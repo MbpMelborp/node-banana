@@ -12,6 +12,8 @@ import { createFrameRecorder, installSpikeApi, type SpikeApi } from "./instrumen
 import { buildSceneGraph } from "./scene/graph";
 import { buildStandInAtlas } from "./scene/standInAtlas";
 import { Scene } from "./scene/Scene";
+import { Painter } from "./painter/painter";
+import { useWorkflowStore } from "@/store/workflowStore";
 
 function copiesFromQuery(): number {
   const query = new URLSearchParams(location.search);
@@ -28,6 +30,7 @@ export function GpuSpike() {
     const recorder = createFrameRecorder();
     const api: SpikeApi = installSpikeApi(recorder);
     let scene: Scene | undefined;
+    let painter: Painter | undefined;
     let cancelled = false;
     (async () => {
       const copies = copiesFromQuery();
@@ -56,6 +59,19 @@ export function GpuSpike() {
         nodeAt: (x: number, y: number) => scene!.nodeAt(x, y),
         selected: () => [...scene!.selected],
       };
+      // Painter A: on unless ?painter=off, and only where HTML-in-Canvas exists.
+      if (api.htmlInCanvas.available && new URLSearchParams(location.search).get("painter") !== "off") {
+        // The real nodes read the workflow store, as on the canvas.
+        await useWorkflowStore.getState().loadWorkflow(workflow);
+        painter = new Painter(scene, graph, canvasRef.current!, api);
+        api.painter = {
+          start: () => painter!.start(),
+          status: () => ({ ...painter!.status }),
+          /** Edits a node's data in the store, as typing elsewhere would; the repaint's latency lands in timings. */
+          change: (id: string, data: Record<string, unknown>) => useWorkflowStore.getState().updateNodeData(id, data),
+        };
+        if (new URLSearchParams(location.search).get("paint") !== "manual") painter.start();
+      }
       api.ready = true;
       setStatus("");
     })().catch(error => {
@@ -63,7 +79,7 @@ export function GpuSpike() {
       setStatus(`Failed: ${api.error}`);
     });
     setPerfOverlayVisible(new URLSearchParams(location.search).get("overlay") !== "off");
-    return () => { cancelled = true; scene?.dispose(); };
+    return () => { cancelled = true; painter?.dispose(); scene?.dispose(); };
   }, []);
 
   return (

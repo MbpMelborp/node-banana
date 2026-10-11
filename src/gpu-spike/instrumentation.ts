@@ -39,6 +39,8 @@ export interface SpikeApi {
   memory(): { jsHeapMB: number | null; atlasMB: number; atlasPages: number };
   /** Set by the scene once it exists. */
   scene?: Record<string, unknown>;
+  /** Set when painter A runs. */
+  painter?: Record<string, unknown>;
 }
 
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));

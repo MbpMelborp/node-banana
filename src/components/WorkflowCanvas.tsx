@@ -130,7 +130,7 @@ import { useAssetStore } from "@/store/assetStore";
 import { TutorialOverlay } from "./onboarding/TutorialOverlay";
 import { useFTUXStore } from "@/store/ftuxStore";
 
-const rawNodeTypes: NodeTypes = {
+export const rawNodeTypes: NodeTypes = {
   imageInput: ImageInputNode,
   audioInput: AudioInputNode,
   videoInput: VideoInputNode,

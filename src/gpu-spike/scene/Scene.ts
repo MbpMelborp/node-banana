@@ -6,14 +6,17 @@
 import * as THREE from "three";
 import { GridIndex, type SceneGraph } from "./graph";
 
-/** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1). */
-const NODE_STRIDE = 12;
-export const FLAG_SELECTED = 1, FLAG_IMAGE = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8;
+/** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), painted layer (1), unused (3). */
+const NODE_STRIDE = 16;
+export const FLAG_SELECTED = 1, FLAG_IMAGE = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG_PAINTED = 16;
 const EDGE_SEGMENTS = 32;
 
 export interface View { x: number; y: number; zoom: number }
 
 export interface AtlasSlot { page: number; u0: number; v0: number; u1: number; v1: number }
+
+/** A painted image of a node: where it sits in flow units (header and margin included) and where it is in the painted atlas. */
+export interface PaintedSlot { x: number; y: number; w: number; h: number; layer: number; u0: number; v0: number; u1: number; v1: number }
 
 const COMMON = /* glsl */ `
   uniform vec2 uViewport;   // css px
@@ -32,35 +35,47 @@ const NODE_VERTEX = /* glsl */ `
   in vec4 iUv;
   in vec3 iColor;
   in float iFlags;
+  in float iLayer;
   out vec2 vLocal;
   out vec2 vSize;
   out vec4 vUv;
   out vec3 vColor;
   flat out int vFlags;
+  flat out float vLayer;
   void main() {
     vFlags = int(iFlags);
     if ((vFlags & ${FLAG_HIDDEN}) != 0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     // One css pixel of margin for the outline and antialiasing.
     float pad = 2.0 / uView.z;
     vec2 local = position * (iRect.zw + 2.0 * pad) - pad;
-    vLocal = local; vSize = iRect.zw; vUv = iUv; vColor = iColor;
+    vLocal = local; vSize = iRect.zw; vUv = iUv; vColor = iColor; vLayer = iLayer;
     gl_Position = toClip(iRect.xy + local);
   }
 `;
 
 const NODE_FRAGMENT = /* glsl */ `
   precision highp float;
+  precision highp sampler2DArray;
   uniform vec3 uView;
   uniform sampler2D uAtlas;
+  uniform sampler2DArray uPainted;
   in vec2 vLocal;
   in vec2 vSize;
   in vec4 vUv;
   in vec3 vColor;
   flat in int vFlags;
+  flat in float vLayer;
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
   void main() {
     float px = 1.0 / uView.z;   // flow units per css pixel
+    if ((vFlags & ${FLAG_PAINTED}) != 0) {
+      // The painted image already holds the node, its header and its margin.
+      vec2 t = clamp(vLocal / vSize, 0.0, 1.0);
+      vec4 texel = texture(uPainted, vec3(mix(vUv.xy, vUv.zw, t), vLayer));
+      outColor = texel;
+      return;
+    }
     vec2 half_ = vSize * 0.5;
     float d = box(vLocal - half_, half_, 14.0);
     float inside = clamp(0.5 - d / px, 0.0, 1.0);
@@ -145,6 +160,12 @@ const GRID_FRAGMENT = /* glsl */ `
   }
 `;
 
+const EMPTY_ARRAY = (() => {
+  const texture = new THREE.DataArrayTexture(new Uint8Array(4), 1, 1, 1);
+  texture.needsUpdate = true;
+  return texture;
+})();
+
 function material(vertexShader: string, fragmentShader: string, uniforms: Record<string, THREE.IUniform>, transparent = true) {
   // Flow space has y down, so quads wind the other way on screen: no culling.
   return new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader, fragmentShader, uniforms, transparent, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
@@ -167,13 +188,18 @@ export class Scene {
   readonly view: View = { x: 0, y: 0, zoom: 1 };
   readonly selected = new Set<number>();
   hovered = -1;
+  /** When the pointer or wheel last moved the view or a node (performance.now()). */
+  lastInputAt = 0;
+  onViewChanged?: () => void;
+  /** A pan or drag is under way. */
+  get interacting() { return this.gesture !== null; }
   private scene = new THREE.Scene();
   private camera = new THREE.Camera();
   private uniforms = { uViewport: { value: new THREE.Vector2() }, uView: { value: new THREE.Vector3() }, uDpr: { value: 1 } };
   private nodeData: Float32Array;
-  private nodeAttrs: THREE.InstancedInterleavedBuffer[] = [];
-  private pageOf: Int32Array;
-  private slotIndex: Int32Array;
+  private nodeAttr!: THREE.InstancedInterleavedBuffer;
+  private nodeUniforms!: Record<string, THREE.IUniform>;
+  private painted = new Map<number, PaintedSlot>();
   private edgeEnds: Float32Array;
   private edgeAttr: THREE.InstancedBufferAttribute;
   private index: GridIndex;
@@ -217,24 +243,13 @@ export class Scene {
     for (let e = 0; e < graph.edges.length / 2; e++) this.writeEdge(e);
     this.add(new THREE.Mesh(edges, material(EDGE_VERTEX, EDGE_FRAGMENT, this.uniforms)), 2);
 
-    // Nodes: one instanced mesh per atlas page, in node order within each.
-    this.pageOf = new Int32Array(graph.nodes.length).fill(-1);
-    this.slotIndex = new Int32Array(graph.nodes.length);
+    // Nodes: one instanced mesh; stand-ins read uAtlas, painted images uPainted.
     this.nodeData = new Float32Array(graph.nodes.length * NODE_STRIDE);
-    const byPage = new Map<number, number[]>();
-    graph.nodes.forEach((_, i) => {
-      const page = options.slotOf(i)?.page ?? 0;
-      (byPage.get(page) ?? byPage.set(page, []).get(page)!).push(i);
-    });
-    let offset = 0;
-    for (const [page, list] of [...byPage].sort((a, b) => a[0] - b[0])) {
-      list.forEach((node, k) => { this.pageOf[node] = page; this.slotIndex[node] = offset + k; this.writeNode(node); });
-      const { mesh, attr } = this.nodeMesh(this.nodeData.subarray(offset * NODE_STRIDE, (offset + list.length) * NODE_STRIDE), list.length, atlas[page] ?? null);
-      this.nodeAttrs[page] = attr;
-      (attr as unknown as { pageOffset: number }).pageOffset = offset;
-      this.add(mesh, 3);
-      offset += list.length;
-    }
+    graph.nodes.forEach((_, i) => this.writeNode(i));
+    const { mesh, attr, uniforms } = this.nodeMesh(this.nodeData, graph.nodes.length, atlas[0] ?? null);
+    this.nodeAttr = attr;
+    this.nodeUniforms = uniforms;
+    this.add(mesh, 3);
 
     this.resize();
     canvas.addEventListener("pointerdown", this.onPointerDown);
@@ -264,28 +279,57 @@ export class Scene {
     geometry.setAttribute("iUv", new THREE.InterleavedBufferAttribute(attr, 4, 4));
     geometry.setAttribute("iColor", new THREE.InterleavedBufferAttribute(attr, 3, 8));
     geometry.setAttribute("iFlags", new THREE.InterleavedBufferAttribute(attr, 1, 11));
+    geometry.setAttribute("iLayer", new THREE.InterleavedBufferAttribute(attr, 1, 12));
     geometry.instanceCount = count;
-    const mesh = new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, { ...this.uniforms, uAtlas: { value: texture } }));
-    return { mesh, attr };
+    const uniforms = { ...this.uniforms, uAtlas: { value: texture }, uPainted: { value: EMPTY_ARRAY } };
+    const mesh = new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, uniforms));
+    return { mesh, attr, uniforms };
   }
 
   private writeNode(i: number) {
     const node = this.options.graph.nodes[i];
-    const slot = node.media ? this.options.slotOf(i) : null;
-    let flags = slot ? FLAG_IMAGE : 0;
+    let flags = this.hidden.has(i) ? FLAG_HIDDEN : 0;
     if (this.selected.has(i)) flags |= FLAG_SELECTED;
-    if (this.hidden.has(i)) flags |= FLAG_HIDDEN;
-    this.nodeData.set([node.x, node.y, node.w, node.h, slot?.u0 ?? 0, slot?.v0 ?? 0, slot?.u1 ?? 0, slot?.v1 ?? 0, ...node.color, flags], this.slotIndex[i] * NODE_STRIDE);
+    const painted = this.painted.get(i);
+    if (painted) {
+      this.nodeData.set([node.x + painted.x, node.y + painted.y, painted.w, painted.h, painted.u0, painted.v0, painted.u1, painted.v1, ...node.color, flags | FLAG_PAINTED, painted.layer], i * NODE_STRIDE);
+      return;
+    }
+    const slot = node.media ? this.options.slotOf(i) : null;
+    if (slot) flags |= FLAG_IMAGE;
+    this.nodeData.set([node.x, node.y, node.w, node.h, slot?.u0 ?? 0, slot?.v0 ?? 0, slot?.u1 ?? 0, slot?.v1 ?? 0, ...node.color, flags, 0], i * NODE_STRIDE);
   }
 
   /** Re-uploads one node's instance data. */
   private touchNode(i: number) {
+    if (!this.nodeAttr) { this.writeNode(i); return; }
     this.writeNode(i);
-    const attr = this.nodeAttrs[this.pageOf[i]];
-    const local = this.slotIndex[i] - (attr as unknown as { pageOffset: number }).pageOffset;
-    attr.addUpdateRange(local * NODE_STRIDE, NODE_STRIDE);
-    attr.needsUpdate = true;
+    this.nodeAttr.addUpdateRange(i * NODE_STRIDE, NODE_STRIDE);
+    this.nodeAttr.needsUpdate = true;
     this.dirty = true;
+  }
+
+  /** The painted atlas (a texture array) the scene reads painted images from. */
+  setPaintedAtlas(texture: THREE.Texture) {
+    this.nodeUniforms.uPainted.value = texture;
+    this.dirty = true;
+  }
+
+  /**
+   * A painter's image for a node, positioned relative to the node (x, y are
+   * offsets from its top-left), or null for the stand-in. Height is the
+   * node's measured height, which also moves its edge ends.
+   */
+  setPainted(i: number, slot: PaintedSlot | null, measuredHeight?: number) {
+    if (slot) this.painted.set(i, slot); else this.painted.delete(i);
+    if (measuredHeight && measuredHeight !== this.options.graph.nodes[i].h) {
+      this.index.remove(i);
+      this.options.graph.nodes[i].h = measuredHeight;
+      this.index.insert(i);
+      for (const e of this.options.graph.edgesOf[i]) { this.writeEdge(e); this.edgeAttr.addUpdateRange(e * 4, 4); }
+      this.edgeAttr.needsUpdate = true;
+    }
+    this.touchNode(i);
   }
 
   private writeEdge(e: number) {
@@ -310,6 +354,7 @@ export class Scene {
     Object.assign(this.view, view);
     this.dirty = true;
     this.options.onViewChange?.(this.view);
+    this.onViewChanged?.();
   }
 
   /** Fits every node on screen. */
@@ -375,6 +420,7 @@ export class Scene {
       if (hit !== this.hovered) { this.hovered = hit; this.options.onHover?.(hit); }
       return;
     }
+    this.lastInputAt = performance.now();
     const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
     gesture.x = event.clientX; gesture.y = event.clientY;
     if (gesture.kind === "pan") this.setView({ x: this.view.x + dx, y: this.view.y + dy });
@@ -391,6 +437,7 @@ export class Scene {
 
   private onWheel = (event: WheelEvent) => {
     event.preventDefault();
+    this.lastInputAt = performance.now();
     if (event.ctrlKey || event.metaKey) {
       const zoom = Math.min(4, Math.max(0.01, this.view.zoom * Math.exp(-event.deltaY * 0.0025)));
       const p = this.toWorld(event.offsetX, event.offsetY);
