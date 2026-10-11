@@ -1,0 +1,268 @@
+{
+  "date": "2026-10-11T17:03:54.108Z",
+  "node": "v22.22.0",
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "platform": "linux x64",
+  "note": "Store only: no React or React Flow subscribed. Timer-driven work (the undo debounce) is driven with fake timers.",
+  "results": [
+    {
+      "copies": 1,
+      "media": "url",
+      "nodes": 303,
+      "edges": 398,
+      "loadMs": 7.162,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.047,
+        "p95": 0.261,
+        "max": 0.394
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 0.601,
+        "p95": 8.518,
+        "max": 8.518
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 0.881,
+        "p95": 7.549,
+        "max": 7.549
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 2.572,
+        "p95": 2.684,
+        "max": 2.684
+      },
+      "autosaveChars": 167793,
+      "heapUsedMB": 87
+    },
+    {
+      "copies": 1,
+      "media": "inline",
+      "nodes": 303,
+      "edges": 398,
+      "loadMs": 517.12,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.052,
+        "p95": 0.105,
+        "max": 0.19
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 0.655,
+        "p95": 5.215,
+        "max": 5.215
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 0.7,
+        "p95": 7.688,
+        "max": 7.688
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 129.307,
+        "p95": 345.126,
+        "max": 345.126
+      },
+      "autosaveChars": 28182822,
+      "heapUsedMB": 141
+    },
+    {
+      "copies": 4,
+      "media": "url",
+      "nodes": 1212,
+      "edges": 1592,
+      "loadMs": 17.512,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.055,
+        "p95": 0.092,
+        "max": 7.45
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 2.211,
+        "p95": 9.87,
+        "max": 9.87
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 2.46,
+        "p95": 5.373,
+        "max": 5.373
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 9.121,
+        "p95": 15.878,
+        "max": 15.878
+      },
+      "autosaveChars": 671419,
+      "heapUsedMB": 151
+    },
+    {
+      "copies": 4,
+      "media": "inline",
+      "nodes": 1212,
+      "edges": 1592,
+      "loadMs": 1298.533,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.054,
+        "p95": 0.078,
+        "max": 0.167
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 2.611,
+        "p95": 9.244,
+        "max": 9.244
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 2.829,
+        "p95": 5.903,
+        "max": 5.903
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 633.041,
+        "p95": 922.277,
+        "max": 922.277
+      },
+      "autosaveChars": 113372160,
+      "heapUsedMB": 317
+    },
+    {
+      "copies": 17,
+      "media": "url",
+      "nodes": 5151,
+      "edges": 6766,
+      "loadMs": 65.6,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.181,
+        "p95": 0.243,
+        "max": 5.678
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 13.751,
+        "p95": 16.684,
+        "max": 16.684
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 20.952,
+        "p95": 24.827,
+        "max": 24.827
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 16.074,
+        "p95": 20.407,
+        "max": 20.407
+      },
+      "autosaveChars": 2869244,
+      "heapUsedMB": 368
+    },
+    {
+      "copies": 17,
+      "media": "inline",
+      "nodes": 5151,
+      "edges": 6766,
+      "loadMs": 5165.107,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.104,
+        "p95": 0.156,
+        "max": 3.108
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 21.426,
+        "p95": 24.246,
+        "max": 24.246
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 15.801,
+        "p95": 20.489,
+        "max": 20.489
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 2622.939,
+        "p95": 6122.515,
+        "max": 6122.515
+      },
+      "autosaveChars": 482761492,
+      "heapUsedMB": 1132
+    },
+    {
+      "copies": 34,
+      "media": "url",
+      "nodes": 10302,
+      "edges": 13532,
+      "loadMs": 174.775,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.215,
+        "p95": 0.354,
+        "max": 3.626
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 30.5,
+        "p95": 113.822,
+        "max": 113.822
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 34.116,
+        "p95": 43.49,
+        "max": 43.49
+      },
+      "autosaveSerialiseMs": {
+        "n": 3,
+        "p50": 48.125,
+        "p95": 51.813,
+        "max": 51.813
+      },
+      "autosaveChars": 5756746,
+      "heapUsedMB": 373
+    },
+    {
+      "copies": 34,
+      "media": "inline",
+      "nodes": 10302,
+      "edges": 13532,
+      "loadMs": 5540.793,
+      "keystrokeMs": {
+        "n": 200,
+        "p50": 0.213,
+        "p95": 0.312,
+        "max": 5.568
+      },
+      "keystrokeAfterPauseMs": {
+        "n": 20,
+        "p50": 42.037,
+        "p95": 64.169,
+        "max": 64.169
+      },
+      "undoMs": {
+        "n": 10,
+        "p50": 47.127,
+        "p95": 57.605,
+        "max": 57.605
+      },
+      "autosaveError": "Invalid string length",
+      "autosaveChars": 0,
+      "heapUsedMB": 1288
+    }
+  ]
+}
