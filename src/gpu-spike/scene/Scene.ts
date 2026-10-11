@@ -208,7 +208,7 @@ export class Scene {
   private disposed = false;
   private gesture: { kind: "pan" | "drag"; x: number; y: number; moved: number[] } | null = null;
 
-  constructor(private options: SceneOptions) {
+  constructor(readonly options: SceneOptions) {
     const { canvas, graph, atlas } = options;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(devicePixelRatio);
@@ -394,11 +394,23 @@ export class Scene {
     if (touched.size) this.edgeAttr.needsUpdate = true;
   }
 
+  /** Pointer position in the canvas's css pixels, whatever element the event came from. */
+  private local(event: MouseEvent) {
+    const box = this.options.canvas.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  }
+
+  /** Public so the live layer can hand presses on a live node's body to the scene. */
+  pointerDown = (event: PointerEvent) => this.onPointerDown(event);
+  wheel = (event: WheelEvent) => this.onWheel(event);
+
   private onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
     const canvas = this.options.canvas;
     canvas.setPointerCapture(event.pointerId);
-    const hit = this.nodeAt(event.offsetX, event.offsetY);
+    this.lastInputAt = performance.now();
+    const at = this.local(event);
+    const hit = this.nodeAt(at.x, at.y);
     if (hit >= 0) {
       if (event.shiftKey) {
         const next = new Set(this.selected);
@@ -416,7 +428,8 @@ export class Scene {
   private onPointerMove = (event: PointerEvent) => {
     const gesture = this.gesture;
     if (!gesture) {
-      const hit = this.nodeAt(event.offsetX, event.offsetY);
+      const at = this.local(event);
+      const hit = this.nodeAt(at.x, at.y);
       if (hit !== this.hovered) { this.hovered = hit; this.options.onHover?.(hit); }
       return;
     }
@@ -440,8 +453,9 @@ export class Scene {
     this.lastInputAt = performance.now();
     if (event.ctrlKey || event.metaKey) {
       const zoom = Math.min(4, Math.max(0.01, this.view.zoom * Math.exp(-event.deltaY * 0.0025)));
-      const p = this.toWorld(event.offsetX, event.offsetY);
-      this.setView({ zoom, x: event.offsetX - p.x * zoom, y: event.offsetY - p.y * zoom });
+      const at = this.local(event);
+      const p = this.toWorld(at.x, at.y);
+      this.setView({ zoom, x: at.x - p.x * zoom, y: at.y - p.y * zoom });
     } else {
       this.setView({ x: this.view.x - event.deltaX, y: this.view.y - event.deltaY });
     }

@@ -19,7 +19,7 @@ export const PAD = 8;
 
 const noop = () => {};
 
-function nodeTitle(node: Node): string {
+export function nodeTitle(node: Node): string {
   const data = node.data as Record<string, { displayName?: string; name?: string } | undefined> & { app?: { name?: string } };
   if (["nanoBanana", "generateVideo", "generate3d", "generateAudio"].includes(node.type ?? "") && data.selectedModel?.displayName) return data.selectedModel.displayName;
   if (node.type === "llmGenerate") {
@@ -62,6 +62,19 @@ interface SheetHandle { set: (next: { nodes: Node[]; done: () => void }) => void
 
 const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
+/** Waits until the elements' sizes are the same two frames running (or the deadline passes). */
+export async function settleSizes(elements: (() => HTMLElement | null)[], until: number) {
+  const sizes = () => elements.map(get => { const element = get(); return element ? `${element.offsetWidth}x${element.offsetHeight}` : ""; }).join(",");
+  let previous = sizes();
+  for (;;) {
+    await nextFrame();
+    await nextFrame();
+    const current = sizes();
+    if (current === previous || performance.now() > until) return;
+    previous = current;
+  }
+}
+
 export class PainterSheet {
   readonly element: HTMLDivElement;
   private root: Root;
@@ -96,7 +109,11 @@ export class PainterSheet {
     }
     const started = performance.now();
     await Promise.all([...this.element.querySelectorAll("img")].map(img => img.complete && img.naturalWidth ? undefined : img.decode().catch(noop)));
-    return { decodeMs: performance.now() - started };
+    const decodeMs = performance.now() - started;
+    // A media card resizes to its image once the image has loaded (a React
+    // update after onLoad), so wait until every node's size holds still.
+    await settleSizes(ids.map(id => () => this.nodeElement(id)), until);
+    return { decodeMs };
   }
 
   nodeElement(id: string): HTMLElement | null {

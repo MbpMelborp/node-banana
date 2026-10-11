@@ -41,6 +41,8 @@ export interface SpikeApi {
   scene?: Record<string, unknown>;
   /** Set when painter A runs. */
   painter?: Record<string, unknown>;
+  /** Set when the live layer runs. */
+  live?: Record<string, unknown>;
 }
 
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));

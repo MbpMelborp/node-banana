@@ -59,6 +59,7 @@ export class Painter {
   private screenful = new Set<number>();
   private dpr = devicePixelRatio;
   private unsubscribe: () => void;
+  private waiters = new Map<number, (() => void)[]>();
   readonly status: PainterStatus = { running: false, queued: 0, paintedFull: 0, paintedEighth: 0, batches: 0, screenfulMs: null, allMs: null, atlasFull: false, atlasUsedPct: 0, storeWrites: 0 };
 
   constructor(private scene: Scene, private graph: SceneGraph, private canvas: HTMLCanvasElement, private api: SpikeApi) {
@@ -101,6 +102,14 @@ export class Painter {
     for (const i of this.byDistance(visible)) this.request(i, "full");
     for (const i of this.byDistance(this.graph.nodes.map((_, i) => i))) this.request(i, "eighth");
     void this.run();
+  }
+
+  /** Paints a node at full size now (ahead of the queue) and resolves once the scene shows it. */
+  paintNow(i: number): Promise<void> {
+    if (!this.startedAt) this.startedAt = performance.now();
+    const done = new Promise<void>(resolve => (this.waiters.get(i) ?? this.waiters.set(i, []).get(i)!).push(resolve));
+    this.request(i, "full", true);
+    return done;
   }
 
   private request(node: number, tier: Tier, urgent = false) {
@@ -245,6 +254,12 @@ export class Painter {
     renderer.resetState();
     for (const r of fits) this.show(r.node);
     const t5 = performance.now();
+    for (const r of fits) {
+      if (!this.state[r.node].full) continue;
+      const waiting = this.waiters.get(r.node);
+      this.waiters.delete(r.node);
+      if (waiting) void nextFrame().then(() => { for (const resolve of waiting) resolve(); });
+    }
 
     this.status.batches++;
     this.status.atlasUsedPct = Math.round(this.atlas.usedPixels / (ATLAS_SIZE * ATLAS_SIZE * ATLAS_LAYERS) * 1000) / 10;
