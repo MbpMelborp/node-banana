@@ -132,6 +132,31 @@ export class SceneGraph {
     return result;
   }
 
+  /**
+   * Applies a change that replaced some node objects in place (no node added
+   * or removed), looking only at those ids. Returns the indices whose
+   * rectangle moved, or null when the array no longer lines up with the
+   * graph (nodes were reordered) and `sync` must rebuild it.
+   */
+  updateNodes(nodes: readonly WorkflowNode[], ids: Iterable<string>): number[] | null {
+    if (nodes.length !== this.nodes.length) return null;
+    const moved: number[] = [];
+    for (const id of ids) {
+      const i = this.indexOf.get(id);
+      if (i == null || nodes[i]?.id !== id) return null;
+      const n = this.nodes[i], node = nodes[i];
+      const { w } = storeNodeSize(node);
+      if (n.x !== node.position.x || n.y !== node.position.y || n.w !== w) {
+        n.x = node.position.x;
+        n.y = node.position.y;
+        n.w = w;
+        moved.push(i);
+      }
+    }
+    this.sourceNodes = nodes;
+    return moved;
+  }
+
   private rebuildNodes(nodes: readonly WorkflowNode[]) {
     const previous = new Map(this.nodes.map((n) => [n.id, n]));
     this.sourceNodes = nodes;
