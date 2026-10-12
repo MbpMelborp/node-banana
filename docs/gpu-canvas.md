@@ -48,6 +48,14 @@ a zoomed-out view never falls back to stand-in cards. Larger tiers are painted f
 evicted, longest unseen first, when the atlas needs room; the view's own
 tier near the view is never evicted.
 
+After the 1/8 pass, every node is also painted at the tier a 25% view needs
+(1/4 on a standard display, 1/2 on a Retina one), in batches of 24 below
+everything else. Those images go to the disk cache and stay in the atlas
+only near the view, and they never evict anything: a jump to a far part of
+the graph at 25% then uploads a couple of hundred images from the cache
+instead of painting them. Nodes the cache already holds are skipped.
+Batches are 48 nodes, 96 at the 1/4 tier.
+
 ## Painting
 
 - **Sizes settle first.** A batch renders its nodes on the sheet, waits for
@@ -90,7 +98,9 @@ deflated, with the node's height and handle anchors. Images are read back
 from the GPU without stalling (a pixel buffer and a fence) and stored once
 the GPU is done; the cache is trimmed to 512 MB, least recently used first.
 The key includes the app version and display scale, so an update or a
-different screen paints afresh.
+different screen paints afresh. A node's file refs (`imageRef`, `inputImageRefs`, …) are left out of
+its key: they name the file its media was saved as, so a save that records
+them repaints nothing.
 
 ## Live nodes
 
@@ -145,3 +155,8 @@ frame-rate checks are meaningless there, the rest still run.
 
 `window.__gpuCanvas` (stats, painter status, sharpness, view, node rects,
 live nodes, `paintNow`, `repaint`) is what the runner drives.
+
+The stats also keep frames over 250 ms with the painter phase they ended in,
+and the browser's long animation frames with their slowest scripts; the
+`tiers` check prints both. That is how a stall outside the painter (an
+autosave settling every node's media in one task) was found.
