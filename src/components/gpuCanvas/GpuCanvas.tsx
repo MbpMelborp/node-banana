@@ -65,6 +65,9 @@ export interface GpuCanvasApi {
   repaint: (id: string) => Promise<void>;
   /** Edits a node's data in the store, as typing elsewhere would (the repaint's latency lands in stats). */
   change: (id: string, data: Record<string, unknown>) => void;
+  /** Records the sheet state (placement, sizes, text fields, images) whenever these nodes are painted. */
+  probe: (ids: string[]) => void;
+  probeLog: () => Record<string, unknown>[];
   info: () => ReturnType<Scene["info"]> & { budget: ReturnType<typeof atlasBudget> | null; htmlInCanvas: boolean };
 }
 
@@ -242,6 +245,11 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       paintNow: (id) => painter?.paintNow(id) ?? Promise.resolve(),
       repaint: (id) => painter?.repaint(id) ?? Promise.resolve(),
       change: (id, data) => useWorkflowStore.getState().updateNodeData(id, data),
+      probe: (ids) => {
+        painter?.probeIds.clear();
+        for (const id of ids) painter?.probeIds.add(id);
+      },
+      probeLog: () => painter?.probeLog ?? [],
       info: () => ({ ...scene.info(), budget, htmlInCanvas }),
     };
 

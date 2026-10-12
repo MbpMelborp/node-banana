@@ -231,6 +231,8 @@ async function main() {
     // Opens the workflow and waits until the loading screen would be gone: the view sharp and every node at 1/8.
     async function openWorkflow(label) {
       const t0 = Date.now();
+      // --probe prompt,imageInput: record the painter's sheet state for nodes of these types (in report.probe).
+      if (option('--probe', '')) await page.evaluate(types => window.__gpuCanvas?.probe(types.split(',').map(t => `type:${t}`)), option('--probe', ''));
       await drop();
       await page.waitFor(n => window.__gpuCanvas?.nodeIds().length === n, workflow.nodes.length, { timeout: 120000, message: 'the workflow in the scene' });
       const loaded = Date.now();
@@ -431,6 +433,7 @@ async function main() {
         return [...seen.values()];
       });
       await fs.mkdir(path.join(shots, 'fidelity'), { recursive: true });
+      if (option('--probe', '')) await page.evaluate(({ ids, types }) => window.__gpuCanvas.probe([...ids, ...types.split(',').map(t => `type:${t}`)]), { ids: sample, types: option('--probe', '') });
       const results = [];
       for (const id of sample) {
         await page.evaluate(id => { const c = window.__gpuCanvas, r = c.nodeRect(id), v = c.view(); c.setView({ zoom: 1, x: 240 - (r.x - v.x) / v.zoom, y: 160 - (r.y - v.y) / v.zoom }); }, id);
@@ -464,7 +467,8 @@ async function main() {
       }
       await page.evaluate(() => window.__gpuCanvas.setLive([]));
       await checkErrors();
-      return { results, pass: results.every(r => r.pass) };
+      const probe = option('--probe', '') ? await page.evaluate(() => window.__gpuCanvas.probeLog()) : undefined;
+      return { results, probe, pass: results.every(r => r.pass) };
     });
 
     // Image tiers: 100% to 5% and back, then jumps; atlas memory and time until sharp.

@@ -150,6 +150,9 @@ export class Painter {
   /** Nodes last painted before their images loaded, and how many times in a row. */
   private provisional = new Map<string, number>();
   private unplacedRetries = 0;
+  /** Nodes whose sheet state is recorded when painted (for a runner diagnosing a mismatch). */
+  readonly probeIds = new Set<string>();
+  readonly probeLog: Record<string, unknown>[] = [];
   /** A sheet size to switch to when the next batch starts. */
   private sheetSize: { width: number; height: number } | null = null;
   private unsubscribers: (() => void)[] = [];
@@ -256,6 +259,30 @@ export class Painter {
     this.queue.add(id, tier, URGENT, performance.now());
     void this.run();
     return done;
+  }
+
+  private probe(ids: string[], placed: Map<string, { x: number; y: number }>, tier: number) {
+    const sheet = this.sheet.element.getBoundingClientRect();
+    const rect = (element: Element) => {
+      const r = element.getBoundingClientRect();
+      return [r.x - sheet.x, r.y - sheet.y, r.width, r.height].map((v) => Math.round(v * 10) / 10);
+    };
+    for (const id of ids) {
+      // An id, or "type:<node type>" for every node of a type (the first few of each).
+      const i = this.scene.graph.indexOf.get(id);
+      const type = i == null ? "" : this.scene.graph.nodes[i].type;
+      const byType = this.probeIds.has(`type:${type}`) && this.probeLog.filter((e) => e.type === type).length < 6;
+      if (!this.probeIds.has(id) && !byType) continue;
+      const element = this.sheet.nodeElement(id);
+      this.probeLog.push({
+        id, type, tier, loading: this.loading, batch: ids.length, index: ids.indexOf(id), sheet: [this.sheet.width, this.sheet.height], placed: placed.get(id),
+        transform: element?.style.transform, rect: element ? rect(element) : null, height: element?.offsetHeight,
+        children: element ? [...element.querySelectorAll("*")].filter((e) => e.scrollTop || e.scrollLeft).length : null,
+        textareas: element ? [...element.querySelectorAll("textarea")].map((t) => ({ length: t.value.length, rect: rect(t), clientHeight: t.clientHeight, scrollHeight: t.scrollHeight, scrollTop: t.scrollTop })) : null,
+        images: element ? [...element.querySelectorAll("img")].map((img) => ({ complete: img.complete, natural: [img.naturalWidth, img.naturalHeight], rect: rect(img), src: (img.getAttribute("src") ?? "").slice(0, 60) })) : null,
+        hidden: element ? getComputedStyle(element).visibility : null,
+      });
+    }
   }
 
   /** Drops a node's images and paints it again on its own (for a runner checking a fresh paint). */
@@ -534,6 +561,7 @@ export class Painter {
       await nextFrame();
       if (this.disposed) return;
     }
+    if (this.probeIds.size) this.probe(fits.map((r) => r.id), placed, tier);
     const t3 = performance.now();
 
     // Paint the sheet into the staging texture.
