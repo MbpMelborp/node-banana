@@ -54,6 +54,8 @@ const VIEW_SETTLE_MS = 80;
 /** Nodes this far outside the view (in screens) are painted ahead and kept from eviction. */
 const MARGIN = 0.25;
 const MAX_BATCH = 48;
+/** How long a batch waits for its images and sizes; a node whose image is still loading is painted provisionally and again later. */
+const SETTLE_MS = 1500, LOADING_SETTLE_MS = 5000;
 /** Times a node painted before its images loaded is painted again. */
 const MAX_PROVISIONAL_REPAINTS = 3;
 /** Cache uploads per frame, in texels, so a cache hit never stalls a frame either. */
@@ -148,6 +150,8 @@ export class Painter {
   /** Nodes last painted before their images loaded, and how many times in a row. */
   private provisional = new Map<string, number>();
   private unplacedRetries = 0;
+  /** A sheet size to switch to when the next batch starts. */
+  private sheetSize: { width: number; height: number } | null = null;
   private unsubscribers: (() => void)[] = [];
   private waiters = new Map<string, (() => void)[]>();
   private readbacks: Readback[] = [];
@@ -199,7 +203,9 @@ export class Painter {
     this.loading = loading;
     const texels = loading ? LOADING_SHEET_TEXELS : SHEET_TEXELS;
     const max = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
-    this.sheet.resize(Math.min(texels.w, max) / this.scene.scale, Math.min(texels.h, max) / this.scene.scale);
+    // Applied when the next batch starts: a batch laid out on one size and
+    // painted on another would copy the wrong regions.
+    this.sheetSize = { width: Math.min(texels.w, max) / this.scene.scale, height: Math.min(texels.h, max) / this.scene.scale };
   }
 
   /** Paints the view at the tier it needs, then every node at 1/8. Called again when a workflow opens: its timings start over. */
@@ -441,6 +447,10 @@ export class Painter {
 
   private async batch() {
     const t0 = performance.now();
+    if (this.sheetSize) {
+      this.sheet.resize(this.sheetSize.width, this.sheetSize.height);
+      this.sheetSize = null;
+    }
     // Take a tier's worth that fits on one sheet by estimated size; requests for nodes that left the graph are dropped.
     const zoomOf = (tier: number) => tier / this.scene.scale;
     const taken = this.queue.take(MAX_BATCH, (request, taken) => {
@@ -484,7 +494,7 @@ export class Painter {
     // Input, or a change to paint, arrived while the sheet was getting ready: give way.
     const urgentBatch = requests[0].priority === URGENT;
     const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
-    const { decodeMs, unloaded } = await this.sheet.settle(misses.map((r) => r.id), 5000, () => this.disposed || yielded());
+    const { decodeMs, unloaded } = await this.sheet.settle(misses.map((r) => r.id), this.loading ? LOADING_SETTLE_MS : SETTLE_MS, () => this.disposed || yielded());
     const t2 = performance.now();
     for (const r of misses) {
       const element = this.sheet.nodeElement(r.id);
