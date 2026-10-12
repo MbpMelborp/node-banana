@@ -556,10 +556,17 @@ export class Painter {
       return;
     }
     const scrolled = this.sheet.resetScroll();
-    if (scrolled) {
-      this.options.stats.record("painter.scrollReset", scrolled);
-      await nextFrame();
-      if (this.disposed) return;
+    if (scrolled) this.options.stats.record("painter.scrollReset", scrolled);
+    // The sheet is painted from its last rendering, not its DOM: let a frame
+    // render what the DOM now holds (the second placement, the reset scroll),
+    // or the copy shows the first placement or the previous batch.
+    await nextFrame();
+    await nextFrame();
+    if (this.disposed) return;
+    if (yielded()) {
+      this.queue.restore(misses);
+      this.options.stats.record(this.scene.lastInputAt > t0 ? "painter.yielded" : "painter.preempted", misses.length);
+      return;
     }
     if (this.probeIds.size) this.probe(fits.map((r) => r.id), placed, tier);
     const t3 = performance.now();
