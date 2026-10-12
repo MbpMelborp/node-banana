@@ -62,6 +62,20 @@ export async function settleSizes(elements: (() => HTMLElement | null)[], until:
   }
 }
 
+/** Resolves once an image has loaded (and decoded) or failed. */
+function loaded(img: HTMLImageElement): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      img.removeEventListener("load", done);
+      img.removeEventListener("error", done);
+      resolve();
+    };
+    img.addEventListener("load", done);
+    img.addEventListener("error", done);
+    if (img.complete) done();
+  }).then(() => img.decode().catch(noop));
+}
+
 /** Waits for React Flow to measure the nodes (it hides a node until then), then for every image in `root` to decode. */
 export async function settleNodes(root: HTMLElement, ids: readonly string[], until: number, cancelled: () => boolean = () => false): Promise<{ decodeMs: number }> {
   const element = (id: string) => root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
@@ -74,11 +88,28 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
     await nextFrame();
   }
   const started = performance.now();
-  await Promise.all([...root.querySelectorAll("img")].map((img) => (img.complete && img.naturalWidth ? undefined : img.decode().catch(noop))));
-  const decodeMs = performance.now() - started;
-  // A media card resizes to its image once the image has loaded (a React
-  // update after onLoad), so wait until every node's size holds still.
-  await settleSizes(ids.map((id) => () => element(id)), until, cancelled);
+  // An image's source can arrive or change after the first render (a
+  // thumbnail swapped in, a reference resolved), and its card resizes once
+  // it has loaded: so wait for the images, then the sizes, until a pass
+  // finds every image loaded and nothing changed.
+  let decodeMs = 0;
+  let seen = "";
+  for (;;) {
+    const images = [...root.querySelectorAll("img")];
+    // A broken image is complete with no width: it is not waited for again.
+    const loading = images.filter((img) => img.getAttribute("src") && !(img.complete && (img.naturalWidth || seen)));
+    const signature = images.map((img) => img.currentSrc || img.getAttribute("src") || "").join("\n");
+    if (!loading.length && signature === seen) break;
+    seen = signature;
+    // Bounded: an image that never loads (lazy, or a stalled request) holds the batch only until the deadline.
+    let allLoaded = false;
+    void Promise.all(loading.map(loaded)).then(() => { allLoaded = true; });
+    while (!allLoaded && performance.now() < until && !cancelled()) await nextFrame();
+    decodeMs = performance.now() - started;
+    if (cancelled()) break;
+    await settleSizes(ids.map((id) => () => element(id)), until, cancelled);
+    if (performance.now() > until || cancelled()) break;
+  }
   return { decodeMs };
 }
 

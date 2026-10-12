@@ -34,7 +34,7 @@ import { PaintedAtlas, type BlitItem } from "@/lib/gpuCanvas/atlas";
 import type { Slot } from "@/lib/gpuCanvas/atlasLayout";
 import type { AtlasBudget } from "@/lib/gpuCanvas/budget";
 import { enableLayoutSubtree, paintElement } from "@/lib/gpuCanvas/htmlInCanvas";
-import { edgesByNode, paintKey } from "@/lib/gpuCanvas/paintKey";
+import { edgesByNode, upstreamPaintKeys } from "@/lib/gpuCanvas/paintKey";
 import { BACKGROUND, EIGHTH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier, type PaintRequest } from "@/lib/gpuCanvas/paintQueue";
 import { cacheKey, deflate, inflate, PAINT_CACHE_BYTES, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
@@ -139,6 +139,8 @@ export class Painter {
   private keyFrame = 0;
   private dirtyKeys = new Set<string>();
   private dirtySince = 0;
+  /** Stale only because something upstream changed: timed apart from the nodes that changed. */
+  private downstream = new Set<string>();
   /** Nodes to paint again whatever the disk cache holds. */
   private uncached = new Set<string>();
   private unplacedRetries = 0;
@@ -293,7 +295,8 @@ export class Painter {
 
   private recomputeAllKeys() {
     const { nodes, context } = this.keyContext();
-    for (const node of nodes) this.keys.set(node.id, paintKey(node, context));
+    const keyOf = upstreamPaintKeys(context);
+    for (const node of nodes) this.keys.set(node.id, keyOf(node.id)!);
   }
 
   private nodesChanged(changes: NodeChanges) {
@@ -319,16 +322,20 @@ export class Painter {
       this.keyFrame = 0;
       const { nodes, context } = this.keyContext();
       const since = this.dirtySince;
-      // A node's image shows what feeds it, so the nodes it feeds are dirty too.
+      // A node's image shows what feeds it, so everything downstream is dirty
+      // too (a Set visits what is added while it is iterated).
+      const changed = new Set(this.dirtyKeys);
       const dirty = new Set(this.dirtyKeys);
       this.dirtyKeys.clear();
-      for (const id of [...dirty]) for (const edge of context.edgesOf(id)) if (edge.source === id) dirty.add(edge.target);
+      for (const id of dirty) for (const edge of context.edgesOf(id)) if (edge.source === id) dirty.add(edge.target);
+      const keyOf = upstreamPaintKeys(context, (id) => (dirty.has(id) ? undefined : this.keys.get(id)));
       for (const id of dirty) {
-        const i = indexOfNode(nodes, id);
-        if (i < 0) continue;
-        const key = paintKey(nodes[i], context);
+        if (indexOfNode(nodes, id) < 0) continue;
+        const key = keyOf(id)!;
         if (this.keys.get(id) === key) continue;
         this.keys.set(id, key);
+        if (changed.has(id)) this.downstream.delete(id);
+        else this.downstream.add(id);
         this.stale(id, since);
       }
     });
@@ -580,7 +587,9 @@ export class Painter {
     // A change counts once the image the view shows has it.
     const shownTier = this.wanted();
     for (const r of done) {
-      if (r.priority === URGENT && r.tier === shownTier) void nextFrame().then(() => this.options.stats.record("painter.changeToShownMs", performance.now() - r.queuedAt));
+      if (r.priority !== URGENT || r.tier !== shownTier) continue;
+      const name = this.downstream.delete(r.id) ? "painter.downstreamToShownMs" : "painter.changeToShownMs";
+      void nextFrame().then(() => this.options.stats.record(name, performance.now() - r.queuedAt));
     }
     if (this.status.screenfulMs == null && this.screenfulSharp()) {
       this.status.screenfulMs = Math.round(now - this.startedAt);

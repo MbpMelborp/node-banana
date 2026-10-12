@@ -5,8 +5,9 @@
  * when a painted image is stale (the painter repaints a node whose key
  * changed) and what the disk cache stores it under. It covers the node's
  * type, width and data, the connections on its sockets (a connected socket
- * looks different), and the data of the nodes feeding it (an Output node
- * shows its source's image). Selection and position are not in it: moving or
+ * looks different), and the keys of the nodes feeding it (an Output node
+ * shows its source's image, and a node can show what its source derives
+ * from further upstream, so a change anywhere upstream reaches it). Selection and position are not in it: moving or
  * selecting a node never repaints it.
  *
  * Hashing is memoised per data object, so a keystroke in one node hashes
@@ -86,6 +87,8 @@ export interface PaintKeyContext {
   edgesOf: (id: string) => readonly WorkflowEdge[];
   /** Anything outside the graph that changes how every node looks (app version, scale). */
   salt: string;
+  /** The key of a node feeding this one; without it, its data stands in. */
+  upstreamKey?: (id: string) => string;
 }
 
 /** The key a node's painted image is kept under (without its tier). */
@@ -97,13 +100,52 @@ export function paintKey(node: WorkflowNode, context: PaintKeyContext): string {
     if (edge.target === node.id) {
       sockets.push(`in:${edge.targetHandle ?? ""}<${edge.sourceHandle ?? ""}:${edge.type ?? ""}`);
       const source = context.nodeById(edge.source);
-      if (source && source.id !== node.id) upstream.push(`${source.type}:${hashData(source.data)}`);
+      if (source && source.id !== node.id) upstream.push(`${source.type}:${context.upstreamKey ? context.upstreamKey(source.id) : hashData(source.data)}`);
     }
     if (edge.source === node.id) sockets.push(`out:${edge.sourceHandle ?? ""}`);
   }
   sockets.sort();
   upstream.sort();
   return strongHash(`${PAINT_FORMAT}|${context.salt}|${node.type}|${w}|${hashData(node.data)}|${sockets.join(",")}|${upstream.join(",")}`);
+}
+
+/**
+ * Keys that take in everything upstream: each node's key includes the keys
+ * of the nodes feeding it. Memoised for the life of the returned function
+ * (one graph state); a cycle is cut where it closes.
+ */
+export function upstreamPaintKeys(context: PaintKeyContext, known?: (id: string) => string | undefined): (id: string) => string | undefined {
+  const keys = new Map<string, string>();
+  const keyed: PaintKeyContext = { ...context, upstreamKey: (id) => keys.get(id) ?? known?.(id) ?? "cycle" };
+  return (id) => {
+    if (keys.has(id)) return keys.get(id);
+    // Depth first without recursion, so a long chain cannot overflow the stack.
+    const stack: { id: string; expanded: boolean }[] = [{ id, expanded: false }];
+    const onStack = new Set<string>([id]);
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const node = context.nodeById(top.id);
+      if (!node) {
+        stack.pop();
+        onStack.delete(top.id);
+        continue;
+      }
+      if (!top.expanded) {
+        top.expanded = true;
+        for (const edge of context.edgesOf(top.id)) {
+          const source = edge.source;
+          if (edge.target !== top.id || source === top.id || keys.has(source) || onStack.has(source) || known?.(source) != null) continue;
+          stack.push({ id: source, expanded: false });
+          onStack.add(source);
+        }
+        continue;
+      }
+      stack.pop();
+      onStack.delete(top.id);
+      if (!keys.has(top.id)) keys.set(top.id, paintKey(node, keyed));
+    }
+    return keys.get(id);
+  };
 }
 
 /** Edge lists by node id, for a PaintKeyContext. */

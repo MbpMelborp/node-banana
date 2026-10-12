@@ -3,7 +3,7 @@ import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { GridIndex, SceneGraph } from "../graph";
 import { AtlasLayout } from "../atlasLayout";
 import { atlasBudget } from "../budget";
-import { edgesByNode, hashData, paintKey, type PaintKeyContext } from "../paintKey";
+import { edgesByNode, hashData, paintKey, upstreamPaintKeys, type PaintKeyContext } from "../paintKey";
 import { BACKGROUND, EIGHTH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier } from "../paintQueue";
 
 function node(id: string, x: number, y: number, data: Record<string, unknown> = {}, type = "prompt"): WorkflowNode {
@@ -119,6 +119,16 @@ describe("paintKey", () => {
     expect(paintKey(b, context([a, b], []))).not.toBe(base);
     const a2 = { ...a, data: { prompt: "hello" } };
     expect(paintKey(b, context([a2, b], [edge("e", "a", "b")]))).not.toBe(base);
+  });
+
+  it("takes in changes anywhere upstream, and survives cycles", () => {
+    const a = node("a", 0, 0, { prompt: "hi" }), b = node("b", 400, 0, {}), c = node("c", 800, 0, {}, "output");
+    const edges = [edge("e1", "a", "b"), edge("e2", "b", "c")];
+    const base = upstreamPaintKeys(context([a, b, c], edges))("c");
+    expect(upstreamPaintKeys(context([{ ...a, data: { prompt: "hello" } }, b, c], edges))("c")).not.toBe(base);
+    expect(upstreamPaintKeys(context([a, b, c], edges))("c")).toBe(base);
+    const looped = upstreamPaintKeys(context([a, b, c], [...edges, edge("e3", "c", "a")]));
+    expect(looped("c")).toBeTruthy();
   });
 
   it("hashes the same data the same way whatever its key order, and long strings by content", () => {
