@@ -142,18 +142,24 @@ export interface SheetBox {
  * Shelf-packs boxes left to right, top to bottom, onto a sheet of the given
  * size in flow units. Boxes that do not fit are left out of the result.
  */
-export function packSheet<K>(boxes: readonly (SheetBox & { key: K })[], width: number, height: number, gap: number): Map<K, { x: number; y: number }> {
+/** Flow units sheet positions are rounded up to (1/8 is the smallest tier). */
+export const SHEET_ALIGN = 8;
+
+export function packSheet<K>(boxes: readonly (SheetBox & { key: K })[], width: number, height: number, gap: number, align = SHEET_ALIGN): Map<K, { x: number; y: number }> {
+  // Every box starts on a multiple of `align` flow units, so at any tier down
+  // to 1/8 it starts on a whole texel and is copied without resampling.
+  const up = (v: number) => Math.ceil(v / align) * align;
   const placed = new Map<K, { x: number; y: number }>();
   let x = 0, y = 0, row = 0;
   for (const box of boxes) {
     if (x > 0 && x + box.w > width) {
       x = 0;
-      y += row + gap;
+      y = up(y + row + gap);
       row = 0;
     }
     if (y + box.h > height && placed.size) continue;
     placed.set(box.key, { x, y });
-    x += box.w + gap;
+    x = up(x + box.w + gap);
     row = Math.max(row, box.h);
   }
   return placed;

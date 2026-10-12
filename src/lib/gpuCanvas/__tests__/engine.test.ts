@@ -182,4 +182,10 @@ describe("paint queue", () => {
     expect(placed.get(2)).toEqual({ x: 64, y: 0 });
     expect(placed.has(3)).toBe(false);
   });
+
+  it("starts every box on a whole texel at 1/8", () => {
+    const placed = packSheet([{ key: 1, w: 61.5, h: 50.25 }, { key: 2, w: 60, h: 50 }, { key: 3, w: 60, h: 50 }], 140, 200, 4);
+    expect(placed.get(2)).toEqual({ x: 72, y: 0 });
+    expect(placed.get(3)).toEqual({ x: 0, y: 56 });
+  });
 });
