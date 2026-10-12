@@ -16,6 +16,7 @@ import { buildLlmHeaders } from "@/store/utils/buildApiHeaders";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import { inlineMediaReferences } from "@/lib/media/references";
 
 export interface LlmGenerateOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -90,7 +91,7 @@ export async function executeLlmGenerate(
         headers,
         body: JSON.stringify({
           prompt: finalText,
-          ...(images.length > 0 && { images }),
+          ...(images.length > 0 && { images: await inlineMediaReferences(images) }),
           provider: llmProvider,
           model: llmModel,
           temperature,

@@ -254,7 +254,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, ids: await listMediaIds(workflowPath) });
   }
 
-  logger.info('file.load', 'Workflow image load request received', {
+  // ?raw=1: the image's bytes, for node data that holds it by reference
+  // (see src/lib/media/references.ts). A canvas can ask for thousands, so
+  // these are not logged one by one.
+  const raw = request.nextUrl.searchParams.get("raw") === "1";
+
+  if (!raw) logger.info('file.load', 'Workflow image load request received', {
     workflowPath,
     imageId,
     folder,
@@ -342,6 +347,19 @@ export async function GET(request: NextRequest) {
         }
       }
       if (filePath) break; // Stop searching if file was found
+    }
+
+    if (raw) {
+      if (!filePath) return new NextResponse(null, { status: 404 });
+      const bytes = await fs.readFile(filePath);
+      return new NextResponse(new Uint8Array(bytes), {
+        headers: {
+          "Content-Type": IMAGE_EXTENSIONS[foundExtension] ?? "image/png",
+          "Content-Length": String(bytes.length),
+          // The file under an id can be rewritten, so the browser checks again
+          "Cache-Control": "no-cache",
+        },
+      });
     }
 
     if (!filePath) {

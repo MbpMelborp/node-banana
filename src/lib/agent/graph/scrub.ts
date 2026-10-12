@@ -2,7 +2,7 @@
  * Keeping media and oversized values out of what the agent sees.
  *
  * The snapshot is sent every turn and ends up in the model's context, so no
- * base64, data: or blob: URL may ever reach it. Values that had to be cut are
+ * base64, data: or blob: URL, nor a reference to a local file, may ever reach it. Values that had to be cut are
  * replaced with visible markers, and the draft refuses to write back an object
  * that still carries one (it would overwrite the user's real value).
  */
@@ -27,10 +27,11 @@ const MAX_ARRAY_ITEMS = 200;
 const MAX_DEPTH = 8;
 const BASE64_RUN = /^[A-Za-z0-9+/=\r\n]+$/;
 
-/** data:/blob: URLs and long base64 runs. */
+/** data:/blob: URLs, media held by reference (src/lib/media/references.ts) and long base64 runs. */
 export function isMediaString(value: string): boolean {
   const head = value.slice(0, 5).toLowerCase();
   if (head === "data:" || head === "blob:") return true;
+  if (value.startsWith("/api/assets/") || value.startsWith("/api/workflow-images?")) return true;
   return value.length > 1000 && !value.includes(" ") && BASE64_RUN.test(value.slice(0, 4000));
 }
 

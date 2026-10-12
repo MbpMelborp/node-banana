@@ -4,11 +4,15 @@ import { NextRequest } from "next/server";
 const mockStat = vi.fn();
 const mockMkdir = vi.fn();
 const mockWriteFile = vi.fn();
+const mockAccess = vi.fn();
+const mockReadFile = vi.fn();
 
 vi.mock("fs/promises", () => ({
   stat: (...args: unknown[]) => mockStat(...args),
   mkdir: (...args: unknown[]) => mockMkdir(...args),
   writeFile: (...args: unknown[]) => mockWriteFile(...args),
+  access: (...args: unknown[]) => mockAccess(...args),
+  readFile: (...args: unknown[]) => mockReadFile(...args),
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -22,7 +26,7 @@ vi.mock("@/utils/logger", () => ({
 // The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
 vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
-import { POST } from "../route";
+import { GET, POST } from "../route";
 import { makePng } from "@/lib/assets/server/__tests__/helpers";
 
 function createMockPostRequest(body: unknown): NextRequest {
@@ -192,6 +196,33 @@ describe("/api/workflow-images route", () => {
       expect(status).toBe(400);
       expect(data.success).toBe(false);
       expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("GET ?raw=1 - an image's bytes, for media held by reference", () => {
+    const rawRequest = (imageId: string) =>
+      ({
+        nextUrl: new URL(`http://localhost/api/workflow-images?workflowPath=${encodeURIComponent("/test/workflow")}&imageId=${imageId}&raw=1`),
+      }) as unknown as NextRequest;
+
+    it("answers with the file's bytes and type", async () => {
+      mockStat.mockResolvedValue({ isDirectory: () => true });
+      mockAccess.mockImplementation(async (file: string) => {
+        if (!file.endsWith("img_1.jpg")) throw new Error("ENOENT");
+      });
+      mockReadFile.mockResolvedValue(Buffer.from("jpeg bytes"));
+
+      const response = await GET(rawRequest("img_1"));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+      expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("jpeg bytes");
+    });
+
+    it("answers 404 when the folder has no such image", async () => {
+      mockStat.mockResolvedValue({ isDirectory: () => true });
+      mockAccess.mockRejectedValue(new Error("ENOENT"));
+      const response = await GET(rawRequest("img_gone"));
+      expect(response.status).toBe(404);
     });
   });
 });

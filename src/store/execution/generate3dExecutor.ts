@@ -22,6 +22,7 @@ import {
   resolvedPrompt,
   withFolderFallback,
 } from "./assetRecording";
+import { inlineMediaReferences } from "@/lib/media/references";
 
 export interface Generate3DOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -100,7 +101,8 @@ export async function executeGenerate3D(
       const response = await fetch("/api/generate", {
         method: "POST",
         headers,
-        body: JSON.stringify(requestPayload),
+        // Providers take media inline; node data may hold it by reference
+        body: JSON.stringify(await inlineMediaReferences(requestPayload)),
         ...(signal ? { signal } : {}),
       });
 

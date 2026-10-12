@@ -29,6 +29,7 @@ import {
   recordOutput,
   sizeFromString,
 } from "./assetRecording";
+import { inlineMediaReferences } from "@/lib/media/references";
 
 export interface NanoBananaOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -142,7 +143,8 @@ export async function executeNanoBanana(
       const response = await fetch("/api/generate", {
         method: "POST",
         headers,
-        body: JSON.stringify(requestPayload),
+        // Providers take media inline; node data may hold it by reference
+        body: JSON.stringify(await inlineMediaReferences(requestPayload)),
         ...(signal ? { signal } : {}),
       });
 
