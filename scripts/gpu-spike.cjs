@@ -161,12 +161,15 @@ async function main() {
       return gone.find(g => g.process === 'renderer' || g.process === 'GPU' || g.process === 'main');
     };
 
+    let appUrl;
     // Opens the spike page and installs the input and error watchers.
     async function open(query, label) {
       console.log(`Opening ${label}…`);
       await crashed();
       // Loaded from the main process, so a crashed page can be replaced.
-      await app.run(({ BrowserWindow }, query) => { const contents = BrowserWindow.getAllWindows()[0].webContents; void contents.loadURL(new URL(`/gpu-spike?${query}&overlay=off`, contents.getURL()).href); }, query);
+      // The app's own address, from before any page was replaced (the uikit runs rest on about:blank).
+      appUrl ??= await app.run(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getURL());
+      await app.run(({ BrowserWindow }, { query, appUrl }) => { void BrowserWindow.getAllWindows()[0].webContents.loadURL(new URL(`/gpu-spike?${query}&overlay=off`, appUrl).href); }, { query, appUrl });
       await delay(1000);
       for (const until = Date.now() + 300000; ;) {
         if (await page.evaluate(() => !!(window.__spike?.ready || window.__spike?.error)).catch(() => false)) break;
@@ -422,7 +425,11 @@ async function main() {
         const step = await settleAt(about(zoom));
         result.steps.push(step);
         // The way out, as drawn once sharp, for looking at each tier.
-        if (k <= 4) await fs.writeFile(path.join(shots, `zoom-${Math.round(zoom * 100)}.png`), await page.screenshot());
+        if (k <= 4) {
+          // A view that is sharp at once (held sharper images) may not be drawn yet.
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          await fs.writeFile(path.join(shots, `zoom-${Math.round(zoom * 100)}.png`), await page.screenshot());
+        }
         console.log(`  ${Math.round(zoom * 100)}%: ${step.sharp}/${step.visible} sharp at ${step.tier}x in ${step.sharpMs ?? `>${sharpWithin}`} ms, atlas ${step.memory.atlasMB} MB`);
       }
       // Jumps: to the far corner of the canvas and back, at 100% and 25%.
