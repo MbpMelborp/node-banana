@@ -21,6 +21,7 @@ import { cn } from "./ui/cn";
 import { ControlsSizingContext, type ControlsSizing } from "./ui/ControlsCard";
 import { SocketColumn, socketRowCount, type SocketOutline, type SocketSpec } from "./ui/Socket";
 import { CONTROLS_GAP, GAP_ROW_H, NODE_MIN_W, socketMinHeight } from "./ui/tokens";
+import { useUpdateNodeData } from "./paintMode";
 
 export type { ShellMedia };
 
@@ -181,7 +182,7 @@ export function NodeShell({
 }: NodeShellProps) {
   const currentNodeIds = useWorkflowStore((state) => state.currentNodeIds);
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   // These run for every node on every store update, a drag frame included:
   // a lookup in the index shared by the nodes array, not a scan of it.
   const controlsWidth = useWorkflowStore((state) => {

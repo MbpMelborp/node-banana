@@ -4,13 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { useCommentNavigation } from "@/hooks/useCommentNavigation";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { ImageInputNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Upload, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 type ImageInputNodeType = Node<ImageInputNodeData, "imageInput">;
 
@@ -21,7 +21,7 @@ export function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeT
   const nodeData = data;
   const adaptiveImage = useAdaptiveImageSrc(nodeData.image, id);
   useCommentNavigation(id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);

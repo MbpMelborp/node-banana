@@ -34,6 +34,7 @@ import {
   type SocketSpec,
 } from "./ui";
 import { Download, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 // Video generation capabilities
 const VIDEO_CAPABILITIES: ModelCapability[] = ["text-to-video", "image-to-video", "audio-to-video", "video-to-video"];
@@ -44,7 +45,7 @@ type GenerateVideoNodeType = Node<GenerateVideoNodeData, "generateVideo">;
 
 export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVideoNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   // Use stable selector for API keys to prevent unnecessary re-fetches
   const { geminiApiKey, replicateApiKey, falApiKey, kieApiKey, comfyApiKey } = useProviderApiKeys();
   const [, setExternalModels] = useState<ProviderModel[]>([]);

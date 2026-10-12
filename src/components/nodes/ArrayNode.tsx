@@ -11,6 +11,7 @@ import { ArrayNodeData } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
 import { arrayItemWireCounts } from "@/lib/edges/arrayItems";
+import { useUpdateNodeData } from "./paintMode";
 
 type ArrayNodeType = Node<ArrayNodeData, "array">;
 
@@ -95,7 +96,7 @@ function arraysEqual(a: string[], b: string[]): boolean {
 }
 
 export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const addNode = useWorkflowStore((state) => state.addNode);
   const onConnect = useWorkflowStore((state) => state.onConnect);
   const edges = useWorkflowStore((state) => state.edges);

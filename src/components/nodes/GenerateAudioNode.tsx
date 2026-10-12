@@ -28,6 +28,7 @@ import {
   type SocketSpec,
 } from "./ui";
 import { Download, Pause, Play, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "audio", type: "audio", label: "Audio" }];
 const DEFAULT_INPUTS: SocketSpec[] = [{ id: "text", type: "text", label: "Prompt" }];
@@ -37,7 +38,7 @@ type GenerateAudioNodeType = Node<GenerateAudioNodeData, "generateAudio">;
 
 export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudioNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"primary" | "fallback">("primary");
 

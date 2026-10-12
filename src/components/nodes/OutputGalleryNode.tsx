@@ -14,6 +14,7 @@ import { useAddMediaNode } from "@/hooks/useAddMediaNode";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { downloadMedia as downloadMediaUtil } from "@/utils/downloadMedia";
 import { Check, Download, ImagePlus, LibraryBig, Menu, Play, Trash2 } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 const INPUT_SOCKETS: SocketSpec[] = [
   { id: "image", type: "image", label: "Image" },
@@ -41,7 +42,7 @@ type OutputGalleryNodeType = Node<OutputGalleryNodeData, "outputGallery">;
 
 export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGalleryNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const addNode = useWorkflowStore((state) => state.addNode);
   const { getNodes, setNodes } = useReactFlow();
   const addMediaNode = useAddMediaNode();

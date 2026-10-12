@@ -6,7 +6,6 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { NodeShell } from "./NodeShell";
 import { ControlsCard, EmptyState, FieldRow, PanelButton, SummaryValues, type SocketSpec } from "./ui";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { useToast } from "@/components/Toast";
 import { GLBViewerNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
@@ -14,6 +13,7 @@ import { downloadMedia } from "@/utils/downloadMedia";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { Box, RefreshCw } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 type GLBViewerNodeType = Node<GLBViewerNodeData, "glbViewer">;
 
@@ -211,7 +211,7 @@ function LoadingIndicator() {
 export function GLBViewerNode({ id, data, selected }: NodeProps<GLBViewerNodeType>) {
   const nodeData = data as GLBViewerNodeData;
   const adaptiveCapturedImage = useAdaptiveImageSrc(nodeData.capturedImage, id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const captureRef = useRef<(() => string | null) | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);

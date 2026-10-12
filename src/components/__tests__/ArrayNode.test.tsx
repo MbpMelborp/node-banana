@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { ArrayNode } from "@/components/nodes/ArrayNode";
+import { PaintedNodes } from "@/components/nodes/paintMode";
 import type { ArrayNodeData } from "@/types";
 
 const mockUpdateNodeData = vi.fn();
@@ -35,7 +36,7 @@ function nodeData(overrides: Partial<ArrayNodeData> = {}): ArrayNodeData {
   };
 }
 
-function setup(data: ArrayNodeData, edges: Array<Record<string, unknown>> = []) {
+function setup(data: ArrayNodeData, edges: Array<Record<string, unknown>> = [], { painted = false } = {}) {
   const state = {
     updateNodeData: mockUpdateNodeData,
     addNode: vi.fn(),
@@ -50,24 +51,23 @@ function setup(data: ArrayNodeData, edges: Array<Record<string, unknown>> = []) 
   };
   mockUseWorkflowStore.mockImplementation((selector: (s: typeof state) => unknown) => selector(state));
   mockState = state;
-  return render(
-    <ReactFlowProvider>
-      <ArrayNode
-        id={NODE_ID}
-        type="array"
-        data={data}
-        selected={false}
-        isConnectable
-        positionAbsoluteX={0}
-        positionAbsoluteY={0}
-        zIndex={0}
-        dragging={false}
-        deletable
-        selectable
-        draggable
-      />
-    </ReactFlowProvider>
+  const node = (
+    <ArrayNode
+      id={NODE_ID}
+      type="array"
+      data={data}
+      selected={false}
+      isConnectable
+      positionAbsoluteX={0}
+      positionAbsoluteY={0}
+      zIndex={0}
+      dragging={false}
+      deletable
+      selectable
+      draggable
+    />
   );
+  return render(<ReactFlowProvider>{painted ? <PaintedNodes>{node}</PaintedNodes> : node}</ReactFlowProvider>);
 }
 
 const incoming = { id: "in", source: "prompt-1", sourceHandle: "text", target: NODE_ID, targetHandle: "text", data: {} };
@@ -86,6 +86,16 @@ describe("ArrayNode", () => {
     expect(screen.getByText("Connect text to split it")).toBeInTheDocument();
     expect(screen.getByTestId("array-item-count")).toHaveTextContent("No items");
     expect(screen.getByRole("button", { name: /Make Prompts/ })).toBeDisabled();
+  });
+
+  it("saves its items when it mounts, except as a painted copy", () => {
+    const data = nodeData({ inputText: ITEMS.join("*") });
+    setup(data, [incoming]);
+    expect(mockUpdateNodeData).toHaveBeenCalledWith(NODE_ID, expect.objectContaining({ outputItems: ITEMS }));
+
+    mockUpdateNodeData.mockClear();
+    setup(data, [incoming], { painted: true });
+    expect(mockUpdateNodeData).not.toHaveBeenCalled();
   });
 
   it("previews the first five items and marks the wired ones", () => {

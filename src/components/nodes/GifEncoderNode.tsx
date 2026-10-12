@@ -25,6 +25,7 @@ import {
   setPending,
   removePending,
 } from "@/store/thumbnailCache";
+import { useUpdateNodeData } from "./paintMode";
 
 type GifEncoderNodeType = Node<GifEncoderNodeData, "gifEncoder">;
 
@@ -114,7 +115,7 @@ function formatBytes(bytes: number | null): string {
 
 export function GifEncoderNode({ id, data, selected }: NodeProps<GifEncoderNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const removeEdge = useWorkflowStore((state) => state.removeEdge);
   const isRunning = useWorkflowStore((state) => state.isRunning);

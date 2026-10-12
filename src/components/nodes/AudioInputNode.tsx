@@ -3,7 +3,6 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { AudioInputNodeData } from "@/types";
 import { useAudioVisualization } from "@/hooks/useAudioVisualization";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
@@ -11,6 +10,7 @@ import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Music, Pause, Play, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 type AudioInputNodeType = Node<AudioInputNodeData, "audioInput">;
 
@@ -20,7 +20,7 @@ const MEDIA_HEIGHT = 96;
 
 export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
 

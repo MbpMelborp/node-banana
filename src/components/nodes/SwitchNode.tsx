@@ -7,6 +7,7 @@ import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
 import type { WorkflowNode, SwitchNodeData, HandleType } from "@/types";
 import { LogicRow, LogicRows, type SocketSpec } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 /**
  * Toggle-controlled fan-out. The input lands on the first row; every switch
@@ -17,7 +18,7 @@ import { LogicRow, LogicRows, type SocketSpec } from "./ui";
 export const SwitchNode = memo(({ id, data, selected }: NodeProps<WorkflowNode>) => {
   const nodeData = data as SwitchNodeData;
   const edges = useWorkflowStore((state) => state.edges);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const { setEdges } = useReactFlow();
   const [editingId, setEditingId] = useState<string | null>(null);
 
