@@ -29,7 +29,7 @@ React Flow canvas runs, unchanged.
 |------|------|--------------|
 | Scene graph | `src/lib/gpuCanvas/graph.ts` | Nodes, edges and groups as flat arrays plus a grid index, kept in step with the store; positions move in place, an add or remove rebuilds |
 | Scene | `src/lib/gpuCanvas/scene.ts` | WebGL2: dot grid, groups, instanced node quads reading the atlas, instanced bezier edges, selection and hover outlines. Owns pan, zoom, click, double-click and wheel |
-| Paint keys | `src/lib/gpuCanvas/paintKey.ts` | A hash of what a node's picture shows: type, width, data, socket connections and the data of what feeds it. Position and selection are not in it |
+| Paint keys | `src/lib/gpuCanvas/paintKey.ts` | A hash of what a node's picture shows: type, width, data, socket connections and the keys of what feeds it, so a change anywhere upstream reaches it. Position and selection are not in it |
 | Queue | `src/lib/gpuCanvas/paintQueue.ts` | Paint requests by priority (urgent changes, the view, background) and tier |
 | Atlas | `src/lib/gpuCanvas/atlasLayout.ts`, `atlas.ts` | A 2048² texture array: 1/8 images shelf-packed for good, larger tiers in freeable cells |
 | Budget | `src/lib/gpuCanvas/budget.ts` | 16 layers (256 MB); 8 on an integrated GPU or under 8 GB of memory |
@@ -51,7 +51,8 @@ tier near the view is never evicted.
 ## Painting
 
 - **Sizes settle first.** A batch renders its nodes on the sheet, waits for
-  React Flow to measure them and for their images to decode, then places
+  React Flow to measure them and for their images to load and decode (again
+  whenever an image's source changes, until the sizes hold), then places
   them again at their measured heights and waits until React Flow has moved
   them (it applies positions a render after ours). Only then is the sheet
   painted. The measured height and handle positions go to the scene, so
@@ -60,8 +61,8 @@ tier near the view is never evicted.
   input, and a batch whose sheet became ready after input arrived goes back
   to the queue unpainted. Sheets are 2048×1536 texels; disk cache uploads
   are spread to 2 M texels a frame.
-- **Changes come first.** A store change marks the node and what it feeds
-  stale a frame later (keys are not computed on the typing path). Their
+- **Changes come first.** A store change marks the node and everything
+  downstream of it stale a frame later (keys are not computed on the typing path). Their
   images at the view's tier and at 1/8 are queued urgent; an urgent batch
   holds only urgent requests, and a background batch still being prepared
   gives way to it.
@@ -70,6 +71,10 @@ tier near the view is never evicted.
   that derives what it shows by saving it (Split Grid and Image Resize copy
   their upstream image) shows the derived value directly when
   `useIsPaintedNode()` is true.
+
+- **Navigating holds `canvas-interacting`** on the document, as today's
+  canvas does, so work that waits for a still canvas (the desktop recovery
+  checkpoint) does not land mid-pan.
 
 ## Opening a workflow
 
@@ -116,11 +121,16 @@ reference), and checks:
 | `open` | in the scene, then the view sharp and every node at 1/8 (loading screen timings) |
 | `reopen` | the same over the disk cache |
 | `pan` | pans while painting hold refresh rate (traced) |
-| `change` | a change to a node not being edited is shown within 100 ms |
-| `fidelity` | each node type painted against live: 99.5% of pixels within 2 levels |
+| `change` | a change to a node not being edited is shown within 100 ms (what it feeds is timed alongside) |
+| `fidelity` | each node type painted against live: 99.5% of pixels within 2 levels, or (photos resample a little differently) no more than 0.5% over 10 levels and a mean difference of 1 level at most |
 | `tiers` | zoom steps and jumps sharp within 500 ms, atlas within budget |
 | `scene` | pan and zoom gestures at refresh rate |
 | `latency` | input latency of a pan on the GPU canvas against today's canvas |
+
+The trace's `latencyMs` counts an input as shown by the first presented frame
+with a main-thread commit after it; a WebGL canvas's frames need none, so for
+the GPU canvas read `chromeLatencyMs` (Chromium's own input-to-presentation
+figure) and the page's `input.latencyMs` instead.
 
 ```bash
 npm run build
