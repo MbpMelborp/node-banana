@@ -24,7 +24,7 @@ export function assetReference(assetId: string): string {
   return assetFileUrl(assetId);
 }
 
-/** The reference for an image in a saved workflow's folder (`imageRef` ids). */
+/** The reference for a file in a saved workflow's folder: an image, video or audio ref id (`imageRef`, `videoRef`, …). */
 export function workflowImageReference(workflowPath: string, imageId: string, folder?: "inputs" | "generations"): string {
   const params = new URLSearchParams({ workflowPath, imageId, raw: "1" });
   if (folder) params.set("folder", folder);

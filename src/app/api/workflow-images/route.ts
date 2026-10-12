@@ -6,6 +6,7 @@ import { decodeBase64, parseDataUrl } from "@/utils/dataUrl";
 import { logger } from "@/utils/logger";
 import { sniffExtension } from "@/utils/mediaSniff";
 import { validateWorkflowPath } from "@/utils/pathValidation";
+import { serveFile } from "@/app/api/assets/_lib/files";
 
 export const maxDuration = 300; // 5 minute timeout for large image operations
 
@@ -22,6 +23,23 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
   svg: "image/svg+xml",
+};
+
+/**
+ * Every extension `?raw=1` serves, in the order it looks: images, then the
+ * video and audio a save writes into `generations/` (see /api/save-generation).
+ */
+const MEDIA_EXTENSIONS: Record<string, string> = {
+  ...IMAGE_EXTENSIONS,
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  aac: "audio/aac",
+  m4a: "audio/mp4",
 };
 
 const MIME_TO_EXTENSION: Record<string, string> = {
@@ -237,6 +255,30 @@ async function listMediaIds(workflowPath: string): Promise<string[]> {
   return [...ids];
 }
 
+/** The first `<id>.<ext>` that exists, folder by folder, extension by extension. */
+async function findMedia(
+  id: string,
+  folders: string[],
+  extensions: Record<string, string>,
+  legacyFolder: string,
+): Promise<{ filePath: string; extension: string } | null> {
+  for (const searchFolder of folders) {
+    for (const extension of Object.keys(extensions)) {
+      const candidatePath = path.join(searchFolder, `${id}.${extension}`);
+      try {
+        await fs.access(candidatePath);
+        if (searchFolder === legacyFolder) {
+          logger.info('file.load', 'Found image in legacy .images folder', { filePath: candidatePath });
+        }
+        return { filePath: candidatePath, extension };
+      } catch {
+        // File not found with this extension, try next
+      }
+    }
+  }
+  return null;
+}
+
 // GET: Load an image from the workflow's folders (inputs, generations, or legacy .images)
 export async function GET(request: NextRequest) {
   const refused = guardAssetRequest(request);
@@ -316,7 +358,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Construct file path - check folders and extensions in order
-    const possibleExtensions = Object.keys(IMAGE_EXTENSIONS);
     const inputsFolder = path.join(workflowPath, IMAGES_FOLDER);
     const generationsFolder = path.join(workflowPath, "generations");
     const legacyFolder = path.join(workflowPath, LEGACY_IMAGES_FOLDER);
@@ -326,40 +367,26 @@ export async function GET(request: NextRequest) {
       ? [generationsFolder, inputsFolder, legacyFolder]
       : [inputsFolder, generationsFolder, legacyFolder];
 
-    let filePath: string | null = null;
-    let foundExtension = "png"; // Track which extension was found
-
-    // Check each folder and extension combination in order
-    for (const searchFolder of searchOrder) {
-      for (const ext of possibleExtensions) {
-        const filename = `${safeImageId}.${ext}`;
-        const candidatePath = path.join(searchFolder, filename);
-        try {
-          await fs.access(candidatePath);
-          filePath = candidatePath;
-          foundExtension = ext;
-          if (searchFolder === legacyFolder) {
-            logger.info('file.load', 'Found image in legacy .images folder', { filePath });
-          }
-          break;
-        } catch {
-          // File not found with this extension, try next
-        }
-      }
-      if (filePath) break; // Stop searching if file was found
-    }
+    // ?raw=1 serves video and audio too, and also looks in the workflow's own
+    // folder, where saves before the generations/ folder put them.
+    const found = raw
+      ? await findMedia(safeImageId, [...searchOrder, workflowPath], MEDIA_EXTENSIONS, legacyFolder)
+      : await findMedia(safeImageId, searchOrder, IMAGE_EXTENSIONS, legacyFolder);
+    const filePath = found?.filePath ?? null;
+    const foundExtension = found?.extension ?? "png";
 
     if (raw) {
       if (!filePath) return new NextResponse(null, { status: 404 });
-      const bytes = await fs.readFile(filePath);
-      return new NextResponse(new Uint8Array(bytes), {
-        headers: {
-          "Content-Type": IMAGE_EXTENSIONS[foundExtension] ?? "image/png",
-          "Content-Length": String(bytes.length),
-          // The file under an id can be rewritten, so the browser checks again
-          "Cache-Control": "no-cache",
-        },
-      });
+      const stats = await fs.stat(filePath);
+      // Ranges let a video seek without reading the whole file. The file under
+      // an id can be rewritten, so the browser revalidates by size and time.
+      return serveFile(request, {
+        path: filePath,
+        mime: MEDIA_EXTENSIONS[foundExtension] ?? "application/octet-stream",
+        bytes: stats.size,
+        sha256: `${stats.size.toString(36)}-${Math.floor(stats.mtimeMs).toString(36)}`,
+        filename: path.basename(filePath),
+      }, { cacheControl: "no-cache" });
     }
 
     if (!filePath) {

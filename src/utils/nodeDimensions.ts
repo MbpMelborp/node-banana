@@ -127,10 +127,9 @@ export function getMediaDimensions(
     return getVideoDimensions(url);
   }
 
-  // Media held by reference: the workflow folder's references are images,
-  // and a library asset is tried as an image, then as a video
-  if (url.startsWith("/api/workflow-images?")) return getImageDimensions(url);
-  if (url.startsWith("/api/assets/")) {
+  // Media held by reference (a workflow folder's file or a library asset)
+  // is tried as an image, then as a video
+  if (url.startsWith("/api/workflow-images?") || url.startsWith("/api/assets/")) {
     return getImageDimensions(url).then((size) => size ?? getVideoDimensions(url));
   }
 

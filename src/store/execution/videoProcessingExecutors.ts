@@ -7,6 +7,7 @@
 
 import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFrameGrabNodeData } from "@/types";
 import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
+import { isMediaReference } from "@/lib/media/references";
 import type { NodeExecutionContext } from "./types";
 import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
 
@@ -60,9 +61,17 @@ function rememberRecordedVideo(key: string, video: RecordedVideo): void {
 
 /** What the node showed before this run, when that was a video still readable here. */
 async function previousVideoFingerprint(previousOutput: unknown): Promise<string | null> {
-  // An object URL is revoked by now; a data: URL (under 20 MB, or loaded from a file) still holds its bytes
-  if (typeof previousOutput !== "string" || !isDataUrl(previousOutput)) return null;
-  return videoFingerprint(dataUrlToBlob(previousOutput));
+  // An object URL is revoked by now; a data: URL (under 20 MB) still holds its
+  // bytes, and a reference (a saved workflow's file) still points at them
+  if (typeof previousOutput !== "string") return null;
+  if (isDataUrl(previousOutput)) return videoFingerprint(dataUrlToBlob(previousOutput));
+  if (!isMediaReference(previousOutput)) return null;
+  try {
+    const response = await fetch(previousOutput);
+    return response.ok ? videoFingerprint(await response.blob()) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

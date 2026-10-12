@@ -46,6 +46,32 @@ describe("media references in saved workflows", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("opens video and audio as references, and reads legacy files from the workflow's own folder", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("list=1")) return Response.json({ success: true, ids: ["vid-a", "aud-a"] });
+      if (url === "/api/load-generation") {
+        const { directoryPath } = JSON.parse(init!.body as string);
+        return Response.json(directoryPath === FOLDER
+          ? { success: true, contentType: "video", video: "data:video/mp4;base64,b2xk" }
+          : { success: false, notFound: true });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const workflow = {
+      version: 1, name: "Cars", edges: [],
+      nodes: [
+        { ...node("videoInput", { video: null, videoRef: "vid-a" }), id: "v1" },
+        { ...node("generateAudio", { outputAudio: null, outputAudioRef: "aud-a" }), id: "a1" },
+        { ...node("videoInput", { video: null, videoRef: "vid-old" }), id: "v2" },
+      ],
+    } as unknown as WorkflowFile;
+
+    const opened = await hydrateWorkflowMedia(workflow, FOLDER);
+    expect((opened.nodes[0].data as { video: string }).video).toBe(workflowImageReference(FOLDER, "vid-a"));
+    expect((opened.nodes[1].data as { outputAudio: string }).outputAudio).toBe(workflowImageReference(FOLDER, "aud-a"));
+    expect((opened.nodes[2].data as { video: string }).video).toBe("data:video/mp4;base64,b2xk");
+  });
+
   it("strips a reference to its own file in this folder, as the save strips media with a ref", async () => {
     const own = workflowImageReference(FOLDER, "img-a");
     const settled = await settleMediaReferences(

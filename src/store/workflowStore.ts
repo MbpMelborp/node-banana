@@ -4048,11 +4048,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             'capturedImageRef', 'videoRef', 'outputVideoRef', 'audioFileRef', 'outputAudioRef',
           ] as const;
           const ARRAY_REF_FIELDS = ['inputImageRefs', 'imageRefs', 'videoRefs'] as const;
-          // The refs that name images (the folder's image route serves these)
-          const IMAGE_REF_FIELDS = new Set<string>([
-            'imageRef', 'sourceImageRef', 'outputImageRef', 'imageARef', 'imageBRef', 'capturedImageRef',
-            'inputImageRefs', 'imageRefs',
-          ]);
           // The media field each ref describes
           const MEDIA_FIELD_BY_REF: Record<string, string> = {
             imageRef: 'image', sourceImageRef: 'sourceImage', outputImageRef: 'outputImage',
@@ -4086,20 +4081,18 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             const unchanged = (key: string) =>
               mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
               mergedData[key] === savedData[key];
-            // An image now in the folder is held by reference from here on
+            // Media now in the folder is held by reference from here on
             // (src/lib/media/references.ts): the node stops carrying its bytes.
             const reference = (media: unknown, ref: unknown) =>
-              typeof media === 'string' && media.startsWith('data:image/') && typeof ref === 'string' && ref
+              typeof media === 'string' && media.startsWith('data:') && typeof ref === 'string' && ref
                 ? workflowImageReference(saveDirectoryPath, ref)
                 : media;
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
               if (unchanged(key) && typeof extData[key] === 'string') {
                 mergedData[key] = extData[key];
-                if (IMAGE_REF_FIELDS.has(key)) {
-                  const field = MEDIA_FIELD_BY_REF[key];
-                  mergedData[field] = reference(mergedData[field], extData[key]);
-                }
+                const field = MEDIA_FIELD_BY_REF[key];
+                mergedData[field] = reference(mergedData[field], extData[key]);
                 touched = true;
               }
             }
@@ -4108,7 +4101,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
                 const refs = extData[key] as unknown[];
                 mergedData[key] = refs;
                 const field = MEDIA_FIELD_BY_REF[key];
-                if (IMAGE_REF_FIELDS.has(key) && Array.isArray(mergedData[field])) {
+                if (Array.isArray(mergedData[field])) {
                   mergedData[field] = (mergedData[field] as unknown[]).map((media, i) => reference(media, refs[i]));
                 }
                 touched = true;

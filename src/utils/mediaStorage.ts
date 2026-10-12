@@ -1010,10 +1010,11 @@ interface HydrationCache extends Map<string, string> {
 
 /**
  * Load all external media into a workflow, replacing refs with the media.
- * Images become references to their files (`/api/workflow-images?…&raw=1`,
+ * Media becomes references to its files (`/api/workflow-images?…&raw=1`,
  * see src/lib/media/references.ts) rather than base64, so a large workflow
- * opens without reading every image into memory. Video and audio are still
- * loaded as data URLs.
+ * opens without reading every image, video and audio file into memory.
+ * Only legacy video and audio in the workflow's own folder, and anything
+ * when the folder cannot be listed, are still read as data URLs.
  */
 export async function hydrateWorkflowMedia(
   workflow: WorkflowFile,
@@ -1449,11 +1450,12 @@ async function loadMediaById(
     return loadedMedia.get(mediaId)!;
   }
 
-  // An image the folder holds is referenced, not read; one it lacks is
-  // missing, as when the image route reports it not found.
-  if (mediaType === "image" && loadedMedia.presentIds) {
-    return loadedMedia.presentIds.has(mediaId) ? workflowImageReference(workflowPath, mediaId) : "";
-  }
+  // Media the folder holds is referenced, not read. An image it lacks is
+  // missing, as when the image route reports it not found; video and audio
+  // it lacks are still looked for in the workflow's own folder below, where
+  // saves before the generations/ folder put them.
+  if (loadedMedia.presentIds?.has(mediaId)) return workflowImageReference(workflowPath, mediaId);
+  if (mediaType === "image" && loadedMedia.presentIds) return "";
 
   let response: Response;
 

@@ -248,7 +248,7 @@ describe("overlapping saves", () => {
   });
 });
 
-describe("images a save writes into the folder", () => {
+describe("media a save writes into the folder", () => {
   it("are held by reference from then on, and anything else stays as it was", async () => {
     const png = "data:image/png;base64,cG5n";
     const video = "data:video/mp4;base64,bXA0";
@@ -257,6 +257,7 @@ describe("images a save writes into the folder", () => {
         node("image-1", { image: png }),
         node("video-1", { video }, "videoInput"),
         node("gen-1", { inputImages: [png], outputImage: png }, "nanoBanana"),
+        node("video-2", { video: "blob:http://localhost/v" }, "videoInput"),
       ],
     });
     vi.mocked(externalizeWorkflowMedia).mockImplementationOnce(async (workflow) => ({
@@ -265,18 +266,20 @@ describe("images a save writes into the folder", () => {
         node("image-1", { image: null, imageRef: "img-a" }),
         node("video-1", { video: null, videoRef: "vid-a" }, "videoInput"),
         node("gen-1", { inputImages: [""], inputImageRefs: ["img-b"], outputImage: null, outputImageRef: "img-c" }, "nanoBanana"),
+        node("video-2", { video: "blob:http://localhost/v" }, "videoInput"),
       ],
     }));
 
     expect(await store().saveToFile()).toBe(true);
-    const [image, videoNode, generate] = store().nodes;
+    const [image, videoNode, generate, unsaved] = store().nodes;
     expect(image.data).toMatchObject({ image: workflowImageReference("/project", "img-a"), imageRef: "img-a" });
-    // The folder's image route serves images only
-    expect(videoNode.data).toMatchObject({ video, videoRef: "vid-a" });
+    expect(videoNode.data).toMatchObject({ video: workflowImageReference("/project", "vid-a"), videoRef: "vid-a" });
     expect(generate.data).toMatchObject({
       inputImages: [workflowImageReference("/project", "img-b")],
       outputImage: workflowImageReference("/project", "img-c"),
     });
+    // Media the save did not write keeps what it held
+    expect(unsaved.data).toEqual({ video: "blob:http://localhost/v" });
     expect(store().hasUnsavedChanges).toBe(false);
   });
 });
