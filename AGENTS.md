@@ -53,6 +53,10 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
+- The graph is never edited in place: an action replaces the node, edge or group object it changes and keeps every other one. Undo snapshots hold the live objects rather than copies, so an in-place edit would rewrite history; the tests freeze the graph after every change (`src/store/utils/freezeGraph.ts`) to catch one
+- `updateNodeData` finds its node through an id index (`src/store/nodeChanges.ts`) and replaces only that node, so a keystroke costs the same at any graph size. `subscribeToWorkflowNodeChanges(listener)` reports which node ids each change updated, added or removed
+- Node components take their writer from `useUpdateNodeData()` (`src/components/nodes/paintMode.tsx`), never straight from the store: inside `<PaintedNodes>` (the GPU canvas's off-screen painted copies) it drops writes, so a node that saves derived data on mount does not write once per paint
+- `NB_STORE_BENCH=1 npx vitest run src/store/__tests__/storeBench.test.ts` times a keystroke, undo, autosave's serialisation and a load at 300 to 10,000 nodes
 - Auto-save runs every 90 seconds when enabled
 
 ### Execution Flow

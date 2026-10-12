@@ -59,7 +59,11 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
-- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`)
+- The graph is never edited in place: an action replaces the node, edge or group object it changes and keeps every other one. Undo snapshots hold the live objects rather than copies, so an in-place edit would rewrite history; the tests freeze the graph after every change (`src/store/utils/freezeGraph.ts`) to catch one
+- `updateNodeData` finds its node through an id index (`src/store/nodeChanges.ts`) and replaces only that node, so a keystroke costs the same at any graph size. `subscribeToWorkflowNodeChanges(listener)` reports which node ids each change updated, added or removed
+- Node components take their writer from `useUpdateNodeData()` (`src/components/nodes/paintMode.tsx`), never straight from the store: inside `<PaintedNodes>` (the GPU canvas's off-screen painted copies) it drops writes, so a node that saves derived data on mount does not write once per paint
+- `NB_STORE_BENCH=1 npx vitest run src/store/__tests__/storeBench.test.ts` times a keystroke, undo, autosave's serialisation and a load at 300 to 10,000 nodes
+- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`). The request body reuses each unchanged node's JSON from the last save (`src/store/utils/workflowSerializer.ts`)
 
 ### Execution Flow
 
