@@ -452,6 +452,17 @@ async function main() {
         await inPage(`${id} live`, id => window.__gpuCanvas.setLive([id]), id);
         const swapMs = Date.now() - swapStarted;
         await delay(250);
+        // A live node can still be swapping its image (a thumbnail for the
+        // full one, deferred while the page is busy): grab it once its images
+        // have loaded and held the same source for 300 ms.
+        await page.waitFor(id => {
+          const node = [...document.querySelectorAll(`.react-flow__node[data-id="${CSS.escape(id)}"]`)].find(n => !n.closest('[data-gpu-canvas-sheet]'));
+          const images = node ? [...node.querySelectorAll('img')] : [];
+          const signature = images.map(img => `${img.currentSrc || img.src}|${img.complete}`).join('\n');
+          const w = (window.__liveImages ??= {});
+          if (w.id !== id || w.signature !== signature) Object.assign(w, { id, signature, since: performance.now() });
+          return images.every(img => img.complete) && performance.now() - w.since >= 300;
+        }, id, { message: `${id}'s live images to settle`, timeout: 5000 }).catch(() => log(`  ${id}: live images still changing after 5 s`));
         const live = await grab(box);
         const type = await page.evaluate(id => window.__gpuCanvas.nodeRect(id).type, id);
         const compared = await compare(painted, live, path.join(shots, 'fidelity', type));
