@@ -39,6 +39,7 @@ import {
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { deepFreezeGraph } from "./utils/freezeGraph";
 import { serializeWorkflowRequest } from "./utils/workflowSerializer";
+import { inlineMediaReferences, workflowImageReference } from "@/lib/media/references";
 import { indexOfNode, replaceNodesAt, subscribeToNodeChanges, type NodeChangeListener } from "./nodeChanges";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
@@ -3400,17 +3401,22 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       ...(runCount > 1 ? { runCount } : {}),
     };
 
-    const json = JSON.stringify(workflow, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
+    // The downloaded file carries its media: anything held by reference goes in inline
+    void inlineMediaReferences(workflow.nodes).then((nodes) => {
+      const json = JSON.stringify({ ...workflow, nodes }, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${workflow.name}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${workflow.name}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, (error) => {
+      useToast.getState().show(`Couldn't export: ${error instanceof Error ? error.message : "a file could not be read"}`, "error");
+    });
   },
 
   loadWorkflow: async (workflow: WorkflowFile, workflowPath?: string) => {
@@ -3998,6 +4004,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       // If external media storage is enabled, externalize media before saving
       if (useExternalImageStorage) {
         workflow = await externalizeWorkflowMedia(workflow, saveDirectoryPath);
+      } else {
+        // The file carries its media: anything held by reference goes in inline
+        workflow = { ...workflow, nodes: await inlineMediaReferences(workflow.nodes) };
       }
       if (replaced()) return false;
 
@@ -4039,6 +4048,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             'capturedImageRef', 'videoRef', 'outputVideoRef', 'audioFileRef', 'outputAudioRef',
           ] as const;
           const ARRAY_REF_FIELDS = ['inputImageRefs', 'imageRefs', 'videoRefs'] as const;
+          // The refs that name images (the folder's image route serves these)
+          const IMAGE_REF_FIELDS = new Set<string>([
+            'imageRef', 'sourceImageRef', 'outputImageRef', 'imageARef', 'imageBRef', 'capturedImageRef',
+            'inputImageRefs', 'imageRefs',
+          ]);
           // The media field each ref describes
           const MEDIA_FIELD_BY_REF: Record<string, string> = {
             imageRef: 'image', sourceImageRef: 'sourceImage', outputImageRef: 'outputImage',
@@ -4072,12 +4086,33 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             const unchanged = (key: string) =>
               mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
               mergedData[key] === savedData[key];
+            // An image now in the folder is held by reference from here on
+            // (src/lib/media/references.ts): the node stops carrying its bytes.
+            const reference = (media: unknown, ref: unknown) =>
+              typeof media === 'string' && media.startsWith('data:image/') && typeof ref === 'string' && ref
+                ? workflowImageReference(saveDirectoryPath, ref)
+                : media;
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
-              if (unchanged(key) && typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && typeof extData[key] === 'string') {
+                mergedData[key] = extData[key];
+                if (IMAGE_REF_FIELDS.has(key)) {
+                  const field = MEDIA_FIELD_BY_REF[key];
+                  mergedData[field] = reference(mergedData[field], extData[key]);
+                }
+                touched = true;
+              }
             }
             for (const key of ARRAY_REF_FIELDS) {
-              if (unchanged(key) && Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && Array.isArray(extData[key])) {
+                const refs = extData[key] as unknown[];
+                mergedData[key] = refs;
+                const field = MEDIA_FIELD_BY_REF[key];
+                if (IMAGE_REF_FIELDS.has(key) && Array.isArray(mergedData[field])) {
+                  mergedData[field] = (mergedData[field] as unknown[]).map((media, i) => reference(media, refs[i]));
+                }
+                touched = true;
+              }
             }
             return touched ? ({ ...node, data: mergedData as WorkflowNodeData } as WorkflowNode) : node;
           });

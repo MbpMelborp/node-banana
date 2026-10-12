@@ -1,6 +1,7 @@
 import { WorkflowNode, WorkflowNodeData } from "@/types";
 import { WorkflowFile } from "@/store/workflowStore";
 import crypto from "crypto";
+import { isMediaReference, resolveMediaReference, workflowImageReference } from "@/lib/media/references";
 
 /**
  * Fetch with timeout support using AbortController
@@ -106,7 +107,8 @@ export async function externalizeWorkflowMedia(
     const batch = workflow.nodes.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
       batch.map((node, batchIndex) =>
-        externalizeNodeMedia(node, workflowPath, savedImageIds, savedMediaIds)
+        settleMediaReferences(node, workflowPath)
+          .then((settled) => externalizeNodeMedia(settled, workflowPath, savedImageIds, savedMediaIds))
           // A node whose media can't be written out (bytes the server refuses to
           // decode, a failed write) keeps it inline, as an unsaved workflow does,
           // rather than failing the whole save.
@@ -127,6 +129,79 @@ export async function externalizeWorkflowMedia(
     ...workflow,
     nodes: externalizedNodes,
   };
+}
+
+/** The folder and id a workflow-file reference names, or null for any other reference. */
+function workflowFileOf(reference: string): { workflowPath: string; imageId: string } | null {
+  if (!reference.startsWith("/api/workflow-images?")) return null;
+  const params = new URLSearchParams(reference.slice(reference.indexOf("?") + 1));
+  const workflowPath = params.get("workflowPath");
+  const imageId = params.get("imageId");
+  return workflowPath && imageId ? { workflowPath, imageId } : null;
+}
+
+/**
+ * A node's media references made ready for externalising. A reference to the
+ * very file its ref names, in this folder, needs nothing written: it is
+ * stripped as the save strips media that has a ref (null in a field, "" in a
+ * list, gone from a map such as a Comfy node's `outputs`), and so is any
+ * other copy of it on the node (the Comfy node's typed mirrors). Any other
+ * reference (an asset, a file in another folder) is read back into a data
+ * URL, which the save then writes into this folder like any other media.
+ *
+ * Refs sit beside their media: `image` ↔ `imageRef`, `inputImages[i]` ↔
+ * `inputImageRefs[i]`, `outputs[k]` ↔ `outputRefs[k]`.
+ */
+export async function settleMediaReferences(node: WorkflowNode, workflowPath: string): Promise<WorkflowNode> {
+  const data = node.data as Record<string, unknown>;
+  const refFor = (key: string) => data[key.endsWith("s") ? `${key.slice(0, -1)}Refs` : `${key}Ref`];
+  const inFolder = (value: string, ref: unknown) => {
+    const file = workflowFileOf(value);
+    return file !== null && file.workflowPath === workflowPath && file.imageId === ref;
+  };
+
+  // The references whose file this folder already holds under their ref
+  const covered = new Set<string>();
+  let any = false;
+  for (const [key, value] of Object.entries(data)) {
+    const ref = refFor(key);
+    if (isMediaReference(value)) {
+      any = true;
+      if (inFolder(value, ref)) covered.add(value);
+    } else if (Array.isArray(value)) {
+      value.forEach((item, i) => {
+        if (!isMediaReference(item)) return;
+        any = true;
+        if (Array.isArray(ref) && inFolder(item, ref[i])) covered.add(item);
+      });
+    } else if (value !== null && typeof value === "object") {
+      for (const [k, item] of Object.entries(value)) {
+        if (!isMediaReference(item)) continue;
+        any = true;
+        if (ref !== null && typeof ref === "object" && inFolder(item, (ref as Record<string, unknown>)[k])) covered.add(item);
+      }
+    }
+  }
+  if (!any) return node;
+
+  const settle = (value: string) => (covered.has(value) ? null : resolveMediaReference(value));
+  const next: Record<string, unknown> = { ...data };
+  for (const [key, value] of Object.entries(data)) {
+    if (isMediaReference(value)) {
+      next[key] = await settle(value);
+    } else if (Array.isArray(value) && value.some(isMediaReference)) {
+      next[key] = await Promise.all(value.map(async (item) => (isMediaReference(item) ? (await settle(item)) ?? "" : item)));
+    } else if (value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).some(isMediaReference)) {
+      const map: Record<string, unknown> = {};
+      for (const [k, item] of Object.entries(value)) {
+        if (!isMediaReference(item)) { map[k] = item; continue; }
+        const settled = await settle(item);
+        if (settled !== null) map[k] = settled;
+      }
+      next[key] = map;
+    }
+  }
+  return { ...node, data: next as WorkflowNode["data"] };
 }
 
 /** The media ids a workflow folder holds, or null when the server could not say (then refs are trusted as before). */
@@ -928,15 +1003,24 @@ async function saveAudioAndGetRef(
   }
 }
 
+/** Loaded media by id, and the media ids the workflow's folder holds when the server could say. */
+interface HydrationCache extends Map<string, string> {
+  presentIds?: Set<string> | null;
+}
+
 /**
- * Load all external media into a workflow, replacing refs with base64 data
- * Returns a new workflow object with base64 data instead of refs
+ * Load all external media into a workflow, replacing refs with the media.
+ * Images become references to their files (`/api/workflow-images?…&raw=1`,
+ * see src/lib/media/references.ts) rather than base64, so a large workflow
+ * opens without reading every image into memory. Video and audio are still
+ * loaded as data URLs.
  */
 export async function hydrateWorkflowMedia(
   workflow: WorkflowFile,
   workflowPath: string
 ): Promise<WorkflowFile> {
-  const loadedMedia = new Map<string, string>(); // mediaId -> base64 (for caching/deduplication)
+  const loadedMedia: HydrationCache = new Map<string, string>(); // mediaId -> media (for caching/deduplication)
+  loadedMedia.presentIds = await listPresentMediaIds(workflowPath);
 
   // Process nodes in parallel batches with controlled concurrency
   const BATCH_SIZE = 3;
@@ -978,7 +1062,7 @@ export async function hydrateWorkflowImages(
 async function hydrateNodeMedia(
   node: WorkflowNode,
   workflowPath: string,
-  loadedMedia: Map<string, string>
+  loadedMedia: HydrationCache
 ): Promise<WorkflowNode> {
   const data = node.data as WorkflowNodeData;
   let newData: WorkflowNodeData;
@@ -1358,11 +1442,17 @@ async function hydrateNodeMedia(
 async function loadMediaById(
   mediaId: string,
   workflowPath: string,
-  loadedMedia: Map<string, string>,
+  loadedMedia: HydrationCache,
   mediaType: "image" | "video" | "audio"
 ): Promise<string> {
   if (loadedMedia.has(mediaId)) {
     return loadedMedia.get(mediaId)!;
+  }
+
+  // An image the folder holds is referenced, not read; one it lacks is
+  // missing, as when the image route reports it not found.
+  if (mediaType === "image" && loadedMedia.presentIds) {
+    return loadedMedia.presentIds.has(mediaId) ? workflowImageReference(workflowPath, mediaId) : "";
   }
 
   let response: Response;
