@@ -13,6 +13,9 @@
 // --chromium-flags adds switches, e.g. "--use-angle=swiftshader" on a machine
 // with no GPU. --keep-traces keeps the Chromium traces next to the report.
 // --paint-copies N paints a smaller tiling in the paint and tiers checks.
+// --uikit-sizes (1000,5000) sets the uikit grids. The text review uses a
+// system font per script; GPU_SPIKE_FONT_CJK (and _ARABIC, _LATIN, _EMOJI)
+// names another TTF.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -83,8 +86,9 @@ function judge(size, summary, refreshHz) {
 
 async function main() {
   const sizes = option('--sizes', '5k,10k').split(',');
-  // scene: question 1; paint: questions 2 and 5; tiers: question 6 (both need HTML-in-Canvas).
-  const checks = option('--checks', 'scene,paint,tiers').split(',');
+  // scene: question 1; paint: questions 2 and 5; tiers: question 6 (both need
+  // HTML-in-Canvas); uikit: question 3.
+  const checks = option('--checks', 'scene,paint,tiers,uikit').split(',');
   const rounds = Number(option('--rounds', 2));
   const osInput = option('--input', ['win32', 'darwin'].includes(process.platform) ? 'os' : 'synthetic') === 'os' ? createOsInput() : undefined;
   assert.ok(!osInput || osInput.available, '--input os needs Windows or macOS');
@@ -419,6 +423,80 @@ async function main() {
       return result;
     }
 
+    // Question 3: uikit. Its Generate node drawn live at 1,000 and 5,000 nodes
+    // (pans and zooms, judged as question 1 judges 5k), painted into a
+    // texture, compared with the HTML node, and the text review sheet.
+    async function uikitChecks() {
+      const result = { live: {}, paint: [], fidelity: null, review: null };
+      const shots = output.replace(/\.json$/, '') + '-uikit';
+      await fs.mkdir(shots, { recursive: true });
+      // Each size with the node's Svg icons, and the largest without them too:
+      // every uikit Svg (and Image) is a draw call of its own.
+      const sizes = option('--uikit-sizes', '1000,5000').split(',').map(Number);
+      const runs = [...sizes.map(count => ({ count, icons: true })), { count: sizes.at(-1), icons: false }];
+      for (const { count, icons } of runs) {
+        const key = icons ? String(count) : `${count}-no-icons`;
+        await open(`generate=${count}&uikit=live&painter=off&live=off${icons ? '' : '&icons=off'}`, `${count} uikit Generate nodes${icons ? '' : ' without icons'}`);
+        await page.mouseMove(2, 2);
+        const traced = [], results = [], drawCalls = {};
+        // Every node on screen, then a screenful at 100%.
+        for (const [where, view] of [['fit', null], ['100%', { zoom: 1, x: 40, y: 60 }]]) {
+          for (const name of where === 'fit' ? ['pan-sweep', 'zoom-wheel'] : ['pan-sweep']) {
+            await page.evaluate(view => view ? window.__spike.scene.setView(view) : window.__spike.scene.fit(), view);
+            await delay(1500);
+            drawCalls[where] = await page.evaluate(() => window.__spike.scene.info());
+            await page.evaluate(() => window.__spike.uikit.updateMs());
+            const measured = await measure(name, `uikit-${key}-${where}-${name}`, traced);
+            const update = await page.evaluate(() => window.__spike.uikit.updateMs());
+            update.sort((a, b) => a - b);
+            results.push({ where, ...measured, uikitUpdateMs: { p50: update[Math.floor(update.length / 2)] ?? null, p95: update[Math.floor(update.length * 0.95)] ?? null } });
+          }
+        }
+        await page.evaluate(() => window.__spike.scene.setView({ zoom: 1, x: 40, y: 60 }));
+        await delay(1500);
+        await fs.writeFile(path.join(shots, `live-${key}.png`), await page.screenshot());
+        const trace = analyzeTrace(traced);
+        console.log(`\n${formatReport(trace)}\n`);
+        result.live[key] = { drawCalls, trace, results, verdicts: Object.fromEntries(Object.entries(trace.summary).map(([label, summary]) => [label, judge('5k', summary, report.displayHz || trace.refreshHz)])),
+          memory: await page.evaluate(() => window.__spike.memory()), processes: await processMemory() };
+        await checkErrors();
+        if (count === sizes[0] && icons) {
+          // uikit as a painter: 48 nodes on a sheet, at full size (the display's scale) and at 1/4.
+          const scale = report.scaleFactor || 1;
+          for (const tier of [scale, 0.25]) {
+            const bench = await page.evaluate(tier => window.__spike.uikit.paintBench({ count: 48, tier, rounds: 5 }), tier);
+            result.paint.push(bench);
+            console.log(`  uikit paints 48 nodes at ${tier}x: ${bench.perNodeMs.toFixed(2)} ms a node (layout and render, warm)`);
+          }
+        }
+      }
+
+      // The uikit node against the HTML node in its place, at 100%.
+      await open('generate=12&uikit=live&painter=off', 'uikit and HTML Generate nodes');
+      await page.mouseMove(2, 2);
+      const id = 'generate-1';
+      await page.evaluate(id => { const s = window.__spike.scene, r = s.nodeRect(id), v = s.view(); s.setView({ zoom: 1, x: Math.round(v.x + 240 - r.x), y: Math.round(v.y + 160 - r.y) }); }, id);
+      await delay(1500);
+      const rect = await page.evaluate(id => window.__spike.scene.nodeRect(id), id);
+      const box = { x: Math.round(rect.x - 8), y: Math.round(rect.y - 30), width: 316, height: 290 };
+      const drawn = await grab(box);
+      await page.evaluate(id => window.__spike.uikit.setVisible(id, false), id);
+      await page.evaluate(id => window.__spike.live.set([id]), id);
+      await delay(500);
+      const html = await grab(box);
+      result.fidelity = await compare(drawn, html, path.join(shots, 'generate'));
+      console.log(`  uikit Generate node against HTML: ${result.fidelity.withinTwoLevelsPct ?? result.fidelity.error}% of pixels within 2 levels`);
+      await checkErrors();
+
+      // The text review: HTML on the left, uikit on the right.
+      await open('generate=1&uikit=review&painter=off&live=off', 'the uikit text review');
+      await delay(2000);
+      result.review = { fonts: await page.evaluate(() => window.__spike.uikit.fonts()) };
+      await fs.writeFile(path.join(shots, 'text-review.png'), await page.screenshot());
+      console.log(`  text review saved; fonts ${result.review.fonts.map(f => `${f.script}: ${f.file || f.error}`).join(', ')}`);
+      return result;
+    }
+
     // Question 1: the scene alone, stand-in images, no painter or live layer.
     if (checks.includes('scene')) for (const size of sizes) {
       const dataset = await open(`size=${size}&painter=off&live=off`, `the ${size} scene`);
@@ -446,6 +524,8 @@ async function main() {
     if (checks.includes('paint')) report.paint = await paintChecks();
     // Question 6: image tiers and atlas memory.
     if (checks.includes('tiers')) report.tiers = await tierChecks();
+    // Question 3: uikit live, as a painter, against HTML, and its text.
+    if (checks.includes('uikit')) report.uikit = await uikitChecks();
     await fs.writeFile(output, JSON.stringify(report, null, 2));
     console.log(`Saved ${output}`);
   } finally {

@@ -43,6 +43,8 @@ export interface SpikeApi {
   painter?: Record<string, unknown>;
   /** Set when the live layer runs. */
   live?: Record<string, unknown>;
+  /** Set in the uikit modes (question 3). */
+  uikit?: Record<string, unknown>;
 }
 
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));

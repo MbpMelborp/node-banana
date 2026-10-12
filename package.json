@@ -33,6 +33,7 @@
     "@imgly/background-removal": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.30.1",
     "@openai/codex": "0.157.0",
+    "@pmndrs/uikit": "^1.0.76",
     "@radix-ui/react-use-controllable-state": "^1.2.6",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",

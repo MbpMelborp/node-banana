@@ -1,8 +1,11 @@
 "use client";
 
 // GPU canvas spike (throwaway, never merged): the page at /gpu-spike. Loads a
-// tiled dataset (?copies=17, or ?size=5k / 10k), draws it on the GPU scene
-// and exposes window.__spike for scripts/gpu-spike.cjs. Nothing links here.
+// tiled dataset (?copies=17, or ?size=5k / 10k, or ?generate=N Generate nodes),
+// draws it on the GPU scene and exposes window.__spike for
+// scripts/gpu-spike.cjs. ?uikit=live draws the nodes as uikit Generate nodes
+// instead (&icons=off without their Svg icons), and ?uikit=review shows the
+// text review. Nothing links here.
 import { useEffect, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { PerfOverlay, setPerfOverlayVisible } from "@/components/PerfOverlay";
@@ -14,6 +17,8 @@ import { buildStandInAtlas } from "./scene/standInAtlas";
 import { Scene } from "./scene/Scene";
 import { Painter } from "./painter/painter";
 import { LiveLayer } from "./live/LiveLayer";
+import { UikitLayer } from "./uikit/UikitLayer";
+import { TextReview } from "./uikit/TextReview";
 import { useWorkflowStore } from "@/store/workflowStore";
 
 function copiesFromQuery(): number {
@@ -33,11 +38,14 @@ export function GpuSpike() {
     let scene: Scene | undefined;
     let painter: Painter | undefined;
     let live: LiveLayer | undefined;
+    let uikit: UikitLayer | TextReview | undefined;
     let cancelled = false;
     (async () => {
+      const query = new URLSearchParams(location.search);
       const copies = copiesFromQuery();
+      const generate = query.get("generate");
       const started = performance.now();
-      const workflow = await (await fetch(`/api/gpu-spike/dataset?copies=${copies}`)).json() as WorkflowFile;
+      const workflow = await (await fetch(`/api/gpu-spike/dataset?${generate ? `generate=${Number(generate)}` : `copies=${copies}`}`)).json() as WorkflowFile;
       const graph = buildSceneGraph(workflow);
       setStatus(`Drawing ${graph.nodes.length.toLocaleString()} stand-in images…`);
       const atlas = await buildStandInAtlas(graph);
@@ -67,10 +75,30 @@ export function GpuSpike() {
           return { x: a.x, y: a.y, width: (n.w + 16) * z, height: (n.h + 38) * z };
         },
       };
+      // The real nodes (painted and live) read the workflow store, as on the canvas.
+      if (query.get("painter") !== "off" || query.get("live") !== "off") await useWorkflowStore.getState().loadWorkflow(workflow);
+      // Question 3: uikit Generate nodes in place of the scene's, or the text review.
+      const uikitMode = query.get("uikit");
+      if (uikitMode === "live") {
+        const byId = new Map(workflow.nodes.map(node => [node.id, node.data as Record<string, unknown>]));
+        const layer = uikit = await UikitLayer.create(graph, canvasRef.current!, id => byId.get(id), { icons: query.get("icons") !== "off" });
+        graph.nodes.forEach((_, i) => scene!.setHidden(i, true));
+        scene.options.overlay = layer;
+        api.uikit = {
+          setVisible: (id: string, visible: boolean) => layer.setVisible(id, visible),
+          /** ms per frame in uikit's update (layout and signals), since the last call. */
+          updateMs: () => layer.updateMs.splice(0),
+          paintBench: (options: { count?: number; tier?: number; rounds?: number }) => layer.paintBench(scene!.renderer, options),
+        };
+      } else if (uikitMode === "review") {
+        graph.nodes.forEach((_, i) => scene!.setHidden(i, true));
+        const review = uikit = new TextReview(canvasRef.current!.parentElement!, canvasRef.current!);
+        scene.options.overlay = review;
+        await review.ready;
+        api.uikit = { fonts: () => review.fonts };
+      }
       // Painter A: on unless ?painter=off, and only where HTML-in-Canvas exists.
-      if (api.htmlInCanvas.available && new URLSearchParams(location.search).get("painter") !== "off") {
-        // The real nodes read the workflow store, as on the canvas.
-        await useWorkflowStore.getState().loadWorkflow(workflow);
+      if (api.htmlInCanvas.available && query.get("painter") !== "off") {
         painter = new Painter(scene, graph, canvasRef.current!, api);
         api.painter = {
           start: () => painter!.start(),
@@ -118,7 +146,7 @@ export function GpuSpike() {
       setStatus(`Failed: ${api.error}`);
     });
     setPerfOverlayVisible(new URLSearchParams(location.search).get("overlay") !== "off");
-    return () => { cancelled = true; live?.dispose(); painter?.dispose(); scene?.dispose(); };
+    return () => { cancelled = true; uikit?.dispose(); live?.dispose(); painter?.dispose(); scene?.dispose(); };
   }, []);
 
   return (

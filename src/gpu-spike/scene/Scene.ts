@@ -181,6 +181,8 @@ export interface SceneOptions {
   onSelection?: (selected: Set<number>) => void;
   onHover?: (node: number) => void;
   onViewChange?: (view: View) => void;
+  /** Drawn over the scene every frame while set (question 3's uikit nodes). */
+  overlay?: { draw(renderer: THREE.WebGLRenderer, view: View, deltaMs: number): void };
 }
 
 export class Scene {
@@ -205,6 +207,7 @@ export class Scene {
   private index: GridIndex;
   private dirty = true;
   private frameHandle = 0;
+  private lastTick = 0;
   private disposed = false;
   private gesture: { kind: "pan" | "drag"; x: number; y: number; moved: number[] } | null = null;
 
@@ -474,14 +477,17 @@ export class Scene {
     if (this.disposed) return;
     this.frameHandle = requestAnimationFrame(this.tick);
     let jsMs = 0;
-    if (this.dirty) {
+    const overlay = this.options.overlay;
+    if (this.dirty || overlay) {
       const start = performance.now();
       this.dirty = false;
       this.uniforms.uView.value.set(this.view.x, this.view.y, this.view.zoom);
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
+      overlay?.draw(this.renderer, this.view, now - (this.lastTick || now));
       jsMs = performance.now() - start;
     }
+    this.lastTick = now;
     this.options.onFrame?.(now, jsMs);
   };
 

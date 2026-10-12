@@ -92,3 +92,22 @@ export function tileWorkflow(base: WorkflowFile, { copies, mediaFor }: TileOptio
 export function sampleMediaUrls(names: string[], { width = 1024 }: { width?: number } = {}): (index: number) => string {
   return index => `/api/gpu-spike/media/${encodeURIComponent(names[index % names.length])}?w=${width}`;
 }
+
+/**
+ * `count` copies of the stress workflow's first Generate node in a grid, each
+ * with a photo and no edges: question 3's uikit Generate node is measured on it.
+ */
+export function generateGrid(base: WorkflowFile, count: number, mediaFor: (index: number) => string): WorkflowFile {
+  const template = base.nodes.find(node => node.type === "nanoBanana");
+  if (!template) throw new Error("The stress workflow has no Generate node");
+  const columns = Math.ceil(Math.sqrt(count * 2.5));
+  const nodes: WorkflowFile["nodes"] = [];
+  for (let i = 0; i < count; i++) {
+    const data = structuredClone(template.data) as Record<string, unknown>;
+    data.outputImage = mediaFor(i);
+    data.status = "complete";
+    delete data.groupId;
+    nodes.push({ ...template, id: `generate-${i}`, groupId: undefined, position: { x: (i % columns) * 360, y: Math.floor(i / columns) * 560 }, data } as WorkflowFile["nodes"][number]);
+  }
+  return { ...base, id: `gpu-spike-generate-${count}`, name: `GPU spike: ${count} Generate nodes`, nodes, edges: [], groups: {} };
+}
