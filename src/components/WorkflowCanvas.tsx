@@ -491,7 +491,9 @@ export function WorkflowCanvas() {
   // this one subscription; React Flow then mounts only what is in view
   const lowDetailZoom = useLowDetailZoom();
   const zoomedOut = useStore(useCallback((state: ReactFlowState) => state.transform[2] < lowDetailZoom, [lowDetailZoom]));
-  useLayoutEffect(() => setZoomedOut(zoomedOut), [zoomedOut]);
+  // The GPU canvas paints nodes at full detail whatever this (hidden) flow's zoom is.
+  const gpuCanvasActive = useGpuCanvasActive();
+  useLayoutEffect(() => setZoomedOut(zoomedOut && !gpuCanvasActive), [zoomedOut, gpuCanvasActive]);
   const lowDetail = useLowDetailEnabled() && zoomedOut;
   // ...except while a node holds the focused field: React Flow would unmount
   // it once out of view, and the edit, which commits on blur, would be lost
@@ -1913,7 +1915,6 @@ export function WorkflowCanvas() {
   // Wheel-based pan/zoom, honoring the user's navigation settings. Disabled
   // while a modal is open (the modal's mini canvas drives its own).
   // The GPU canvas (Settings › Canvas) takes React Flow's place, with its own pan and zoom.
-  const gpuCanvasActive = useGpuCanvasActive();
   useWheelPanZoom(reactFlowWrapper, canvasNavigationSettings, !isModalOpen && !gpuCanvasActive);
   const gpuWheelZooms = useCallback((event: WheelEvent) => {
     const { zoomMode } = canvasNavigationSettings;
