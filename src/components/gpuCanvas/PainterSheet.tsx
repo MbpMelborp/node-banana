@@ -18,6 +18,7 @@ import { nextFrame, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 // Transitions and animations would be painted mid-way; the pane is transparent so the margins are.
 const SHEET_STYLE = `
   [data-gpu-canvas-sheet] *, [data-gpu-canvas-sheet] *::before, [data-gpu-canvas-sheet] *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }
+  [data-gpu-canvas-sheet], [data-gpu-canvas-sheet] * { overflow-anchor: none !important; }
   [data-gpu-canvas-sheet] .react-flow__pane, [data-gpu-canvas-sheet] .react-flow__renderer, [data-gpu-canvas-sheet] .react-flow { background: transparent !important; }
 `;
 
@@ -123,6 +124,25 @@ export class PainterSheet {
   /** The sheet's React Flow state (for handle positions). */
   flow() {
     return this.flowState();
+  }
+
+  /**
+   * Scrolls everything on the sheet back to its start: a painted node shows
+   * its content from the top, as a node does when it mounts. Something on a
+   * big sheet (focus, scroll anchoring) can scroll a node's clipped card or
+   * the sheet's flow, which would paint the card shifted or empty. Returns
+   * how many elements had moved.
+   */
+  resetScroll(): number {
+    let moved = 0;
+    for (const element of [this.element, ...this.element.querySelectorAll<HTMLElement>("*")]) {
+      if (element.scrollTop || element.scrollLeft) {
+        element.scrollTop = 0;
+        element.scrollLeft = 0;
+        moved++;
+      }
+    }
+    return moved;
   }
 
   nodeElement(id: string): HTMLElement | null {

@@ -518,6 +518,12 @@ export class Painter {
       this.options.stats.record(this.scene.lastInputAt > t0 ? "painter.yielded" : "painter.preempted", misses.length);
       return;
     }
+    const scrolled = this.sheet.resetScroll();
+    if (scrolled) {
+      this.options.stats.record("painter.scrollReset", scrolled);
+      await nextFrame();
+      if (this.disposed) return;
+    }
     const t3 = performance.now();
 
     // Paint the sheet into the staging texture.
