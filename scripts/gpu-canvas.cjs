@@ -508,9 +508,11 @@ async function main() {
         jumps.push(jump);
         log(`  jump at ${Math.round(zoom * 100)}%: ${jump.sharp}/${jump.visible} sharp in ${jump.sharpMs ?? `>${sharpWithin}`} ms`);
       }
+      const summary = await page.evaluate(() => window.__gpuCanvas.stats.summary());
+      for (const f of summary.longFrames ?? []) log(`  long frame: ${f.ms} ms, ending in "${f.phase}"`);
       const verdict = { atMost256MB: Math.max(...steps.map(s => s.atlasMB)) <= 256, jumpsSharpWithin500ms: jumps.every(j => j.sharpMs != null && j.sharpMs <= 500) };
       await checkErrors();
-      return { steps, jumps, verdict: { ...verdict, pass: Object.values(verdict).every(Boolean) }, stats: await page.evaluate(() => window.__gpuCanvas.stats.summary()) };
+      return { steps, jumps, verdict: { ...verdict, pass: Object.values(verdict).every(Boolean) }, stats: summary };
     });
 
     // The scene: every node on screen, pans and zooms.

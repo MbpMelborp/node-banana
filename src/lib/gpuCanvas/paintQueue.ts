@@ -109,18 +109,19 @@ export class PaintQueue {
 
   /**
    * Takes the first request's tier and as many more of that tier as `fits`
-   * accepts (in order), at most `max`. An urgent batch takes only urgent
+   * accepts (in order), at most `max` (or `max(tier)`). An urgent batch takes only urgent
    * requests, so a change is not held up by a full sheet of others. Taken
    * requests leave the queue.
    */
-  take(max: number, fits: (request: PaintRequest, taken: readonly PaintRequest[]) => boolean): PaintRequest[] {
+  take(max: number | ((tier: number) => number), fits: (request: PaintRequest, taken: readonly PaintRequest[]) => boolean): PaintRequest[] {
     const queue = this.ordered();
     if (!queue.length) return [];
     const { tier, priority } = queue[0];
+    const limit = typeof max === "number" ? max : max(tier);
     const taken: PaintRequest[] = [];
     for (const request of queue) {
       if (request.tier !== tier || (priority === URGENT && request.priority !== URGENT)) continue;
-      if (taken.length >= max) break;
+      if (taken.length >= limit) break;
       if (!fits(request, taken)) {
         if (taken.length) break;
         // A first image too large for the sheet still goes, alone; it is squeezed.

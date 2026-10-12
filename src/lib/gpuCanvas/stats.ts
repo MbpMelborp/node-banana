@@ -6,6 +6,7 @@
  */
 
 const MAX_SAMPLES = 4096;
+const LONG_FRAME_MS = 250;
 
 export interface Percentiles {
   count: number;
@@ -26,6 +27,10 @@ export class GpuCanvasStats {
   readonly samples: Record<string, number[]> = {};
   frameTimes: number[] = [];
   jsMs: number[] = [];
+  /** What the canvas was doing (set by the painter), for naming a long frame. */
+  phase = "idle";
+  /** Frames over LONG_FRAME_MS: how long, when, and the phase they ended in. */
+  longFrames: { ms: number; at: number; phase: string }[] = [];
 
   record(name: string, value: number) {
     const list = (this.samples[name] ??= []);
@@ -34,6 +39,10 @@ export class GpuCanvasStats {
   }
 
   frame(now: number, jsMs: number) {
+    const last = this.frameTimes.at(-1);
+    if (last != null && now - last > LONG_FRAME_MS && this.longFrames.length < 50) {
+      this.longFrames.push({ ms: Math.round(now - last), at: Math.round(now), phase: this.phase });
+    }
     this.frameTimes.push(now);
     this.jsMs.push(jsMs);
     if (this.frameTimes.length > MAX_SAMPLES * 3) {
@@ -47,6 +56,7 @@ export class GpuCanvasStats {
     for (const key of Object.keys(this.samples)) delete this.samples[key];
     this.frameTimes = [];
     this.jsMs = [];
+    this.longFrames = [];
   }
 
   summary() {
@@ -56,6 +66,7 @@ export class GpuCanvasStats {
       fps: seconds ? Math.round(((this.frameTimes.length - 1) / seconds) * 10) / 10 : 0,
       frameMs: percentiles(intervals),
       jsMs: percentiles(this.jsMs),
+      longFrames: this.longFrames,
       samples: Object.fromEntries(Object.entries(this.samples).map(([name, values]) => [name, percentiles(values)])),
     };
   }

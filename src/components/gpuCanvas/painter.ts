@@ -53,7 +53,12 @@ const GAP_PX = 4;
 const VIEW_SETTLE_MS = 80;
 /** Nodes this far outside the view (in screens) are painted ahead and kept from eviction. */
 const MARGIN = 0.25;
-const MAX_BATCH = 48;
+/**
+ * Nodes per batch. Each batch costs a few frames of settling whatever its
+ * size, and small tiers fit hundreds of nodes on a sheet: a jump at 25% shows
+ * about 170 nodes, which at 48 a batch took four batches and 700 ms.
+ */
+const maxBatch = (tier: number) => (tier >= 0.5 ? 48 : 192);
 /** How long a batch waits for its images and sizes; a node whose image is still loading is painted provisionally and again later. */
 const SETTLE_MS = 1500, LOADING_SETTLE_MS = 5000;
 /** Times a node painted before its images loaded is painted again. */
@@ -453,12 +458,19 @@ export class Painter {
           while ((this.scene.interacting || performance.now() - this.scene.lastInputAt < QUIET_MS) && !this.disposed) await nextFrame();
         }
         await this.batch();
+        this.phase("between batches");
         await nextFrame();
       }
     } finally {
+      this.phase("idle");
       this.running = this.status.running = false;
       this.updateStatus();
     }
+  }
+
+  /** Names what the painter is doing, for a long frame's record. */
+  private phase(name: string) {
+    this.options.stats.phase = name;
   }
 
   private boxOf(id: string) {
@@ -480,7 +492,7 @@ export class Painter {
     }
     // Take a tier's worth that fits on one sheet by estimated size; requests for nodes that left the graph are dropped.
     const zoomOf = (tier: number) => tier / this.scene.scale;
-    const taken = this.queue.take(MAX_BATCH, (request, taken) => {
+    const taken = this.queue.take(maxBatch, (request, taken) => {
       if (!this.scene.graph.indexOf.has(request.id) || this.fresh(request.id, request.tier)) return true;
       const sheet = this.sheetFlowSize(zoomOf(request.tier));
       const boxes = [...taken, request].filter((r) => this.scene.graph.indexOf.has(r.id)).map((r) => ({ key: r.id, ...this.boxOf(r.id) }));
@@ -494,6 +506,7 @@ export class Painter {
     const tier = requests[0].tier, zoom = zoomOf(tier);
 
     // Images the disk cache holds go straight in.
+    this.phase(`cache ${tier}`);
     const misses = await this.fromCache(requests);
     this.resolveWaiters(requests.filter((r) => !misses.includes(r)));
     if (this.disposed || !misses.length) {
@@ -516,11 +529,13 @@ export class Painter {
 
     // First pass at estimated heights, to measure.
     const first = place(misses, (id) => this.boxOf(id).h - HEADER - PAD);
+    this.phase(`render ${tier} ×${misses.length}`);
     await this.sheet.render(sheetNodes(misses, first), zoom);
     const t1 = performance.now();
     // Input, or a change to paint, arrived while the sheet was getting ready: give way.
     const urgentBatch = requests[0].priority === URGENT;
     const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
+    this.phase(`settle ${tier} ×${misses.length}`);
     const { decodeMs, unloaded } = await this.sheet.settle(misses.map((r) => r.id), this.loading ? LOADING_SETTLE_MS : SETTLE_MS, () => this.disposed || yielded());
     const t2 = performance.now();
     for (const r of misses) {
@@ -535,6 +550,7 @@ export class Painter {
       const a = first.get(r.id), b = placed.get(r.id)!;
       return !a || a.x !== b.x || a.y !== b.y;
     });
+    this.phase(`place ${tier} ×${fits.length}`);
     if (moved || fits.length !== misses.length) await this.sheet.render(sheetNodes(fits, placed), zoom);
     const nodePositions = new Map(fits.map((r) => {
       const p = placed.get(r.id)!;
@@ -560,6 +576,7 @@ export class Painter {
     // The sheet is painted from its last rendering, not its DOM: let a frame
     // render what the DOM now holds (the second placement, the reset scroll),
     // or the copy shows the first placement or the previous batch.
+    this.phase(`frames ${tier} ×${fits.length}`);
     await nextFrame();
     await nextFrame();
     if (this.disposed) return;
@@ -570,6 +587,7 @@ export class Painter {
     }
     if (this.probeIds.size) this.probe(fits.map((r) => r.id), placed, tier);
     const t3 = performance.now();
+    this.phase(`paint ${tier} ×${fits.length}`);
 
     // Paint the sheet into the staging texture.
     const renderer = this.scene.renderer;
@@ -614,6 +632,7 @@ export class Painter {
     }
     for (const r of done) if (!unloaded.has(r.id)) this.provisional.delete(r.id);
     if (provisional.length) this.options.stats.record("painter.provisional", provisional.length);
+    this.phase(`readback ${tier} ×${done.length}`);
     if (this.options.cache) this.readBack(provisional.length ? done.filter((r) => !unloaded.has(r.id)) : done);
 
     const { stats } = this.options;
@@ -903,7 +922,9 @@ export class Painter {
       this.storedSinceTrim += readback.entries.length;
       if (this.storedSinceTrim > 200) {
         this.storedSinceTrim = 0;
+        const trimStarted = performance.now();
         await cache.trim(PAINT_CACHE_BYTES);
+        this.options.stats.record("painter.trimMs", performance.now() - trimStarted);
       }
     } catch {
       // A full disk or a closed database only costs a repaint next time.
