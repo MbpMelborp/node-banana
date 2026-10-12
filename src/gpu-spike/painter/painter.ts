@@ -352,9 +352,15 @@ export class Painter {
     }
     let slot = this.atlas.allocateCell(tier, w, h, i);
     if (slot) return slot;
-    // Same tier first (frees a cell at once), then other tiers until a layer comes free.
-    const victims = (t: number) => this.atlas.cellOwners(t).filter(o => !this.near.has(o)).sort((a, b) => this.state[a].lastSeen - this.state[b].lastSeen);
-    const order = [...victims(tier).map(o => [o, tier]), ...this.tiers.filter(t => t !== tier && t !== EIGHTH).flatMap(t => victims(t).map(o => [o, t]))];
+    // Only the view's own tier is kept for nodes near it: their other tiers
+    // (left from an earlier zoom) go like any unseen node's. Cells of this
+    // image's size class first (one frees a cell at once), then the rest of
+    // its tier, then other tiers until a layer comes free; longest unseen first.
+    const wanted = this.wanted(), key = this.atlas.cellClass(tier, w, h).key;
+    const victims = (t: number) => this.atlas.cellOwners(t).filter(o => t !== wanted || !this.near.has(o)).sort((a, b) => this.state[a].lastSeen - this.state[b].lastSeen);
+    const same = victims(tier), sameClass = same.filter(o => this.state[o].slots.get(tier)?.cellKey === key);
+    const order = [...sameClass.map(o => [o, tier]), ...same.filter(o => !sameClass.includes(o)).map(o => [o, tier]),
+      ...this.tiers.filter(t => t !== tier && t !== EIGHTH).flatMap(t => victims(t).map(o => [o, t]))];
     for (const [o, t] of order) {
       const s = this.state[o], held = s.slots.get(t);
       if (!held) continue;

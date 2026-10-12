@@ -1,12 +1,14 @@
 // GPU canvas spike (throwaway): the painted atlas. A texture array of square
 // layers. The 1/8 images every node keeps are shelf-packed into layers of
 // their own and never evicted; the larger tiers, kept only near the view, use
-// fixed cells per tier so a cell can be freed and reused. Images are copied in
+// fixed cells so a cell can be freed and reused. Cells come in size classes
+// (each tier's images rounded up to a step), so a layer at 2× holds several
+// nodes rather than one cell sized for the largest. Images are copied in
 // from the painter's staging texture by drawing quads.
 import * as THREE from "three";
 import { atlasMemory } from "../instrumentation";
 
-export interface Slot { layer: number; x: number; y: number; w: number; h: number; tier: number; cell?: number }
+export interface Slot { layer: number; x: number; y: number; w: number; h: number; tier: number; cell?: number; cellKey?: string }
 
 export interface BlitItem {
   /** Source rectangle in the staging texture, in its pixels. */
@@ -16,6 +18,8 @@ export interface BlitItem {
 
 /** The largest painted image, in css px at 100% (node, header and margin). */
 export const MAX_IMAGE = { w: 520, h: 680 };
+/** Cell size classes step by this much, in css px at 100%. */
+const CELL_STEP = { w: 64, h: 96 };
 
 const BLIT_VERTEX = /* glsl */ `
   precision highp float;
@@ -32,7 +36,7 @@ const BLIT_FRAGMENT = /* glsl */ `
   void main() { outColor = texture(uStaging, vSrc); }
 `;
 
-interface Slab { tier: number; layer: number; cols: number; cellW: number; cellH: number; free: number[]; owner: (number | undefined)[] }
+interface Slab { key: string; tier: number; layer: number; cols: number; cellW: number; cellH: number; free: number[]; owner: (number | undefined)[] }
 
 export class PaintedAtlas {
   readonly target: THREE.WebGLArrayRenderTarget;
@@ -95,16 +99,24 @@ export class PaintedAtlas {
     return { layer, x: 1, y: y + 1, w, h, tier };
   }
 
-  /** A freeable cell of a tier (its scale), or null when every layer is taken. */
+  /** The cell size class an image of a tier goes in (images larger than MAX_IMAGE are squeezed into the largest). */
+  cellClass(tier: number, w: number, h: number) {
+    const stepW = CELL_STEP.w * tier, stepH = CELL_STEP.h * tier;
+    const cellW = Math.min(Math.ceil(w / stepW) * stepW, Math.ceil(MAX_IMAGE.w * tier)) + 2;
+    const cellH = Math.min(Math.ceil(h / stepH) * stepH, Math.ceil(MAX_IMAGE.h * tier)) + 2;
+    return { cellW, cellH, key: `${tier}:${cellW}x${cellH}` };
+  }
+
+  /** A freeable cell for a tier's image, or null when every layer is taken. */
   allocateCell(tier: number, w: number, h: number, owner: number): Slot | null {
     w = Math.ceil(w); h = Math.ceil(h);
-    let slab = this.slabs.find(s => s.tier === tier && s.free.length);
+    const { cellW, cellH, key } = this.cellClass(tier, w, h);
+    let slab = this.slabs.find(s => s.key === key && s.free.length);
     if (!slab) {
       const layer = this.freeLayer();
       if (layer < 0) return null;
-      const cellW = Math.ceil(MAX_IMAGE.w * tier) + 2, cellH = Math.ceil(MAX_IMAGE.h * tier) + 2;
       const cols = Math.floor(this.size / cellW), rows = Math.floor(this.size / cellH);
-      slab = { tier, layer, cols, cellW, cellH, free: Array.from({ length: cols * rows }, (_, k) => cols * rows - 1 - k), owner: [] };
+      slab = { key, tier, layer, cols, cellW, cellH, free: Array.from({ length: cols * rows }, (_, k) => cols * rows - 1 - k), owner: [] };
       this.slabs.push(slab);
       this.layerUse[layer] = slab;
       this.account();
@@ -112,7 +124,7 @@ export class PaintedAtlas {
     const cell = slab.free.pop()!;
     slab.owner[cell] = owner;
     this.use(tier, w * h);
-    return { layer: slab.layer, x: (cell % slab.cols) * slab.cellW + 1, y: Math.floor(cell / slab.cols) * slab.cellH + 1, w: Math.min(w, slab.cellW - 2), h: Math.min(h, slab.cellH - 2), tier, cell };
+    return { layer: slab.layer, x: (cell % slab.cols) * slab.cellW + 1, y: Math.floor(cell / slab.cols) * slab.cellH + 1, w: Math.min(w, slab.cellW - 2), h: Math.min(h, slab.cellH - 2), tier, cell, cellKey: key };
   }
 
   release(slot: Slot) {

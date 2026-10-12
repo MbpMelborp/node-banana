@@ -156,7 +156,7 @@ async function main() {
     });
     report.crashes = [];
     const crashed = async () => {
-      const gone = await app.run(() => globalThis.__gone.splice(0)).catch(error => [{ process: 'main', reason: error.message }]);
+      const gone = await app.run(() => globalThis.__gone.splice(0)).catch(error => [{ process: 'main', reason: error.message, log: app.output().slice(-3000) }]);
       report.crashes.push(...gone);
       return gone.find(g => g.process === 'renderer' || g.process === 'GPU' || g.process === 'main');
     };
@@ -453,12 +453,47 @@ async function main() {
       const result = report.uikit = { live: {}, paint: [], fidelity: null, review: null };
       const shots = output.replace(/\.json$/, '') + '-uikit';
       await fs.mkdir(shots, { recursive: true });
+      // The uikit node against the HTML node, and the text review, first: the
+      // 5,000-node pages have taken Electron down on both machines.
+      try {
+        // The uikit node against the HTML node in its place, at 100%.
+        await open('generate=12&uikit=live&painter=off', 'uikit and HTML Generate nodes');
+        await page.mouseMove(2, 2);
+        const id = 'generate-1';
+        await page.evaluate(id => { const s = window.__spike.scene, r = s.nodeRect(id), v = s.view(); s.setView({ zoom: 1, x: Math.round(v.x + 240 - r.x), y: Math.round(v.y + 160 - r.y) }); }, id);
+        await delay(1500);
+        const rect = await page.evaluate(id => window.__spike.scene.nodeRect(id), id);
+        const box = { x: Math.round(rect.x - 8), y: Math.round(rect.y - 30), width: 316, height: 290 };
+        const drawn = await grab(box);
+        await page.evaluate(id => window.__spike.uikit.setVisible(id, false), id);
+        await page.evaluate(id => window.__spike.live.set([id]), id);
+        await delay(500);
+        const html = await grab(box);
+        result.fidelity = await compare(drawn, html, path.join(shots, 'generate'));
+        console.log(`  uikit Generate node against HTML: ${result.fidelity.withinTwoLevelsPct ?? result.fidelity.error}% of pixels within 2 levels`);
+        await checkErrors();
+
+        // The text review: HTML on the left, uikit on the right.
+        await open('generate=1&uikit=review&painter=off&live=off', 'the uikit text review');
+        await delay(2000);
+        result.review = { fonts: await page.evaluate(() => window.__spike.uikit.fonts()) };
+        await fs.writeFile(path.join(shots, 'text-review.png'), await page.screenshot());
+        console.log(`  text review saved; fonts ${result.review.fonts.map(f => `${f.script}: ${f.file || f.error}`).join(', ')}`);
+      } catch (error) {
+        console.error(`  uikit fidelity or review failed: ${error.message}`);
+        result.reviewError = { error: error.message, crash: await crashed() ?? null };
+      }
+      await save();
+
       // Each size with the node's Svg icons, and the largest without them too:
       // every uikit Svg (and Image) is a draw call of its own.
       const sizes = option('--uikit-sizes', '1000,5000').split(',').map(Number);
       const runs = [...sizes.map(count => ({ count, icons: true })), { count: sizes.at(-1), icons: false }];
       for (const { count, icons } of runs) {
         const key = icons ? String(count) : `${count}-no-icons`;
+        // An empty page between runs, so the last one's GPU memory is freed before the next loads.
+        await app.run(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.loadURL('about:blank')).catch(() => {});
+        await delay(3000);
         try {
           await open(`generate=${count}&uikit=live&painter=off&live=off${icons ? '' : '&icons=off'}`, `${count} uikit Generate nodes${icons ? '' : ' without icons'}`);
           await page.mouseMove(2, 2);
@@ -500,29 +535,6 @@ async function main() {
         await save();
       }
 
-      // The uikit node against the HTML node in its place, at 100%.
-      await open('generate=12&uikit=live&painter=off', 'uikit and HTML Generate nodes');
-      await page.mouseMove(2, 2);
-      const id = 'generate-1';
-      await page.evaluate(id => { const s = window.__spike.scene, r = s.nodeRect(id), v = s.view(); s.setView({ zoom: 1, x: Math.round(v.x + 240 - r.x), y: Math.round(v.y + 160 - r.y) }); }, id);
-      await delay(1500);
-      const rect = await page.evaluate(id => window.__spike.scene.nodeRect(id), id);
-      const box = { x: Math.round(rect.x - 8), y: Math.round(rect.y - 30), width: 316, height: 290 };
-      const drawn = await grab(box);
-      await page.evaluate(id => window.__spike.uikit.setVisible(id, false), id);
-      await page.evaluate(id => window.__spike.live.set([id]), id);
-      await delay(500);
-      const html = await grab(box);
-      result.fidelity = await compare(drawn, html, path.join(shots, 'generate'));
-      console.log(`  uikit Generate node against HTML: ${result.fidelity.withinTwoLevelsPct ?? result.fidelity.error}% of pixels within 2 levels`);
-      await checkErrors();
-
-      // The text review: HTML on the left, uikit on the right.
-      await open('generate=1&uikit=review&painter=off&live=off', 'the uikit text review');
-      await delay(2000);
-      result.review = { fonts: await page.evaluate(() => window.__spike.uikit.fonts()) };
-      await fs.writeFile(path.join(shots, 'text-review.png'), await page.screenshot());
-      console.log(`  text review saved; fonts ${result.review.fonts.map(f => `${f.script}: ${f.file || f.error}`).join(', ')}`);
       return result;
     }
 
