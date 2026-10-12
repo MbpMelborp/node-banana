@@ -113,6 +113,7 @@ async function main() {
   await new Promise(resolve => probe.close(resolve));
 
   let app;
+  const save = () => fs.writeFile(output, JSON.stringify(report, null, 2));
   const report = { date: new Date().toISOString(), platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model, input: osInput ? 'os' : 'synthetic', inputHz: hz,
     gestureMs: seconds * 1000, rounds, chromiumFlags: flags, sizes: {} };
   try {
@@ -146,12 +147,34 @@ async function main() {
       return { origin: process.platform === 'win32' ? screen.dipToScreenPoint({ x: bounds.x, y: bounds.y }) : { x: bounds.x, y: bounds.y }, scaleFactor: display.scaleFactor };
     });
 
+    // A renderer or GPU process that dies is recorded here, so a crash fails
+    // the step at once (with its reason) instead of waiting out a timeout.
+    await app.run(({ app }) => {
+      globalThis.__gone = [];
+      app.on('render-process-gone', (_event, _contents, details) => globalThis.__gone.push({ process: 'renderer', ...details, at: Date.now() }));
+      app.on('child-process-gone', (_event, details) => globalThis.__gone.push({ process: details.type, reason: details.reason, exitCode: details.exitCode, at: Date.now() }));
+    });
+    report.crashes = [];
+    const crashed = async () => {
+      const gone = await app.run(() => globalThis.__gone.splice(0)).catch(error => [{ process: 'main', reason: error.message }]);
+      report.crashes.push(...gone);
+      return gone.find(g => g.process === 'renderer' || g.process === 'GPU' || g.process === 'main');
+    };
+
     // Opens the spike page and installs the input and error watchers.
     async function open(query, label) {
       console.log(`Opening ${label}…`);
-      await page.evaluate(`location.href = '/gpu-spike?${query}&overlay=off'`);
+      await crashed();
+      // Loaded from the main process, so a crashed page can be replaced.
+      await app.run(({ BrowserWindow }, query) => { const contents = BrowserWindow.getAllWindows()[0].webContents; void contents.loadURL(new URL(`/gpu-spike?${query}&overlay=off`, contents.getURL()).href); }, query);
       await delay(1000);
-      await page.waitFor(() => window.__spike?.ready || window.__spike?.error, null, { timeout: 300000, message: label });
+      for (const until = Date.now() + 300000; ;) {
+        if (await page.evaluate(() => !!(window.__spike?.ready || window.__spike?.error)).catch(() => false)) break;
+        const crash = await crashed();
+        if (crash) throw new Error(`The ${crash.process} process died opening ${label}: ${crash.reason} (exit ${crash.exitCode})`);
+        if (Date.now() > until) throw new Error(`Timed out after 300000 ms waiting for ${label}`);
+        await delay(250);
+      }
       const error = await page.evaluate(() => window.__spike.error || null);
       if (error) throw new Error(`The spike page failed: ${error}`);
       await page.evaluate(PAGE_PROBE);
@@ -427,7 +450,7 @@ async function main() {
     // (pans and zooms, judged as question 1 judges 5k), painted into a
     // texture, compared with the HTML node, and the text review sheet.
     async function uikitChecks() {
-      const result = { live: {}, paint: [], fidelity: null, review: null };
+      const result = report.uikit = { live: {}, paint: [], fidelity: null, review: null };
       const shots = output.replace(/\.json$/, '') + '-uikit';
       await fs.mkdir(shots, { recursive: true });
       // Each size with the node's Svg icons, and the largest without them too:
@@ -436,39 +459,45 @@ async function main() {
       const runs = [...sizes.map(count => ({ count, icons: true })), { count: sizes.at(-1), icons: false }];
       for (const { count, icons } of runs) {
         const key = icons ? String(count) : `${count}-no-icons`;
-        await open(`generate=${count}&uikit=live&painter=off&live=off${icons ? '' : '&icons=off'}`, `${count} uikit Generate nodes${icons ? '' : ' without icons'}`);
-        await page.mouseMove(2, 2);
-        const traced = [], results = [], drawCalls = {};
-        // Every node on screen, then a screenful at 100%.
-        for (const [where, view] of [['fit', null], ['100%', { zoom: 1, x: 40, y: 60 }]]) {
-          for (const name of where === 'fit' ? ['pan-sweep', 'zoom-wheel'] : ['pan-sweep']) {
-            await page.evaluate(view => view ? window.__spike.scene.setView(view) : window.__spike.scene.fit(), view);
-            await delay(1500);
-            drawCalls[where] = await page.evaluate(() => window.__spike.scene.info());
-            await page.evaluate(() => window.__spike.uikit.updateMs());
-            const measured = await measure(name, `uikit-${key}-${where}-${name}`, traced);
-            const update = await page.evaluate(() => window.__spike.uikit.updateMs());
-            update.sort((a, b) => a - b);
-            results.push({ where, ...measured, uikitUpdateMs: { p50: update[Math.floor(update.length / 2)] ?? null, p95: update[Math.floor(update.length * 0.95)] ?? null } });
+        try {
+          await open(`generate=${count}&uikit=live&painter=off&live=off${icons ? '' : '&icons=off'}`, `${count} uikit Generate nodes${icons ? '' : ' without icons'}`);
+          await page.mouseMove(2, 2);
+          const traced = [], results = [], drawCalls = {};
+          // Every node on screen, then a screenful at 100%.
+          for (const [where, view] of [['fit', null], ['100%', { zoom: 1, x: 40, y: 60 }]]) {
+            for (const name of where === 'fit' ? ['pan-sweep', 'zoom-wheel'] : ['pan-sweep']) {
+              await page.evaluate(view => view ? window.__spike.scene.setView(view) : window.__spike.scene.fit(), view);
+              await delay(1500);
+              drawCalls[where] = await page.evaluate(() => window.__spike.scene.info());
+              await page.evaluate(() => window.__spike.uikit.updateMs());
+              const measured = await measure(name, `uikit-${key}-${where}-${name}`, traced);
+              const update = await page.evaluate(() => window.__spike.uikit.updateMs());
+              update.sort((a, b) => a - b);
+              results.push({ where, ...measured, uikitUpdateMs: { p50: update[Math.floor(update.length / 2)] ?? null, p95: update[Math.floor(update.length * 0.95)] ?? null } });
+            }
           }
-        }
-        await page.evaluate(() => window.__spike.scene.setView({ zoom: 1, x: 40, y: 60 }));
-        await delay(1500);
-        await fs.writeFile(path.join(shots, `live-${key}.png`), await page.screenshot());
-        const trace = analyzeTrace(traced);
-        console.log(`\n${formatReport(trace)}\n`);
-        result.live[key] = { drawCalls, trace, results, verdicts: Object.fromEntries(Object.entries(trace.summary).map(([label, summary]) => [label, judge('5k', summary, report.displayHz || trace.refreshHz)])),
-          memory: await page.evaluate(() => window.__spike.memory()), processes: await processMemory() };
-        await checkErrors();
-        if (count === sizes[0] && icons) {
-          // uikit as a painter: 48 nodes on a sheet, at full size (the display's scale) and at 1/4.
-          const scale = report.scaleFactor || 1;
-          for (const tier of [scale, 0.25]) {
-            const bench = await page.evaluate(tier => window.__spike.uikit.paintBench({ count: 48, tier, rounds: 5 }), tier);
-            result.paint.push(bench);
-            console.log(`  uikit paints 48 nodes at ${tier}x: ${bench.perNodeMs.toFixed(2)} ms a node (layout and render, warm)`);
+          await page.evaluate(() => window.__spike.scene.setView({ zoom: 1, x: 40, y: 60 }));
+          await delay(1500);
+          await fs.writeFile(path.join(shots, `live-${key}.png`), await page.screenshot());
+          const trace = analyzeTrace(traced);
+          console.log(`\n${formatReport(trace)}\n`);
+          result.live[key] = { drawCalls, trace, results, verdicts: Object.fromEntries(Object.entries(trace.summary).map(([label, summary]) => [label, judge('5k', summary, report.displayHz || trace.refreshHz)])),
+            memory: await page.evaluate(() => window.__spike.memory()), processes: await processMemory() };
+          await checkErrors();
+          if (count === sizes[0] && icons) {
+            // uikit as a painter: 48 nodes on a sheet, at full size (the display's scale) and at 1/4.
+            const scale = report.scaleFactor || 1;
+            for (const tier of [scale, 0.25]) {
+              const bench = await page.evaluate(tier => window.__spike.uikit.paintBench({ count: 48, tier, rounds: 5 }), tier);
+              result.paint.push(bench);
+              console.log(`  uikit paints 48 nodes at ${tier}x: ${bench.perNodeMs.toFixed(2)} ms a node (layout and render, warm)`);
+            }
           }
+        } catch (error) {
+          console.error(`  uikit ${key} failed: ${error.message}`);
+          result.live[key] = { error: error.message, crash: await crashed() ?? null };
         }
+        await save();
       }
 
       // The uikit node against the HTML node in its place, at 100%.
@@ -518,15 +547,27 @@ async function main() {
       await fs.writeFile(output.replace(/\.json$/, '') + `-${size}.png`, await page.screenshot());
       report.sizes[size] = { dataset, htmlInCanvas, scene: await page.evaluate(() => window.__spike.scene.info()), memory: await page.evaluate(() => window.__spike.memory()),
         processes: await processMemory(), trace, verdicts, results };
+      await save();
     }
 
+    await save();
+
+    // Each later check is saved as it finishes; one that fails is recorded
+    // with its error (and any crash) and the run goes on to the next.
+    const section = async (name, fn) => {
+      try { report[name] = await fn(); }
+      catch (error) {
+        console.error(`The ${name} check failed: ${error.message}`);
+        report[name] = { ...report[name], error: error.message, crash: await crashed() ?? null };
+      }
+      await save();
+    };
     // Questions 2 and 5: painter A on the 5k dataset, then painted against live nodes.
-    if (checks.includes('paint')) report.paint = await paintChecks();
+    if (checks.includes('paint')) await section('paint', paintChecks);
     // Question 6: image tiers and atlas memory.
-    if (checks.includes('tiers')) report.tiers = await tierChecks();
+    if (checks.includes('tiers')) await section('tiers', tierChecks);
     // Question 3: uikit live, as a painter, against HTML, and its text.
-    if (checks.includes('uikit')) report.uikit = await uikitChecks();
-    await fs.writeFile(output, JSON.stringify(report, null, 2));
+    if (checks.includes('uikit')) await section('uikit', uikitChecks);
     console.log(`Saved ${output}`);
   } finally {
     if (app) {
