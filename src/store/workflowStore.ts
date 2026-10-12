@@ -38,6 +38,7 @@ import {
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { deepFreezeGraph } from "./utils/freezeGraph";
+import { indexOfNode, replaceNodesAt, subscribeToNodeChanges, type NodeChangeListener } from "./nodeChanges";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
 import { hasHistoryEntries, historyAssetIds, isHistoryEntryAvailable, pruneMissingHistory } from "./utils/historyPruning";
@@ -1268,7 +1269,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   updateNodeData: (nodeId: string, data: Partial<WorkflowNodeData>) => {
-    const node = get().nodes.find((n) => n.id === nodeId);
+    // Typing lands here on every keystroke, so nothing on this path walks
+    // the graph: the node is found by index, the undo step holds references,
+    // and only the edited node is replaced.
+    const nodes = get().nodes;
+    const index = indexOfNode(nodes, nodeId);
+    const node = index === -1 ? undefined : nodes[index];
 
     // Debounced undo tracking: skip during execution and during node/edge deletion
     // (clearStaleInputImages calls updateNodeData as a side effect of deletion)
@@ -1287,14 +1293,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }, 500);
     }
 
-    set((state) => ({
-      nodes: state.nodes.map((node) =>
-        node.id === nodeId
-          ? { ...node, data: { ...node.data, ...data } as WorkflowNodeData }
-          : node
-      ) as WorkflowNode[],
-      hasUnsavedChanges: true,
-    }));
+    if (node) {
+      const updated = { ...node, data: { ...node.data, ...data } as WorkflowNodeData } as WorkflowNode;
+      set({ nodes: replaceNodesAt(nodes, new Map([[index, updated]])), hasUnsavedChanges: true });
+    } else {
+      set({ hasUnsavedChanges: true });
+    }
     // Recompute dimming if this is a switch or conditionalSwitch node and their control data changed
     if (node?.type === "switch" && "switches" in data) {
       get().recomputeDimmedNodes();
@@ -4458,6 +4462,11 @@ function prependGalleryEntry(
 if (typeof window !== "undefined") migrateLegacyComfyCloudKey();
 
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
+
+/** Calls `listener` with the nodes each store change touched (see `nodeChanges.ts`). */
+export function subscribeToWorkflowNodeChanges(listener: NodeChangeListener): () => void {
+  return subscribeToNodeChanges(useWorkflowStore, listener);
+}
 
 // The tests freeze the graph after every change, so an in-place edit to a
 // node, edge or group (which undo shares with the live state) throws there.
