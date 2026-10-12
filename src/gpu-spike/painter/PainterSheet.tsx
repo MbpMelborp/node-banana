@@ -1,10 +1,10 @@
 "use client";
 
 // GPU canvas spike (throwaway): the painter's sheet. A real <ReactFlow> at
-// 100% holding a batch of real nodes, with their floating headers, rendered
-// inside the scene's <canvas layoutsubtree>: laid out like the page, never
-// shown, and painted into a texture in one call. The nodes read the real
-// workflow store, as they do on the canvas.
+// the zoom of the tier being painted, holding a batch of real nodes with
+// their floating headers, rendered inside the scene's <canvas layoutsubtree>:
+// laid out like the page, never shown, and painted into a texture in one
+// call. The nodes read the real workflow store, as they do on the canvas.
 import { startTransition, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ReactFlow, ReactFlowProvider, type Node } from "@xyflow/react";
@@ -37,12 +37,12 @@ const SHEET_STYLE = `
   [data-gpu-spike-sheet] .react-flow__pane, [data-gpu-spike-sheet] .react-flow__renderer { background: transparent !important; }
 `;
 
-function Sheet({ nodes, onCommit }: { nodes: Node[]; onCommit: () => void }) {
-  useLayoutEffect(onCommit, [nodes, onCommit]);
+function Sheet({ nodes, zoom, onCommit }: { nodes: Node[]; zoom: number; onCommit: () => void }) {
+  useLayoutEffect(onCommit, [nodes, zoom, onCommit]);
   return (
     <ReactFlowProvider>
       <style>{SHEET_STYLE}</style>
-      <ReactFlow nodes={nodes} edges={[]} nodeTypes={rawNodeTypes} defaultViewport={{ x: 0, y: 0, zoom: 1 }} minZoom={1} maxZoom={1}
+      <ReactFlow nodes={nodes} edges={[]} nodeTypes={rawNodeTypes} viewport={{ x: 0, y: 0, zoom }} minZoom={0.01} maxZoom={4}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false}
         zoomOnDoubleClick={false} preventScrolling={false} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
         <FloatingNodeHeaders nodes={nodes} getNodeTitle={nodeTitle} onCustomTitleChange={noop} onCommentChange={noop} onRunNode={noop}
@@ -53,12 +53,13 @@ function Sheet({ nodes, onCommit }: { nodes: Node[]; onCommit: () => void }) {
 }
 
 function SheetHost({ api }: { api: SheetHandle }) {
-  const [state, setState] = useState<{ nodes: Node[]; done: () => void }>({ nodes: [], done: noop });
+  const [state, setState] = useState<SheetState>({ nodes: [], zoom: 1, done: noop });
   useLayoutEffect(() => { api.set = next => startTransition(() => setState(next)); }, [api]);
-  return <Sheet nodes={state.nodes} onCommit={state.done} />;
+  return <Sheet nodes={state.nodes} zoom={state.zoom} onCommit={state.done} />;
 }
 
-interface SheetHandle { set: (next: { nodes: Node[]; done: () => void }) => void }
+interface SheetState { nodes: Node[]; zoom: number; done: () => void }
+interface SheetHandle { set: (next: SheetState) => void }
 
 const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
@@ -91,9 +92,9 @@ export class PainterSheet {
     this.root.render(<SheetHost api={this.handle} />);
   }
 
-  /** Renders the nodes and resolves once React has committed them. */
-  render(nodes: Node[]): Promise<void> {
-    return new Promise(resolve => this.handle.set({ nodes, done: resolve }));
+  /** Renders the nodes at a zoom (the painted tier over the device pixel ratio) and resolves once React has committed them. */
+  render(nodes: Node[], zoom = 1): Promise<void> {
+    return new Promise(resolve => this.handle.set({ nodes, zoom, done: resolve }));
   }
 
   /** Resolves once React Flow has measured every node (it hides a node until then) and every image has decoded. */

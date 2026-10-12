@@ -76,6 +76,9 @@ export function GpuSpike() {
           start: () => painter!.start(),
           paintNow: (id: string) => painter!.paintNow(graph.indexOf.get(id)!),
           status: () => ({ ...painter!.status }),
+          /** Visible nodes, how many are drawn as sharp as the zoom needs, and the tier it needs. */
+          sharpness: () => painter!.sharpness(),
+          tiers: () => [...painter!.tiers],
           /** Edits a node's data in the store, as typing elsewhere would; the repaint's latency lands in timings. */
           change: (id: string, data: Record<string, unknown>) => useWorkflowStore.getState().updateNodeData(id, data),
         };

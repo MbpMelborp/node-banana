@@ -12,6 +12,7 @@
 // cannot hold a key. --input synthetic sends everything through Electron.
 // --chromium-flags adds switches, e.g. "--use-angle=swiftshader" on a machine
 // with no GPU. --keep-traces keeps the Chromium traces next to the report.
+// --paint-copies N paints a smaller tiling in the paint and tiers checks.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -82,8 +83,8 @@ function judge(size, summary, refreshHz) {
 
 async function main() {
   const sizes = option('--sizes', '5k,10k').split(',');
-  // scene: question 1; paint: questions 2 and 5 (needs HTML-in-Canvas).
-  const checks = option('--checks', 'scene,paint').split(',');
+  // scene: question 1; paint: questions 2 and 5; tiers: question 6 (both need HTML-in-Canvas).
+  const checks = option('--checks', 'scene,paint,tiers').split(',');
   const rounds = Number(option('--rounds', 2));
   const osInput = option('--input', ['win32', 'darwin'].includes(process.platform) ? 'os' : 'synthetic') === 'os' ? createOsInput() : undefined;
   assert.ok(!osInput || osInput.available, '--input os needs Windows or macOS');
@@ -354,6 +355,70 @@ async function main() {
       return result;
     }
 
+    // Question 6: image tiers. Zoom 100% to 5% and back about the same point,
+    // then jump across the canvas, recording atlas memory at each step and how
+    // long until every visible node is drawn as sharp as its size needs.
+    async function tierChecks() {
+      const result = { steps: [], jumps: [] };
+      const copies = option('--paint-copies');
+      await open(`${copies ? `copies=${copies}` : 'size=5k'}&paint=manual&live=off`, 'the dataset for image tiers');
+      assert.ok(await page.evaluate(() => !!window.__spike.painter), 'Image tiers need HTML-in-Canvas (--enable-blink-features=CanvasDrawElement)');
+      await page.mouseMove(2, 2);
+      result.tiers = await page.evaluate(() => window.__spike.painter.tiers());
+      await page.evaluate(() => window.__spike.scene.setView({ zoom: 1, x: 40, y: 80 }));
+      await delay(500);
+      console.log(`Image tiers ${result.tiers.join(', ')}: painting every node at 1/8 first…`);
+      await page.evaluate(() => window.__spike.painter.start());
+      await page.waitFor(() => { const s = window.__spike.painter.status(); return s.allMs != null || s.atlasFull; }, null, { timeout: Number(option('--paint-timeout', 180000)), interval: 250, message: 'every node painted at 1/8' });
+      result.painted = await page.evaluate(() => window.__spike.painter.status());
+      const sharpWithin = Number(option('--sharp-timeout', 10000));
+      // Sets the view and waits until every visible node is sharp (or the timeout).
+      const settleAt = async view => {
+        const t0 = Date.now();
+        await page.evaluate(view => window.__spike.scene.setView(view), view);
+        let sharpness;
+        for (;;) {
+          sharpness = await page.evaluate(() => window.__spike.painter.sharpness());
+          if (sharpness.sharp >= sharpness.visible || Date.now() - t0 > sharpWithin) break;
+          await delay(16);
+        }
+        const status = await page.evaluate(() => window.__spike.painter.status());
+        return { view, sharpMs: sharpness.sharp >= sharpness.visible ? Date.now() - t0 : null, ...sharpness, memory: await page.evaluate(() => window.__spike.memory()),
+          held: status.held, layers: status.layers, evicted: status.evicted, oversize: status.oversize, atlasFull: status.atlasFull };
+      };
+      const { width, height } = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      const center = await page.evaluate(({ width, height }) => { const v = window.__spike.scene.view(); return { x: (width / 2 - v.x) / v.zoom, y: (height / 2 - v.y) / v.zoom }; }, { width, height });
+      const about = zoom => ({ zoom, x: width / 2 - center.x * zoom, y: height / 2 - center.y * zoom });
+      const shots = output.replace(/\.json$/, '') + '-tiers';
+      await fs.mkdir(shots, { recursive: true });
+      for (const [k, zoom] of [1, 0.5, 0.25, 0.1, 0.05, 0.1, 0.25, 0.5, 1].entries()) {
+        const step = await settleAt(about(zoom));
+        result.steps.push(step);
+        // The way out, as drawn once sharp, for looking at each tier.
+        if (k <= 4) await fs.writeFile(path.join(shots, `zoom-${Math.round(zoom * 100)}.png`), await page.screenshot());
+        console.log(`  ${Math.round(zoom * 100)}%: ${step.sharp}/${step.visible} sharp at ${step.tier}x in ${step.sharpMs ?? `>${sharpWithin}`} ms, atlas ${step.memory.atlasMB} MB`);
+      }
+      // Jumps: to the far corner of the canvas and back, at 100% and 25%.
+      const bounds = await page.evaluate(() => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (let i = 0; i < window.__spike.dataset.nodes; i++) { const n = window.__spike.scene.nodeRect(i), v = window.__spike.scene.view(); const x = (n.x - v.x) / v.zoom, y = (n.y - v.y) / v.zoom; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return { x0, y0, x1, y1 }; });
+      for (const zoom of [1, 0.25]) for (const to of [{ x: bounds.x1 - 1200, y: bounds.y1 - 800 }, { x: bounds.x0 + 400, y: bounds.y0 + 300 }, { x: (bounds.x0 + bounds.x1) / 2, y: (bounds.y0 + bounds.y1) / 2 }]) {
+        await delay(300);
+        const jump = await settleAt({ zoom, x: width / 2 - to.x * zoom, y: height / 2 - to.y * zoom });
+        result.jumps.push(jump);
+        console.log(`  jump at ${Math.round(zoom * 100)}%: ${jump.sharp}/${jump.visible} sharp in ${jump.sharpMs ?? `>${sharpWithin}`} ms, atlas ${jump.memory.atlasMB} MB`);
+      }
+      const all = [...result.steps, ...result.jumps];
+      result.maxAtlasMB = Math.max(...all.map(s => s.memory.atlasMB));
+      result.timings = await page.evaluate(() => window.__spike.timings);
+      result.processes = await processMemory();
+      result.verdict = {
+        atMost256MB: result.maxAtlasMB <= 256,
+        jumpsSharpWithin500ms: result.jumps.every(j => j.sharpMs != null && j.sharpMs <= 500),
+      };
+      result.verdict.pass = Object.values(result.verdict).every(Boolean);
+      await checkErrors();
+      return result;
+    }
+
     // Question 1: the scene alone, stand-in images, no painter or live layer.
     if (checks.includes('scene')) for (const size of sizes) {
       const dataset = await open(`size=${size}&painter=off&live=off`, `the ${size} scene`);
@@ -379,6 +444,8 @@ async function main() {
 
     // Questions 2 and 5: painter A on the 5k dataset, then painted against live nodes.
     if (checks.includes('paint')) report.paint = await paintChecks();
+    // Question 6: image tiers and atlas memory.
+    if (checks.includes('tiers')) report.tiers = await tierChecks();
     await fs.writeFile(output, JSON.stringify(report, null, 2));
     console.log(`Saved ${output}`);
   } finally {

@@ -1,17 +1,21 @@
 // GPU canvas spike (throwaway): the painted atlas. A texture array of square
-// layers, filled with a shelf allocator; images are copied in from the
-// painter's staging texture by drawing quads, so a smaller tier is a filtered
-// downscale (the staging texture has mipmaps).
+// layers. The 1/8 images every node keeps are shelf-packed into layers of
+// their own and never evicted; the larger tiers, kept only near the view, use
+// fixed cells per tier so a cell can be freed and reused. Images are copied in
+// from the painter's staging texture by drawing quads.
 import * as THREE from "three";
 import { atlasMemory } from "../instrumentation";
 
-export interface Slot { layer: number; x: number; y: number; w: number; h: number }
+export interface Slot { layer: number; x: number; y: number; w: number; h: number; tier: number; cell?: number }
 
 export interface BlitItem {
   /** Source rectangle in the staging texture, in its pixels. */
   src: { x: number; y: number; w: number; h: number };
   dst: Slot;
 }
+
+/** The largest painted image, in css px at 100% (node, header and margin). */
+export const MAX_IMAGE = { w: 520, h: 680 };
 
 const BLIT_VERTEX = /* glsl */ `
   precision highp float;
@@ -28,15 +32,21 @@ const BLIT_FRAGMENT = /* glsl */ `
   void main() { outColor = texture(uStaging, vSrc); }
 `;
 
+interface Slab { tier: number; layer: number; cols: number; cellW: number; cellH: number; free: number[]; owner: (number | undefined)[] }
+
 export class PaintedAtlas {
   readonly target: THREE.WebGLArrayRenderTarget;
+  /** What each layer holds: "shelf", a tier's slab, or nothing yet. */
+  private layerUse: ("shelf" | Slab | null)[];
   private shelves: { layer: number; y: number; h: number; x: number }[] = [];
-  private nextY: number[];
+  private shelfTop = new Map<number, number>();
+  private slabs: Slab[] = [];
   private blitScene = new THREE.Scene();
   private blitCamera = new THREE.Camera();
   private blitGeometry = new THREE.BufferGeometry();
   private blitMaterial: THREE.RawShaderMaterial;
-  usedPixels = 0;
+  /** Pixels holding images, by tier. */
+  readonly usedPixels = new Map<number, number>();
 
   constructor(readonly size: number, readonly layers: number) {
     this.target = new THREE.WebGLArrayRenderTarget(size, size, layers, { depthBuffer: false, stencilBuffer: false });
@@ -44,40 +54,100 @@ export class PaintedAtlas {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
-    this.nextY = new Array(layers).fill(0);
+    this.layerUse = new Array(layers).fill(null);
     this.blitMaterial = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: BLIT_VERTEX, fragmentShader: BLIT_FRAGMENT,
       uniforms: { uStaging: { value: null } }, depthTest: false, depthWrite: false, transparent: false, blending: THREE.NoBlending, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(this.blitGeometry, this.blitMaterial);
     mesh.frustumCulled = false;
     this.blitGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
     this.blitScene.add(mesh);
-    atlasMemory.pages = layers;
-    atlasMemory.bytes = size * size * 4 * layers;
+    this.account();
   }
 
-  /** A slot of w×h pixels, or null when the atlas is full. One pixel of gutter keeps filtering inside it. */
-  allocate(w: number, h: number): Slot | null {
+  private freeLayer(): number {
+    return this.layerUse.indexOf(null);
+  }
+
+  /** A permanent, shelf-packed slot (the 1/8 tier), or null when no layer is left. */
+  allocateShelf(w: number, h: number, tier: number): Slot | null {
     w = Math.ceil(w); h = Math.ceil(h);
     const gw = w + 2, gh = h + 2;
-    if (gw > this.size || gh > this.size) return null;
     for (const shelf of this.shelves) {
       if (shelf.h >= gh && shelf.h <= gh * 1.5 && shelf.x + gw <= this.size) {
-        const slot = { layer: shelf.layer, x: shelf.x + 1, y: shelf.y + 1, w, h };
+        const slot = { layer: shelf.layer, x: shelf.x + 1, y: shelf.y + 1, w, h, tier };
         shelf.x += gw;
-        this.usedPixels += w * h;
+        this.use(tier, w * h);
         return slot;
       }
     }
-    for (let layer = 0; layer < this.layers; layer++) {
-      if (this.nextY[layer] + gh <= this.size) {
-        const shelf = { layer, y: this.nextY[layer], h: gh, x: gw };
-        this.nextY[layer] += gh;
-        this.shelves.push(shelf);
-        this.usedPixels += w * h;
-        return { layer, x: 1, y: shelf.y + 1, w, h };
-      }
+    let layer = [...this.shelfTop].find(([, top]) => top + gh <= this.size)?.[0];
+    if (layer == null) {
+      layer = this.freeLayer();
+      if (layer < 0) return null;
+      this.layerUse[layer] = "shelf";
+      this.shelfTop.set(layer, 0);
+      this.account();
     }
-    return null;
+    const y = this.shelfTop.get(layer)!;
+    this.shelfTop.set(layer, y + gh);
+    this.shelves.push({ layer, y, h: gh, x: gw });
+    this.use(tier, w * h);
+    return { layer, x: 1, y: y + 1, w, h, tier };
+  }
+
+  /** A freeable cell of a tier (its scale), or null when every layer is taken. */
+  allocateCell(tier: number, w: number, h: number, owner: number): Slot | null {
+    w = Math.ceil(w); h = Math.ceil(h);
+    let slab = this.slabs.find(s => s.tier === tier && s.free.length);
+    if (!slab) {
+      const layer = this.freeLayer();
+      if (layer < 0) return null;
+      const cellW = Math.ceil(MAX_IMAGE.w * tier) + 2, cellH = Math.ceil(MAX_IMAGE.h * tier) + 2;
+      const cols = Math.floor(this.size / cellW), rows = Math.floor(this.size / cellH);
+      slab = { tier, layer, cols, cellW, cellH, free: Array.from({ length: cols * rows }, (_, k) => cols * rows - 1 - k), owner: [] };
+      this.slabs.push(slab);
+      this.layerUse[layer] = slab;
+      this.account();
+    }
+    const cell = slab.free.pop()!;
+    slab.owner[cell] = owner;
+    this.use(tier, w * h);
+    return { layer: slab.layer, x: (cell % slab.cols) * slab.cellW + 1, y: Math.floor(cell / slab.cols) * slab.cellH + 1, w: Math.min(w, slab.cellW - 2), h: Math.min(h, slab.cellH - 2), tier, cell };
+  }
+
+  release(slot: Slot) {
+    if (slot.cell == null) return;
+    const slab = this.layerUse[slot.layer];
+    if (!slab || slab === "shelf") return;
+    slab.owner[slot.cell] = undefined;
+    slab.free.push(slot.cell);
+    this.use(slot.tier, -slot.w * slot.h);
+    // An empty slab gives its layer back.
+    if (slab.free.length === slab.cols * Math.floor(this.size / slab.cellH)) {
+      this.slabs.splice(this.slabs.indexOf(slab), 1);
+      this.layerUse[slot.layer] = null;
+      this.account();
+    }
+  }
+
+  /** Every node holding a cell of this tier (for choosing what to evict). */
+  cellOwners(tier: number): number[] {
+    return this.slabs.filter(s => s.tier === tier).flatMap(s => s.owner.filter((o): o is number => o != null));
+  }
+
+  private use(tier: number, pixels: number) {
+    this.usedPixels.set(tier, (this.usedPixels.get(tier) ?? 0) + pixels);
+  }
+
+  /** Layers in use count toward the budget; the array itself is allocated whole up front. */
+  private account() {
+    const inUse = this.layerUse.filter(Boolean).length;
+    atlasMemory.pages = inUse;
+    atlasMemory.bytes = inUse * this.size * this.size * 4;
+  }
+
+  layersInUse() {
+    return { shelf: this.layerUse.filter(u => u === "shelf").length, byTier: Object.fromEntries([...new Set(this.slabs.map(s => s.tier))].map(t => [t, this.slabs.filter(s => s.tier === t).length])), total: this.layers };
   }
 
   /** The slot's texture coordinates (v = 0 at the top row). */
