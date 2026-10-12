@@ -50,15 +50,16 @@ const QUIET_MS = 120;
 /** Space between nodes on the sheet, in css px. */
 const GAP_PX = 4;
 /** The view's tiers are chosen this long after it stops moving. */
-const VIEW_SETTLE_MS = 80;
+const VIEW_SETTLE_MS = 50;
 /** Nodes this far outside the view (in screens) are painted ahead and kept from eviction. */
 const MARGIN = 0.25;
 /**
  * Nodes per batch. Each batch costs a few frames of settling whatever its
- * size, and small tiers fit hundreds of nodes on a sheet: a jump at 25% shows
- * about 170 nodes, which at 48 a batch took four batches and 700 ms.
+ * size, so a jump at 25% (about 170 nodes) goes in two batches rather than
+ * four. Not more: committing 192 nodes held the page for 300 ms a batch, and
+ * the 1/8 paints of a whole graph got slower, not faster.
  */
-const maxBatch = (tier: number) => (tier >= 0.5 ? 48 : 192);
+const maxBatch = (tier: number) => (tier === 0.25 ? 96 : 48);
 /** How long a batch waits for its images and sizes; a node whose image is still loading is painted provisionally and again later. */
 const SETTLE_MS = 1500, LOADING_SETTLE_MS = 5000;
 /** Times a node painted before its images loaded is painted again. */
@@ -740,13 +741,15 @@ export class Painter {
     const lastSeen = (o: string) => this.paints.get(o)?.lastSeen ?? 0;
     const victims = (t: number) => layout.cellOwners(t).filter((o) => o !== id && (t !== wanted || !this.near.has(o))).sort((a, b) => lastSeen(a) - lastSeen(b));
     const same = victims(tier);
-    const sameClass = same.filter((o) => this.paints.get(o)?.images.get(tier)?.slot.cellKey === key);
-    const order: [string, number][] = [
-      ...sameClass.map((o): [string, number] => [o, tier]),
-      ...same.filter((o) => !sameClass.includes(o)).map((o): [string, number] => [o, tier]),
-      ...this.tiers.filter((t) => t !== tier && t !== EIGHTH).flatMap((t) => victims(t).map((o): [string, number] => [o, t])),
-    ];
-    for (const [o, t] of order) {
+    const inClass = (o: string) => this.paints.get(o)?.images.get(tier)?.slot.cellKey === key;
+    // Built lazily: with thousands of cells held, listing every tier's victims
+    // for each allocation stalled the page for seconds.
+    function* order(this: Painter): Generator<[string, number]> {
+      for (const o of same) if (inClass(o)) yield [o, tier];
+      for (const o of same) if (!inClass(o)) yield [o, tier];
+      for (const t of this.tiers) if (t !== tier && t !== EIGHTH) for (const o of victims(t)) yield [o, t];
+    }
+    for (const [o, t] of order.call(this)) {
       const paint = this.paints.get(o), held = paint?.images.get(t);
       if (!paint || !held) continue;
       layout.release(held.slot);

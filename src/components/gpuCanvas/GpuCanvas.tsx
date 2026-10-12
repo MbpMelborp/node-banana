@@ -101,6 +101,7 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
     // Today's canvas sets this from its zoom; nodes here are never at low detail.
     setZoomedOut(false);
     const stats = new GpuCanvasStats();
+    stats.observeLongFrames();
     const store = useWorkflowStore.getState();
     const graph = new SceneGraph(store.nodes, store.edges, store.groups);
     const types = boundedNodeTypes(nodeTypes);
@@ -261,6 +262,7 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       engineRef.current = null;
       if (window.__gpuCanvas?.stats === stats) delete window.__gpuCanvas;
       interacting.dispose();
+      stats.dispose();
       live.dispose();
       painter?.dispose();
       scene.dispose();

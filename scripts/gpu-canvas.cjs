@@ -510,6 +510,7 @@ async function main() {
       }
       const summary = await page.evaluate(() => window.__gpuCanvas.stats.summary());
       for (const f of summary.longFrames ?? []) log(`  long frame: ${f.ms} ms, ending in "${f.phase}"`);
+      for (const f of summary.loafs ?? []) log(`  long animation frame: ${f.ms} ms (blocking ${f.blockingMs}, render ${f.renderMs}, layout ${f.layoutMs}) in "${f.phase}"; scripts: ${f.scripts.map(s => `${s.ms} ms ${s.fn || s.invoker} ${s.at}`).join(' | ') || 'none'}`);
       const verdict = { atMost256MB: Math.max(...steps.map(s => s.atlasMB)) <= 256, jumpsSharpWithin500ms: jumps.every(j => j.sharpMs != null && j.sharpMs <= 500) };
       await checkErrors();
       return { steps, jumps, verdict: { ...verdict, pass: Object.values(verdict).every(Boolean) }, stats: summary };
