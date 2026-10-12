@@ -31,6 +31,8 @@ const LIVE_STYLE = `
 
 /** How long a leaving node waits for its painted image to be current. */
 const LEAVE_TIMEOUT_MS = 1500;
+/** How long the layer waits for React to commit a change of live nodes. */
+const RENDER_TIMEOUT_MS = 2000;
 
 export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "test";
 
@@ -186,7 +188,11 @@ export class LiveLayer {
       const n = graph.nodes[g];
       flowNodes.push(flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected));
     }
-    return new Promise<void>((resolve) => this.setNodes({ nodes: flowNodes, committed: resolve }));
+    // A commit that never comes (the tree failed) must not hold up whoever waits on the layer.
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, RENDER_TIMEOUT_MS);
+      this.setNodes({ nodes: flowNodes, committed: () => { clearTimeout(timer); resolve(); } });
+    });
   }
 
   /** Resolves when every wanted node is live and every other node is back in the scene. */

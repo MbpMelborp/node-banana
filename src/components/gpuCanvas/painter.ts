@@ -138,6 +138,10 @@ export class Painter {
   private viewTimer = 0;
   private keyFrame = 0;
   private dirtyKeys = new Set<string>();
+  private dirtySince = 0;
+  /** Nodes to paint again whatever the disk cache holds. */
+  private uncached = new Set<string>();
+  private unplacedRetries = 0;
   private unsubscribers: (() => void)[] = [];
   private waiters = new Map<string, (() => void)[]>();
   private readbacks: Readback[] = [];
@@ -192,9 +196,10 @@ export class Painter {
     this.sheet.resize(Math.min(texels.w, max) / this.scene.scale, Math.min(texels.h, max) / this.scene.scale);
   }
 
-  /** Paints the view at the tier it needs, then every node at 1/8. */
+  /** Paints the view at the tier it needs, then every node at 1/8. Called again when a workflow opens: its timings start over. */
   start() {
     this.startedAt = performance.now();
+    Object.assign(this.status, { screenfulDone: false, screenfulMs: null, allMs: null, batches: 0, cacheHits: 0 });
     this.recomputeAllKeys();
     this.screenful = new Set(this.scene.visible(0).map((i) => this.scene.graph.nodes[i].id));
     this.refreshView();
@@ -241,6 +246,19 @@ export class Painter {
     return done;
   }
 
+  /** Drops a node's images and paints it again on its own (for a runner checking a fresh paint). */
+  repaint(id: string): Promise<void> {
+    const paint = this.paints.get(id);
+    if (paint) {
+      for (const image of paint.images.values()) this.atlas.layout.release(image.slot);
+      paint.images.clear();
+      paint.shown = undefined;
+    }
+    this.show(id, true);
+    this.uncached.add(id);
+    return this.paintNow(id);
+  }
+
   /** The smallest tier as sharp as the view's zoom needs. */
   wanted() {
     return wantedTier(this.scene.view.zoom, this.scene.scale, this.tiers);
@@ -279,6 +297,7 @@ export class Painter {
   }
 
   private nodesChanged(changes: NodeChanges) {
+    if (!this.dirtyKeys.size) this.dirtySince = performance.now();
     for (const id of changes.updated) this.dirtyKeys.add(id);
     for (const id of changes.added) this.dirtyKeys.add(id);
     this.scheduleKeys();
@@ -287,6 +306,7 @@ export class Painter {
   private edgesChanged(previous: readonly WorkflowEdge[], next: readonly WorkflowEdge[]) {
     const before = new Set(previous);
     const after = new Set(next);
+    if (!this.dirtyKeys.size) this.dirtySince = performance.now();
     for (const edge of previous) if (!after.has(edge)) this.dirtyKeys.add(edge.source).add(edge.target);
     for (const edge of next) if (!before.has(edge)) this.dirtyKeys.add(edge.source).add(edge.target);
     this.scheduleKeys();
@@ -298,6 +318,7 @@ export class Painter {
     this.keyFrame = requestAnimationFrame(() => {
       this.keyFrame = 0;
       const { nodes, context } = this.keyContext();
+      const since = this.dirtySince;
       // A node's image shows what feeds it, so the nodes it feeds are dirty too.
       const dirty = new Set(this.dirtyKeys);
       this.dirtyKeys.clear();
@@ -308,13 +329,13 @@ export class Painter {
         const key = paintKey(nodes[i], context);
         if (this.keys.get(id) === key) continue;
         this.keys.set(id, key);
-        this.stale(id);
+        this.stale(id, since);
       }
     });
   }
 
   /** A node's key changed: its images are stale. Repaint what the view shows and the 1/8, and drop the rest. */
-  private stale(id: string) {
+  private stale(id: string, changedAt: number) {
     const paint = this.paints.get(id), tier = this.wanted();
     if (paint) {
       for (const [t, image] of paint.images) {
@@ -323,9 +344,9 @@ export class Painter {
         paint.images.delete(t);
       }
     }
-    const now = performance.now();
-    if (this.near.has(id) && tier !== EIGHTH) this.queue.add(id, tier, URGENT, now);
-    this.queue.add(id, EIGHTH, URGENT, now);
+    // Queued as of the store change, so the time to shown counts the frame keys wait for.
+    if (this.near.has(id) && tier !== EIGHTH) this.queue.add(id, tier, URGENT, changedAt);
+    this.queue.add(id, EIGHTH, URGENT, changedAt);
     this.show(id);
     void this.run();
   }
@@ -449,8 +470,10 @@ export class Painter {
     const first = place(misses, (id) => this.boxOf(id).h - HEADER - PAD);
     await this.sheet.render(sheetNodes(misses, first), zoom);
     const t1 = performance.now();
-    const yielded = () => !this.loading && this.scene.lastInputAt > t0;
-    const { decodeMs } = await this.sheet.settle(misses.map((r) => r.id), 5000, () => this.disposed);
+    // Input, or a change to paint, arrived while the sheet was getting ready: give way.
+    const urgentBatch = requests[0].priority === URGENT;
+    const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
+    const { decodeMs } = await this.sheet.settle(misses.map((r) => r.id), 5000, () => this.disposed || yielded());
     const t2 = performance.now();
     for (const r of misses) {
       const element = this.sheet.nodeElement(r.id);
@@ -464,15 +487,24 @@ export class Painter {
       const a = first.get(r.id), b = placed.get(r.id)!;
       return !a || a.x !== b.x || a.y !== b.y;
     });
-    if (moved || fits.length !== misses.length) {
-      await this.sheet.render(sheetNodes(fits, placed), zoom);
-      await nextFrame();
-    }
+    if (moved || fits.length !== misses.length) await this.sheet.render(sheetNodes(fits, placed), zoom);
+    const nodePositions = new Map(fits.map((r) => {
+      const p = placed.get(r.id)!;
+      return [r.id, { x: p.x + PAD, y: p.y + HEADER }];
+    }));
+    const inPlace = await this.sheet.positioned(nodePositions, 2000, () => this.disposed || yielded());
     if (this.disposed) return;
-    // Input arrived while the sheet was getting ready: give way, paint it later.
-    if (yielded()) {
+    if (!inPlace && !yielded() && this.unplacedRetries < 2) {
+      // Still elsewhere: painting now would misplace it. Try again (twice, then paint what is there).
+      this.unplacedRetries++;
       this.queue.restore(fits);
-      this.options.stats.record("painter.yielded", fits.length);
+      this.options.stats.record("painter.unplaced", fits.length);
+      return;
+    }
+    this.unplacedRetries = 0;
+    if (yielded()) {
+      this.queue.restore(misses);
+      this.options.stats.record(this.scene.lastInputAt > t0 ? "painter.yielded" : "painter.preempted", misses.length);
       return;
     }
     const t3 = performance.now();
@@ -545,8 +577,10 @@ export class Painter {
   private afterBatch(done: readonly PaintRequest[], t0: number) {
     const now = performance.now();
     this.resolveWaiters(done);
+    // A change counts once the image the view shows has it.
+    const shownTier = this.wanted();
     for (const r of done) {
-      if (r.priority === URGENT) void nextFrame().then(() => this.options.stats.record("painter.changeToShownMs", performance.now() - r.queuedAt));
+      if (r.priority === URGENT && r.tier === shownTier) void nextFrame().then(() => this.options.stats.record("painter.changeToShownMs", performance.now() - r.queuedAt));
     }
     if (this.status.screenfulMs == null && this.screenfulSharp()) {
       this.status.screenfulMs = Math.round(now - this.startedAt);
@@ -657,6 +691,7 @@ export class Painter {
     if (!cache) return requests;
     const started = performance.now();
     const found = await Promise.all(requests.map(async (r) => {
+      if (this.uncached.delete(r.id)) return undefined;
       try {
         const key = this.keys.get(r.id);
         return key ? await cache.get(cacheKey(key, r.tier)) : undefined;

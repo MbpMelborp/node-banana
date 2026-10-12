@@ -9,7 +9,9 @@
  * Larger tiers, kept only near the view, use fixed cells so a cell can be
  * freed and reused. Cells come in size classes (each tier's images rounded
  * up to a step), so a layer at 2× holds several nodes rather than one cell
- * sized for the largest.
+ * sized for the largest. A class's cells sit in a slab: a whole layer for
+ * large cells, or a quarter of one for small cells, so the small
+ * tiers' many classes do not each take a layer.
  */
 
 export interface Slot {
@@ -34,6 +36,11 @@ interface Slab {
   key: string;
   tier: number;
   layer: number;
+  /** The slab's region of its layer: top-left texel and side. */
+  x: number;
+  y: number;
+  side: number;
+  region: number;
   cols: number;
   rows: number;
   cellW: number;
@@ -49,9 +56,19 @@ interface Shelf {
   x: number;
 }
 
+/** A layer split into equal square regions, each free or holding a slab. */
+interface Regions {
+  side: number;
+  per: number;
+  slabs: (Slab | null)[];
+}
+
+/** A slab wants at least this many cells before it takes a smaller region. */
+const MIN_CELLS_PER_SLAB = 16;
+
 export class AtlasLayout {
-  /** What each layer holds: shelves, a tier's slab, or nothing yet. */
-  private layerUse: ("shelf" | Slab | null)[];
+  /** What each layer holds: shelves, slabs in regions, or nothing yet. */
+  private layerUse: ("shelf" | Regions | null)[];
   private shelves: Shelf[] = [];
   private shelfTop = new Map<number, number>();
   private slabs: Slab[] = [];
@@ -118,19 +135,15 @@ export class AtlasLayout {
     const { cellW, cellH, key } = this.cellClass(tier, w, h);
     let slab = this.slabs.find((s) => s.key === key && s.free.length);
     if (!slab) {
-      const layer = this.freeLayer();
-      if (layer < 0) return null;
-      const cols = Math.floor(this.size / cellW), rows = Math.floor(this.size / cellH);
-      slab = { key, tier, layer, cols, rows, cellW, cellH, free: Array.from({ length: cols * rows }, (_, k) => cols * rows - 1 - k), owner: [] };
-      this.slabs.push(slab);
-      this.layerUse[layer] = slab;
+      slab = this.newSlab(key, tier, cellW, cellH) ?? undefined;
+      if (!slab) return null;
     }
     const cell = slab.free.pop()!;
     slab.owner[cell] = owner;
     const slot: Slot = {
       layer: slab.layer,
-      x: (cell % slab.cols) * slab.cellW + 1,
-      y: Math.floor(cell / slab.cols) * slab.cellH + 1,
+      x: slab.x + (cell % slab.cols) * slab.cellW + 1,
+      y: slab.y + Math.floor(cell / slab.cols) * slab.cellH + 1,
       w: Math.min(w, slab.cellW - 2),
       h: Math.min(h, slab.cellH - 2),
       tier,
@@ -141,20 +154,46 @@ export class AtlasLayout {
     return slot;
   }
 
-  /** Gives a slot back: a cell to its slab (an empty slab frees its layer), a shelf slot for reuse at its size. */
+  /** A quarter of a layer when it holds enough cells of this size, else a whole layer; in a layer split that way, or a free one. */
+  private newSlab(key: string, tier: number, cellW: number, cellH: number): Slab | null {
+    const half = this.size / 2;
+    const side = Math.floor(half / cellW) * Math.floor(half / cellH) >= MIN_CELLS_PER_SLAB ? half : this.size;
+    let layer = this.layerUse.findIndex((use) => use && use !== "shelf" && use.side === side && use.slabs.includes(null));
+    if (layer < 0) {
+      layer = this.freeLayer();
+      if (layer < 0) return null;
+      const per = this.size / side;
+      this.layerUse[layer] = { side, per, slabs: new Array(per * per).fill(null) };
+    }
+    const regions = this.layerUse[layer] as Regions;
+    const region = regions.slabs.indexOf(null);
+    const cols = Math.floor(side / cellW), rows = Math.floor(side / cellH);
+    const slab: Slab = {
+      key, tier, layer, x: (region % regions.per) * side, y: Math.floor(region / regions.per) * side, side, region,
+      cols, rows, cellW, cellH, free: Array.from({ length: cols * rows }, (_, k) => cols * rows - 1 - k), owner: [],
+    };
+    regions.slabs[region] = slab;
+    this.slabs.push(slab);
+    return slab;
+  }
+
+  /** Gives a slot back: a cell to its slab (an empty slab frees its region, and an empty layer the layer), a shelf slot for reuse at its size. */
   release(slot: Slot) {
     this.use(slot.tier, -slot.w * slot.h);
     if (slot.cell == null) {
       this.freeShelfSlots.push(slot);
       return;
     }
-    const slab = this.layerUse[slot.layer];
-    if (!slab || slab === "shelf") return;
+    const regions = this.layerUse[slot.layer];
+    if (!regions || regions === "shelf") return;
+    const slab = regions.slabs[Math.floor(slot.y / regions.side) * regions.per + Math.floor(slot.x / regions.side)];
+    if (!slab) return;
     slab.owner[slot.cell] = undefined;
     slab.free.push(slot.cell);
     if (slab.free.length === slab.cols * slab.rows) {
       this.slabs.splice(this.slabs.indexOf(slab), 1);
-      this.layerUse[slot.layer] = null;
+      regions.slabs[slab.region] = null;
+      if (regions.slabs.every((s) => s === null)) this.layerUse[slot.layer] = null;
     }
   }
 

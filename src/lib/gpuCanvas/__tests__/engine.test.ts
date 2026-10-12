@@ -80,6 +80,20 @@ describe("AtlasLayout", () => {
     expect(atlas.layersInUse()).toBe(1);
     expect(atlas.allocateCell(1, 300, 400, "c")).not.toBeNull();
   });
+
+  it("puts small cell classes in quarters of a layer, freeing the layer with its last slab", () => {
+    const atlas = new AtlasLayout(2048, 2);
+    // Four classes of 1/4 images share one layer, one quarter each.
+    const slots = [60, 120, 180, 240].map((h, k) => atlas.allocateCell(0.25, 80, h, `n${k}`)!);
+    expect(new Set(slots.map((s) => s.layer)).size).toBe(1);
+    expect(new Set(slots.map((s) => `${s.x < 1024}:${s.y < 1024}`)).size).toBe(4);
+    expect(atlas.layersInUse()).toBe(1);
+    // A fifth class opens the next layer.
+    expect(atlas.allocateCell(0.25, 140, 60, "n4")!.layer).not.toBe(slots[0].layer);
+    for (const slot of slots) atlas.release(slot);
+    expect(atlas.layersInUse()).toBe(1);
+    expect(atlas.cellOwners(0.25)).toEqual(["n4"]);
+  });
 });
 
 describe("atlasBudget", () => {
@@ -139,6 +153,17 @@ describe("paint queue", () => {
     queue.restore(second);
     expect(queue.take(10, () => true).map((r) => r.id)).toEqual(["b", "c"]);
     expect(queue.size).toBe(0);
+  });
+
+  it("paints a change on its own, not with a sheet of others", () => {
+    const queue = new PaintQueue();
+    queue.add("b", 1, VIEW, 0);
+    queue.add("c", 1, VIEW, 0);
+    queue.add("a", 1, URGENT, 1);
+    expect(queue.hasUrgent()).toBe(true);
+    expect(queue.take(10, () => true).map((r) => r.id)).toEqual(["a"]);
+    expect(queue.hasUrgent()).toBe(false);
+    expect(queue.take(10, () => true).map((r) => r.id)).toEqual(["b", "c"]);
   });
 
   it("packs a sheet in rows and leaves out what does not fit", () => {

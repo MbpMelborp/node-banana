@@ -13,6 +13,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { NodeChange, NodeTypes } from "@xyflow/react";
+import { frameLoadedGraph } from "@/utils/frameGraph";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { WorkflowNode } from "@/types";
@@ -60,6 +61,7 @@ export interface GpuCanvasApi {
   live: () => string[];
   setLive: (ids: string[]) => Promise<string[]>;
   paintNow: (id: string) => Promise<void>;
+  repaint: (id: string) => Promise<void>;
   /** Edits a node's data in the store, as typing elsewhere would (the repaint's latency lands in stats). */
   change: (id: string, data: Record<string, unknown>) => void;
   info: () => ReturnType<Scene["info"]> & { budget: ReturnType<typeof atlasBudget> | null; htmlInCanvas: boolean };
@@ -115,7 +117,12 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       queueMicrotask(() => setFailure(message));
       return;
     }
-    const headerProxy: HeaderProps = new Proxy({} as HeaderProps, { get: (_, key: keyof HeaderProps) => propsRef.current.headers[key] });
+    // The latest header props, read when used; spreadable, so a render takes them as they are then.
+    const headerProxy: HeaderProps = new Proxy({} as HeaderProps, {
+      get: (_, key: keyof HeaderProps) => propsRef.current.headers[key],
+      ownKeys: () => Reflect.ownKeys(propsRef.current.headers),
+      getOwnPropertyDescriptor: (_, key) => ({ value: propsRef.current.headers[key as keyof HeaderProps], enumerable: true, configurable: true, writable: false }),
+    });
     const live = new LiveLayer(host, scene, types, headerProxy, stats);
     live.setView(scene.view);
 
@@ -125,11 +132,6 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
     const painter = budget ? new Painter(scene, { nodeTypes: types, headers: headerProxy, budget, cache: openPaintStore(), salt: APP_VERSION, stats }) : null;
     live.painter = painter;
     engineRef.current = { painter, scene };
-
-    // The view: the tab's saved one, else everything in view.
-    const saved = store.canvasViewport;
-    if (saved && saved.zoom > 0) scene.setView(saved);
-    else scene.fit();
 
     // Selected nodes are live; store selection follows clicks.
     const selectedIds = new Set(store.nodes.filter((n) => n.selected).map((n) => n.id));
@@ -230,10 +232,10 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
         return [...live.live];
       },
       paintNow: (id) => painter?.paintNow(id) ?? Promise.resolve(),
+      repaint: (id) => painter?.repaint(id) ?? Promise.resolve(),
       change: (id, data) => useWorkflowStore.getState().updateNodeData(id, data),
       info: () => ({ ...scene.info(), budget, htmlInCanvas }),
     };
-    painter?.start();
 
     return () => {
       clearTimeout(settleTimer);
@@ -249,10 +251,22 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
     // The engine is built once per mount; props it needs later are read through propsRef.
   }, [nodeTypes]);
 
-  // Opening a large workflow shows the loading screen until its first paint is done.
+  // A workflow opened (or the canvas mounted): the tab's view, else the graph framed as today's
+  // canvas frames it; painting starts over from the view, behind the loading screen when large.
   useEffect(() => {
     const engine = engineRef.current;
-    const painter = engine?.painter;
+    if (!engine) return;
+    const { scene, painter } = engine;
+    const saved = useWorkflowStore.getState().canvasViewport;
+    if (saved && saved.zoom > 0) scene.setView(saved);
+    else {
+      const framed = frameLoadedGraph(scene.graph.nodes.map((n) => ({ x: n.x, y: n.y, width: n.w, height: n.h })), scene.canvas.clientWidth, scene.canvas.clientHeight);
+      if (framed) {
+        scene.setView(framed);
+        useWorkflowStore.getState().setCanvasViewport(framed);
+      }
+    }
+    painter?.start();
     if (!painter || painter.status.total < LOADING_MIN_NODES) return;
     const done = () => painter.status.screenfulDone && painter.status.painted >= painter.status.total;
     let shown = false;

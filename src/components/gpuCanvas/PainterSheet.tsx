@@ -13,7 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { ReactFlow, ReactFlowProvider, useStoreApi, type Node, type NodeTypes, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { PaintedNodes } from "@/components/nodes/paintMode";
-import { noop, settleNodes, type HeaderProps } from "./nodeSheets";
+import { nextFrame, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // Transitions and animations would be painted mid-way; the pane is transparent so the margins are.
 const SHEET_STYLE = `
@@ -58,6 +58,9 @@ function Sheet({ connect, nodeTypes, headers }: { connect: (connection: SheetCon
   );
 }
 
+/** React Flow's node transform, as the style reads it back. */
+const TRANSLATE = /^translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)$/;
+
 export class PainterSheet {
   readonly element: HTMLDivElement;
   private root: Root;
@@ -93,6 +96,28 @@ export class PainterSheet {
 
   settle(ids: readonly string[], timeoutMs = 5000, cancelled?: () => boolean) {
     return settleNodes(this.element, ids, performance.now() + timeoutMs, cancelled);
+  }
+
+  /**
+   * Waits until React Flow has moved each node to its position (it applies
+   * new positions a render after ours), so the sheet is not painted with a
+   * node still where the previous pass put it. False if the deadline passed.
+   */
+  async positioned(at: ReadonlyMap<string, { x: number; y: number }>, timeoutMs = 2000, cancelled?: () => boolean) {
+    const until = performance.now() + timeoutMs;
+    for (;;) {
+      let ready = true;
+      for (const [id, { x, y }] of at) {
+        const shown = TRANSLATE.exec(this.nodeElement(id)?.style.transform ?? "");
+        if (!shown || Math.abs(Number(shown[1]) - x) > 0.01 || Math.abs(Number(shown[2]) - y) > 0.01) {
+          ready = false;
+          break;
+        }
+      }
+      if (ready) return true;
+      if (performance.now() > until || cancelled?.()) return false;
+      await nextFrame();
+    }
   }
 
   /** The sheet's React Flow state (for handle positions). */

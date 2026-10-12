@@ -56,6 +56,12 @@ export class PaintQueue {
     return this.queued.size;
   }
 
+  /** Whether a change is waiting to be painted. */
+  hasUrgent() {
+    for (const request of this.queued.values()) if (request.priority === URGENT) return true;
+    return false;
+  }
+
   has(id: string, tier: number) {
     return this.queued.has(`${id}:${tier}`);
   }
@@ -103,15 +109,17 @@ export class PaintQueue {
 
   /**
    * Takes the first request's tier and as many more of that tier as `fits`
-   * accepts (in order), at most `max`. Taken requests leave the queue.
+   * accepts (in order), at most `max`. An urgent batch takes only urgent
+   * requests, so a change is not held up by a full sheet of others. Taken
+   * requests leave the queue.
    */
   take(max: number, fits: (request: PaintRequest, taken: readonly PaintRequest[]) => boolean): PaintRequest[] {
     const queue = this.ordered();
     if (!queue.length) return [];
-    const tier = queue[0].tier;
+    const { tier, priority } = queue[0];
     const taken: PaintRequest[] = [];
     for (const request of queue) {
-      if (request.tier !== tier) continue;
+      if (request.tier !== tier || (priority === URGENT && request.priority !== URGENT)) continue;
       if (taken.length >= max) break;
       if (!fits(request, taken)) {
         if (taken.length) break;

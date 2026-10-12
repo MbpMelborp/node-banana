@@ -13,7 +13,9 @@
 // --copies N tiles the stress workflow N times (17 is about 5,100 nodes).
 // --input os (the default on Windows and the Mac) moves the real cursor at
 // --hz (1000) in a maximised window: do not touch the mouse while it runs.
-// --chromium-flags adds switches, e.g. "--use-angle=swiftshader" with no GPU.
+// --chromium-flags adds switches, e.g. "--no-sandbox --use-angle=swiftshader"
+// on a Linux box with no GPU (run under xvfb-run).
+// --fresh-paint also compares each node painted alone, bypassing the disk cache.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -192,6 +194,10 @@ async function main() {
       await page.evaluate(gpu => localStorage.setItem('node-banana-gpu-canvas', gpu ? 'on' : 'off'), gpu);
       await app.run(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
       await delay(1500);
+      // Linux with no keyring asks where keys go; the runner stores none.
+      await page.click('Use for this session only', { optional: true, timeout: 5000 });
+      // A reload looks like a crash to session recovery; reopening starts from an empty workspace.
+      await page.click('Discard', { optional: true, timeout: 3000 });
       await page.waitFor(() => !!document.querySelector('[data-gpu-canvas], .react-flow'), null, { timeout: 120000, message: 'the canvas' });
       await page.click('Close', { last: true, optional: true, timeout: 5000 });
       await page.click('Skip', { optional: true, timeout: 2000 });
@@ -199,7 +205,7 @@ async function main() {
       await page.evaluate(PAGE_PROBE);
       await page.evaluate(() => {
         window.__perfErrors = [];
-        addEventListener('error', event => { if (!/^ResizeObserver loop/.test(event.message)) window.__perfErrors.push(event.message); });
+        addEventListener('error', event => { if (!/^ResizeObserver loop/.test(event.message)) window.__perfErrors.push(event.error?.stack ? String(event.error.stack).slice(0, 800) : event.message); });
         addEventListener('unhandledrejection', event => window.__perfErrors.push(String(event.reason?.message || event.reason)));
         window.confirm = () => true;
         window.__runnerInput = {};
@@ -333,10 +339,23 @@ async function main() {
         return { size, withinTwoLevelsPct: Math.round(within / (pa.length / 4) * 10000) / 100, maxDiff };
       }, { a, b, file });
     }
+    // A page promise with a deadline, so a hang names itself instead of stalling the driver.
+    const inPage = async (label, fn, arg, timeout = 20000) => {
+      const result = await page.evaluate(`Promise.race([(${fn})(${JSON.stringify(arg ?? null)}).then(v => ({ v })), new Promise(r => setTimeout(() => r({ timedOut: true }), ${timeout}))])`);
+      if (result?.timedOut) {
+        const state = await page.evaluate(() => ({ errors: window.__perfErrors, live: window.__gpuCanvas?.live(), layer: document.querySelectorAll('[data-gpu-canvas-live] .react-flow__node').length }));
+        throw new Error(`Timed out after ${timeout} ms waiting for ${label}: ${JSON.stringify(state)}`);
+      }
+      return result?.v;
+    };
     const section = async (name, fn) => {
       if (!checks.includes(name)) return;
       try { report[name] = await fn(); }
-      catch (error) { console.error(`The ${name} check failed: ${error.message}`); report[name] = { error: error.message }; }
+      catch (error) {
+        const shown = await page.evaluate(() => document.body?.innerText.slice(0, 600)).catch(e => `(page unreadable: ${e.message})`);
+        console.error(`The ${name} check failed: ${error.message}\nThe page showed: ${shown}`);
+        report[name] = { error: error.message, shown };
+      }
       await save();
     };
     // A view at 100% at the top-left of the first copy.
@@ -409,22 +428,28 @@ async function main() {
       for (const id of sample) {
         await page.evaluate(id => { const c = window.__gpuCanvas, r = c.nodeRect(id), v = c.view(); c.setView({ zoom: 1, x: Math.round(v.x + 240 - r.x), y: Math.round(v.y + 160 - r.y) }); }, id);
         await page.mouseMove(2, 2);
-        await page.evaluate(() => window.__gpuCanvas.setLive([]));
+        await inPage('the live layer emptied', () => window.__gpuCanvas.setLive([]));
         await delay(300);
-        await page.evaluate(id => window.__gpuCanvas.paintNow(id), id);
+        await inPage(`${id} painted`, id => window.__gpuCanvas.paintNow(id), id);
         await delay(250);
         const rect = await page.evaluate(id => window.__gpuCanvas.paintRect(id), id);
         const box = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
         const painted = await grab(box);
         const swapStarted = Date.now();
-        await page.evaluate(id => window.__gpuCanvas.setLive([id]), id);
+        await inPage(`${id} live`, id => window.__gpuCanvas.setLive([id]), id);
         const swapMs = Date.now() - swapStarted;
         await delay(250);
         const live = await grab(box);
         const type = await page.evaluate(id => window.__gpuCanvas.nodeRect(id).type, id);
         const compared = await compare(painted, live, path.join(shots, 'fidelity', type));
+        if (flag('--fresh-paint')) {
+          await inPage('the live layer emptied', () => window.__gpuCanvas.setLive([]));
+          await inPage(`${id} repainted`, id => window.__gpuCanvas.repaint(id), id);
+          await delay(250);
+          compared.fresh = await compare(await grab(box), live, path.join(shots, 'fidelity', `${type}-fresh`));
+        }
         results.push({ id, type, swapMs, ...compared, pass: compared.withinTwoLevelsPct >= 99.5 });
-        log(`  ${type}: ${compared.withinTwoLevelsPct ?? compared.error}% of pixels within 2 levels`);
+        log(`  ${type}: ${compared.withinTwoLevelsPct ?? compared.error}% of pixels within 2 levels${compared.fresh ? ` (painted alone: ${compared.fresh.withinTwoLevelsPct}%)` : ''}`);
       }
       await page.evaluate(() => window.__gpuCanvas.setLive([]));
       await checkErrors();
@@ -494,7 +519,7 @@ async function main() {
         if (!gpu) {
           await ready({ gpu: false });
           await drop();
-          await page.waitFor(n => document.querySelectorAll('.react-flow__node').length > 0 && (window.__gpuCanvas == null), workflow.nodes.length, { timeout: 180000, message: "today's canvas" });
+          await page.waitFor(() => document.querySelectorAll('.react-flow__node').length > 0 && window.__gpuCanvas == null, null, { timeout: 180000, message: "today's canvas" });
           await delay(5000);
         }
         await page.evaluate(gpu => {
@@ -510,6 +535,14 @@ async function main() {
       return result;
     });
     log(`Saved ${output}`);
+  } catch (error) {
+    // What the page and the app showed when it failed.
+    if (app) {
+      report.failure = { message: error.message, appOutput: app.output().slice(-6000),
+        page: await app.page.evaluate(() => ({ url: location.href, text: document.body?.innerText.slice(0, 2000), errors: window.__perfErrors ?? null })).catch(e => String(e)) };
+      console.error(`App output:\n${report.failure.appOutput}\nPage: ${JSON.stringify(report.failure.page, null, 2)}`);
+    }
+    throw error;
   } finally {
     await save().catch(() => {});
     if (app) {
