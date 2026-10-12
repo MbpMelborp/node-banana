@@ -29,6 +29,8 @@ export interface CachedPaint {
 
 export interface PaintStore {
   get(key: string): Promise<CachedPaint | undefined>;
+  /** Every key held. */
+  keys(): Promise<Set<string>>;
   put(entry: CachedPaint): Promise<void>;
   /** Marks entries used, so they outlive older ones. */
   touch(keys: readonly string[]): Promise<void>;
@@ -65,6 +67,9 @@ export class MemoryPaintStore implements PaintStore {
   readonly entries = new Map<string, CachedPaint>();
   async get(key: string) {
     return this.entries.get(key);
+  }
+  async keys() {
+    return new Set(this.entries.keys());
   }
   async put(entry: CachedPaint) {
     this.entries.set(entry.key, entry);
@@ -125,6 +130,10 @@ export class IndexedDbPaintStore implements PaintStore {
 
   async put(entry: CachedPaint) {
     await request((await this.store("readwrite")).put(entry));
+  }
+
+  async keys() {
+    return new Set((await request((await this.store("readonly")).getAllKeys())) as string[]);
   }
 
   async touch(keys: readonly string[]) {

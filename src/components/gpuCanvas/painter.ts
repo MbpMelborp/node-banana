@@ -35,7 +35,7 @@ import type { Slot } from "@/lib/gpuCanvas/atlasLayout";
 import type { AtlasBudget } from "@/lib/gpuCanvas/budget";
 import { enableLayoutSubtree, paintElement } from "@/lib/gpuCanvas/htmlInCanvas";
 import { edgesByNode, upstreamPaintKeys } from "@/lib/gpuCanvas/paintKey";
-import { BACKGROUND, EIGHTH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier, type PaintRequest } from "@/lib/gpuCanvas/paintQueue";
+import { BACKGROUND, EIGHTH, PREFETCH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier, type PaintRequest } from "@/lib/gpuCanvas/paintQueue";
 import { cacheKey, deflate, inflate, PAINT_CACHE_BYTES, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { PainterSheet } from "./PainterSheet";
@@ -59,7 +59,11 @@ const MARGIN = 0.25;
  * four. Not more: committing 192 nodes held the page for 300 ms a batch, and
  * the 1/8 paints of a whole graph got slower, not faster.
  */
-const maxBatch = (tier: number) => (tier === 0.25 ? 96 : 48);
+const maxBatch = (tier: number, priority: number) => (priority === PREFETCH ? PREFETCH_BATCH : tier === 0.25 ? 96 : 48);
+/** Painting for the disk cache goes in small batches, so a change never waits long behind one. */
+const PREFETCH_BATCH = 24;
+/** The zoom whose tier every node is painted at for the disk cache. */
+const PREFETCH_ZOOM = 0.25;
 /** How long a batch waits for its images and sizes; a node whose image is still loading is painted provisionally and again later. */
 const SETTLE_MS = 1500, LOADING_SETTLE_MS = 5000;
 /** Times a node painted before its images loaded is painted again. */
@@ -225,6 +229,33 @@ export class Painter {
     this.screenful = new Set(this.scene.visible(0).map((i) => this.scene.graph.nodes[i].id));
     this.refreshView();
     for (const i of this.byDistance(this.scene.graph.nodes.map((_, i) => i))) this.queue.add(this.scene.graph.nodes[i].id, EIGHTH, BACKGROUND, performance.now());
+    this.updateStatus();
+    void this.run();
+    void this.prefetch();
+  }
+
+  /**
+   * After the 1/8 pass, paints every node at the tier a 25% view needs, for
+   * the disk cache only (the atlas keeps it only for nodes near the view): a
+   * jump at that zoom then uploads its images instead of painting a few
+   * hundred nodes. Nodes the cache already holds are skipped.
+   */
+  private async prefetch() {
+    const cache = this.options.cache;
+    const tier = wantedTier(PREFETCH_ZOOM, this.scene.scale, this.tiers);
+    if (!cache || tier === EIGHTH) return;
+    let held: Set<string>;
+    try {
+      held = await cache.keys();
+    } catch {
+      return;
+    }
+    if (this.disposed) return;
+    const now = performance.now();
+    for (const i of this.byDistance(this.scene.graph.nodes.map((_, i) => i))) {
+      const id = this.scene.graph.nodes[i].id, key = this.keys.get(id);
+      if (key && !held.has(cacheKey(key, tier)) && !this.fresh(id, tier)) this.queue.add(id, tier, PREFETCH, now);
+    }
     this.updateStatus();
     void this.run();
   }
@@ -611,7 +642,7 @@ export class Painter {
     for (const r of fits) {
       const p = placed.get(r.id)!, paint = this.paint(r.id), box = this.boxOf(r.id);
       const src = { x: p.x * tier, y: p.y * tier, w: box.w * tier, h: box.h * tier };
-      const slot = this.slotFor(r.id, tier, Math.ceil(box.w * tier), Math.ceil(box.h * tier));
+      const slot = this.slotFor(r.id, tier, Math.ceil(box.w * tier), Math.ceil(box.h * tier), r.priority !== PREFETCH);
       if (!slot) continue;
       paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h });
       const handles = flow ? handleAnchors(flow, r.id) : undefined;
@@ -629,12 +660,15 @@ export class Painter {
     for (const r of provisional) {
       const tries = (this.provisional.get(r.id) ?? 0) + 1;
       this.provisional.set(r.id, tries);
-      if (tries <= MAX_PROVISIONAL_REPAINTS) this.queue.add(r.id, r.tier, BACKGROUND, performance.now());
+      if (tries <= MAX_PROVISIONAL_REPAINTS) this.queue.add(r.id, r.tier, Math.max(BACKGROUND, r.priority), performance.now());
     }
     for (const r of done) if (!unloaded.has(r.id)) this.provisional.delete(r.id);
     if (provisional.length) this.options.stats.record("painter.provisional", provisional.length);
     this.phase(`readback ${tier} ×${done.length}`);
     if (this.options.cache) this.readBack(provisional.length ? done.filter((r) => !unloaded.has(r.id)) : done);
+    // Painted for the disk cache: the atlas keeps only what is near the view.
+    // (The read-back is queued on the GPU ahead of anything that reuses the slots.)
+    for (const r of done) if (r.priority === PREFETCH && !this.near.has(r.id) && r.tier !== this.wanted()) this.drop(r.id, r.tier);
 
     const { stats } = this.options;
     stats.record("painter.nodesPerBatch", done.length);
@@ -710,8 +744,17 @@ export class Painter {
 
   // ---- the atlas ----
 
-  /** A slot for a node's tier, reusing the one it holds when the size matches. */
-  private slotFor(id: string, tier: number, w: number, h: number): Slot | null {
+  /** Gives back a node's image of a tier and shows what it has left. */
+  private drop(id: string, tier: number) {
+    const paint = this.paints.get(id), image = paint?.images.get(tier);
+    if (!paint || !image) return;
+    this.atlas.layout.release(image.slot);
+    paint.images.delete(tier);
+    this.show(id);
+  }
+
+  /** A slot for a node's tier, reusing the one it holds when the size matches; a paint for the disk cache evicts nothing. */
+  private slotFor(id: string, tier: number, w: number, h: number, evict = true): Slot | null {
     const paint = this.paint(id);
     const held = paint.images.get(tier);
     if (held && held.slot.w === w && held.slot.h === h) return held.slot;
@@ -720,7 +763,7 @@ export class Painter {
       paint.images.delete(tier);
       if (paint.shown === held) paint.shown = undefined;
     }
-    return this.allocate(id, tier, w, h);
+    return evict ? this.allocate(id, tier, w, h) : this.atlas.layout.allocateCell(tier, w, h, id);
   }
 
   /** A slot: 1/8 on a shelf for good, others in a cell, evicting the longest unseen nodes outside the view. */

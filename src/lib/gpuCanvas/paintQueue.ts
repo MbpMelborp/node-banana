@@ -11,8 +11,8 @@
 
 export const EIGHTH = 0.125;
 
-/** A change, or a paint someone waits on; the view's tier; the background 1/8 pass. */
-export const URGENT = 0, VIEW = 1, BACKGROUND = 2;
+/** A change, or a paint someone waits on; the view's tier; the background 1/8 pass; the zoomed-out tier painted for the disk cache. */
+export const URGENT = 0, VIEW = 1, BACKGROUND = 2, PREFETCH = 3;
 
 export interface PaintRequest {
   id: string;
@@ -109,15 +109,15 @@ export class PaintQueue {
 
   /**
    * Takes the first request's tier and as many more of that tier as `fits`
-   * accepts (in order), at most `max` (or `max(tier)`). An urgent batch takes only urgent
+   * accepts (in order), at most `max` (or `max(tier, priority)` of the first). An urgent batch takes only urgent
    * requests, so a change is not held up by a full sheet of others. Taken
    * requests leave the queue.
    */
-  take(max: number | ((tier: number) => number), fits: (request: PaintRequest, taken: readonly PaintRequest[]) => boolean): PaintRequest[] {
+  take(max: number | ((tier: number, priority: number) => number), fits: (request: PaintRequest, taken: readonly PaintRequest[]) => boolean): PaintRequest[] {
     const queue = this.ordered();
     if (!queue.length) return [];
     const { tier, priority } = queue[0];
-    const limit = typeof max === "number" ? max : max(tier);
+    const limit = typeof max === "number" ? max : max(tier, priority);
     const taken: PaintRequest[] = [];
     for (const request of queue) {
       if (request.tier !== tier || (priority === URGENT && request.priority !== URGENT)) continue;
