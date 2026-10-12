@@ -26,7 +26,7 @@ import { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { setZoomedOut } from "@/components/nodes/lowDetail";
 import { Painter, type PainterStatus } from "./painter";
 import { LiveLayer } from "./LiveLayer";
-import { boundedNodeTypes, type HeaderProps } from "./nodeSheets";
+import { boundedNodeTypes, HEADER, PAD, type HeaderProps } from "./nodeSheets";
 
 /** Workflows at least this large open behind the loading screen while they paint. */
 const LOADING_MIN_NODES = 150;
@@ -51,10 +51,17 @@ export interface GpuCanvasApi {
   view: () => View;
   setView: (view: Partial<View>) => void;
   fit: () => void;
-  nodeRect: (id: string) => { x: number; y: number; width: number; height: number } | null;
+  nodeRect: (id: string) => { x: number; y: number; width: number; height: number; type: string } | null;
+  /** The node's painted rectangle on screen (header and margin included), in css px. */
+  paintRect: (id: string) => { x: number; y: number; width: number; height: number } | null;
+  /** Node ids at or near a point, for runners choosing where to press. */
+  nodeAt: (x: number, y: number) => string | null;
+  nodeIds: () => string[];
   live: () => string[];
   setLive: (ids: string[]) => Promise<string[]>;
   paintNow: (id: string) => Promise<void>;
+  /** Edits a node's data in the store, as typing elsewhere would (the repaint's latency lands in stats). */
+  change: (id: string, data: Record<string, unknown>) => void;
   info: () => ReturnType<Scene["info"]> & { budget: ReturnType<typeof atlasBudget> | null; htmlInCanvas: boolean };
 }
 
@@ -203,8 +210,19 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
         const i = scene.graph.indexOf.get(id);
         if (i == null) return null;
         const n = scene.graph.nodes[i], a = scene.toScreen(n.x, n.y), z = scene.view.zoom;
-        return { x: a.x, y: a.y, width: n.w * z, height: n.h * z };
+        return { x: a.x, y: a.y, width: n.w * z, height: n.h * z, type: n.type };
       },
+      paintRect: (id) => {
+        const i = scene.graph.indexOf.get(id);
+        if (i == null) return null;
+        const n = scene.graph.nodes[i], a = scene.toScreen(n.x - PAD, n.y - HEADER), z = scene.view.zoom;
+        return { x: a.x, y: a.y, width: (n.w + PAD * 2) * z, height: (n.h + HEADER + PAD) * z };
+      },
+      nodeAt: (x, y) => {
+        const i = scene.nodeAt(x, y);
+        return i >= 0 ? scene.graph.nodes[i].id : null;
+      },
+      nodeIds: () => scene.graph.nodes.map((n) => n.id),
       live: () => [...live.live],
       setLive: async (ids) => {
         live.wantOnly("test", ids);
@@ -212,6 +230,7 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
         return [...live.live];
       },
       paintNow: (id) => painter?.paintNow(id) ?? Promise.resolve(),
+      change: (id, data) => useWorkflowStore.getState().updateNodeData(id, data),
       info: () => ({ ...scene.info(), budget, htmlInCanvas }),
     };
     painter?.start();
