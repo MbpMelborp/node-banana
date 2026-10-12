@@ -61,7 +61,7 @@ const MARGIN = 0.25;
  */
 const maxBatch = (tier: number, priority: number) => (priority === PREFETCH ? PREFETCH_BATCH : tier === 0.25 ? 96 : 48);
 /** Painting for the disk cache goes in small batches, so a change never waits long behind one. */
-const PREFETCH_BATCH = 24;
+const PREFETCH_BATCH = 8;
 /** The zoom whose tier every node is painted at for the disk cache. */
 const PREFETCH_ZOOM = 0.25;
 /** How long a batch waits for its images and sizes; a node whose image is still loading is painted provisionally and again later. */
@@ -567,6 +567,11 @@ export class Painter {
     // Input, or a change to paint, arrived while the sheet was getting ready: give way.
     const urgentBatch = requests[0].priority === URGENT;
     const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
+    if (yielded()) {
+      this.queue.restore(misses);
+      this.options.stats.record(this.scene.lastInputAt > t0 ? "painter.yielded" : "painter.preempted", misses.length);
+      return;
+    }
     this.phase(`settle ${tier} ×${misses.length}`);
     const { decodeMs, unloaded } = await this.sheet.settle(misses.map((r) => r.id), this.loading ? LOADING_SETTLE_MS : SETTLE_MS, () => this.disposed || yielded());
     const t2 = performance.now();

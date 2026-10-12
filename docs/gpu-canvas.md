@@ -49,7 +49,7 @@ evicted, longest unseen first, when the atlas needs room; the view's own
 tier near the view is never evicted.
 
 After the 1/8 pass, every node is also painted at the tier a 25% view needs
-(1/4 on a standard display, 1/2 on a Retina one), in batches of 24 below
+(1/4 on a standard display, 1/2 on a Retina one), in batches of 8 below
 everything else. Those images go to the disk cache and stay in the atlas
 only near the view, and they never evict anything: a jump to a far part of
 the graph at 25% then uploads a couple of hundred images from the cache
