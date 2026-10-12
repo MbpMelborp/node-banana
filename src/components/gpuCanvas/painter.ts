@@ -54,6 +54,8 @@ const VIEW_SETTLE_MS = 80;
 /** Nodes this far outside the view (in screens) are painted ahead and kept from eviction. */
 const MARGIN = 0.25;
 const MAX_BATCH = 48;
+/** Times a node painted before its images loaded is painted again. */
+const MAX_PROVISIONAL_REPAINTS = 3;
 /** Cache uploads per frame, in texels, so a cache hit never stalls a frame either. */
 const UPLOAD_TEXELS_PER_FRAME = 2048 * 1024;
 
@@ -143,6 +145,8 @@ export class Painter {
   private downstream = new Set<string>();
   /** Nodes to paint again whatever the disk cache holds. */
   private uncached = new Set<string>();
+  /** Nodes last painted before their images loaded, and how many times in a row. */
+  private provisional = new Map<string, number>();
   private unplacedRetries = 0;
   private unsubscribers: (() => void)[] = [];
   private waiters = new Map<string, (() => void)[]>();
@@ -480,7 +484,7 @@ export class Painter {
     // Input, or a change to paint, arrived while the sheet was getting ready: give way.
     const urgentBatch = requests[0].priority === URGENT;
     const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
-    const { decodeMs } = await this.sheet.settle(misses.map((r) => r.id), 5000, () => this.disposed || yielded());
+    const { decodeMs, unloaded } = await this.sheet.settle(misses.map((r) => r.id), 5000, () => this.disposed || yielded());
     const t2 = performance.now();
     for (const r of misses) {
       const element = this.sheet.nodeElement(r.id);
@@ -549,7 +553,17 @@ export class Painter {
     renderer.resetState();
     for (const r of done) this.show(r.id, true);
     const t5 = performance.now();
-    if (this.options.cache) this.readBack(done);
+    // A node whose image had not loaded is shown as painted, kept out of the
+    // disk cache, and painted again later (a few times at most).
+    const provisional = done.filter((r) => unloaded.has(r.id));
+    for (const r of provisional) {
+      const tries = (this.provisional.get(r.id) ?? 0) + 1;
+      this.provisional.set(r.id, tries);
+      if (tries <= MAX_PROVISIONAL_REPAINTS) this.queue.add(r.id, r.tier, BACKGROUND, performance.now());
+    }
+    for (const r of done) if (!unloaded.has(r.id)) this.provisional.delete(r.id);
+    if (provisional.length) this.options.stats.record("painter.provisional", provisional.length);
+    if (this.options.cache) this.readBack(provisional.length ? done.filter((r) => !unloaded.has(r.id)) : done);
 
     const { stats } = this.options;
     stats.record("painter.nodesPerBatch", done.length);

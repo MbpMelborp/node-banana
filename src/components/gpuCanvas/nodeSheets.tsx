@@ -77,7 +77,7 @@ function loaded(img: HTMLImageElement): Promise<void> {
 }
 
 /** Waits for React Flow to measure the nodes (it hides a node until then), then for every image in `root` to decode. */
-export async function settleNodes(root: HTMLElement, ids: readonly string[], until: number, cancelled: () => boolean = () => false): Promise<{ decodeMs: number }> {
+export async function settleNodes(root: HTMLElement, ids: readonly string[], until: number, cancelled: () => boolean = () => false): Promise<{ decodeMs: number; unloaded: Set<string> }> {
   const element = (id: string) => root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
   for (;;) {
     const pending = ids.filter((id) => {
@@ -110,7 +110,14 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
     await settleSizes(ids.map((id) => () => element(id)), until, cancelled);
     if (performance.now() > until || cancelled()) break;
   }
-  return { decodeMs };
+  // Nodes with an image still loading at the deadline: painted as they are, but not for keeps.
+  const unloaded = new Set<string>();
+  for (const img of root.querySelectorAll("img")) {
+    if (!img.getAttribute("src") || img.complete) continue;
+    const id = img.closest(".react-flow__node")?.getAttribute("data-id");
+    if (id) unloaded.add(id);
+  }
+  return { decodeMs, unloaded };
 }
 
 /** Each handle's anchor (where an edge meets it), relative to its node, as React Flow measured it. */

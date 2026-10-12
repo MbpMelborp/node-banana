@@ -570,7 +570,9 @@ export class Scene {
   private noteInput(event: Event) {
     this.lastInputAt = performance.now();
     this.callbacks.onInput?.();
-    if (!this.pendingInputAt) this.pendingInputAt = event.timeStamp;
+    // Injected input can carry a timestamp from another clock; then the time it reached the page stands in.
+    const now = performance.now();
+    if (!this.pendingInputAt) this.pendingInputAt = event.timeStamp <= now && now - event.timeStamp < 1000 ? event.timeStamp : now;
   }
 
   /** Public so the live layer can hand presses and wheels over live nodes to the scene. */
