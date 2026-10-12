@@ -37,6 +37,7 @@ import {
   WorkflowEdgeData,
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
+import { deepFreezeGraph } from "./utils/freezeGraph";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
 import { hasHistoryEntries, historyAssetIds, isHistoryEntryAvailable, pruneMissingHistory } from "./utils/historyPruning";
@@ -856,20 +857,32 @@ function pruneEmptiedGroups(
   return pruned;
 }
 
-/** Capture current undoable state as a deep-cloned snapshot */
+/**
+ * Capture the current undoable state. The store never edits a node, edge or
+ * group in place (it replaces the object), so a snapshot holds the live
+ * objects themselves: taking one costs nothing however large the graph,
+ * and history shares every node an edit did not touch. The tests freeze
+ * the graph to keep it that way (`deepFreezeGraph`).
+ */
 function captureUndoSnapshot(state: WorkflowStore): UndoSnapshot {
-  const cloned = clonePreservingStrings({
+  return {
     nodes: state.nodes,
     edges: state.edges,
     groups: state.groups,
     edgeStyle: state.edgeStyle,
     edgeAppearance: state.edgeAppearance,
-  }) as UndoSnapshot;
-  // Strip transient selection state from cloned nodes
-  for (const node of cloned.nodes) {
-    delete (node as Record<string, unknown>).selected;
-  }
-  return cloned;
+  };
+}
+
+/** A snapshot's nodes as the canvas gets them back: nothing selected. */
+function restoredNodes(nodes: WorkflowNode[]): WorkflowNode[] {
+  if (!nodes.some((node) => "selected" in node)) return nodes;
+  return nodes.map((node) => {
+    if (!("selected" in node)) return node;
+    const rest = { ...node };
+    delete rest.selected;
+    return rest;
+  });
 }
 
 /** Flush pending debounced data snapshot, capture current state, push to undoManager */
@@ -1145,7 +1158,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const previous = undoManager.undo(current);
     if (previous) {
       set({
-        nodes: previous.nodes,
+        nodes: restoredNodes(previous.nodes),
         edges: previous.edges,
         groups: previous.groups,
         edgeStyle: previous.edgeStyle,
@@ -1171,7 +1184,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const next = undoManager.redo(current);
     if (next) {
       set({
-        nodes: next.nodes,
+        nodes: restoredNodes(next.nodes),
         edges: next.edges,
         groups: next.groups,
         edgeStyle: next.edgeStyle,
@@ -4445,6 +4458,18 @@ function prependGalleryEntry(
 if (typeof window !== "undefined") migrateLegacyComfyCloudKey();
 
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
+
+// The tests freeze the graph after every change, so an in-place edit to a
+// node, edge or group (which undo shares with the live state) throws there.
+if (process.env.NODE_ENV === "test" && process.env.NB_FREEZE_GRAPH !== "off") {
+  const freeze = (state: WorkflowStore) => {
+    deepFreezeGraph(state.nodes);
+    deepFreezeGraph(state.edges);
+    deepFreezeGraph(state.groups);
+  };
+  freeze(useWorkflowStore.getState());
+  useWorkflowStore.subscribe(freeze);
+}
 
 // A run ends wherever `isRunning` drops — it finished, Stop was pressed, an
 // early return, or a load, clear or tab switch aborted it — so its asset run

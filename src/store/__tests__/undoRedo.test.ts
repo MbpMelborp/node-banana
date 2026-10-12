@@ -652,4 +652,53 @@ describe("Undo/Redo integration", () => {
       expect(store.hasUnsavedChanges).toBe(true);
     });
   });
+
+  describe("undo shares the graph instead of copying it", () => {
+    it("keeps the untouched nodes' objects across a typing undo step", () => {
+      const store = useWorkflowStore.getState();
+      const a = store.addNode("prompt", { x: 0, y: 0 });
+      const b = store.addNode("prompt", { x: 400, y: 0 });
+      vi.advanceTimersByTime(600);
+      const before = useWorkflowStore.getState().nodes;
+
+      useWorkflowStore.getState().updateNodeData(a, { prompt: "a fox" });
+      const after = useWorkflowStore.getState().nodes;
+      // Only the edited node is replaced
+      expect(after.find((n) => n.id === b)).toBe(before.find((n) => n.id === b));
+      expect(after.find((n) => n.id === a)).not.toBe(before.find((n) => n.id === a));
+      vi.advanceTimersByTime(600);
+
+      useWorkflowStore.getState().undo();
+      const undone = useWorkflowStore.getState().nodes;
+      // Undo brings back the very objects it replaced
+      expect(undone.find((n) => n.id === a)).toBe(before.find((n) => n.id === a));
+      expect(undone.find((n) => n.id === b)).toBe(before.find((n) => n.id === b));
+
+      useWorkflowStore.getState().redo();
+      expect((useWorkflowStore.getState().nodes.find((n) => n.id === a)?.data as { prompt: string }).prompt).toBe("a fox");
+    });
+
+    it("clears the selection a snapshot was taken with", () => {
+      const store = useWorkflowStore.getState();
+      const a = store.addNode("prompt", { x: 0, y: 0 });
+      useWorkflowStore.getState().onNodesChange([{ type: "select", id: a, selected: true }]);
+      expect(useWorkflowStore.getState().nodes[0].selected).toBe(true);
+      useWorkflowStore.getState().addNode("prompt", { x: 400, y: 0 });
+
+      useWorkflowStore.getState().undo();
+      const nodes = useWorkflowStore.getState().nodes;
+      expect(nodes).toHaveLength(1);
+      expect("selected" in nodes[0]).toBe(false);
+    });
+
+    it("refuses in-place edits to the graph, which would rewrite history", () => {
+      const store = useWorkflowStore.getState();
+      store.addNode("prompt", { x: 0, y: 0 });
+      const node = useWorkflowStore.getState().nodes[0];
+      expect(() => { (node.data as { prompt: string }).prompt = "changed"; }).toThrow(TypeError);
+      expect(() => { node.position.x = 5; }).toThrow(TypeError);
+      expect(() => { useWorkflowStore.getState().nodes.push(node); }).toThrow(TypeError);
+    });
+  });
 });
+
