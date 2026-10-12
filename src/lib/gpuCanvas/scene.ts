@@ -77,7 +77,11 @@ const NODE_VERTEX = /* glsl */ `
     float pad = 3.0 / uView.z;
     vec2 local = position * (iRect.zw + 2.0 * pad) - pad;
     vLocal = local; vSize = iRect.zw; vUv = iUv; vColor = iColor; vLayer = iLayer;
-    gl_Position = toClip(iRect.xy + local);
+    // The node starts on a whole pixel, as the page lays it out, so a painted
+    // image at its own scale is copied texel for pixel rather than blurred.
+    vec2 origin = iRect.xy * uView.z + uView.xy;
+    vec2 snap = (floor(origin + 0.5) - origin) / uView.z;
+    gl_Position = toClip(iRect.xy + snap + local);
   }
 `;
 
@@ -237,6 +241,8 @@ export interface SceneCallbacks {
   /** A double-click on empty canvas, at a flow position. */
   onPaneDoubleClick?: (x: number, y: number, screen: { x: number; y: number }) => void;
   onViewChange?: (view: View) => void;
+  /** A press, drag or wheel on the canvas: the user is navigating. */
+  onInput?: () => void;
   /** ms from an input event to the frame that drew its effect (the page's own part of input latency). */
   onInputLatency?: (ms: number) => void;
   /** Whether a wheel event zooms rather than pans (the canvas's navigation settings). */
@@ -563,6 +569,7 @@ export class Scene {
 
   private noteInput(event: Event) {
     this.lastInputAt = performance.now();
+    this.callbacks.onInput?.();
     if (!this.pendingInputAt) this.pendingInputAt = event.timeStamp;
   }
 
@@ -574,6 +581,7 @@ export class Scene {
     if (event.button !== 0 && event.button !== 1) return;
     this.canvas.setPointerCapture?.(event.pointerId);
     this.lastInputAt = performance.now();
+    this.callbacks.onInput?.();
     const at = this.local(event);
     this.gesture = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, onNode: event.button === 0 ? this.nodeAt(at.x, at.y) : -1, button: event.button };
   };

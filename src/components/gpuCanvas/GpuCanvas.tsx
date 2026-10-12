@@ -25,6 +25,7 @@ import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
 import { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { setZoomedOut } from "@/components/nodes/lowDetail";
+import { createPanActivityTracker } from "@/hooks/useWheelPanZoom";
 import { Painter, type PainterStatus } from "./painter";
 import { LiveLayer } from "./LiveLayer";
 import { boundedNodeTypes, HEADER, PAD, type HeaderProps } from "./nodeSheets";
@@ -100,11 +101,18 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
     const store = useWorkflowStore.getState();
     const graph = new SceneGraph(store.nodes, store.edges, store.groups);
     const types = boundedNodeTypes(nodeTypes);
+    // Held while the user navigates, as today's canvas does, so work that
+    // waits for a quiet canvas (the desktop recovery checkpoint) waits for it.
+    const interacting = createPanActivityTracker({
+      setActive: (active) => document.documentElement.classList.toggle("canvas-interacting", active),
+      endDelayMs: 300,
+    });
     let scene: Scene;
     try {
       scene = new Scene(canvas, graph, {
         onFrame: (now, jsMs) => stats.frame(now, jsMs),
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
+        onInput: () => interacting.signal(),
         wheelZooms: (event) => propsRef.current.wheelZooms(event),
         onHover: (i) => live.wantOnly("hover", i >= 0 ? [scene.graph.nodes[i].id] : []),
         onSelect: (indices, additive) => select(indices.map((i) => scene.graph.nodes[i].id), additive),
@@ -244,6 +252,7 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       unsubscribeView();
       engineRef.current = null;
       if (window.__gpuCanvas?.stats === stats) delete window.__gpuCanvas;
+      interacting.dispose();
       live.dispose();
       painter?.dispose();
       scene.dispose();
