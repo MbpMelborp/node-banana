@@ -712,6 +712,8 @@ async function externalizeNodeMedia(
       newData = data;
   }
 
+  // An unchanged node stays the same object, so the save reuses its JSON
+  if (newData === data) return node;
   return {
     ...node,
     data: newData,

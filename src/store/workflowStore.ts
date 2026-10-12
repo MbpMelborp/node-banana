@@ -38,6 +38,7 @@ import {
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { deepFreezeGraph } from "./utils/freezeGraph";
+import { serializeWorkflowRequest } from "./utils/workflowSerializer";
 import { indexOfNode, replaceNodesAt, subscribeToNodeChanges, type NodeChangeListener } from "./nodeChanges";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
@@ -4003,11 +4004,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const response = await fetch("/api/workflow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directoryPath: saveDirectoryPath,
-          filename: workflowName,
-          workflow,
-        }),
+        // Reuses each unchanged node's JSON from the last save
+        body: serializeWorkflowRequest({ directoryPath: saveDirectoryPath, filename: workflowName }, workflow),
       });
 
       const result = await response.json();

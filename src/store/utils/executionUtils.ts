@@ -420,6 +420,9 @@ export function copyLoopOutput(
   }
 }
 
+/** Nodes already found to hold no blob: URL. A node is replaced, never edited, when it changes. */
+const blobFree = new WeakSet<WorkflowNode>();
+
 /**
  * Object URLs die with the document that made them, so a `blob:` string in a
  * workflow file, or in state that came from one, can never be read again: a
@@ -456,7 +459,9 @@ export function stripDeadBlobUrls(nodes: WorkflowNode[]): WorkflowNode[] {
     return { value, changed: false };
   };
   return nodes.map((node) => {
+    if (blobFree.has(node)) return node;
     const result = strip(node.data, 0);
+    if (!result.changed) blobFree.add(node);
     return result.changed ? { ...node, data: result.value as WorkflowNodeData } : node;
   });
 }
