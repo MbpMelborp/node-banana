@@ -137,6 +137,11 @@ describe("paintKey", () => {
     expect(hashData({ image: long })).toBe(hashData({ image: "x".repeat(10_000) }));
     expect(hashData({ image: long })).not.toBe(hashData({ image: `${"x".repeat(9_999)}y` }));
   });
+
+  it("leaves a node's file refs out, so a save that records them repaints nothing", () => {
+    expect(hashData({ image: "a.png", imageRef: "img-1", inputImageRefs: ["img-2"] })).toBe(hashData({ image: "a.png" }));
+    expect(hashData({ settings: { styleRef: "x" } })).not.toBe(hashData({ settings: {} }));
+  });
 });
 
 describe("paint queue", () => {

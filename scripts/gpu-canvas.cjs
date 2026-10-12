@@ -88,6 +88,7 @@ async function buildFixture(dir, copies) {
     await sharp(path.join(root, 'examples/sample-images', name)).resize(1536, 1536, { fit: 'inside' }).jpeg({ quality: 88 }).toFile(path.join(dir, 'inputs', `${id}.jpg`));
     ids.push(id);
   }
+  const idFor = index => ids[index % ids.length];
   const mediaFor = index => `/api/workflow-images?${new URLSearchParams({ workflowPath: dir, imageId: ids[index % ids.length], raw: '1' })}`;
   let maxX = 0, maxY = 0;
   for (const node of base.nodes) {
@@ -106,8 +107,9 @@ async function buildFixture(dir, copies) {
     const imageOf = new Map();
     for (const node of base.nodes) {
       const data = structuredClone(node.data);
-      if (node.type === 'imageInput') { data.image = mediaFor(media++); data.filename = `reference-${media}.jpg`; imageOf.set(node.id, data.image); }
-      else if (node.type === 'nanoBanana') { data.outputImage = mediaFor(media++); data.status = 'complete'; imageOf.set(node.id, data.outputImage); }
+      // Each reference carries its file's ref, as a saved workflow opens.
+      if (node.type === 'imageInput') { data.imageRef = idFor(media); data.image = mediaFor(media++); data.filename = `reference-${media}.jpg`; imageOf.set(node.id, data.image); }
+      else if (node.type === 'nanoBanana') { data.outputImageRef = idFor(media); data.outputImage = mediaFor(media++); data.status = 'complete'; imageOf.set(node.id, data.outputImage); }
       if (typeof data.groupId === 'string') data.groupId += suffix;
       nodes.push({ ...node, id: node.id + suffix, position: { x: node.position.x + dx, y: node.position.y + dy }, ...(node.groupId ? { groupId: node.groupId + suffix } : {}), data });
     }
@@ -118,7 +120,8 @@ async function buildFixture(dir, copies) {
     for (const node of nodes.slice(nodes.length - base.nodes.length)) {
       if (node.type !== 'output') continue;
       const source = firstImage.get(node.id.slice(0, -suffix.length));
-      Object.assign(node.data, { image: source ? imageOf.get(source) : mediaFor(media++), contentType: 'image' });
+      const image = source ? imageOf.get(source) : mediaFor(media++);
+      Object.assign(node.data, { image, imageRef: new URLSearchParams(image.split('?')[1]).get('imageId'), contentType: 'image' });
     }
   }
   return { ...base, id: `gpu-canvas-${copies}`, name: `GPU canvas ${copies} copies`, directoryPath: dir, nodes, edges, groups };

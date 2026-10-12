@@ -52,16 +52,23 @@ function hashLong(text: string): string {
   return hash;
 }
 
-/** JSON with sorted keys and long strings replaced by their hash. */
-function stableText(value: unknown): string {
+/**
+ * A node's file refs (`imageRef`, `inputImageRefs`, …) name the file its
+ * media was saved as; they never change what it shows. Left out, so a save
+ * that records them does not repaint every node holding media.
+ */
+const FILE_REF = /Refs?$/;
+
+/** JSON with sorted keys and long strings replaced by their hash; `top` drops a node data object's file refs. */
+function stableText(value: unknown, top = false): string {
   if (typeof value === "string") return value.length > LONG_STRING ? JSON.stringify(hashLong(value)) : JSON.stringify(value);
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableText).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map((item) => stableText(item)).join(",")}]`;
   const keys = Object.keys(value as Record<string, unknown>).sort();
   const parts: string[] = [];
   for (const key of keys) {
     const item = (value as Record<string, unknown>)[key];
-    if (item === undefined || typeof item === "function") continue;
+    if (item === undefined || typeof item === "function" || (top && FILE_REF.test(key))) continue;
     parts.push(`${JSON.stringify(key)}:${stableText(item)}`);
   }
   return `{${parts.join(",")}}`;
@@ -74,7 +81,7 @@ export function hashData(data: unknown): string {
   if (data === null || typeof data !== "object") return strongHash(stableText(data));
   let hash = dataHashes.get(data);
   if (hash == null) {
-    hash = strongHash(stableText(data));
+    hash = strongHash(stableText(data, true));
     dataHashes.set(data, hash);
   }
   return hash;
