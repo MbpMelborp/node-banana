@@ -39,6 +39,17 @@ export function useUpdateNodeData(): UpdateNodeData {
 }
 
 /**
+ * The store's `updateNodeData`, painted copy or not: for an effect that keeps
+ * values derived from upstream in the node's data (a Switch's input type, a
+ * Prompt Constructor's resolved text) and writes only when they differ. On
+ * the GPU canvas a node is mounted mostly as a painted copy, painted again
+ * whenever something upstream changes, so that is where it derives.
+ */
+export function useDerivedNodeData(): UpdateNodeData {
+  return useWorkflowStore((state) => state.updateNodeData);
+}
+
+/**
  * On the GPU canvas a node is a live component only while it is worked in
  * (hovered, selected, focused); otherwise it is unmounted and drawn as a
  * picture. Whatever a node shows from its own state (a dialog, a lightbox, a

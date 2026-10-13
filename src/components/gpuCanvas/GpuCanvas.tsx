@@ -81,6 +81,8 @@ export interface GpuCanvasApi {
   repaint: (id: string) => Promise<void>;
   /** Edits a node's data in the store, as typing elsewhere would (the repaint's latency lands in stats). */
   change: (id: string, data: Record<string, unknown>) => void;
+  /** A node's data as the store holds it. */
+  data: (id: string) => Record<string, unknown> | null;
   /** Records the sheet state (placement, sizes, text fields, images) whenever these nodes are painted. */
   probe: (ids: string[]) => void;
   probeLog: () => Record<string, unknown>[];
@@ -373,6 +375,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       paintNow: (id) => painter?.paintNow(id) ?? Promise.resolve(),
       repaint: (id) => painter?.repaint(id) ?? Promise.resolve(),
       change: (id, data) => useWorkflowStore.getState().updateNodeData(id, data),
+      data: (id) => {
+        const { nodes } = useWorkflowStore.getState();
+        const i = indexOfNode(nodes, id);
+        return i >= 0 ? (nodes[i].data as unknown as Record<string, unknown>) : null;
+      },
       probe: (ids) => {
         painter?.probeIds.clear();
         for (const id of ids) painter?.probeIds.add(id);
