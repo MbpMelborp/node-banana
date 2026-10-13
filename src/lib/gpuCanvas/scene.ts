@@ -308,6 +308,9 @@ const GRID_FRAGMENT = /* glsl */ `
   }
 `;
 
+/** Every shader the scene compiles, for the tests. */
+export const SCENE_SHADERS = { NODE_VERTEX, NODE_FRAGMENT, OUTLINE_FRAGMENT, EDGE_VERTEX, EDGE_FRAGMENT, GRID_VERTEX, GRID_FRAGMENT };
+
 const EMPTY_ARRAY = (() => {
   const texture = new THREE.DataArrayTexture(new Uint8Array(4), 1, 1, 1);
   texture.needsUpdate = true;
@@ -320,6 +323,8 @@ function material(vertexShader: string, fragmentShader: string, uniforms: Record
 }
 
 export interface SceneCallbacks {
+  /** The scene cannot draw: a shader failed to compile or link. */
+  onFailure?: (reason: string) => void;
   /** Computes a connection's route (the owner knows the store's edge style and bundles). */
   routeEdge?: (e: number) => EdgeRoute;
   /** Every animation frame, with the JavaScript the scene ran in it (ms). */
@@ -340,8 +345,6 @@ export interface SceneCallbacks {
   onViewChange?: (view: View) => void;
   /** The zoom below which running nodes show a halo (0: never). */
   runningHaloBelow?: () => number;
-  /** A shader did not compile or link (the driver's log): the scene cannot draw. */
-  onShaderError?: (log: string) => void;
   /** A press, drag or wheel on the canvas: the user is navigating. */
   onInput?: () => void;
   /** ms from an input event to the frame that drew its effect (the page's own part of input latency). */
@@ -411,9 +414,8 @@ export class Scene {
     this.renderer.setPixelRatio(devicePixelRatio);
     this.renderer.autoClear = false;
     this.renderer.debug.onShaderError = (gl, program, vertex, fragment) => {
-      const log = [gl.getProgramInfoLog(program), gl.getShaderInfoLog(vertex), gl.getShaderInfoLog(fragment)].filter(Boolean).join("\n").trim();
-      console.error(`GPU canvas: a shader did not compile\n${log}`);
-      this.callbacks.onShaderError?.(log);
+      const log = [gl.getProgramInfoLog(program), gl.getShaderInfoLog(vertex), gl.getShaderInfoLog(fragment)].map((l) => l?.trim()).filter(Boolean).join("\n");
+      this.callbacks.onFailure?.(`a shader failed to compile${log ? `: ${log}` : ""}`);
     };
     this.graph = graph;
     this.index = new GridIndex(graph.nodes);

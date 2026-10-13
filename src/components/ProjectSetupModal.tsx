@@ -1150,7 +1150,7 @@ export function ProjectSetupModal({
                 description={localGpuCanvas && !gpuCanvasSupported()
                   ? "Restart Node Banana to start drawing with the GPU canvas"
                   : localGpuCanvas && gpuCanvasFailure
-                  ? `The GPU canvas stopped (${gpuCanvasFailure}), so the classic canvas is drawing until Node Banana restarts`
+                  ? "The GPU canvas stopped working, so the classic canvas is drawing until Node Banana restarts"
                   : localGpuCanvas
                   ? "Draws every node on the GPU at full detail, so very large workflows stay smooth. Turn it off to use the classic canvas, which this release still includes"
                   : "Off: the classic canvas is drawing. It will be removed in a coming release"}

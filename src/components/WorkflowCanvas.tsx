@@ -508,7 +508,7 @@ export function WorkflowCanvas() {
     else setGpuCanvasBuild((build) => build + 1);
   }, [gpuCanvasBuild]);
   useEffect(() => {
-    if (gpuCanvasFailure) showToast(`The GPU canvas stopped (${gpuCanvasFailure}), so the classic canvas is drawing until Node Banana restarts`, "warning");
+    if (gpuCanvasFailure) showToast("The GPU canvas stopped working, so the classic canvas is drawing until Node Banana restarts", "warning");
   }, [gpuCanvasFailure, showToast]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropType, setDropType] = useState<"image" | "audio" | "workflow" | "node" | null>(null);

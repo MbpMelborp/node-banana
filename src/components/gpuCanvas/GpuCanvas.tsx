@@ -57,7 +57,7 @@ export interface GpuCanvasProps {
   children?: ReactNode;
   /** Drawn inside the page's React Flow, in its viewport's context (group controls, the navigator). */
   flowChildren?: ReactNode;
-  /** The scene could not start (no WebGL2): the page falls back to the classic canvas. */
+  /** The scene could not start or draw (no WebGL2, a shader failed): the page falls back to the classic canvas. */
   onFailure: (reason: string) => void;
   /** The GPU reset and WebGL is back (or gave up coming back): the page builds the canvas again. */
   onContextLost: () => void;
@@ -164,6 +164,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     try {
       scene = new Scene(canvas, graph, {
         onFrame: (now, jsMs) => stats.frame(now, jsMs),
+        // Something the scene draws would be missing (a shader failed): the classic canvas takes over.
+        onFailure: (reason) => queueMicrotask(() => propsRef.current.onFailure(reason)),
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
         wheelZooms: (event) => propsRef.current.wheelZooms(event),
@@ -182,8 +184,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         },
         onViewChange: (view) => live.setView(view),
         runningHaloBelow: haloBelow,
-        // Something the scene draws would be missing: the classic canvas takes over.
-        onShaderError: () => queueMicrotask(() => propsRef.current.onFailure("a shader did not compile")),
       });
     } catch (error) {
       // WebGL2 is unavailable: the classic canvas takes over.

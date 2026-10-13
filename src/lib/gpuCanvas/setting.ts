@@ -73,6 +73,7 @@ export function gpuCanvasSupported(): boolean {
 export function reportGpuCanvasFailure(reason: string) {
   if (failure) return;
   failure = reason;
+  console.error(`GPU canvas: ${reason}. Using the classic canvas until Node Banana restarts.`);
   notify();
 }
 

@@ -322,16 +322,17 @@ export class LiveLayer {
   private render(): Promise<void> {
     const { nodes } = useWorkflowStore.getState();
     const graph = this.scene.graph;
-    const lookup = this.flowState()?.nodeLookup;
     const flowNodes: Node[] = [];
     const present = new Set<string>();
+    // A node handed to React Flow without its measured size is hidden until
+    // it is measured again, which blurs the field being typed in: carry the
+    // size React Flow already measured.
+    const lookup = this.flowState()?.nodeLookup;
     for (const id of new Set([...this.wanted.keys(), ...this.leaving])) {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
       const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected);
-      // Each render hands React Flow new node objects; without the size it measured, it would hide
-      // the node until measuring it again, and hiding a node blurs the field being typed in.
       const measured = lookup?.get(id)?.measured;
       if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
       flowNodes.push(node);
