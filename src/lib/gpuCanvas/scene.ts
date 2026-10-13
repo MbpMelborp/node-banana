@@ -268,16 +268,16 @@ const EDGE_FRAGMENT = /* glsl */ `
     // Dashes of 6 and gaps of 4 flow units (reference links).
     if ((vFlags & ${EDGE_DASHED}) != 0 && mod(vAlong, 10.0) > 6.0) discard;
     float coverage = clamp(vHalf + 0.5 - abs(vSide), 0.0, 1.0);
-    bool active = (vFlags & ${EDGE_ACTIVE}) != 0;
+    bool isActive = (vFlags & ${EDGE_ACTIVE}) != 0;
     bool highlight = (vFlags & (${EDGE_SELECTED} | ${EDGE_HOVERED})) != 0;
     float alpha;
     if ((vFlags & ${EDGE_STEM}) == 0 && uGradient > 0.5) {
       // The shared gradient: bright ends, a softer middle, across the edge's bounding box.
       float span = max(vRange.y - vRange.x, 1e-3);
       float pos = clamp((vX - vRange.x) / span, 0.0, 1.0);
-      vec3 stops = active || highlight ? vec3(1.0, 0.55, 1.0) : vec3(uFaded, uFaded * 0.4, uFaded);
+      vec3 stops = isActive || highlight ? vec3(1.0, 0.55, 1.0) : vec3(uFaded, uFaded * 0.4, uFaded);
       alpha = pos < 0.5 ? mix(stops.x, stops.y, pos * 2.0) : mix(stops.y, stops.z, (pos - 0.5) * 2.0);
-    } else alpha = active ? 1.0 : uFaded;
+    } else alpha = isActive ? 1.0 : uFaded;
     outColor = vec4(vColor, alpha * coverage);
   }
 `;
@@ -308,6 +308,9 @@ const GRID_FRAGMENT = /* glsl */ `
   }
 `;
 
+/** Every shader the scene compiles, for the tests. */
+export const SCENE_SHADERS = { NODE_VERTEX, NODE_FRAGMENT, OUTLINE_FRAGMENT, EDGE_VERTEX, EDGE_FRAGMENT, GRID_VERTEX, GRID_FRAGMENT };
+
 const EMPTY_ARRAY = (() => {
   const texture = new THREE.DataArrayTexture(new Uint8Array(4), 1, 1, 1);
   texture.needsUpdate = true;
@@ -320,6 +323,8 @@ function material(vertexShader: string, fragmentShader: string, uniforms: Record
 }
 
 export interface SceneCallbacks {
+  /** The scene cannot draw: a shader failed to compile or link. */
+  onFailure?: (reason: string) => void;
   /** Computes a connection's route (the owner knows the store's edge style and bundles). */
   routeEdge?: (e: number) => EdgeRoute;
   /** Every animation frame, with the JavaScript the scene ran in it (ms). */
@@ -408,6 +413,10 @@ export class Scene {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(devicePixelRatio);
     this.renderer.autoClear = false;
+    this.renderer.debug.onShaderError = (gl, program, vertex, fragment) => {
+      const log = [gl.getProgramInfoLog(program), gl.getShaderInfoLog(vertex), gl.getShaderInfoLog(fragment)].map((l) => l?.trim()).filter(Boolean).join("\n");
+      this.callbacks.onFailure?.(`a shader failed to compile${log ? `: ${log}` : ""}`);
+    };
     this.graph = graph;
     this.index = new GridIndex(graph.nodes);
 

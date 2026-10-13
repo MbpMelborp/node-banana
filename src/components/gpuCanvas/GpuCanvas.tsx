@@ -21,6 +21,7 @@ import { SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
 import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
 import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
+import { reportGpuCanvasFailure } from "@/lib/gpuCanvas/setting";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
 import { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { getLowDetailSettings, setZoomedOut } from "@/components/nodes/lowDetail";
@@ -164,6 +165,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     try {
       scene = new Scene(canvas, graph, {
         onFrame: (now, jsMs) => stats.frame(now, jsMs),
+        onFailure: reportGpuCanvasFailure,
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
         wheelZooms: (event) => propsRef.current.wheelZooms(event),
