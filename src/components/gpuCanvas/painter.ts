@@ -489,6 +489,8 @@ export class Painter {
         if (!this.loading) {
           while ((this.scene.interacting || performance.now() - this.scene.lastInputAt < QUIET_MS) && !this.disposed) await nextFrame();
         }
+        // A change's keys come a frame after it: don't start other work in that frame.
+        while (this.dirtyKeys.size && !this.disposed) await nextFrame();
         await this.batch();
         this.phase("between batches");
         await nextFrame();
@@ -566,7 +568,8 @@ export class Painter {
     const t1 = performance.now();
     // Input, or a change to paint, arrived while the sheet was getting ready: give way.
     const urgentBatch = requests[0].priority === URGENT;
-    const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && this.queue.hasUrgent());
+    // A change whose keys are still to be worked out (a frame after the store change) counts as urgent.
+    const yielded = () => (!this.loading && this.scene.lastInputAt > t0) || (!urgentBatch && (this.queue.hasUrgent() || this.dirtyKeys.size > 0));
     if (yielded()) {
       this.queue.restore(misses);
       this.options.stats.record(this.scene.lastInputAt > t0 ? "painter.yielded" : "painter.preempted", misses.length);
@@ -940,6 +943,11 @@ export class Painter {
   private pollReadbacks = () => {
     this.readbackFrame = 0;
     if (this.disposed) return;
+    // Reading the pixels back can wait while the user navigates.
+    if (this.scene.interacting || performance.now() - this.scene.lastInputAt < QUIET_MS) {
+      this.readbackFrame = requestAnimationFrame(this.pollReadbacks);
+      return;
+    }
     const gl = this.gl;
     const pending: Readback[] = [];
     for (const readback of this.readbacks) {

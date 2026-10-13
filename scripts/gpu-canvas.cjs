@@ -533,6 +533,10 @@ async function main() {
     // The scene: every node on screen, pans and zooms.
     const gestureNames = option('--gestures', ['pan-sweep', 'zoom-wheel', ...(process.platform === 'darwin' ? ['pan-wheel'] : [])].join(',')).split(',');
     await section('scene', async () => {
+      // The scene's own frame rate: wait for the painter's background work to finish (pan-while-painting measures it busy).
+      const idleStarted = Date.now();
+      await page.waitFor(() => { const p = window.__gpuCanvas.painter(); return !p.running && p.queued === 0; }, null, { timeout: 180000, interval: 500, message: 'the painter to finish' })
+        .then(() => log(`  painter idle after ${Date.now() - idleStarted} ms`), () => log('  painter still busy after 180 s'));
       const traced = [], results = [];
       for (let round = 0; round < 2; round++) for (const name of gestureNames) {
         await page.evaluate(() => window.__gpuCanvas.fit());
