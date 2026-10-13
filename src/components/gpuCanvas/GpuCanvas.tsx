@@ -69,6 +69,13 @@ export interface GpuCanvasApi {
   probe: (ids: string[]) => void;
   probeLog: () => Record<string, unknown>[];
   info: () => ReturnType<Scene["info"]> & { budget: ReturnType<typeof atlasBudget> | null; htmlInCanvas: boolean };
+  /**
+   * For a runner isolating frame-rate costs: takes a part of the page away
+   * (on = false) or puts it back. "subtree" is the canvas's layoutsubtree
+   * attribute, "sheet" the painter's sheet inside it, "live" the live layer,
+   * "chrome" everything on the page but the canvas and the live layer.
+   */
+  diagnose: (part: "subtree" | "sheet" | "live" | "chrome", on: boolean) => void;
 }
 
 declare global {
@@ -252,7 +259,31 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       },
       probeLog: () => painter?.probeLog ?? [],
       info: () => ({ ...scene.info(), budget, htmlInCanvas }),
+      diagnose: (part, on) => diagnose(part, on),
     };
+    const sheetElement = canvas.querySelector<HTMLElement>("[data-gpu-canvas-sheet]");
+    const hidden = new Map<HTMLElement, string>();
+    function diagnose(part: "subtree" | "sheet" | "live" | "chrome", on: boolean) {
+      if (part === "subtree") canvas!.toggleAttribute("layoutsubtree", on);
+      else if (part === "sheet" && sheetElement) {
+        if (on) canvas!.appendChild(sheetElement);
+        else sheetElement.remove();
+      } else if (part === "live") live.element.style.display = on ? "" : "none";
+      else if (part === "chrome") {
+        if (on) {
+          for (const [element, display] of hidden) element.style.display = display;
+          hidden.clear();
+          return;
+        }
+        const keep = new Set<Element>([canvas!, live.element]);
+        for (let at: Element | null = canvas!; at && at !== document.body; at = at.parentElement) keep.add(at);
+        for (const at of [...keep]) for (const sibling of at.parentElement?.children ?? []) {
+          if (keep.has(sibling) || !(sibling instanceof HTMLElement) || sibling.tagName === "SCRIPT" || sibling.tagName === "STYLE") continue;
+          hidden.set(sibling, sibling.style.display);
+          sibling.style.display = "none";
+        }
+      }
+    }
 
     return () => {
       clearTimeout(settleTimer);

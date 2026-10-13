@@ -16,6 +16,8 @@
 // --chromium-flags adds switches, e.g. "--no-sandbox --use-angle=swiftshader"
 // on a Linux box with no GPU (run under xvfb-run).
 // --fresh-paint also compares each node painted alone, bypassing the disk cache.
+// --scene-variants base,subtree,sheet,live,chrome,bare repeats the scene
+// gestures with parts of the page taken away, to find what costs frames.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -537,13 +539,22 @@ async function main() {
       const idleStarted = Date.now();
       await page.waitFor(() => { const p = window.__gpuCanvas.painter(); return !p.running && p.queued === 0; }, null, { timeout: 180000, interval: 500, message: 'the painter to finish' })
         .then(() => log(`  painter idle after ${Date.now() - idleStarted} ms`), () => log('  painter still busy after 180 s'));
+      // --scene-variants base,subtree,sheet,live,chrome,bare: repeat the gestures with a part of the page taken away
+      // (bare takes all of them), to find what costs frames. Labels carry the variant.
+      const variants = option('--scene-variants', 'base').split(',');
+      const PARTS = { subtree: ['sheet', 'subtree'], sheet: ['sheet'], live: ['live'], chrome: ['chrome'], bare: ['sheet', 'subtree', 'live', 'chrome'] };
       const traced = [], results = [];
-      for (let round = 0; round < 2; round++) for (const name of gestureNames) {
-        await page.evaluate(() => window.__gpuCanvas.fit());
-        await delay(1500);
-        results.push(await measure(name, name, traced));
+      for (const variant of variants) {
+        const parts = PARTS[variant] || [];
+        await page.evaluate(parts => { for (const part of parts) window.__gpuCanvas.diagnose(part, false); }, parts);
+        for (let round = 0; round < 2; round++) for (const name of gestureNames) {
+          await page.evaluate(() => window.__gpuCanvas.fit());
+          await delay(1500);
+          results.push(await measure(name, variant === 'base' ? name : `${name}:${variant}`, traced));
+        }
+        if (variant === 'base') await fs.writeFile(path.join(shots, 'fit.png'), await page.screenshot());
+        await page.evaluate(parts => { for (const part of [...parts].reverse()) window.__gpuCanvas.diagnose(part, true); }, parts);
       }
-      await fs.writeFile(path.join(shots, 'fit.png'), await page.screenshot());
       await checkErrors();
       return { ...traceResult(traced, results), info: await page.evaluate(() => window.__gpuCanvas.info()) };
     });
