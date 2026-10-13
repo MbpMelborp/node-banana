@@ -33,6 +33,7 @@ import type {
 } from "@/lib/comfy/types";
 import type { ComfyAppNodeData, ComfyRunHistoryItem } from "@/types";
 import { downloadMedia } from "@/utils/downloadMedia";
+import { useUpdateNodeData } from "./paintMode";
 
 type ComfyAppNodeType = Node<ComfyAppNodeData, "comfyApp">;
 
@@ -49,7 +50,7 @@ const EMPTY_HEIGHT = 150;
 
 export function ComfyAppNode({ id, data, selected }: NodeProps<ComfyAppNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   /** `replace` picks a different workflow; `edit` revisits this one's picks. */
   const [modal, setModal] = useState<"replace" | "edit" | null>(null);
   /** A workflow dropped on the canvas, to be read instead of asking for a file. */

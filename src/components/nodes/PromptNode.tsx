@@ -7,6 +7,7 @@ import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { PromptNodeData } from "@/types";
 import { ControlsCard, HeightGrip, SummaryValues, type SocketSpec } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 type PromptNodeType = Node<PromptNodeData, "prompt">;
 
@@ -16,7 +17,7 @@ const DEFAULT_HEIGHT = 160;
 
 export function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const getConnectedInputs = useWorkflowStore((state) => state.getConnectedInputs);
   const edges = useWorkflowStore((state) => state.edges);
 

@@ -4,13 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { useAnnotationStore } from "@/store/annotationStore";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { AnnotationNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Plus, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 type AnnotationNodeType = Node<AnnotationNodeData, "annotation">;
 
@@ -20,7 +20,7 @@ const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "image", type: "image", label: "Imag
 export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeType>) {
   const nodeData = data;
   const openModal = useAnnotationStore((state) => state.openModal);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);

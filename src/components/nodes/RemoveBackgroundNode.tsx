@@ -9,6 +9,7 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { BackgroundRemovalModel, RemoveBackgroundNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { ChipGroup, ControlsCard, EmptyState, Field, Spinner, type SocketSpec } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 type RemoveBackgroundNodeType = Node<RemoveBackgroundNodeData, "removeBackground">;
 
@@ -33,7 +34,7 @@ const MODEL_OPTIONS: { value: BackgroundRemovalModel; label: string }[] = [
 export function RemoveBackgroundNode({ id, data, selected }: NodeProps<RemoveBackgroundNodeType>) {
   const nodeData = data;
   const adaptiveOutputImage = useAdaptiveImageSrc(nodeData.outputImage, id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const getConnectedInputs = useWorkflowStore((state) => state.getConnectedInputs);
   const edges = useWorkflowStore((state) => state.edges);

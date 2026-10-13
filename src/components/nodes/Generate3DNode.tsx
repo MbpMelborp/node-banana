@@ -26,6 +26,7 @@ import {
   type SocketSpec,
 } from "./ui";
 import { Box, Folder, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "3d", type: "3d", label: "3D" }];
 const MEDIA_HEIGHT = 112;
@@ -34,7 +35,7 @@ type Generate3DNodeType = Node<Generate3DNodeData, "generate3d">;
 
 export function Generate3DNode({ id, data, selected }: NodeProps<Generate3DNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"primary" | "fallback">("primary");
 

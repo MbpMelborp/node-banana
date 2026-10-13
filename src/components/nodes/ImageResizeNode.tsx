@@ -20,6 +20,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 type ImageResizeNodeType = Node<ImageResizeNodeData, "imageResize">;
 
@@ -54,7 +55,7 @@ function formatBytes(bytes: number | null): string {
 export function ImageResizeNode({ id, data, selected }: NodeProps<ImageResizeNodeType>) {
   const nodeData = data;
   const adaptiveOutput = useAdaptiveImageSrc(nodeData.outputImage, id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);

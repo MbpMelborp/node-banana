@@ -11,6 +11,7 @@ import { nodeGraphIndex } from "@/lib/edges/graphIndex";
 import { PromptConstructorNodeData, PromptNodeData, LLMGenerateNodeData, AvailableVariable, WorkflowNode } from "@/types";
 import { resolveTextSourcesThroughRouters } from "@/store/utils/connectedInputs";
 import { parseVarTags } from "@/utils/parseVarTags";
+import { useUpdateNodeData } from "./paintMode";
 
 type PromptConstructorNodeType = Node<PromptConstructorNodeData, "promptConstructor">;
 
@@ -20,7 +21,7 @@ const DEFAULT_HEIGHT = 160;
 
 export function PromptConstructorNode({ id, data, selected }: NodeProps<PromptConstructorNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   // The text nodes feeding this one, as the store's own node objects, so the
   // list only changes when one of them does and not on every drag frame
   const connectedTextNodes = useWorkflowStore(

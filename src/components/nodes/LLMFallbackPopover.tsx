@@ -22,6 +22,7 @@ import type {
 } from "@/types";
 
 import { LLM_PROVIDER_OPTIONS, defaultLLMModel, llmModelLabel, llmModelOptions } from "@/lib/llm/catalog";
+import { useUpdateNodeData } from "./paintMode";
 
 const mapLlmToProviderType = (p: LLMProvider): ProviderType =>
   p === "google" ? "gemini" : p;
@@ -35,7 +36,7 @@ interface LLMFallbackPopoverProps {
 }
 
 export function LLMFallbackPopover({ nodeId, onClose }: LLMFallbackPopoverProps) {
-  const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const node = useWorkflowStore((s) => s.nodes.find((n) => n.id === nodeId));
   const data = node?.data as LLMGenerateNodeData | undefined;
   const existing = data?.fallbackModel;

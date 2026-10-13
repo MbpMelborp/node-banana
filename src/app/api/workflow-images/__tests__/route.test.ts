@@ -4,12 +4,19 @@ import { NextRequest } from "next/server";
 const mockStat = vi.fn();
 const mockMkdir = vi.fn();
 const mockWriteFile = vi.fn();
+const mockAccess = vi.fn();
+const mockReadFile = vi.fn();
 
 vi.mock("fs/promises", () => ({
   stat: (...args: unknown[]) => mockStat(...args),
   mkdir: (...args: unknown[]) => mockMkdir(...args),
   writeFile: (...args: unknown[]) => mockWriteFile(...args),
+  access: (...args: unknown[]) => mockAccess(...args),
+  readFile: (...args: unknown[]) => mockReadFile(...args),
 }));
+
+// ?raw=1 streams through serveFile, covered against real files in raw.test.ts.
+vi.mock("@/app/api/assets/_lib/files", () => ({ serveFile: vi.fn() }));
 
 vi.mock("@/utils/logger", () => ({
   logger: {
@@ -22,7 +29,7 @@ vi.mock("@/utils/logger", () => ({
 // The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
 vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
-import { POST } from "../route";
+import { GET, POST } from "../route";
 import { makePng } from "@/lib/assets/server/__tests__/helpers";
 
 function createMockPostRequest(body: unknown): NextRequest {

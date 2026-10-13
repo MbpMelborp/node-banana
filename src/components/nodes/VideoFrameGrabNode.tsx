@@ -9,6 +9,7 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { VideoFrameGrabNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { ChipGroup, ControlsCard, EmptyState, Field, FieldRow, PanelButton, Spinner, type SocketSpec } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 type VideoFrameGrabNodeType = Node<VideoFrameGrabNodeData, "videoFrameGrab">;
 
@@ -24,7 +25,7 @@ const POSITION_OPTIONS = [
 export function VideoFrameGrabNode({ id, data, selected }: NodeProps<VideoFrameGrabNodeType>) {
   const nodeData = data;
   const adaptiveOutputImage = useAdaptiveImageSrc(nodeData.outputImage, id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);

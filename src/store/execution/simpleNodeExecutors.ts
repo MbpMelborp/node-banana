@@ -21,6 +21,15 @@ import type { NodeExecutionContext } from "./types";
 import { resolveTextSourcesThroughRouters } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
 import { parseVarTags } from "@/utils/parseVarTags";
+import { inlineMediaReferences } from "@/lib/media/references";
+/** Saves an Output node's content to the project's outputs folder; media held by reference is sent inline. */
+async function postOutput(payload: Record<string, unknown>): Promise<Response> {
+  return fetch("/api/save-generation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(await inlineMediaReferences(payload)),
+  });
+}
 
 /**
  * Annotation node: receives upstream image as source, passes through if no annotations.
@@ -201,15 +210,11 @@ export async function executeOutput(ctx: NodeExecutionContext): Promise<void> {
       const outputNodeData = node.data as OutputNodeData;
       const outputsPath = `${saveDirectoryPath}/outputs`;
 
-      fetch("/api/save-generation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directoryPath: outputsPath,
-          audio: audioContent,
-          customFilename: outputNodeData.outputFilename || undefined,
-          createDirectory: true,
-        }),
+      postOutput({
+        directoryPath: outputsPath,
+        audio: audioContent,
+        customFilename: outputNodeData.outputFilename || undefined,
+        createDirectory: true,
       }).catch((err) => {
         console.error("Failed to save output:", err);
       });
@@ -231,15 +236,11 @@ export async function executeOutput(ctx: NodeExecutionContext): Promise<void> {
       const outputNodeData = node.data as OutputNodeData;
       const outputsPath = `${saveDirectoryPath}/outputs`;
 
-      fetch("/api/save-generation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directoryPath: outputsPath,
-          video: videoContent,
-          customFilename: outputNodeData.outputFilename || undefined,
-          createDirectory: true,
-        }),
+      postOutput({
+        directoryPath: outputsPath,
+        video: videoContent,
+        customFilename: outputNodeData.outputFilename || undefined,
+        createDirectory: true,
       }).catch((err) => {
         console.error("Failed to save output:", err);
       });
@@ -272,16 +273,12 @@ export async function executeOutput(ctx: NodeExecutionContext): Promise<void> {
       const outputNodeData = node.data as OutputNodeData;
       const outputsPath = `${saveDirectoryPath}/outputs`;
 
-      fetch("/api/save-generation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directoryPath: outputsPath,
-          image: isVideoContent ? undefined : content,
-          video: isVideoContent ? content : undefined,
-          customFilename: outputNodeData.outputFilename || undefined,
-          createDirectory: true,
-        }),
+      postOutput({
+        directoryPath: outputsPath,
+        image: isVideoContent ? undefined : content,
+        video: isVideoContent ? content : undefined,
+        customFilename: outputNodeData.outputFilename || undefined,
+        createDirectory: true,
       }).catch((err) => {
         console.error("Failed to save output:", err);
       });

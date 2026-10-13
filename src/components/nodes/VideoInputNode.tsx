@@ -3,7 +3,6 @@
 import { useCallback, useRef, useState } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { VideoInputNodeData } from "@/types";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
@@ -11,6 +10,7 @@ import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, ScrubRow, SummaryValues, formatTime, type SocketSpec } from "./ui";
 import { Download, Video, X } from "lucide-react";
+import { useUpdateNodeData } from "./paintMode";
 
 type VideoInputNodeType = Node<VideoInputNodeData, "videoInput">;
 
@@ -23,7 +23,7 @@ const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "video", type: "video", label: "Vide
 
 export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);

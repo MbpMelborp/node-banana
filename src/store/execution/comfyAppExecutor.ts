@@ -18,6 +18,7 @@ import { seedsForRun } from "@/lib/comfy/seeds";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
 import { assetParameters, assetProducer, recordOutput, recordingResult, withFolderFallback } from "./assetRecording";
+import { inlineMediaReferences, isMediaReference } from "@/lib/media/references";
 
 /** The carousel keeps this many runs, like the image and video nodes. */
 const RUN_HISTORY_LIMIT = 50;
@@ -259,7 +260,8 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
       headers,
       body: JSON.stringify({
         app,
-        inputs,
+        // The engine takes media inline; node data may hold it by reference
+        inputs: await inlineMediaReferences(inputs),
         params,
         randomizeSeeds: settings.randomizeSeeds,
         seedKey,
@@ -572,7 +574,7 @@ function describeRun(
   params: Record<string, unknown>
 ): string {
   const text = Object.values(inputs)
-    .filter((value) => !value.startsWith("data:"))
+    .filter((value) => !value.startsWith("data:") && !isMediaReference(value))
     .join(" · ")
     .slice(0, 400);
   if (text) return `${appName}: ${text}`;

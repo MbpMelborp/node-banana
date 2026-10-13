@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore, type WorkflowFile } from "../workflowStore";
 import { externalizeWorkflowMedia, hydrateWorkflowMedia } from "@/utils/mediaStorage";
 import type { WorkflowNode } from "@/types";
+import { workflowImageReference } from "@/lib/media/references";
 
 vi.mock("@/utils/mediaStorage", () => ({
   externalizeWorkflowMedia: vi.fn(async (workflow) => workflow),
@@ -244,5 +245,41 @@ describe("overlapping saves", () => {
     // Each save posted the identity it was started with
     const posted = vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).filename);
     expect(posted).toEqual(["Original", "Original", "Different"]);
+  });
+});
+
+describe("media a save writes into the folder", () => {
+  it("are held by reference from then on, and anything else stays as it was", async () => {
+    const png = "data:image/png;base64,cG5n";
+    const video = "data:video/mp4;base64,bXA0";
+    useWorkflowStore.setState({
+      nodes: [
+        node("image-1", { image: png }),
+        node("video-1", { video }, "videoInput"),
+        node("gen-1", { inputImages: [png], outputImage: png }, "nanoBanana"),
+        node("video-2", { video: "blob:http://localhost/v" }, "videoInput"),
+      ],
+    });
+    vi.mocked(externalizeWorkflowMedia).mockImplementationOnce(async (workflow) => ({
+      ...workflow,
+      nodes: [
+        node("image-1", { image: null, imageRef: "img-a" }),
+        node("video-1", { video: null, videoRef: "vid-a" }, "videoInput"),
+        node("gen-1", { inputImages: [""], inputImageRefs: ["img-b"], outputImage: null, outputImageRef: "img-c" }, "nanoBanana"),
+        node("video-2", { video: "blob:http://localhost/v" }, "videoInput"),
+      ],
+    }));
+
+    expect(await store().saveToFile()).toBe(true);
+    const [image, videoNode, generate, unsaved] = store().nodes;
+    expect(image.data).toMatchObject({ image: workflowImageReference("/project", "img-a"), imageRef: "img-a" });
+    expect(videoNode.data).toMatchObject({ video: workflowImageReference("/project", "vid-a"), videoRef: "vid-a" });
+    expect(generate.data).toMatchObject({
+      inputImages: [workflowImageReference("/project", "img-b")],
+      outputImage: workflowImageReference("/project", "img-c"),
+    });
+    // Media the save did not write keeps what it held
+    expect(unsaved.data).toEqual({ video: "blob:http://localhost/v" });
+    expect(store().hasUnsavedChanges).toBe(false);
   });
 });

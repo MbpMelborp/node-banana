@@ -22,6 +22,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
+import { useUpdateNodeData } from "./paintMode";
 
 type VideoTrimNodeType = Node<VideoTrimNodeData, "videoTrim">;
 
@@ -40,7 +41,7 @@ function formatTime(seconds: number): string {
 
 export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);

@@ -18,6 +18,7 @@ import {
   MIN_SLICE_GAP,
 } from "@/store/utils/splitGridTemplate";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
+import { useUpdateNodeData } from "./paintMode";
 
 type SplitGridNodeType = Node<SplitGridNodeData, "splitGrid">;
 
@@ -86,7 +87,7 @@ function GridDimField({ label, value, onChange, disabled }: GridDimFieldProps) {
 export function SplitGridNode({ id, data, selected }: NodeProps<SplitGridNodeType>) {
   const nodeData = data;
   const adaptiveSourceImage = useAdaptiveImageSrc(nodeData.sourceImage, id);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);

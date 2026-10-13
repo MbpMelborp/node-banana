@@ -37,6 +37,7 @@ import {
   readBlobBytes,
   sha256Hex,
 } from "./mediaBlob";
+import { isMediaReference } from "@/lib/media/isReference";
 
 /** Videos larger than this open as blob: URLs rather than data: URLs (the executors' own threshold). */
 export const INLINE_VIDEO_LIMIT = 20 * 1024 * 1024;
@@ -264,9 +265,12 @@ function encodeNode(node: unknown, refs: Map<string, MediaInfo | null>): unknown
   return result;
 }
 
-/** The bytes behind one media string; null when a blob: URL can no longer be read. */
+/** The bytes behind one media string; null when a blob: URL or a referenced file can no longer be read. */
 async function mediaBlob(media: string, prefetched: PrefetchedMedia): Promise<Blob | null> {
-  return isBlobUrl(media) ? await (prefetched.get(media) ?? fetchBlobUrl(media)) : dataUrlToBlob(media);
+  if (isBlobUrl(media)) return await (prefetched.get(media) ?? fetchBlobUrl(media));
+  // Media held by reference is read from its file, as a blob: URL is
+  if (isMediaReference(media)) return await fetchBlobUrl(media);
+  return dataUrlToBlob(media);
 }
 
 /** Bytes, hash and type of one media string. */

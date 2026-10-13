@@ -37,6 +37,10 @@ import {
   WorkflowEdgeData,
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
+import { deepFreezeGraph } from "./utils/freezeGraph";
+import { serializeWorkflowRequest } from "./utils/workflowSerializer";
+import { inlineMediaReferences, workflowImageReference } from "@/lib/media/references";
+import { indexOfNode, replaceNodesAt, subscribeToNodeChanges, type NodeChangeListener } from "./nodeChanges";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
 import { hasHistoryEntries, historyAssetIds, isHistoryEntryAvailable, pruneMissingHistory } from "./utils/historyPruning";
@@ -856,20 +860,32 @@ function pruneEmptiedGroups(
   return pruned;
 }
 
-/** Capture current undoable state as a deep-cloned snapshot */
+/**
+ * Capture the current undoable state. The store never edits a node, edge or
+ * group in place (it replaces the object), so a snapshot holds the live
+ * objects themselves: taking one costs nothing however large the graph,
+ * and history shares every node an edit did not touch. The tests freeze
+ * the graph to keep it that way (`deepFreezeGraph`).
+ */
 function captureUndoSnapshot(state: WorkflowStore): UndoSnapshot {
-  const cloned = clonePreservingStrings({
+  return {
     nodes: state.nodes,
     edges: state.edges,
     groups: state.groups,
     edgeStyle: state.edgeStyle,
     edgeAppearance: state.edgeAppearance,
-  }) as UndoSnapshot;
-  // Strip transient selection state from cloned nodes
-  for (const node of cloned.nodes) {
-    delete (node as Record<string, unknown>).selected;
-  }
-  return cloned;
+  };
+}
+
+/** A snapshot's nodes as the canvas gets them back: nothing selected. */
+function restoredNodes(nodes: WorkflowNode[]): WorkflowNode[] {
+  if (!nodes.some((node) => "selected" in node)) return nodes;
+  return nodes.map((node) => {
+    if (!("selected" in node)) return node;
+    const rest = { ...node };
+    delete rest.selected;
+    return rest;
+  });
 }
 
 /** Flush pending debounced data snapshot, capture current state, push to undoManager */
@@ -1145,7 +1161,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const previous = undoManager.undo(current);
     if (previous) {
       set({
-        nodes: previous.nodes,
+        nodes: restoredNodes(previous.nodes),
         edges: previous.edges,
         groups: previous.groups,
         edgeStyle: previous.edgeStyle,
@@ -1171,7 +1187,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const next = undoManager.redo(current);
     if (next) {
       set({
-        nodes: next.nodes,
+        nodes: restoredNodes(next.nodes),
         edges: next.edges,
         groups: next.groups,
         edgeStyle: next.edgeStyle,
@@ -1255,7 +1271,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   updateNodeData: (nodeId: string, data: Partial<WorkflowNodeData>) => {
-    const node = get().nodes.find((n) => n.id === nodeId);
+    // Typing lands here on every keystroke, so nothing on this path walks
+    // the graph: the node is found by index, the undo step holds references,
+    // and only the edited node is replaced.
+    const nodes = get().nodes;
+    const index = indexOfNode(nodes, nodeId);
+    const node = index === -1 ? undefined : nodes[index];
 
     // Debounced undo tracking: skip during execution and during node/edge deletion
     // (clearStaleInputImages calls updateNodeData as a side effect of deletion)
@@ -1274,14 +1295,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }, 500);
     }
 
-    set((state) => ({
-      nodes: state.nodes.map((node) =>
-        node.id === nodeId
-          ? { ...node, data: { ...node.data, ...data } as WorkflowNodeData }
-          : node
-      ) as WorkflowNode[],
-      hasUnsavedChanges: true,
-    }));
+    if (node) {
+      const updated = { ...node, data: { ...node.data, ...data } as WorkflowNodeData } as WorkflowNode;
+      set({ nodes: replaceNodesAt(nodes, new Map([[index, updated]])), hasUnsavedChanges: true });
+    } else {
+      set({ hasUnsavedChanges: true });
+    }
     // Recompute dimming if this is a switch or conditionalSwitch node and their control data changed
     if (node?.type === "switch" && "switches" in data) {
       get().recomputeDimmedNodes();
@@ -3382,17 +3401,22 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       ...(runCount > 1 ? { runCount } : {}),
     };
 
-    const json = JSON.stringify(workflow, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
+    // The downloaded file carries its media: anything held by reference goes in inline
+    void inlineMediaReferences(workflow.nodes).then((nodes) => {
+      const json = JSON.stringify({ ...workflow, nodes }, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${workflow.name}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${workflow.name}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, (error) => {
+      useToast.getState().show(`Couldn't export: ${error instanceof Error ? error.message : "a file could not be read"}`, "error");
+    });
   },
 
   loadWorkflow: async (workflow: WorkflowFile, workflowPath?: string) => {
@@ -3980,17 +4004,17 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       // If external media storage is enabled, externalize media before saving
       if (useExternalImageStorage) {
         workflow = await externalizeWorkflowMedia(workflow, saveDirectoryPath);
+      } else {
+        // The file carries its media: anything held by reference goes in inline
+        workflow = { ...workflow, nodes: await inlineMediaReferences(workflow.nodes) };
       }
       if (replaced()) return false;
 
       const response = await fetch("/api/workflow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directoryPath: saveDirectoryPath,
-          filename: workflowName,
-          workflow,
-        }),
+        // Reuses each unchanged node's JSON from the last save
+        body: serializeWorkflowRequest({ directoryPath: saveDirectoryPath, filename: workflowName }, workflow),
       });
 
       const result = await response.json();
@@ -4057,12 +4081,31 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             const unchanged = (key: string) =>
               mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
               mergedData[key] === savedData[key];
+            // Media now in the folder is held by reference from here on
+            // (src/lib/media/references.ts): the node stops carrying its bytes.
+            const reference = (media: unknown, ref: unknown) =>
+              typeof media === 'string' && media.startsWith('data:') && typeof ref === 'string' && ref
+                ? workflowImageReference(saveDirectoryPath, ref)
+                : media;
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
-              if (unchanged(key) && typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && typeof extData[key] === 'string') {
+                mergedData[key] = extData[key];
+                const field = MEDIA_FIELD_BY_REF[key];
+                mergedData[field] = reference(mergedData[field], extData[key]);
+                touched = true;
+              }
             }
             for (const key of ARRAY_REF_FIELDS) {
-              if (unchanged(key) && Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && Array.isArray(extData[key])) {
+                const refs = extData[key] as unknown[];
+                mergedData[key] = refs;
+                const field = MEDIA_FIELD_BY_REF[key];
+                if (Array.isArray(mergedData[field])) {
+                  mergedData[field] = (mergedData[field] as unknown[]).map((media, i) => reference(media, refs[i]));
+                }
+                touched = true;
+              }
             }
             return touched ? ({ ...node, data: mergedData as WorkflowNodeData } as WorkflowNode) : node;
           });
@@ -4445,6 +4488,23 @@ function prependGalleryEntry(
 if (typeof window !== "undefined") migrateLegacyComfyCloudKey();
 
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
+
+/** Calls `listener` with the nodes each store change touched (see `nodeChanges.ts`). */
+export function subscribeToWorkflowNodeChanges(listener: NodeChangeListener): () => void {
+  return subscribeToNodeChanges(useWorkflowStore, listener);
+}
+
+// The tests freeze the graph after every change, so an in-place edit to a
+// node, edge or group (which undo shares with the live state) throws there.
+if (process.env.NODE_ENV === "test" && process.env.NB_FREEZE_GRAPH !== "off") {
+  const freeze = (state: WorkflowStore) => {
+    deepFreezeGraph(state.nodes);
+    deepFreezeGraph(state.edges);
+    deepFreezeGraph(state.groups);
+  };
+  freeze(useWorkflowStore.getState());
+  useWorkflowStore.subscribe(freeze);
+}
 
 // A run ends wherever `isRunning` drops — it finished, Stop was pressed, an
 // early return, or a load, clear or tab switch aborted it — so its asset run

@@ -8,6 +8,7 @@
  */
 
 import { parseDataUrl as decodeDataUrl } from "@/utils/dataUrl";
+import { isMediaReference } from "@/lib/media/isReference";
 
 /**
  * `data:[<type>][;param]*,<payload>` with a real media type (or none at all),
@@ -23,9 +24,12 @@ export function isBlobUrl(value: string): boolean {
   return value.startsWith("blob:");
 }
 
-/** A string a snapshot stores by reference rather than inline. */
+/**
+ * A string a snapshot stores by hash rather than inline: a data: or blob:
+ * URL, or media node data holds by reference (src/lib/media/references.ts).
+ */
 export function isMediaString(value: unknown): value is string {
-  return typeof value === "string" && (isBlobUrl(value) || isDataUrl(value));
+  return typeof value === "string" && (isBlobUrl(value) || isDataUrl(value) || isMediaReference(value));
 }
 
 export interface ParsedDataUrl {

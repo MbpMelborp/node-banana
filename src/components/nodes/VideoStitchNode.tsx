@@ -23,6 +23,7 @@ import { VideoStitchNodeData, WorkflowNode } from "@/types";
 import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
+import { useUpdateNodeData } from "./paintMode";
 
 type VideoStitchNodeType = Node<VideoStitchNodeData, "videoStitch">;
 
@@ -36,7 +37,7 @@ const LOOP_OPTIONS = [
 
 export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNodeType>) {
   const nodeData = data;
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const edges = useWorkflowStore((state) => state.edges);
   const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);

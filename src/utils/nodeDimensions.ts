@@ -11,7 +11,8 @@ export function getImageDimensions(
   base64DataUrl: string
 ): Promise<{ width: number; height: number } | null> {
   return new Promise((resolve) => {
-    if (!base64DataUrl || (!base64DataUrl.startsWith("data:image") && !base64DataUrl.startsWith("http"))) {
+    // A data: URL, a remote URL, or a same-origin path (media held by reference)
+    if (!base64DataUrl || (!base64DataUrl.startsWith("data:image") && !base64DataUrl.startsWith("http") && !base64DataUrl.startsWith("/"))) {
       resolve(null);
       return;
     }
@@ -124,6 +125,12 @@ export function getMediaDimensions(
       // Invalid URL, fall through to video
     }
     return getVideoDimensions(url);
+  }
+
+  // Media held by reference (a workflow folder's file or a library asset)
+  // is tried as an image, then as a video
+  if (url.startsWith("/api/workflow-images?") || url.startsWith("/api/assets/")) {
+    return getImageDimensions(url).then((size) => size ?? getVideoDimensions(url));
   }
 
   return Promise.resolve(null);

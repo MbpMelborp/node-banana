@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
-import { useWorkflowStore } from "@/store/workflowStore";
 import { WorkflowNodeData } from "@/types";
+import { useUpdateNodeData } from "@/components/nodes/paintMode";
 
 interface HistoryItem {
   id: string;
@@ -50,7 +50,7 @@ export function useGenerationCarousel<T extends HistoryItem, R = string>({
   loadFn,
   buildUpdate,
 }: UseGenerationCarouselParams<T, R>) {
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateNodeData = useUpdateNodeData();
   const [isLoading, setIsLoading] = useState(false);
 
   const navigate = useCallback(
