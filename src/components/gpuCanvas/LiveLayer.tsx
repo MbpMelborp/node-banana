@@ -324,11 +324,18 @@ export class LiveLayer {
     const graph = this.scene.graph;
     const flowNodes: Node[] = [];
     const present = new Set<string>();
+    // A node handed to React Flow without its measured size is hidden until
+    // it is measured again, which blurs the field being typed in: carry the
+    // size React Flow already measured.
+    const lookup = this.flowState()?.nodeLookup;
     for (const id of new Set([...this.wanted.keys(), ...this.leaving])) {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
-      flowNodes.push(flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected));
+      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected);
+      const measured = lookup?.get(id)?.measured;
+      if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
+      flowNodes.push(node);
       present.add(id);
     }
     const flowEdges: Edge[] = [];
