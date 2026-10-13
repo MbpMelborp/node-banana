@@ -322,13 +322,19 @@ export class LiveLayer {
   private render(): Promise<void> {
     const { nodes } = useWorkflowStore.getState();
     const graph = this.scene.graph;
+    const lookup = this.flowState()?.nodeLookup;
     const flowNodes: Node[] = [];
     const present = new Set<string>();
     for (const id of new Set([...this.wanted.keys(), ...this.leaving])) {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
-      flowNodes.push(flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected));
+      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected);
+      // Each render hands React Flow new node objects; without the size it measured, it would hide
+      // the node until measuring it again, and hiding a node blurs the field being typed in.
+      const measured = lookup?.get(id)?.measured;
+      if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
+      flowNodes.push(node);
       present.add(id);
     }
     const flowEdges: Edge[] = [];
