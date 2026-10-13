@@ -23,7 +23,7 @@ import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
 import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
 import { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
-import { setZoomedOut } from "@/components/nodes/lowDetail";
+import { getLowDetailSettings, setZoomedOut } from "@/components/nodes/lowDetail";
 import { createPanActivityTracker } from "@/hooks/useWheelPanZoom";
 import { Painter, type PainterStatus } from "./painter";
 import { LiveFlow, LiveLayer, type LiveConnection } from "./LiveLayer";
@@ -153,6 +153,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         live.wantOnly("hover", id ? [id] : []);
       }, 0);
     };
+    // Zoomed out past the low-detail zoom, running nodes show a halo (as today's low-detail cards do).
+    const haloBelow = () => {
+      const { enabled, zoom } = getLowDetailSettings();
+      return enabled ? zoom : 0;
+    };
     let scene: Scene;
     try {
       scene = new Scene(canvas, graph, {
@@ -174,6 +179,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
           return routeSceneEdge(graph, e, { style: state.edgeStyle, appearance: state.edgeAppearance, edges: state.edges, nodes: state.nodes, thicknessPx: EDGE_THICKNESS_PX[state.edgeAppearance.thickness] });
         },
         onViewChange: (view) => live.setView(view),
+        runningHaloBelow: haloBelow,
       });
     } catch (error) {
       // WebGL2 is unavailable: say so instead of an empty canvas.
@@ -191,9 +197,13 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     });
     const live = new LiveLayer(liveElement, liveConnection, scene, stats);
     live.onPointerNode = showHover;
-    // Nodes live for what they hold (the 3D viewer, a playing video, a ComfyUI run), and Output
-    // nodes run on a new connection though they are not mounted.
-    const liveContent = new LiveContent(live);
+    // Nodes live for what they hold (the 3D viewer, a playing video, a ComfyUI run, a spinner),
+    // and Output nodes run on a new connection though they are not mounted.
+    const liveContent = new LiveContent(live, {
+      zoomedOut: () => scene.view.zoom < haloBelow(),
+      onViewChanged: (listener) => scene.onViewChanged(listener),
+      setRunning: (ids) => scene.setRunning(ids),
+    });
     const stopAutoRun = watchOutputAutoRun(useWorkflowStore);
     const editor = new Editor(scene, live, host, () => propsRef.current.editing);
     // The routes above read the store: compute them now that the scene exists.

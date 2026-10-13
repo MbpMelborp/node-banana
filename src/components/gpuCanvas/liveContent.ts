@@ -15,12 +15,31 @@
  *   which only its component can open; and one whose run is in progress, so
  *   its preview stream shows as on today's canvas. Runs are few at a time
  *   (the run's concurrency limit).
+ * - **running**: a node working on its own output (`status: "loading"`), so
+ *   its spinner turns and its progress shows. Not while zoomed out past the
+ *   low-detail zoom: there the scene draws a halo over its picture instead,
+ *   as today's canvas draws its low-detail card. The halo marks every node
+ *   the run is on as well as those loading.
  */
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { useComfyAppRequestStore } from "@/store/comfyAppRequestStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { WorkflowNode } from "@/types";
 import type { LiveLayer } from "./LiveLayer";
+
+export interface LiveContentOptions {
+  /** Whether the view is zoomed out past the low-detail zoom. */
+  zoomedOut: () => boolean;
+  /** Called as the view changes; returns the unsubscribe. */
+  onViewChanged: (listener: () => void) => () => void;
+  /** The nodes a run is on, for the scene's halos. */
+  setRunning: (ids: Iterable<string>) => void;
+}
+
+/** A node working on its own output. */
+export function isLoading(node: WorkflowNode): boolean {
+  return (node.data as { status?: string } | undefined)?.status === "loading";
+}
 
 /** Node types that stay live, as they stay mounted on today's canvas. */
 export const RESIDENT_TYPES = new Set(["glbViewer"]);
@@ -36,10 +55,28 @@ export class LiveContent {
   private resident = new Set<string>();
   private pending = new Set<string>();
   private requested: string | null = null;
+  private loading = new Set<string>();
+  /** The loading nodes made live (none while zoomed out). */
+  private liveLoading = new Set<string>();
+  private zoomedOut: boolean;
+  private currentNodeIds: readonly string[];
   private off: (() => void)[] = [];
 
-  constructor(private live: LiveLayer) {
+  constructor(private live: LiveLayer, private options: LiveContentOptions) {
+    this.zoomedOut = options.zoomedOut();
+    this.currentNodeIds = useWorkflowStore.getState().currentNodeIds;
     this.scan();
+    this.off.push(options.onViewChanged(() => {
+      const zoomedOut = options.zoomedOut();
+      if (zoomedOut === this.zoomedOut) return;
+      this.zoomedOut = zoomedOut;
+      for (const id of this.loading) this.wantLoading(id);
+    }));
+    this.off.push(useWorkflowStore.subscribe((state) => {
+      if (state.currentNodeIds === this.currentNodeIds) return;
+      this.currentNodeIds = state.currentNodeIds;
+      this.publishRunning();
+    }));
     this.off.push(subscribeToWorkflowNodeChanges((changes) => {
       if (changes.added.size || changes.removed.size) {
         this.scan();
@@ -81,6 +118,21 @@ export class LiveContent {
     }
     for (const id of [...this.resident]) if (!seen.has(id)) this.resident.delete(id);
     for (const id of [...this.pending]) if (!seen.has(id)) this.pending.delete(id);
+    for (const id of [...this.loading]) if (!seen.has(id)) this.loading.delete(id);
+    for (const id of [...this.liveLoading]) if (!seen.has(id)) this.liveLoading.delete(id);
+    this.publishRunning();
+  }
+
+  private wantLoading(id: string) {
+    const live = this.loading.has(id) && !this.zoomedOut;
+    if (live === this.liveLoading.has(id)) return;
+    if (live) this.liveLoading.add(id);
+    else this.liveLoading.delete(id);
+    this.live.want(id, "running", live);
+  }
+
+  private publishRunning() {
+    this.options.setRunning(new Set([...this.loading, ...this.currentNodeIds]));
   }
 
   private check(node: WorkflowNode) {
@@ -95,6 +147,13 @@ export class LiveContent {
       if (pending) this.pending.add(node.id);
       else this.pending.delete(node.id);
       this.live.want(node.id, "pending", pending);
+    }
+    const loading = isLoading(node);
+    if (loading !== this.loading.has(node.id)) {
+      if (loading) this.loading.add(node.id);
+      else this.loading.delete(node.id);
+      this.wantLoading(node.id);
+      this.publishRunning();
     }
   }
 

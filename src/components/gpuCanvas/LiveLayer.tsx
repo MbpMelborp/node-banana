@@ -60,9 +60,10 @@ const RENDER_TIMEOUT_MS = 2000;
  * a lightbox), "playing" while its video plays, "resident" for types that
  * stay live as they stay mounted on today's canvas (the 3D viewer), and
  * "pending" while it has work to pick up only a mounted node can (a
- * ComfyUI workflow to import, a run streaming previews).
+ * ComfyUI workflow to import, a run streaming previews), and "running"
+ * while it works on its output (its spinner turns).
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "test" | "held" | "playing" | "resident" | "pending";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "test" | "held" | "playing" | "resident" | "pending" | "running";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {
