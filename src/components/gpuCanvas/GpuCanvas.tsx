@@ -182,6 +182,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         },
         onViewChange: (view) => live.setView(view),
         runningHaloBelow: haloBelow,
+        // Something the scene draws would be missing: the classic canvas takes over.
+        onShaderError: () => queueMicrotask(() => propsRef.current.onFailure("a shader did not compile")),
       });
     } catch (error) {
       // WebGL2 is unavailable: the classic canvas takes over.
