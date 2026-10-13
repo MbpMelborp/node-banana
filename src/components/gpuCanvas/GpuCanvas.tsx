@@ -41,7 +41,7 @@ const LOADING_MIN_NODES = 150;
 const LOADING_DELAY_MS = 300;
 /** Above this zoom every visible node is live. */
 const LIVE_ZOOM = 1;
-/** From this zoom, connections that show more than a line (labels, stubs, clamps) are live while on screen. */
+/** From this zoom, connections that show more than a line (labels, stubs, clamps) are live while on screen; those showing a run's comet at any zoom. */
 const LIVE_EDGE_ZOOM = 0.3;
 /** At most this many live connections besides the selected ones. */
 const MAX_LIVE_EDGES = 250;
@@ -272,17 +272,16 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     const showLiveEdges = () => {
       const { edges } = useWorkflowStore.getState();
       const ids = edges.filter((e) => e.selected).map((e) => e.id);
-      if (scene.view.zoom >= LIVE_EDGE_ZOOM) {
-        const w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
-        const a = scene.toWorld(-w * 0.25, -h * 0.25), b = scene.toWorld(w * 1.25, h * 1.25);
-        let count = 0;
-        for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
-          if (count >= MAX_LIVE_EDGES) break;
-          const edge = scene.graph.edges[e];
-          if (!scene.edgeRoute(e)?.decorated || edge.edge.selected) continue;
-          ids.push(edge.id);
-          count++;
-        }
+      const all = scene.view.zoom >= LIVE_EDGE_ZOOM;
+      const w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
+      const a = scene.toWorld(-w * 0.25, -h * 0.25), b = scene.toWorld(w * 1.25, h * 1.25);
+      let count = 0;
+      for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
+        if (count >= MAX_LIVE_EDGES) break;
+        const edge = scene.graph.edges[e], route = scene.edgeRoute(e);
+        if (!route?.decorated || edge.edge.selected || (!all && !route.running)) continue;
+        ids.push(edge.id);
+        count++;
       }
       const key = ids.join("\n");
       if (key === liveEdgesKey && edges === liveEdgesSource) return;

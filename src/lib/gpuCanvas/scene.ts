@@ -568,7 +568,7 @@ export class Scene {
     const [sx, sy, tx, ty] = this.graph.edgeEnds(e);
     const d = tx - sx, off = d >= 0 ? 0.5 * d : 0.25 * 25 * Math.sqrt(-d);
     const segment: Cubic = [sx, sy, sx + off, sy, tx - off, ty, tx, ty];
-    return { segments: [segment], stems: [], ends: [sx, sy, tx, ty], labelX: (sx + tx) / 2, labelY: (sy + ty) / 2, width: 3, dashed: false, hidden: false, decorated: false };
+    return { segments: [segment], stems: [], ends: [sx, sy, tx, ty], labelX: (sx + tx) / 2, labelY: (sy + ty) / 2, width: 3, dashed: false, hidden: false, decorated: false, running: false };
   }
 
   private writeEdge(e: number) {
