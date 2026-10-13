@@ -28,10 +28,11 @@ import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { flowNode, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
-// Pointer events are inherited, so what sits on the flow and takes clicks opts back in.
+// Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
+// Flow sets a node's pointer-events inline (none, since this flow selects and drags nothing), hence !important.
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
-  [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel { pointer-events: all; }
+  [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel { pointer-events: all !important; }
   [data-gpu-canvas-live] .react-flow__node-gpuGhost { visibility: hidden; pointer-events: none !important; }
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
 `;
@@ -143,6 +144,10 @@ export class LiveLayer {
   private unsubscribe: () => void;
   private listeners: (() => void)[] = [];
   painter: LivePainter | null = null;
+  /** The live node under the pointer, if any. */
+  pointerNode: string | null = null;
+  /** Called when the pointer moves onto a live node or off the live nodes. */
+  onPointerNode: ((id: string | null) => void) | null = null;
 
   /** `element` holds the LiveFlow rendered with `connection`. */
   constructor(readonly element: HTMLElement, private connection: LiveConnection, private scene: Scene, private stats: GpuCanvasStats) {
@@ -164,6 +169,19 @@ export class LiveLayer {
       if (!target.closest(".react-flow__handle") && target.closest("input, textarea, select, button, a, [contenteditable='true'], .nodrag")) return;
       scene.pointerDown(event);
     }, true);
+    // The pointer over a live node: it is hovered, though the scene below no longer sees the pointer.
+    on("pointerover", (event) => {
+      const id = liveNodeId(event.target);
+      if (id !== this.pointerNode) {
+        this.pointerNode = id;
+        this.onPointerNode?.(id);
+      }
+    });
+    on("pointerout", (event) => {
+      if (liveNodeId(event.relatedTarget) || !this.pointerNode) return;
+      this.pointerNode = null;
+      this.onPointerNode?.(null);
+    });
     // The node holding focus stays live wherever the pointer goes.
     on("focusin", (event) => {
       const id = (event.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
@@ -361,6 +379,12 @@ export class LiveLayer {
     this.generation++;
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
+}
+
+/** The live node (not a stand-in) an element belongs to. */
+function liveNodeId(target: EventTarget | null): string | null {
+  const node = (target as Element | null)?.closest?.("[data-gpu-canvas-live] .react-flow__node");
+  return node && !node.classList.contains("react-flow__node-gpuGhost") ? node.getAttribute("data-id") : null;
 }
 
 /** A stand-in for a painted node at a live connection's end: its box, and its handles where painting measured them. */

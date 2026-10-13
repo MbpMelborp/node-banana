@@ -139,6 +139,17 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       setActive: (active) => document.documentElement.classList.toggle("canvas-interacting", active),
       endDelayMs: 300,
     });
+    // The hovered node: the one under the pointer in the scene, or the live node it moved onto
+    // (the scene sees the pointer leave as it enters a live node). Applied a task later, so
+    // leaving the scene for a live node is one change, not a drop and a return.
+    let sceneHover: string | null = null, hoverTimer = 0;
+    const showHover = () => {
+      clearTimeout(hoverTimer);
+      hoverTimer = window.setTimeout(() => {
+        const id = live.pointerNode ?? sceneHover;
+        live.wantOnly("hover", id ? [id] : []);
+      }, 0);
+    };
     let scene: Scene;
     try {
       scene = new Scene(canvas, graph, {
@@ -146,7 +157,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
         wheelZooms: (event) => propsRef.current.wheelZooms(event),
-        onHover: (i) => live.wantOnly("hover", i >= 0 ? [scene.graph.nodes[i].id] : []),
+        onHover: (i) => {
+          sceneHover = i >= 0 ? scene.graph.nodes[i].id : null;
+          showHover();
+        },
         onPress: (event) => editor.press(event),
         onIdleMove: (event) => editor.idleMove(event),
         onContextMenu: (event) => editor.contextMenu(event),
@@ -173,6 +187,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       getOwnPropertyDescriptor: (_, key) => ({ value: propsRef.current.headers[key as keyof HeaderProps], enumerable: true, configurable: true, writable: false }),
     });
     const live = new LiveLayer(liveElement, liveConnection, scene, stats);
+    live.onPointerNode = showHover;
     const editor = new Editor(scene, live, host, () => propsRef.current.editing);
     // The routes above read the store: compute them now that the scene exists.
     scene.setEdgeAppearance(store.edgeAppearance.gradient, store.edgeAppearance.fadedOpacity);
@@ -376,6 +391,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     return () => {
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
+      clearTimeout(hoverTimer);
       unsubscribeNodes();
       unsubscribeStore();
       unsubscribeView();
