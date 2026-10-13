@@ -19,6 +19,7 @@
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
+import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
@@ -53,7 +54,15 @@ const LEAVE_TIMEOUT_MS = 1500;
 /** How long the layer waits for React to commit a change of live nodes. */
 const RENDER_TIMEOUT_MS = 2000;
 
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "test";
+/**
+ * Why a node is live. Besides being worked in (hover, selection, focus, a
+ * drag, zoomed in): "held" while it shows something of its own (a dialog,
+ * a lightbox), "playing" while its video plays, "resident" for types that
+ * stay live as they stay mounted on today's canvas (the 3D viewer), and
+ * "pending" while it has work to pick up only a mounted node can (a
+ * ComfyUI workflow to import, a run streaming previews).
+ */
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "test" | "held" | "playing" | "resident" | "pending";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {
@@ -63,6 +72,8 @@ export interface LiveConnection {
   flow?: () => ReactFlowState;
   /** Set by the layer: called when something other than the scene moved the flow's viewport (setCenter, a tab switch). */
   viewChanged?: (view: View) => void;
+  /** Set by the layer: keeps a node live until the returned release is called (useHoldLive). */
+  hold?: HoldLive;
 }
 
 function ViewSync({ connect, onViewChanged }: { connect: (part: LiveConnection) => void; onViewChanged: (view: View) => void }) {
@@ -92,6 +103,8 @@ interface LiveFlowProps {
   defaultEdgeOptions: DefaultEdgeOptions;
   onEdgesChange: OnEdgesChange;
   headers: HeaderProps;
+  /** Keeps a node live while it shows something of its own (useHoldLive in the nodes). */
+  hold: HoldLive;
   /** Drawn inside the flow, in its viewport's context (group controls, the navigator). */
   children?: ReactNode;
 }
@@ -103,7 +116,7 @@ interface LiveFlowProps {
  * portal, the selection's positions) answers for the GPU canvas, its
  * viewport kept equal to the scene's.
  */
-export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, children }: LiveFlowProps) {
+export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, hold, children }: LiveFlowProps) {
   const [state, setState] = useState<FlowState>({ nodes: [], edges: [], committed: noop });
   const { nodes, edges } = state;
   const types = useMemo(() => ({ ...nodeTypes, gpuGhost: GhostNode }), [nodeTypes]);
@@ -112,7 +125,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   useLayoutEffect(() => connect({ setNodes: setState }), [connect]);
   useLayoutEffect(() => state.committed(), [state]);
   return (
-    <>
+    <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange}
         defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false}
@@ -123,7 +136,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
         <FloatingNodeHeaders nodes={real} {...headers} />
         {children}
       </ReactFlow>
-    </>
+    </HoldLiveProvider>
   );
 }
 
@@ -191,6 +204,7 @@ export class LiveLayer {
       const next = (event.relatedTarget as Element | null)?.closest?.("[data-gpu-canvas-live] .react-flow__node")?.getAttribute("data-id");
       this.wantOnly("focus", next ? [next] : []);
     });
+    connection.hold = (id) => this.hold(id);
     // Someone else moved the flow's viewport (setCenter, fitView, a tab restored): the scene follows.
     connection.viewChanged = (view) => {
       const current = scene.view;
@@ -217,6 +231,26 @@ export class LiveLayer {
 
   /** Connections the layer renders (their labels, stubs, clamps and toolbars; the scene draws their strokes). */
   private edgeIds: string[] = [];
+
+  private holds = new Map<string, number>();
+
+  /** Keeps a node live until the release is called; holds count. */
+  hold(id: string): () => void {
+    this.holds.set(id, (this.holds.get(id) ?? 0) + 1);
+    if (this.holds.get(id) === 1) this.want(id, "held", true);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.holds.get(id) ?? 1) - 1;
+      if (count > 0) {
+        this.holds.set(id, count);
+        return;
+      }
+      this.holds.delete(id);
+      this.want(id, "held", false);
+    };
+  }
 
   /** Sets the live connections; renders when they or what they show changed. */
   setEdges(ids: string[]) {
@@ -376,6 +410,7 @@ export class LiveLayer {
     this.unsubscribe();
     for (const off of this.listeners) off();
     this.connection.viewChanged = undefined;
+    this.connection.hold = undefined;
     this.generation++;
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
@@ -383,7 +418,12 @@ export class LiveLayer {
 
 /** The live node (not a stand-in) an element belongs to. */
 function liveNodeId(target: EventTarget | null): string | null {
-  const node = (target as Element | null)?.closest?.("[data-gpu-canvas-live] .react-flow__node");
+  const element = target as Element | null;
+  if (!element?.closest?.("[data-gpu-canvas-live]")) return null;
+  // A node's floating header is the node's too.
+  const header = element.closest("[data-node-header]");
+  if (header) return header.getAttribute("data-node-header");
+  const node = element.closest(".react-flow__node");
   return node && !node.classList.contains("react-flow__node-gpuGhost") ? node.getAttribute("data-id") : null;
 }
 
