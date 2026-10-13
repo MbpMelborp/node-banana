@@ -1,15 +1,10 @@
 "use client";
 
 /**
- * The GPU canvas (Settings › Canvas, desktop only): the workflow drawn by one
- * WebGL2 scene, every node as an image painted from its real component, and
- * only the nodes being worked in as live components over it. See
- * docs/gpu-canvas.md.
- *
- * This is phase 2 of the rewrite: a read-only canvas. It pans, zooms,
- * selects (click, Shift+click) and opens nodes (double-click), and live nodes
- * work as they do on today's canvas; dragging, connecting, menus and the
- * rest of editing come with phase 3.
+ * The GPU canvas (the desktop app's canvas; Settings › Canvas): the workflow
+ * drawn by one WebGL2 scene, every node as an image painted from its real
+ * component, and only the nodes being worked in as live components over it.
+ * See docs/gpu-canvas.md.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { DefaultEdgeOptions, EdgeTypes, NodeTypes } from "@xyflow/react";
@@ -45,6 +40,8 @@ const LIVE_ZOOM = 1;
 const LIVE_EDGE_ZOOM = 0.3;
 /** At most this many live connections besides the selected ones. */
 const MAX_LIVE_EDGES = 250;
+/** After the GPU resets, the canvas is rebuilt once WebGL is back, or after this long at the latest. */
+const CONTEXT_RESTORE_WAIT_MS = 3000;
 
 export interface GpuCanvasProps {
   nodeTypes: NodeTypes;
@@ -60,6 +57,10 @@ export interface GpuCanvasProps {
   children?: ReactNode;
   /** Drawn inside the page's React Flow, in its viewport's context (group controls, the navigator). */
   flowChildren?: ReactNode;
+  /** The scene could not start (no WebGL2): the page falls back to the classic canvas. */
+  onFailure: (reason: string) => void;
+  /** The GPU reset and WebGL is back (or gave up coming back): the page builds the canvas again. */
+  onContextLost: () => void;
 }
 
 export interface GpuCanvasApi {
@@ -107,7 +108,7 @@ interface Loading {
   total: number;
 }
 
-export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheelZooms, editing, children, flowChildren }: GpuCanvasProps) {
+export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheelZooms, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<HTMLDivElement>(null);
@@ -119,11 +120,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const [initialView] = useState(() => useWorkflowStore.getState().canvasViewport ?? { x: 0, y: 0, zoom: 1 });
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
   // The latest props, read by the engine without rebuilding it.
-  const propsRef = useRef({ headers, wheelZooms, editing });
+  const propsRef = useRef({ headers, wheelZooms, editing, onFailure, onContextLost });
   useLayoutEffect(() => {
-    propsRef.current = { headers, wheelZooms, editing };
+    propsRef.current = { headers, wheelZooms, editing, onFailure, onContextLost };
   });
   const loadCount = useWorkflowStore((state) => state.workflowLoadCount);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
@@ -184,11 +184,24 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         runningHaloBelow: haloBelow,
       });
     } catch (error) {
-      // WebGL2 is unavailable: say so instead of an empty canvas.
+      // WebGL2 is unavailable: the classic canvas takes over.
       const message = error instanceof Error ? error.message : String(error);
-      queueMicrotask(() => setFailure(message));
+      queueMicrotask(() => propsRef.current.onFailure(message));
       return;
     }
+    // A GPU reset loses the atlas and every buffer: once WebGL is back, the page builds the
+    // canvas afresh (the disk cache makes the repaint quick). three.js asks for the restore.
+    let lostTimer = 0;
+    const rebuild = () => {
+      clearTimeout(lostTimer);
+      canvas.removeEventListener("webglcontextrestored", rebuild);
+      propsRef.current.onContextLost();
+    };
+    const contextLost = () => {
+      canvas.addEventListener("webglcontextrestored", rebuild);
+      lostTimer = window.setTimeout(rebuild, CONTEXT_RESTORE_WAIT_MS);
+    };
+    canvas.addEventListener("webglcontextlost", contextLost);
     // Chrome over the scene drops its backdrop blur (globals.css).
     document.documentElement.toggleAttribute("data-gpu-canvas-active", true);
     // The latest header props, read when used; spreadable, so a render takes them as they are then.
@@ -412,6 +425,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     }
 
     return () => {
+      canvas.removeEventListener("webglcontextlost", contextLost);
+      canvas.removeEventListener("webglcontextrestored", rebuild);
+      clearTimeout(lostTimer);
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
       clearTimeout(hoverTimer);
@@ -485,11 +501,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       </div>
       {children}
       {loading && <LoadingScreen painted={loading.painted} total={loading.total} />}
-      {failure && (
-        <div className="absolute inset-0 flex items-center justify-center text-sm text-neutral-400">
-          The GPU canvas could not start: {failure}. Turn it off in Settings › Canvas.
-        </div>
-      )}
     </div>
   );
 }
