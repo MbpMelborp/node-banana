@@ -136,6 +136,8 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
       queueMicrotask(() => setFailure(message));
       return;
     }
+    // Chrome over the scene drops its backdrop blur (globals.css).
+    document.documentElement.toggleAttribute("data-gpu-canvas-active", true);
     // The latest header props, read when used; spreadable, so a render takes them as they are then.
     const headerProxy: HeaderProps = new Proxy({} as HeaderProps, {
       get: (_, key: keyof HeaderProps) => propsRef.current.headers[key],
@@ -286,6 +288,7 @@ export function GpuCanvas({ nodeTypes, headers, wheelZooms, children }: GpuCanva
     }
 
     return () => {
+      document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
       unsubscribeNodes();
       unsubscribeStore();
