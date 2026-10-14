@@ -18,6 +18,8 @@ let host: HTMLDivElement;
 let settings: GpuEditing;
 let edgeHit: number;
 let stems: { segment: number[]; width: number }[];
+/** Nodes the editor holds live for a press. */
+let pressed: string[];
 
 /** A pointer event at a css point (the fake scene's css and flow coordinates are the same). */
 function pointer(x: number, y: number, init: MouseEventInit = {}) {
@@ -62,7 +64,13 @@ beforeEach(() => {
     capture: noop, input: noop, nodesMoved: noop, setHeldEdge: noop, setHoveredEdge: noop, panGesture: () => ({ move: noop, up: noop, cancel: noop }),
     onViewChanged: () => noop, onLayoutChanged: () => noop,
   } as unknown as Scene;
-  const live = { refresh: noop, wantOnly: noop, live: new Set<string>(), element: document.createElement("div") } as unknown as LiveLayer;
+  pressed = [];
+  const live = {
+    refresh: noop, wantOnly: noop, live: new Set<string>(), element: document.createElement("div"),
+    want: (id: string, reason: string, on: boolean) => {
+      if (reason === "press") pressed = on ? [...pressed, id] : pressed.filter((p) => p !== id);
+    },
+  } as unknown as LiveLayer;
   host = document.createElement("div");
   document.body.appendChild(host);
   settings = {
@@ -125,6 +133,21 @@ describe("presses on the GPU canvas", () => {
     settings.locked = true;
     expect(editor.press(pointer(100, 100, { button: 2 }))).not.toBeNull();
     expect(panGesture).toHaveBeenCalledTimes(2);
+  });
+
+  it("a pressed node stays live until the press ends, clicked, dragged or cancelled", () => {
+    let gesture = editor.press(pointer(900, 100))!;
+    expect(pressed).toEqual(["c"]);
+    gesture.move(pointer(901, 100));
+    expect(pressed).toEqual(["c"]);
+    gesture.up(pointer(901, 100));
+    expect(pressed).toEqual([]);
+    drag([100, 100], [200, 100]);
+    expect(pressed).toEqual([]);
+    gesture = editor.press(pointer(500, 100))!;
+    expect(pressed).toEqual(["b"]);
+    gesture.cancel();
+    expect(pressed).toEqual([]);
   });
 
   it("a drag on empty canvas in select mode still selects by marquee", () => {

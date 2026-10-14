@@ -117,8 +117,10 @@ Batches are 48 nodes, 96 at the 1/4 tier.
 
 - **Navigating holds `canvas-interacting`** on the document, as today's
   canvas does, so work that waits for a still canvas (the desktop recovery
-  checkpoint) does not land mid-pan. A node or wire drag holds it for its
-  whole length: a pause mid-drag does not let the pan tracker drop it.
+  checkpoint) does not land mid-pan. Only view moves (pans, wheels) and drags
+  set it, with classic's 120 ms tail; a bare press (a click) does not. A node
+  or wire drag holds it for its whole length: a pause mid-drag does not let
+  the pan tracker drop it.
 
 ## Opening a workflow
 
@@ -152,9 +154,11 @@ image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap; until then the live component and its
 floating header are laid out but invisible (`gpu-entering`), so nothing
 shows doubled over the picture (a node with no picture yet shows at once).
-When it stops being live it waits up to
-1.5 s for a current painted image (it may have been edited while live)
-before the scene shows it again.
+A pressed node stays live until the press ends, and a hover holds while a
+button is down (as NodeShell ignores a leave then). When it stops being live
+it stays on the layer until its painted image is current (it may have been
+edited while live), however long the painter holds that paint back (a pan, a
+wheel); only a paint that is not coming is given up on after 1.5 s.
 
 The layer hands React Flow new node objects on each render, carrying the
 size React Flow measured: without it React Flow hides the node until it

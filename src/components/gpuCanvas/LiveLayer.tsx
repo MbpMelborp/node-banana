@@ -110,14 +110,16 @@ function EdgeMask({ cover }: { cover?: EdgeCover }) {
   );
 }
 
-/** How long a leaving node waits for its painted image to be current. */
+/** How long a leaving node waits for its painted image to be current, when the painter has no paint of it under way. */
 const LEAVE_TIMEOUT_MS = 1500;
+/** How many paints a leaving node asks for, each finishing before a newer change (an edit, a zoom) needed another. */
+const LEAVE_REPAINTS = 4;
 /** How long the layer waits for React to commit a change of live nodes. */
 const RENDER_TIMEOUT_MS = 2000;
 
 /**
  * Why a node is live. Besides being worked in (hover, selection, focus, a
- * drag, zoomed in, a connection being drawn to or over it): "held" while it shows something of its own (a dialog,
+ * press, a drag, zoomed in, a connection being drawn to or over it): "held" while it shows something of its own (a dialog,
  * a lightbox), "playing" while its video plays, "resident" for types that
  * stay live as they stay mounted on today's canvas (the 3D viewer), and
  * "pending" while it has work to pick up only a mounted node can (a
@@ -125,7 +127,7 @@ const RENDER_TIMEOUT_MS = 2000;
  * while it works on its output (its spinner turns). "added" holds a node just added until its first paint shows. "cover" keeps a later node in the store over an
  * unselected live node it overlaps, as classic stacks nodes in store order (the layer sets it, coverChanged).
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "press" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {
@@ -243,6 +245,10 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
 export interface LivePainter {
   /** Resolves once the node's painted image is current. */
   paintNow(id: string): Promise<void>;
+  /** Whether the node's painted image is current (or the node is gone). */
+  isFresh(id: string): boolean;
+  /** Whether the painter still has the node's paint to do. */
+  painting(id: string): boolean;
   /** The node's height and handles as its painted image has them. */
   measured(id: string): { height: number; handles?: Map<string, HandleAnchor> } | undefined;
 }
@@ -297,10 +303,31 @@ export class LiveLayer {
         this.onPointerNode?.(id);
       }
     });
+    // While a gesture runs the hover holds, as NodeShell ignores a leave with a button down (the gesture capturing
+    // the pointer, or a press dragged off its node); once the button lifts, what is under the pointer is hovered.
+    let heldOut = false;
     on("pointerout", (event) => {
       if (liveNodeId(event.relatedTarget) || !this.pointerNode) return;
+      if (scene.interacting) {
+        heldOut = true;
+        return;
+      }
       this.pointerNode = null;
       this.onPointerNode?.(null);
+    });
+    const lifted = (event: PointerEvent) => {
+      if (!heldOut) return;
+      heldOut = false;
+      const id = event.pointerType === "touch" ? null : liveNodeId(document.elementFromPoint(event.clientX, event.clientY));
+      if (id === this.pointerNode) return;
+      this.pointerNode = id;
+      this.onPointerNode?.(id);
+    };
+    window.addEventListener("pointerup", lifted, true);
+    window.addEventListener("pointercancel", lifted, true);
+    this.listeners.push(() => {
+      window.removeEventListener("pointerup", lifted, true);
+      window.removeEventListener("pointercancel", lifted, true);
     });
     // The node holding focus (in it or its floating header) stays live wherever the pointer goes.
     on("focusin", (event) => {
@@ -398,6 +425,11 @@ export class LiveLayer {
   /** The page's React Flow state, while the live flow is mounted. */
   flowState(): ReactFlowState | null {
     return this.connection.flow?.() ?? null;
+  }
+
+  /** Whether the layer renders the node: live, swapping in, or on its way back to the scene. */
+  renders(id: string) {
+    return this.wanted.has(id) || this.live.has(id) || this.leaving.has(id);
   }
 
   /** Whether the node is wanted live for this reason. */
@@ -606,8 +638,17 @@ export class LiveLayer {
   }
 
   private async leave(id: string) {
-    if (this.painter) await Promise.race([this.painter.paintNow(id), new Promise((resolve) => setTimeout(resolve, LEAVE_TIMEOUT_MS))]);
-    // Wanted again meanwhile: it stays.
+    // It stays live (its painted copy hidden) until the painted image is current: one from before an edit made while
+    // it was live would show the old content and height. A paint the painter holds back (a pan, a wheel, a long
+    // batch) is waited for; the cap is for a paint that is not coming (a failed one).
+    const painter = this.painter;
+    for (let paints = 0; painter && paints < LEAVE_REPAINTS; ) {
+      const painted = await Promise.race([painter.paintNow(id).then(() => true), new Promise<false>((resolve) => setTimeout(resolve, LEAVE_TIMEOUT_MS, false))]);
+      // Wanted again meanwhile: it stays.
+      if (this.wanted.has(id) || !this.leaving.has(id)) return;
+      if (painter.isFresh(id) || (!painted && !painter.painting(id))) break;
+      if (painted) paints++;
+    }
     if (this.wanted.has(id) || !this.leaving.has(id)) return;
     this.leaving.delete(id);
     const i = this.scene.graph.indexOf.get(id);

@@ -180,7 +180,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       setActive: (active) => {
         if (active || !editor.holdsInteracting) document.documentElement.classList.toggle("canvas-interacting", active);
       },
-      endDelayMs: 300,
     });
     // The hovered node: the one under the pointer in the scene, or the live node it moved onto
     // (the scene sees the pointer leave as it enters a live node). Applied a task later, so
@@ -365,8 +364,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         if (moved.length) {
           scene.nodesMoved(moved);
           // Painted nodes that moved mask the live connections they now lie over (LiveLayer's EdgeMask), and a
-          // live node moved or resized from the store (its resize grips) takes its new box from the graph.
-          if (live.hasEdges || moved.some((i) => live.live.has(scene.graph.nodes[i].id))) live.refresh();
+          // node the layer renders, moved or resized from the store (a group drag, arrange, undo, its resize grips),
+          // takes its new box from the graph: the layer's own listener ran first and rendered the old one.
+          if (live.hasEdges || moved.some((i) => live.renders(scene.graph.nodes[i].id))) live.refresh();
         }
         // What a node's connections show can follow its data (a run's loading pulse, a bundle's clamp).
         const edges = new Set<number>();

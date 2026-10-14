@@ -316,6 +316,16 @@ export class Painter {
     return paint?.height == null ? undefined : { height: paint.height, handles: paint.handles };
   }
 
+  /** Whether the scene's image of the node is current at the view's tier (or the node is gone). */
+  isFresh(id: string) {
+    return !this.scene.graph.indexOf.has(id) || this.fresh(id, this.wanted());
+  }
+
+  /** Whether a paintNow for the node is still to come: its paint waits in the loop (behind a pan, a long batch). */
+  painting(id: string) {
+    return this.running && this.waiters.has(id);
+  }
+
   paintNow(id: string): Promise<void> {
     if (!this.startedAt) this.startedAt = performance.now();
     const tier = this.wanted();

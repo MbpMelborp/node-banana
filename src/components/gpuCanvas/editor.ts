@@ -561,7 +561,22 @@ export class Editor {
 
   private nodeGesture(event: PointerEvent, i: number): Gesture {
     const id = this.scene.graph.nodes[i].id;
-    return this.clickGesture(event, () => this.clickNode(id, event.shiftKey), (move) => this.editing().locked ? null : this.dragGesture(event, move, i));
+    const gesture = this.clickGesture(event, () => this.clickNode(id, event.shiftKey), (move) => this.editing().locked ? null : this.dragGesture(event, move, i));
+    // Classic keeps a node mounted through a press: the pressed node stays live until the gesture ends (once the
+    // click has selected it or the drag let go), though the press took its hover away (a capture, a jittery click).
+    this.live.want(id, "press", true);
+    const release = () => this.live.want(id, "press", false);
+    return {
+      move: gesture.move,
+      up: (up) => {
+        gesture.up(up);
+        release();
+      },
+      cancel: () => {
+        gesture.cancel();
+        release();
+      },
+    };
   }
 
   private dragGesture(down: PointerEvent, first: PointerEvent, pressed: number): Gesture | null {

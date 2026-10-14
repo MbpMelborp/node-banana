@@ -470,7 +470,7 @@ export interface SceneCallbacks {
   onViewChange?: (view: View) => void;
   /** The zoom below which running nodes show a halo (0: never). */
   runningHaloBelow?: () => number;
-  /** A press, drag or wheel on the canvas: the user is navigating. */
+  /** A drag or wheel on the canvas (not a bare press): the user is navigating. */
   onInput?: () => void;
   /** ms from an input event to the frame that drew its effect (the page's own part of input latency). */
   onInputLatency?: (ms: number) => void;
@@ -1216,8 +1216,9 @@ export class Scene {
   private onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === "touch" && this.touchDown(event)) return;
     if (this.gesture) return;
+    // Input for the painter's quiet wait, not a move of the canvas: a press alone (a click) leaves onInput
+    // (the canvas-interacting class) alone, as classic's tracker hears only view moves and drags.
     this.lastInputAt = performance.now();
-    this.callbacks.onInput?.();
     // The owner decides what a press does (select, drag, connect, marquee); by default a drag pans.
     const gesture = this.callbacks.onPress ? this.callbacks.onPress(event) : event.button === 0 || event.button === 1 ? this.panGesture(event) : null;
     if (!gesture) return;
