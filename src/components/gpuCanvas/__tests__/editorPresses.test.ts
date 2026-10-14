@@ -94,6 +94,18 @@ describe("presses on the GPU canvas", () => {
     expect(settings.onPaneClick).not.toHaveBeenCalled();
   });
 
+  it("a middle press on a node or connection pans in any pan mode, even under a dialog; on empty canvas only where the mode pans", () => {
+    const pan = { move: noop, up: noop, cancel: noop };
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => pan;
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    settings.disabled = true;
+    expect(editor.press(pointer(100, 100, { button: 1 }))).toBe(pan);
+    edgeHit = 0;
+    expect(editor.press(pointer(500, 1000, { button: 1 }))).toBe(pan);
+    edgeHit = -1;
+    expect(editor.press(pointer(2000, 2000, { button: 1 }))).toBeNull();
+  });
+
   it("a drag on empty canvas in select mode still selects by marquee", () => {
     drag([780, -20], [1200, 400], { shiftKey: true });
     expect(selected()).toEqual(["c"]);

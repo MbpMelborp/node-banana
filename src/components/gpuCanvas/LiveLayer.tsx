@@ -206,10 +206,12 @@ export class LiveLayer {
     // that can still scroll (sceneWheel), as on classic.
     on("wheel", (event) => scene.wheel(event), { passive: false });
     // A press on a live node's body or floating header goes to the scene (click to select, drag to
-    // move), and so does one on its handles (drag to connect); its fields keep theirs (pressGoesToScene).
+    // move), and so does one on its handles (drag to connect); its fields keep theirs (pressGoesToScene),
+    // except from the middle button, which pans from anywhere in a node as classic's zoom pane lets it.
     on("pointerdown", (event) => {
       const target = event.target as Element;
-      if (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target)) return;
+      const middle = event.button === 1 && !!target.closest(".react-flow__node");
+      if (!middle && (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target))) return;
       // The header's own drag moves nodes through this flow, whose nodes are the layer's: the scene's drag stands in.
       if (!target.closest(".react-flow__node")) {
         event.preventDefault();

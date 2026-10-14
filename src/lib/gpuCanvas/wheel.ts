@@ -5,7 +5,8 @@
  * the pointer and stopping the event there. What it leaves goes to
  * `useWheelPanZoom` on the wrapper, which leaves an inner area that can
  * still scroll to the browser and otherwise steps the zoom 1.2x about the
- * centre, pans (a macOS trackpad) or does nothing.
+ * centre, pans (a macOS trackpad) or does nothing. Chrome beside the pane
+ * (the agent pill, the history drop-down) is the wrapper handler's alone.
  */
 import { findScrollableAncestor, isMacOS, wheelAction } from "@/hooks/useWheelPanZoom";
 import type { CanvasNavigationSettings } from "@/types/canvas";
@@ -24,6 +25,13 @@ export interface SceneWheelOptions {
   zoomOnPinch: boolean;
   /** Whether `useWheelPanZoom` runs on classic (off under a modal). */
   wrapperWheel: boolean;
+  /**
+   * The wheel is over React Flow's zoom pane (the nodes, connections and empty canvas), not over
+   * chrome beside it (the agent pill, the history drop-down), which only the wrapper's handler sees.
+   */
+  pane?: boolean;
+  /** React Flow's `panActivationKeyCode` is held (Space, in the "space" pan mode): it pans on scroll. */
+  panKey?: boolean;
   mac?: boolean;
 }
 
@@ -33,15 +41,28 @@ function flowWheelDelta(event: WheelEvent, mac: boolean) {
   return -event.deltaY * (event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002) * factor;
 }
 
-export function sceneWheel(event: WheelEvent, { settings, zoomOnPinch, wrapperWheel, mac = isMacOS }: SceneWheelOptions): SceneWheel {
+/** React Flow's panOnScrollSpeed default. */
+const PAN_ON_SCROLL_SPEED = 0.5;
+
+export function sceneWheel(event: WheelEvent, { settings, zoomOnPinch, wrapperWheel, pane = true, panKey = false, mac = isMacOS }: SceneWheelOptions): SceneWheel {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const noWheel = !!target?.closest(".nowheel");
+  // The pan key turns React Flow's panOnScroll on, unless its zoom activation key (Meta on macOS,
+  // Control elsewhere) is down too: then only a pinch zooms, and the event goes no further.
+  if (pane && panKey && !noWheel && !(mac ? event.metaKey : event.ctrlKey)) {
+    if (event.ctrlKey && zoomOnPinch) return { type: "zoom", factor: 2 ** flowWheelDelta(event, mac), about: "pointer" };
+    const lines = event.deltaMode === 1 ? 20 : 1;
+    // Shift sends a vertical wheel sideways off the Mac.
+    const sideways = !mac && event.shiftKey;
+    const dx = (sideways ? event.deltaY : event.deltaX) * lines, dy = sideways ? 0 : event.deltaY * lines;
+    return { type: "pan", dx: dx * PAN_ON_SCROLL_SPEED, dy: dy * PAN_ON_SCROLL_SPEED };
+  }
   // React Flow's zoom pane: a pinch (ctrl) when zoomOnPinch is on, or the zoom
   // activation key (Meta on macOS, Control elsewhere, which is the pinch's ctrl).
-  const flowZooms = event.ctrlKey ? zoomOnPinch : mac && event.metaKey;
+  const flowZooms = pane && (event.ctrlKey ? zoomOnPinch : mac && event.metaKey);
   if (flowZooms && !noWheel) return { type: "zoom", factor: 2 ** flowWheelDelta(event, mac), about: "pointer" };
   // A pinch over a .nowheel area never zooms the page (React Flow's rule).
-  const held: SceneWheel = event.ctrlKey && noWheel ? { type: "block" } : null;
+  const held: SceneWheel = pane && event.ctrlKey && noWheel ? { type: "block" } : null;
   if (!wrapperWheel || (target && findScrollableAncestor(target, event.deltaX, event.deltaY))) return held;
   const action = wheelAction(event, settings, mac);
   if (action === "ignore") return held;

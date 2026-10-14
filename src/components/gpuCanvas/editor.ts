@@ -192,6 +192,11 @@ export class Editor {
     return where === "viewport" && !!parent;
   }
 
+  /** Space is held in the "space" pan mode (React Flow's panActivationKeyCode): wheels pan, as its panOnScroll. */
+  get spaceHeld() {
+    return this.space && this.editing().navigation.panMode === "space";
+  }
+
   /** Whether a node or wire drag holds `canvas-interacting`: the pan tracker must not take it away mid-drag. */
   get holdsInteracting() {
     return this.interactingHolds > 0;
@@ -288,11 +293,16 @@ export class Editor {
   /** The scene's onPress: what this press starts. */
   press = (event: PointerEvent): Gesture | null => {
     const editing = this.editing();
-    if (editing.disabled) return null;
     const scene = this.scene;
     const at = scene.local(event);
+    // A middle press on a node or connection pans whatever the pan mode, the tutorial or a dialog say:
+    // the first rule of React Flow's zoom filter, ahead of its panOnDrag checks.
+    if (event.button === 1 && (this.nodeFromEvent(event) != null || scene.nodeAt(at.x, at.y) >= 0 || scene.edgeAt(at.x, at.y) >= 0)) {
+      return scene.panGesture(event);
+    }
+    if (editing.disabled) return null;
     const space = this.space && !editing.tutorial;
-    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, space };
+    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, space };
     const panning = paneDragAction(editing.navigation, modifiers, isMac);
     // The tutorial turns panning off: such a press selects, drags and connects as a plain one.
     const action = editing.tutorial && panning === "pan" ? null : panning;

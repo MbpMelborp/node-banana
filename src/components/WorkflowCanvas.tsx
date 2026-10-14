@@ -105,6 +105,7 @@ import { PerfOverlay } from "./PerfOverlay";
 import { reportGpuCanvasFailure, useGpuCanvasActive, useGpuCanvasFailure } from "@/lib/gpuCanvas/setting";
 import { sceneWheel } from "@/lib/gpuCanvas/wheel";
 import type { GpuEditing } from "./gpuCanvas/editor";
+import type { GpuWheelState } from "./gpuCanvas/GpuCanvas";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
 import { logger } from "@/utils/logger";
 import { WelcomeModal } from "./quickstart";
@@ -1930,8 +1931,15 @@ export function WorkflowCanvas() {
   useWheelPanZoom(reactFlowWrapper, canvasNavigationSettings, !isModalOpen && !gpuCanvasActive);
   // The GPU canvas's wheel, decided as React Flow's zoom pane and the hook above decide it here.
   const gpuWheel = useCallback(
-    (event: WheelEvent) =>
-      sceneWheel(event, { settings: canvasNavigationSettings, zoomOnPinch: !tutorialActive && !isModalOpen, wrapperWheel: !isModalOpen }),
+    (event: WheelEvent, { pane, panKey }: GpuWheelState) =>
+      sceneWheel(event, {
+        settings: canvasNavigationSettings,
+        zoomOnPinch: !tutorialActive && !isModalOpen,
+        wrapperWheel: !isModalOpen,
+        pane,
+        // React Flow's panActivationKeyCode, off in the tutorial and under a modal.
+        panKey: panKey && !tutorialActive && !isModalOpen,
+      }),
     [canvasNavigationSettings, tutorialActive, isModalOpen],
   );
   const gpuHeaders = useMemo(() => ({
@@ -2734,6 +2742,7 @@ export function WorkflowCanvas() {
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           headers={gpuHeaders}
           wheel={gpuWheel}
+          wheelRoot={reactFlowWrapper}
           editing={gpuEditing}
           flowChildren={
             <>

@@ -351,8 +351,13 @@ export interface SceneCallbacks {
   onInput?: () => void;
   /** ms from an input event to the frame that drew its effect (the page's own part of input latency). */
   onInputLatency?: (ms: number) => void;
-  /** What a wheel does (the canvas's navigation settings); without it every wheel pans. */
-  wheel?: (event: WheelEvent) => SceneWheel;
+  /**
+   * What a wheel does (the canvas's navigation settings); without it every wheel pans. `pane` is false
+   * for one over chrome beside the canvas, which classic's wrapper handler alone sees.
+   */
+  wheel?: (event: WheelEvent, pane: boolean) => SceneWheel;
+  /** Whether two fingers pinch to zoom (React Flow's zoomOnPinch); on when not given. */
+  pinchZooms?: () => boolean;
 }
 
 /** A press being followed: its moves and its release, until it ends. */
@@ -410,6 +415,19 @@ export class Scene {
   private frameHandle = 0;
   private disposed = false;
   private gesture: Gesture | null = null;
+  /** The pointer the gesture follows: another one (a second finger) neither moves nor ends it. */
+  private gesturePointer = -1;
+  /** Fingers down (client px), followed through the window wherever they press. */
+  private touches = new Map<number, { x: number; y: number }>();
+  /**
+   * A pinch under way, as d3-zoom's touch zoom on classic: two fingers zoom about their midpoint and
+   * pan with it, one left pans, until the last lifts. Anchored again whenever a finger comes or goes.
+   */
+  private pinch: { mid: { x: number; y: number }; distance: number; view: View } | null = null;
+  private stopFollowingTouches: (() => void) | null = null;
+  /** The mouse over the canvas (client px), for hover under a still pointer as the view moves; null once it leaves. */
+  private pointerAt: { clientX: number; clientY: number } | null = null;
+  private hoverStale = false;
   /** A press handed over by the live layer and not captured yet: its moves and release come through the window. */
   private uncaptured: { pointerId: number; off: () => void } | null = null;
   /** Lifts the block on text selection and native drags a gesture holds (blockNativeDrag). */
@@ -450,7 +468,7 @@ export class Scene {
 
   /** A pan is under way (the painter waits). */
   get interacting() {
-    return this.gesture !== null;
+    return this.gesture !== null || this.pinch !== null;
   }
 
   private add(mesh: THREE.Mesh, order: number) {
@@ -833,6 +851,14 @@ export class Scene {
     if (edges.size) this.touchEdgeList(edges);
   }
 
+  /** Hovers the node under the mouse where it last was over the canvas (the view may have moved under it). */
+  private updateHover() {
+    this.hoverStale = false;
+    if (!this.pointerAt || this.gesture || this.pinch) return;
+    const at = this.local(this.pointerAt);
+    this.setHovered(this.nodeAt(at.x, at.y));
+  }
+
   private setHovered(i: number) {
     if (i === this.hovered) return;
     const previous = this.hovered;
@@ -882,6 +908,8 @@ export class Scene {
     const zoom = view.zoom == null ? this.view.zoom : Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom));
     Object.assign(this.view, view, { zoom });
     this.dirty = true;
+    // What lies under a still pointer changed: hover follows on the next frame.
+    if (this.pointerAt) this.hoverStale = true;
     this.callbacks.onViewChange?.(this.view);
     for (const listener of this.viewListeners) listener();
   }
@@ -934,7 +962,7 @@ export class Scene {
   }
 
   /** Pointer position in the canvas's css pixels, whatever element the event came from. */
-  local(event: MouseEvent) {
+  local(event: { clientX: number; clientY: number }) {
     const box = this.canvas.getBoundingClientRect();
     return { x: event.clientX - box.left, y: event.clientY - box.top };
   }
@@ -949,9 +977,10 @@ export class Scene {
 
   /** Public so the live layer can hand presses and wheels over live nodes to the scene. */
   pointerDown = (event: PointerEvent) => this.onPointerDown(event);
-  wheel = (event: WheelEvent) => this.onWheel(event);
+  wheel = (event: WheelEvent, pane = true) => this.onWheel(event, pane);
 
   private onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "touch" && this.touchDown(event)) return;
     if (this.gesture) return;
     this.lastInputAt = performance.now();
     this.callbacks.onInput?.();
@@ -959,6 +988,7 @@ export class Scene {
     const gesture = this.callbacks.onPress ? this.callbacks.onPress(event) : event.button === 0 || event.button === 1 ? this.panGesture(event) : null;
     if (!gesture) return;
     this.gesture = gesture;
+    this.gesturePointer = event.pointerId;
     this.blockNativeDrag();
     if (event.target === this.canvas) this.canvas.setPointerCapture?.(event.pointerId);
     else this.followUncaptured(event.pointerId);
@@ -1020,6 +1050,66 @@ export class Scene {
     this.uncaptured = null;
   }
 
+  /**
+   * A finger came down: followed until it lifts. A second one starts a pinch, which drops what the first
+   * began (a drag, a marquee); while one runs, it takes every finger. Returns whether the pinch took this one.
+   */
+  private touchDown(event: PointerEvent): boolean {
+    this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    this.followTouches();
+    if (!this.pinch && this.touches.size === 2 && (this.callbacks.pinchZooms?.() ?? true)) {
+      this.cancelGesture();
+      this.anchorPinch();
+      this.noteInput(event);
+    } else if (this.pinch) this.anchorPinch();
+    return this.pinch !== null;
+  }
+
+  private anchorPinch() {
+    const [a, b] = [...this.touches.values()];
+    const box = this.canvas.getBoundingClientRect();
+    const mid = b ? { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top } : { x: a.x - box.left, y: a.y - box.top };
+    this.pinch = { mid, distance: b ? Math.hypot(b.x - a.x, b.y - a.y) : 0, view: { ...this.view } };
+  }
+
+  /** Fingers are followed through the window: one may press on a live node, whose moves the canvas never sees. */
+  private followTouches() {
+    if (this.stopFollowingTouches) return;
+    const options = { capture: true };
+    const move = (event: PointerEvent) => {
+      if (!this.touches.has(event.pointerId)) return;
+      this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const pinch = this.pinch;
+      if (!pinch) return;
+      const [a, b] = [...this.touches.values()];
+      const box = this.canvas.getBoundingClientRect();
+      const mid = b ? { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top } : { x: a.x - box.left, y: a.y - box.top };
+      const zoom = b && pinch.distance ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinch.view.zoom * Math.hypot(b.x - a.x, b.y - a.y) / pinch.distance)) : pinch.view.zoom;
+      // The flow point under the first midpoint stays under the fingers.
+      const scale = zoom / pinch.view.zoom;
+      this.noteInput(event);
+      this.setView({ zoom, x: mid.x - (pinch.mid.x - pinch.view.x) * scale, y: mid.y - (pinch.mid.y - pinch.view.y) * scale });
+    };
+    const up = (event: PointerEvent) => {
+      if (!this.touches.delete(event.pointerId)) return;
+      if (this.touches.size) {
+        if (this.pinch) this.anchorPinch();
+        return;
+      }
+      this.pinch = null;
+      this.stopFollowingTouches?.();
+    };
+    window.addEventListener("pointermove", move, options);
+    window.addEventListener("pointerup", up, options);
+    window.addEventListener("pointercancel", up, options);
+    this.stopFollowingTouches = () => {
+      window.removeEventListener("pointermove", move, options);
+      window.removeEventListener("pointerup", up, options);
+      window.removeEventListener("pointercancel", up, options);
+      this.stopFollowingTouches = null;
+    };
+  }
+
   /** A gesture that pans the view with the pointer. */
   panGesture(event: PointerEvent): Gesture {
     let x = event.clientX, y = event.clientY;
@@ -1054,7 +1144,11 @@ export class Scene {
   }
 
   private onPointerMove = (event: PointerEvent) => {
+    // A pinch's fingers are its own (followTouches).
+    if (this.pinch && event.pointerType === "touch") return;
     const gesture = this.gesture;
+    if (gesture && event.pointerId !== this.gesturePointer) return;
+    if (event.pointerType === "mouse") this.pointerAt = { clientX: event.clientX, clientY: event.clientY };
     if (!gesture) {
       const at = this.local(event);
       this.setHovered(this.nodeAt(at.x, at.y));
@@ -1066,6 +1160,7 @@ export class Scene {
 
   private onPointerUp = (event: PointerEvent) => {
     const gesture = this.gesture;
+    if (gesture && event.pointerId !== this.gesturePointer) return;
     this.gesture = null;
     this.stopFollowing();
     this.nativeDragBlock?.();
@@ -1079,6 +1174,7 @@ export class Scene {
   };
 
   private onPointerLeave = () => {
+    this.pointerAt = null;
     if (!this.gesture) this.setHovered(-1);
   };
 
@@ -1092,8 +1188,12 @@ export class Scene {
     }
   };
 
-  private onWheel = (event: WheelEvent) => {
-    const action: SceneWheel = this.callbacks.wheel ? this.callbacks.wheel(event) : { type: "pan", dx: event.deltaX, dy: event.deltaY };
+  private onWheel = (event: WheelEvent, pane = true) => {
+    // A wheel on the canvas hovers what it is over at once: a node coming under a still pointer turns
+    // live, and its inner areas take the wheels that follow (on classic, nodes are always there to).
+    if (event.target === this.canvas) this.pointerAt = { clientX: event.clientX, clientY: event.clientY };
+    const action: SceneWheel = this.callbacks.wheel ? this.callbacks.wheel(event, pane) : { type: "pan", dx: event.deltaX, dy: event.deltaY };
+    if (event.target === this.canvas) this.updateHover();
     if (!action) return;
     event.preventDefault();
     if (action.type === "block") return;
@@ -1154,6 +1254,7 @@ export class Scene {
   private tick = (now: number) => {
     if (this.disposed) return;
     this.frameHandle = requestAnimationFrame(this.tick);
+    if (this.hoverStale) this.updateHover();
     let jsMs = 0;
     const halo = this.haloShown();
     if (this.haloMesh) this.haloMesh.visible = halo;
@@ -1200,6 +1301,7 @@ export class Scene {
     canvas.removeEventListener("dblclick", this.onDoubleClick);
     canvas.removeEventListener("contextmenu", this.onContextMenu);
     canvas.removeEventListener("wheel", this.onWheel);
+    this.stopFollowingTouches?.();
     cancelAnimationFrame(this.viewAnimation);
     for (const mesh of this.graphMeshes) {
       mesh.geometry.dispose();

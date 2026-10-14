@@ -15,6 +15,8 @@ export interface PaneModifiers {
   button: number;
   shiftKey: boolean;
   altKey: boolean;
+  /** Control is held: d3-zoom's default filter starts no pan with it. */
+  ctrlKey: boolean;
   /** Space is held (the "space" pan mode's key). */
   space: boolean;
 }
@@ -25,14 +27,15 @@ export interface PaneModifiers {
  * marquee; `panActivationKeyCode` (Space in "space" mode) pans; otherwise
  * `panOnDrag` (left and middle when "always", or by default off the Mac; the
  * right button in "middleMouse" mode) pans, and `selectionOnDrag` (on the
- * Mac, unless a drag mode or "always" is set) draws a marquee.
+ * Mac, unless a drag mode or "always" is set) draws a marquee. A pan never
+ * starts with Control held (d3-zoom's default filter, which React Flow keeps).
  */
 export function paneDragAction(settings: CanvasNavigationSettings, modifiers: PaneModifiers, isMac: boolean): PaneAction {
   const { button } = modifiers;
   if (selectionKeyHeld(settings, modifiers)) return "select";
-  if (settings.panMode === "space" && modifiers.space && (button === 0 || button === 1)) return "pan";
+  if (settings.panMode === "space" && modifiers.space && (button === 0 || button === 1)) return modifiers.ctrlKey ? null : "pan";
   const panButtons = settings.panMode === "always" ? [0, 1] : settings.panMode === "middleMouse" ? [2] : isMac ? [] : [0, 1];
-  if (panButtons.includes(button)) return "pan";
+  if (panButtons.includes(button)) return modifiers.ctrlKey ? null : "pan";
   const selectionOnDrag = settings.selectionMode === "altDrag" || settings.selectionMode === "shiftDrag" ? false : settings.panMode === "always" ? false : isMac;
   if (button === 0 && selectionOnDrag) return "select";
   return null;

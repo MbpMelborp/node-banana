@@ -118,7 +118,7 @@ describe("SceneGraph edges", () => {
 
 describe("paneDragAction", () => {
   const settings = (patch: Partial<CanvasNavigationSettings>): CanvasNavigationSettings => ({ ...defaultCanvasNavigationSettings, ...patch });
-  const press = (patch: Partial<{ button: number; shiftKey: boolean; altKey: boolean; space: boolean }> = {}) => ({ button: 0, shiftKey: false, altKey: false, space: false, ...patch });
+  const press = (patch: Partial<{ button: number; shiftKey: boolean; altKey: boolean; ctrlKey: boolean; space: boolean }> = {}) => ({ button: 0, shiftKey: false, altKey: false, ctrlKey: false, space: false, ...patch });
 
   it("follows today's canvas: off the Mac a drag pans, on the Mac it draws a marquee, Shift always draws one", () => {
     const defaults = settings({});
@@ -136,6 +136,15 @@ describe("paneDragAction", () => {
     expect(paneDragAction(settings({ selectionMode: "altDrag" }), press({ altKey: true }), false)).toBe("select");
     expect(paneDragAction(settings({ selectionMode: "altDrag" }), press({ shiftKey: true }), false)).toBe("pan");
     expect(paneDragAction(settings({ selectionMode: "shiftDrag" }), press(), true)).toBe(null);
+  });
+
+  it("starts no pan with Control held, as d3-zoom's default filter", () => {
+    expect(paneDragAction(settings({}), press({ ctrlKey: true }), false)).toBe(null);
+    expect(paneDragAction(settings({}), press({ ctrlKey: true, button: 1 }), false)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "space" }), press({ ctrlKey: true, space: true }), true)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "middleMouse" }), press({ ctrlKey: true, button: 2 }), true)).toBe(null);
+    // A marquee is the pane's, not d3-zoom's: Control does not stop it.
+    expect(paneDragAction(settings({}), press({ ctrlKey: true }), true)).toBe("select");
   });
 
   it("tells the selection key, which selects over nodes too, from selecting on drag, which starts only on the pane", () => {

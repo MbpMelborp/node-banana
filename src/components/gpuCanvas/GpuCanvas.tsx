@@ -6,7 +6,7 @@
  * component, and only the nodes being worked in as live components over it.
  * See docs/gpu-canvas.md.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { DefaultEdgeOptions, EdgeTypes, NodeTypes } from "@xyflow/react";
 import { frameLoadedGraph } from "@/utils/frameGraph";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
@@ -44,6 +44,14 @@ const MAX_LIVE_EDGES = 250;
 /** After the GPU resets, the canvas is rebuilt once WebGL is back, or after this long at the latest. */
 const CONTEXT_RESTORE_WAIT_MS = 3000;
 
+/** What a wheel's decision needs from the canvas besides the event. */
+export interface GpuWheelState {
+  /** Over the pane (nodes, connections, empty canvas), not chrome beside it. */
+  pane: boolean;
+  /** Space is held in the "space" pan mode. */
+  panKey: boolean;
+}
+
 export interface GpuCanvasProps {
   nodeTypes: NodeTypes;
   /** The connection components, for the live connections (labels, stubs, toolbars). */
@@ -51,7 +59,12 @@ export interface GpuCanvasProps {
   defaultEdgeOptions: DefaultEdgeOptions;
   headers: HeaderProps;
   /** What a wheel does (the canvas's navigation settings, as classic's wheel handlers read them). */
-  wheel: (event: WheelEvent) => SceneWheel;
+  wheel: (event: WheelEvent, state: GpuWheelState) => SceneWheel;
+  /**
+   * The element classic's wrapper wheel handler listens on: wheels over chrome in it beside the canvas
+   * (the agent pill, the history drop-down) still pan and zoom. The canvas's own box when not given.
+   */
+  wheelRoot?: RefObject<HTMLElement | null>;
   /** WorkflowCanvas's editing settings and handlers (connect, menus, group drops). */
   editing: GpuEditing;
   /** Drawn over the canvas (the performance overlay, the agent button). */
@@ -109,7 +122,7 @@ interface Loading {
   total: number;
 }
 
-export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheel, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
+export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheel, wheelRoot, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<HTMLDivElement>(null);
@@ -124,9 +137,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
   // The latest props, read by the engine without rebuilding it.
-  const propsRef = useRef({ headers, wheel, editing, onFailure, onContextLost });
+  const propsRef = useRef({ headers, wheel, wheelRoot, editing, onFailure, onContextLost });
   useLayoutEffect(() => {
-    propsRef.current = { headers, wheel, editing, onFailure, onContextLost };
+    propsRef.current = { headers, wheel, wheelRoot, editing, onFailure, onContextLost };
   });
   const loadCount = useWorkflowStore((state) => state.workflowLoadCount);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
@@ -174,7 +187,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onFailure: (reason) => queueMicrotask(() => propsRef.current.onFailure(reason)),
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
-        wheel: (event) => propsRef.current.wheel(event),
+        wheel: (event, pane) => propsRef.current.wheel(event, { pane, panKey: editor.spaceHeld }),
+        // React Flow's zoomOnPinch: off in the tutorial and under a dialog.
+        pinchZooms: () => !propsRef.current.editing.disabled && !propsRef.current.editing.tutorial,
         onHover: (i) => {
           sceneHover = i >= 0 ? scene.graph.nodes[i].id : null;
           showHover();
@@ -209,6 +224,15 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       lostTimer = window.setTimeout(rebuild, CONTEXT_RESTORE_WAIT_MS);
     };
     canvas.addEventListener("webglcontextlost", contextLost);
+    // Chrome beside the canvas (the agent pill, the history drop-down) is not the pane: there a wheel
+    // does what classic's wrapper handler makes of it. The canvas and the live layer handle their own.
+    const wheelRoot = propsRef.current.wheelRoot?.current ?? host;
+    const chromeWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (event.defaultPrevented || target === canvas || (target instanceof Node && liveElement.contains(target))) return;
+      scene.wheel(event, false);
+    };
+    wheelRoot.addEventListener("wheel", chromeWheel, { passive: false });
     // Chrome over the scene drops its backdrop blur (globals.css).
     document.documentElement.toggleAttribute("data-gpu-canvas-active", true);
     // The latest header props, read when used; spreadable, so a render takes them as they are then.
@@ -452,6 +476,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
 
     return () => {
       canvas.removeEventListener("webglcontextlost", contextLost);
+      wheelRoot.removeEventListener("wheel", chromeWheel);
       canvas.removeEventListener("webglcontextrestored", rebuild);
       clearTimeout(lostTimer);
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);

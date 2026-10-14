@@ -308,7 +308,20 @@ The scene takes every press and asks the editor what it starts:
   about the pointer by d3-zoom's delta; otherwise `useWheelPanZoom`'s rules
   apply: an inner area that can still scroll keeps the wheel, the zoom
   modifier steps 1.2x about the centre, a macOS trackpad pans, and any
-  other wheel does nothing.
+  other wheel does nothing. With Space held (the "space" pan mode) a wheel
+  pans at half speed (React Flow's `panOnScroll`) and only a pinch zooms.
+  Over chrome beside the canvas (the agent pill, the history drop-down,
+  anything else in the canvas's wrapper) only the wrapper's rules apply,
+  through a listener on the wrapper (`wheelRoot`). A wheel on the canvas
+  hovers the node under the pointer, and hover is tested again as the view
+  moves under a still pointer, so a node brought under it turns live and its
+  inner areas take the wheels that follow.
+- Two fingers pinch about their midpoint and pan with it, as d3-zoom's touch
+  zoom (off in the tutorial and under a dialog); the second finger drops what
+  the first began, one left pans, and a gesture follows only the pointer that
+  started it.
+- A middle press on a node or connection pans in any pan mode, as React
+  Flow's zoom filter allows; no drag pans with Control held.
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
   the live flow's too). Fit view frames every node as React Flow's
   `fitView` (10% padding); a minimap click glides the view there over 250
@@ -343,6 +356,8 @@ handles. That happens on screen at 30% zoom and above, for up to 250.
 - A live connection's decorations draw over painted nodes they pass under.
 - A node whose look depends on state outside its data and its inputs (a
   file loading elsewhere, a timer) may paint stale until its key changes.
+- A wheel over a painted node's scrolling text pans the canvas until the
+  node is live, a few frames after it comes under the pointer.
 
 ## What phase 4 leaves out
 
