@@ -5,7 +5,7 @@ import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "
 import { defaultEdgeAppearance } from "@/types";
 import { measuredChanges, SceneGraph } from "../graph";
 import { cubicAt, distanceToCubic, pathToCubics, routeSceneEdge, type RouteContext } from "../edgeRoutes";
-import { closestHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
+import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
 
 function node(id: string, x: number, y: number, data: Record<string, unknown> = {}, type = "prompt"): WorkflowNode {
@@ -239,5 +239,44 @@ describe("measuredChanges", () => {
       { type: "dimensions", id: "a", dimensions: { width: 300, height: 150 }, setAttributes: false },
       { type: "dimensions", id: "c", dimensions: { width: 300, height: 240 }, setAttributes: false },
     ]);
+  });
+});
+
+describe("edgeEndAt", () => {
+  const nodes = [node("a", 0, 0), node("b", 600, 0)];
+  const graph = () => {
+    const g = new SceneGraph(nodes, [edge("ab", "a", "b")], {});
+    g.nodes[0].handles = new Map([["source:text", { x: 315, y: 100, position: "right" }]]);
+    g.nodes[1].handles = new Map([["target:text", { x: -15, y: 100, position: "left" }]]);
+    return g;
+  };
+
+  it("finds React Flow's reconnect anchors: 10 flow units round each end, shifted 10 outward", () => {
+    const g = graph();
+    expect(edgeEndAt(g, [0, 1], 325, 100)).toEqual({ edge: 0, end: "source" });
+    expect(edgeEndAt(g, [0, 1], 575, 108)).toEqual({ edge: 0, end: "target" });
+    // Inward of the end is the handle's, not the anchor's.
+    expect(edgeEndAt(g, [0, 1], 300, 100)).toBeNull();
+    expect(edgeEndAt(g, [0, 1], 450, 100)).toBeNull();
+  });
+
+  it("skips connections React Flow does not render or cannot reconnect", () => {
+    const g = graph();
+    g.edges[0].edge = { ...g.edges[0].edge, reconnectable: false };
+    expect(edgeEndAt(g, [0, 1], 325, 100)).toBeNull();
+  });
+
+  it("gives the handle at the other end to draw from", () => {
+    expect(edgeEndHandle(graph(), 0, "source")).toMatchObject({ node: 0, handleId: "text", type: "source", x: 315, y: 100 });
+  });
+});
+
+describe("autoPanVelocity", () => {
+  it("is React Flow's calcAutoPan: nothing inside 40 px of the edges, up to 15 px a frame at them", () => {
+    const size = { width: 1000, height: 800 };
+    expect(autoPanVelocity({ x: 500, y: 400 }, size)).toEqual([0, 0]);
+    expect(autoPanVelocity({ x: 0, y: 400 }, size)).toEqual([15, 0]);
+    expect(autoPanVelocity({ x: 20, y: 790 }, size)).toEqual([7.5, -11.25]);
+    expect(autoPanVelocity({ x: 1100, y: -50 }, size)).toEqual([-15, 15]);
   });
 });

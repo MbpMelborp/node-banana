@@ -10,7 +10,9 @@
  *   the first move and the drop go to the store (the first records the undo
  *   step), the moves between only to the scene and the live layer;
  * - a drag from a handle draws a connection, dropped on a handle, a node or
- *   empty canvas as today; a click on a handle opens its menu;
+ *   empty canvas as today; a click on a handle opens its menu; a drag from
+ *   a connection's end moves that end to another handle (React Flow's
+ *   reconnect); the view pans while the pointer is near the canvas's edge;
  * - a drag on empty canvas pans or draws a marquee, as the navigation
  *   settings say;
  * - Delete and Backspace remove the selected nodes and connections; the
@@ -32,7 +34,7 @@ import type { HandleMenuTarget } from "@/components/HandleMenu";
 import { routeEdge } from "@/lib/edges/route";
 import { Position } from "@xyflow/react";
 import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
-import { closestHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
+import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, RECONNECT_RADIUS, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import type { LiveLayer } from "./LiveLayer";
@@ -70,6 +72,8 @@ export interface GpuEditing {
   tutorial: boolean;
   isValidConnection: (connection: Connection) => boolean;
   onConnect: (connection: Connection) => void;
+  /** A connection's end dragged onto another handle (React Flow's onReconnect). */
+  onReconnect: (edge: WorkflowEdge, connection: Connection) => void;
   /** A connection dropped without a handle: on a node (`nodeId`) or on empty canvas. */
   onConnectEnd: (event: MouseEvent, state: ConnectEndState, nodeId: string | null) => void;
   onHandleClick: (target: HandleMenuTarget) => void;
@@ -258,6 +262,11 @@ export class Editor {
       if (handle) return this.connectGesture(event, handle);
     }
     const node = this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
+    // A connection's end, outside the handle it meets, moves that end (React Flow's reconnect anchors).
+    if (node < 0 && !editing.locked && !keyHeld) {
+      const end = this.edgeEndAt(at.x, at.y);
+      if (end) return this.connectGesture(event, edgeEndHandle(scene.graph, end.edge, end.end === "source" ? "target" : "source"), end.edge);
+    }
     const edge = node < 0 ? scene.edgeAt(at.x, at.y) : -1;
     // With the selection key held, a press on a node or connection starts a selection: a drag draws a
     // marquee at once, a release is still a click (Shift toggles it, as multiSelectionKeyCode).
@@ -306,6 +315,13 @@ export class Editor {
     const scene = this.scene, p = scene.toWorld(cssX, cssY), floor = HANDLE_HIT_PX / scene.view.zoom;
     // Handles sit on a node's sides, a little outside it.
     return handleAt(scene.graph, this.nodesNear(p.x, p.y, Math.max(floor, 24) + 24), p.x, p.y, floor);
+  }
+
+  /** The connection end (its reconnect anchor) under a point (css px). */
+  private edgeEndAt(cssX: number, cssY: number) {
+    const p = this.scene.toWorld(cssX, cssY);
+    // The anchors sit beside the handles, a little outside their nodes.
+    return edgeEndAt(this.scene.graph, this.nodesNear(p.x, p.y, RECONNECT_RADIUS * 2 + 24), p.x, p.y);
   }
 
   private nodesNear(x: number, y: number, reach: number): number[] {
@@ -608,14 +624,21 @@ export class Editor {
 
   // ── Connecting ────────────────────────────────────────────────────────
 
-  private connectGesture(down: PointerEvent, from: HandleHit): Gesture {
+  /**
+   * A connection drawn from `from`. With `reconnecting`, the press took that edge's other end: the
+   * edge is hidden while it is drawn and a valid drop moves its end (React Flow's reconnect anchors);
+   * a press that does not move is a click on the edge.
+   */
+  private connectGesture(down: PointerEvent, from: HandleHit, reconnecting?: number): Gesture {
     const scene = this.scene;
-    const fromLive = down.target instanceof Element && !!down.target.closest(".react-flow__handle");
+    const fromLive = reconnecting == null && down.target instanceof Element && !!down.target.closest(".react-flow__handle");
     const fromId = scene.graph.nodes[from.node].id;
+    const heldEdgeId = reconnecting == null ? null : scene.graph.edges[reconnecting].id;
     const handleId = from.handleId || null;
     const startX = down.clientX, startY = down.clientY;
     let dragging = false;
     let target: HandleHit | null = null;
+    let last = down, panFrame = 0;
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     const wanted = from.type === "source" ? "target" : "source";
     const draw = (event: PointerEvent) => {
@@ -644,23 +667,46 @@ export class Editor {
       path.setAttribute("d", d);
       path.setAttribute("stroke-width", String(scene.view.zoom));
     };
+    // React Flow's autoPanOnConnect: near the canvas's edge the view pans every frame, the pointer still or not.
+    const autoPan = () => {
+      const { clientWidth: width, clientHeight: height } = scene.canvas;
+      const [vx, vy] = width && height ? autoPanVelocity(scene.local(last), { width, height }) : [0, 0];
+      if (vx || vy) {
+        scene.setView({ x: scene.view.x + vx, y: scene.view.y + vy });
+        draw(last);
+      }
+      panFrame = requestAnimationFrame(autoPan);
+    };
+    // The reconnected edge's live copy (its decorations), hidden with the scene's stroke.
+    const liveEdge = () => heldEdgeId == null ? null : this.live.element?.querySelector<SVGElement>(`.react-flow__edge[data-id="${CSS.escape(heldEdgeId)}"]`) ?? null;
     const start = (event: PointerEvent) => {
       dragging = true;
       scene.capture();
+      if (reconnecting != null) {
+        scene.setHeldEdge(reconnecting);
+        liveEdge()?.style.setProperty("visibility", "hidden");
+      }
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", CONNECTION_LINE_STROKE);
       this.overlay.append(path);
       document.documentElement.classList.add("canvas-interacting");
       draw(event);
+      panFrame = requestAnimationFrame(autoPan);
     };
     const end = () => {
+      cancelAnimationFrame(panFrame);
       path.remove();
+      if (reconnecting != null) {
+        scene.setHeldEdge(-1);
+        liveEdge()?.style.removeProperty("visibility");
+      }
       setConnectDrag(false);
       this.live.wantOnly("connect", []);
       document.documentElement.classList.remove("canvas-interacting");
     };
     return {
       move: (event) => {
+        last = event;
         if (!dragging) {
           if (Math.hypot(event.clientX - startX, event.clientY - startY) <= HANDLE_CLICK_SLOP) return;
           start(event);
@@ -671,6 +717,11 @@ export class Editor {
       },
       up: (event) => {
         if (!dragging) {
+          // A press on a connection's end that did not move is a click on the connection.
+          if (reconnecting != null) {
+            this.clickEdge(event, reconnecting);
+            return;
+          }
           // The click reaches the node as well: it selects it, as React Flow's node click (connectOnClick is off).
           this.clickNode(fromId, event.shiftKey);
           // A click on the handle opens its menu at its centre (a live node's handle opens it through WorkflowCanvas's own listener).
@@ -682,14 +733,20 @@ export class Editor {
         end();
         const editing = this.editing();
         if (target) {
-          editing.onConnect(this.connection(from, target));
+          const connection = this.connection(from, target);
+          const edge = heldEdgeId == null ? undefined : useWorkflowStore.getState().edges.find((e) => e.id === heldEdgeId);
+          if (heldEdgeId == null) editing.onConnect(connection);
+          else if (edge) editing.onReconnect(edge, connection);
           return;
         }
-        // No handle: WorkflowCanvas connects to a compatible handle of the node under the pointer, or offers the add-node menu.
+        // No handle: WorkflowCanvas connects to a compatible handle of the node under the pointer, or offers the
+        // add-node menu (a reconnect too: the connection stays, and the new one starts from its other end).
         const fromNode = useWorkflowStore.getState().nodes.find((n) => n.id === fromId);
         if (!fromNode) return;
-        // Classic finds the node by its element: its floating header is not part of it.
-        const at = scene.local(event), node = scene.nodeAt(at.x, at.y, false);
+        // Classic finds the node by its element: its floating header is not part of it, its sockets are.
+        const at = scene.local(event);
+        let node = scene.nodeAt(at.x, at.y, false);
+        if (node < 0) node = (this.liveHandleAt(event) ?? this.paintedHandleAt(at.x, at.y))?.node ?? -1;
         editing.onConnectEnd(event, { isValid: false, fromNode, fromHandle: { id: handleId, type: from.type } }, node >= 0 ? scene.graph.nodes[node].id : null);
       },
       cancel: end,
@@ -727,11 +784,13 @@ export class Editor {
       else if (hadOne) store.setHoveredHandle(null);
     }
     const node = handle ? -1 : scene.nodeAt(at.x, at.y);
-    const edge = handle || node >= 0 ? -1 : scene.edgeAt(at.x, at.y);
+    // A connection's end shows React Flow's move cursor where a press would reconnect it.
+    const end = handle || node >= 0 || this.editing().disabled || this.editing().locked ? null : this.edgeEndAt(at.x, at.y);
+    const edge = handle || node >= 0 ? -1 : end?.edge ?? scene.edgeAt(at.x, at.y);
     // The connection holding keyboard focus looks hovered while the pointer is on no other.
     const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
     scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
-    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : edge >= 0 ? "pointer" : "";
+    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : end ? "move" : edge >= 0 ? "pointer" : "";
   };
 
   /** The scene's onContextMenu: the add-node menu on empty canvas, the connection menu on a connection. */
@@ -741,7 +800,8 @@ export class Editor {
     const scene = this.scene, at = scene.local(event);
     // A node, its header band or a painted handle is not the pane: the browser's own menu shows.
     if (scene.nodeAt(at.x, at.y) >= 0 || this.paintedHandleAt(at.x, at.y)) return;
-    const e = scene.edgeAt(at.x, at.y);
+    // A connection's reconnect anchors are part of it.
+    const e = this.edgeEndAt(at.x, at.y)?.edge ?? scene.edgeAt(at.x, at.y);
     const edge = e >= 0 ? useWorkflowStore.getState().edges.find((candidate) => candidate.id === scene.graph.edges[e].id) : undefined;
     // The right button pans in "middleMouse" mode (React Flow's panOnDrag [2] swallows the menu).
     if (editing.navigation.panMode === "middleMouse" && !editing.tutorial) {
@@ -760,7 +820,7 @@ export class Editor {
   paneDoubleClick = (x: number, y: number, screen: { x: number; y: number }) => {
     if (this.editing().disabled) return;
     const at = this.scene.toScreen(x, y);
-    if (this.scene.edgeAt(at.x, at.y) >= 0 || this.paintedHandleAt(at.x, at.y)) return;
+    if (this.scene.edgeAt(at.x, at.y) >= 0 || this.edgeEndAt(at.x, at.y) || this.paintedHandleAt(at.x, at.y)) return;
     this.editing().onPaneMenu(screen.x, screen.y);
   };
 }

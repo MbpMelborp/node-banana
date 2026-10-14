@@ -173,7 +173,9 @@ export function handleAnchors(state: ReactFlowState, id: string, root?: ParentNo
       anchor.box = { x, y, w: width, h: height };
       const classes = elements.get(key)?.classList;
       if (classes) {
-        anchor.connectableStart = classes.contains("connectable") && classes.contains("connectablestart");
+        // A live node's sockets leave starting a connection to the editor (Socket's isConnectableStart): they still start one.
+        const live = !!elements.get(key)?.closest("[data-gpu-canvas-live]");
+        anchor.connectableStart = classes.contains("connectable") && (classes.contains("connectablestart") || live);
         anchor.connectableEnd = classes.contains("connectable") && classes.contains("connectableend");
       }
       anchors.set(key, anchor);

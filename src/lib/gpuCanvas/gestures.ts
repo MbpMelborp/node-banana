@@ -5,7 +5,9 @@
  */
 import type { CanvasNavigationSettings } from "@/types/canvas";
 import { contains, type Box } from "@/lib/nodes/marqueeSelection";
+import { Position } from "@xyflow/react";
 import type { HandleAnchor, SceneGraph } from "./graph";
+import { edgeAnchors } from "./edgeRoutes";
 
 export type PaneAction = "pan" | "select" | null;
 
@@ -127,6 +129,62 @@ export function closestHandle(graph: SceneGraph, nodes: Iterable<number>, x: num
     }
   }
   return best;
+}
+
+/** The handle at one end of a connection, as a press on it would find it (its anchor where it is not measured yet). */
+export function edgeEndHandle(graph: SceneGraph, e: number, end: "source" | "target"): HandleHit {
+  const edge = graph.edges[e], i = end === "source" ? edge.source : edge.target;
+  const handleId = (end === "source" ? edge.sourceHandle : edge.targetHandle) ?? "";
+  const anchor = graph.nodes[i].handles?.get(`${end}:${handleId}`);
+  if (anchor) return handleHit(graph, i, `${end}:${handleId}`, anchor);
+  const { x, y } = edgeAnchors(graph, e)[end];
+  return { node: i, handleId, type: end, x, y, cx: x, cy: y, connectableEnd: true };
+}
+
+/** React Flow's reconnectRadius: the circle round each end of a connection that a press takes to move that end. */
+export const RECONNECT_RADIUS = 10;
+
+/**
+ * The end of a connection under a flow point, as React Flow's EdgeUpdateAnchors
+ * place them: a circle of RECONNECT_RADIUS round each end, shifted as far
+ * outward along its handle's side. `nodes` are the nodes near the point (the
+ * ends sit on their sides). The nearest centre wins.
+ */
+export function edgeEndAt(graph: SceneGraph, nodes: Iterable<number>, x: number, y: number): { edge: number; end: "source" | "target" } | null {
+  let best: { edge: number; end: "source" | "target" } | null = null, bestDistance = Infinity;
+  for (const i of nodes) {
+    for (const e of graph.edgesOf[i] ?? []) {
+      const edge = graph.edges[e];
+      // React Flow renders no hidden edge, and none whose reconnectable is off.
+      if (!edge || edge.edge.hidden || edge.edge.reconnectable === false) continue;
+      const anchors = edgeAnchors(graph, e);
+      for (const end of ["source", "target"] as const) {
+        if ((end === "source" ? edge.source : edge.target) !== i) continue;
+        const { x: ax, y: ay, position } = anchors[end];
+        const cx = ax + (position === Position.Left ? -RECONNECT_RADIUS : position === Position.Right ? RECONNECT_RADIUS : 0);
+        const cy = ay + (position === Position.Top ? -RECONNECT_RADIUS : position === Position.Bottom ? RECONNECT_RADIUS : 0);
+        const distance = Math.hypot(x - cx, y - cy);
+        if (distance > RECONNECT_RADIUS || distance >= bestDistance) continue;
+        bestDistance = distance;
+        best = { edge: e, end };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * React Flow's calcAutoPan: how far (css px a frame) to pan while a connection
+ * is drawn with the pointer within `distance` of the canvas's edge, faster the
+ * nearer it is. `at` is the pointer in the canvas's css pixels.
+ */
+export function autoPanVelocity(at: { x: number; y: number }, size: { width: number; height: number }, speed = 15, distance = 40): [number, number] {
+  const velocity = (value: number, min: number, max: number) => {
+    if (value < min) return (Math.min(Math.max(Math.abs(value - min), 1), min) / min) * speed;
+    if (value > max) return (-Math.min(Math.max(Math.abs(value - max), 1), min) / min) * speed;
+    return 0;
+  };
+  return [velocity(at.x, distance, size.width - distance), velocity(at.y, distance, size.height - distance)];
 }
 
 export type CardBox = { x: number; y: number; w: number; h: number } | null;

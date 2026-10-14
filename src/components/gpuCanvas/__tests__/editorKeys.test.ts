@@ -20,6 +20,7 @@ const editing: GpuEditing = {
   tutorial: false,
   isValidConnection: () => true,
   onConnect: noop,
+  onReconnect: noop,
   onConnectEnd: noop,
   onHandleClick: noop,
   onNodeDragStop: noop,

@@ -7,7 +7,7 @@ import { cn } from "./cn";
 import { SOCKET_H, SOCKET_HOLE_R, SOCKET_RING_W, SOCKET_W, socketCenter } from "./tokens";
 import { HandleLabel } from "../HandleLabel";
 import { useConnectDragStore } from "@/store/connectDragStore";
-import { useIsPaintedNode } from "../paintMode";
+import { useIsLiveLayerNode, useIsPaintedNode } from "../paintMode";
 
 export type SocketType = HandleType | "reference";
 
@@ -154,6 +154,8 @@ export function Socket({ nodeId, side, row, spec, showLabel = false, outline = "
   const painted = useIsPaintedNode();
   const dragTarget = useConnectDragStore((s) => !!s.target && s.target.nodeId === nodeId && s.target.type === handleType && (s.target.handleId ?? "") === spec.id);
   const gpuTarget = dragTarget && !painted;
+  // A live node on the GPU canvas leaves the press to the canvas's editor: React Flow must not start a second connection.
+  const liveLayer = useIsLiveLayerNode();
   const color = socketColor(spec.type);
   const position = side === "left" ? Position.Left : Position.Right;
 
@@ -182,6 +184,7 @@ export function Socket({ nodeId, side, row, spec, showLabel = false, outline = "
         data-connected={connected ? "true" : undefined}
         title={spec.title}
         isConnectable={spec.isConnectable ?? true}
+        isConnectableStart={liveLayer ? false : undefined}
         className={cn("socket", spec.placeholder && "socket-placeholder", gpuTarget && "connectingto valid")}
         style={{
           ...socketBoxStyle(side, row),

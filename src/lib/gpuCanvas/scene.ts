@@ -392,6 +392,8 @@ export class Scene {
   private edgeSelected = new Set<number>();
   /** Edges the live layer draws (decorated ones on screen). */
   private edgeLive = new Set<number>();
+  /** The edge whose end is being dragged to reconnect it: not drawn meanwhile, as React Flow hides it. */
+  private edgeHeld = -1;
   private hoveredEdge = -1;
 
   private graphMeshes: THREE.Mesh[] = [];
@@ -586,7 +588,7 @@ export class Scene {
     const route = this.routes[e];
     if (!route) return;
     const edge = this.graph.edges[e];
-    let flags = route.hidden || this.edgeLive.has(e) ? EDGE_HIDDEN : 0;
+    let flags = route.hidden || this.edgeLive.has(e) || this.edgeHeld === e ? EDGE_HIDDEN : 0;
     if (this.edgeSelected.has(e)) flags |= EDGE_SELECTED;
     if (this.hoveredEdge === e) flags |= EDGE_HOVERED;
     if (this.selected.has(edge.source) || this.selected.has(edge.target)) flags |= EDGE_ACTIVE;
@@ -703,6 +705,14 @@ export class Scene {
     if (changed.length) this.touchEdgeList(changed);
   }
 
+  /** Hides an edge while its end is dragged to reconnect it (-1: none). */
+  setHeldEdge(e: number) {
+    if (e === this.edgeHeld) return;
+    const previous = this.edgeHeld;
+    this.edgeHeld = e;
+    this.touchEdgeList([previous, e]);
+  }
+
   setHoveredEdge(e: number) {
     if (e === this.hoveredEdge) return;
     const previous = this.hoveredEdge;
@@ -727,6 +737,7 @@ export class Scene {
     this.routes = [];
     this.edgeSelected.clear();
     this.edgeLive.clear();
+    this.edgeHeld = -1;
     this.hoveredEdge = -1;
     this.index = new GridIndex(graph.nodes, 512, NODE_HEADER);
     this.buildGraphMeshes();
@@ -750,6 +761,7 @@ export class Scene {
     this.routes = [];
     this.edgeSelected.clear();
     this.edgeLive.clear();
+    this.edgeHeld = -1;
     this.hoveredEdge = -1;
     this.buildGraphMeshes();
   }

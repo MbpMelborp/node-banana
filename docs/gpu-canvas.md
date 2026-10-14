@@ -206,8 +206,20 @@ The scene takes every press and asks the editor what it starts:
   connectDragStore tells nodes so: the node it starts from, the node under
   the pointer and a valid target turn live, show their socket labels, and
   the target's socket fills. A valid drop connects; anything else goes to
-  `handleConnectEnd` with the node under the pointer, which opens the
-  connection drop menu as today.
+  `handleConnectEnd` with the node under the pointer (its sockets' reach
+  counts, as their elements do on classic), which connects to a compatible
+  handle there or opens the connection drop menu as today. Within 40 px of
+  the canvas's edge the view pans while the line is drawn, faster nearer
+  the edge (React Flow's `autoPanOnConnect`, speed 15). A live node's
+  sockets start no React Flow connection of their own (Socket's
+  `isConnectableStart` is off in the live layer): the editor's is the only
+  one.
+- **A connection's end** (React Flow's reconnect anchors: a circle of 10
+  flow units round each end, shifted 10 outward, under nodes and handles;
+  the `move` cursor): a drag hides the connection and draws the line from
+  its other end; a valid drop is WorkflowCanvas's `handleReconnect`, any
+  other goes to `handleConnectEnd` and the connection stays. A press that
+  does not move is a click on the connection. Not on a locked canvas.
 - **A node**, its floating header included (the 30 flow units above it,
   painted or live): a click selects it (Shift adds or removes it), and
   leaves a selection it is already part of as it is; a click on a live
@@ -277,8 +289,7 @@ handles. That happens on screen at 30% zoom and above, for up to 250.
 
 ## What phase 3 leaves out
 
-- Sweeping connections with the hook key (H), and dragging a connection's
-  end to reconnect it.
+- Sweeping connections with the hook key (H).
 - Hidden connections' stubs below 30% zoom.
 - While a connection is drawn, painted nodes away from the pointer keep
   their pictures without socket labels (classic shows every node's).

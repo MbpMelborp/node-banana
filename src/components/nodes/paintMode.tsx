@@ -65,6 +65,15 @@ export function HoldLiveProvider({ hold, children }: { hold: HoldLive; children:
   return <HoldLiveContext.Provider value={hold}>{children}</HoldLiveContext.Provider>;
 }
 
+/**
+ * True inside the GPU canvas's live layer. Its React Flow starts no
+ * connection of its own: the GPU canvas's editor draws them, from presses the
+ * layer hands it.
+ */
+export function useIsLiveLayerNode(): boolean {
+  return useContext(HoldLiveContext) !== null;
+}
+
 /** Keeps this node live while `active` (inside a node; the node's id comes from React Flow). */
 export function useHoldLive(active: boolean, nodeId?: string | null) {
   const hold = useContext(HoldLiveContext);

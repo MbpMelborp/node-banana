@@ -31,11 +31,14 @@ import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
 // Flow sets a node's pointer-events inline (none, since this flow selects and drags nothing), hence !important.
+// Its sockets start no connection of their own (the editor draws them), so React Flow's connectionindicator
+// cursor is given back here.
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel { pointer-events: all !important; }
   [data-gpu-canvas-live] .react-flow__node-gpuGhost { visibility: hidden; pointer-events: none !important; }
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
+  [data-gpu-canvas-live] .react-flow__handle.connectable { cursor: crosshair; }
 `;
 
 /**
@@ -155,7 +158,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
     <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
-        defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false}
+        defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
         panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>

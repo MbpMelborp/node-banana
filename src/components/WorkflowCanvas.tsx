@@ -2413,6 +2413,7 @@ export function WorkflowCanvas() {
     tutorial: tutorialActive,
     isValidConnection,
     onConnect: handleConnect,
+    onReconnect: handleReconnect,
     onConnectEnd: (event, state, nodeId) => handleConnectEnd(event, state as unknown as Parameters<OnConnectEnd>[1], nodeId),
     onHandleClick: setHandleMenu,
     onNodeDragStop: (event, node) => handleNodeDragStop(event, node),
@@ -2421,7 +2422,7 @@ export function WorkflowCanvas() {
     onEdgeClick: (event, edge) => handleEdgeClick(event as unknown as React.MouseEvent, edge),
     onEdgeContextMenu: (event, edge) => handleEdgeContextMenu(event as unknown as React.MouseEvent, edge),
     onSelectionChange: handleSelectionChange,
-  }), [canvasNavigationSettings, canvasLocked, isModalOpen, tutorialActive, isValidConnection, handleConnect, handleConnectEnd, handleNodeDragStop, handlePaneClick, openNodeSearchMenu, handleEdgeClick, handleEdgeContextMenu, handleSelectionChange]);
+  }), [canvasNavigationSettings, canvasLocked, isModalOpen, tutorialActive, isValidConnection, handleConnect, handleReconnect, handleConnectEnd, handleNodeDragStop, handlePaneClick, openNodeSearchMenu, handleEdgeClick, handleEdgeContextMenu, handleSelectionChange]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
