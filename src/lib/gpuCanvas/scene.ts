@@ -13,7 +13,7 @@
  */
 import * as THREE from "three";
 import { getViewportForBounds } from "@xyflow/react";
-import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
+import { GridIndex, NODE_HEADER, type SceneGraph, type SceneNode } from "./graph";
 import { cubicArcLength, cubicLength, cubicPieces, distanceToCubic, routeGradientRange, type Cubic, type EdgeRoute } from "./edgeRoutes";
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
@@ -972,6 +972,20 @@ export class Scene {
     if (quad) this.painted.set(i, quad);
     else this.painted.delete(i);
     this.touchNode(i);
+  }
+
+  /** The node's controls card where it reaches past the node's sides (SceneNode.overhang): presses and hover find it there. */
+  setOverhang(i: number, overhang: SceneNode["overhang"]) {
+    const node = this.graph.nodes[i];
+    const a = node?.overhang, b = overhang;
+    if (!node || a === b || (a && b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h)) return;
+    node.overhang = overhang;
+    this.index.update(i);
+  }
+
+  /** Whether the scene draws a painted image for the node (not its stand-in card). */
+  hasPainted(i: number): boolean {
+    return this.painted.has(i);
   }
 
   /** The node's height as painting measured it; moves its edges' ends. */

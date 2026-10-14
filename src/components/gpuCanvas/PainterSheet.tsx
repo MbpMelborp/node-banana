@@ -17,7 +17,9 @@ import { StoreSocketConnections } from "@/components/nodes/ui/socketConnections"
 import { nextFrame, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // Transitions and animations would be painted mid-way; the pane is transparent so the margins are.
+// The agent's shimmer (an attribute on a shown node) is never painted.
 const SHEET_STYLE = `
+  [data-gpu-canvas-sheet] [data-agent-shimmer] :is([data-media-card], [data-controls-card])::after { content: none !important; }
   [data-gpu-canvas-sheet] *, [data-gpu-canvas-sheet] *::before, [data-gpu-canvas-sheet] *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }
   [data-gpu-canvas-sheet], [data-gpu-canvas-sheet] * { overflow-anchor: none !important; }
   [data-gpu-canvas-sheet] .react-flow__pane, [data-gpu-canvas-sheet] .react-flow__renderer, [data-gpu-canvas-sheet] .react-flow { background: transparent !important; }

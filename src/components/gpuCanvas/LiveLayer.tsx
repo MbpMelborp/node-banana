@@ -12,7 +12,8 @@
  *
  * A node's painted image stays in the scene until its live component has
  * been measured and its images decoded; only then is the scene's copy
- * hidden, so the swap shows no gap. A node leaving the layer waits until its
+ * hidden and the live one (kept invisible till then) shown, so the swap
+ * shows no gap and nothing doubled. A node leaving the layer waits until its
  * painted image is current (it may have been edited while live), then goes
  * back to the scene.
  */
@@ -32,7 +33,7 @@ import { dimClassName } from "@/lib/gpuCanvas/dimming";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import type { WorkflowNode } from "@/types";
-import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
+import { controlsOverhangBox, flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
@@ -44,6 +45,8 @@ import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./
 // The scene drags the nodes, so React Flow's draggable cursors are given here: grab, grabbing while a drag moves them (the
 // editor's data-gpu-dragging), the default arrow when locked or under a dialog. A focused node shows no ring, as classic's
 // selectable nodes (React Flow's .selectable:focus outline none; the wrappers stay focusable, as classic's).
+// A node swapping in is laid out (measured, its images decoding) but not shown until its painted copy goes.
+const ENTERING = "gpu-entering";
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel:not(.pointer-events-none) { pointer-events: all !important; }
@@ -55,6 +58,7 @@ const LIVE_STYLE = `
   [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grab; }
   [data-gpu-canvas-live][data-gpu-dragging]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grabbing; }
   [data-gpu-canvas-live] .react-flow__node:focus, [data-gpu-canvas-live] .react-flow__node:focus-visible { outline: none; }
+  [data-gpu-canvas-live] .react-flow__node.${ENTERING} { visibility: hidden; }
 `;
 
 /**
@@ -69,8 +73,11 @@ function GhostNode() {
 /** Painted nodes over live connections (paintedCover): the connections they cover, and their boxes. */
 type EdgeCover = { edgeIds: string[]; boxes: { x: number; y: number; w: number; h: number }[] };
 
-/** `headers`: painted nodes whose floating header a live node would cover; the flow shows those headers, above it. */
-type FlowState = { nodes: Node[]; edges: Edge[]; headers?: Node[]; cover?: EdgeCover; committed: () => void };
+/**
+ * `headers`: painted nodes whose floating header a live node would cover; the flow shows those headers, above it.
+ * `entering`: nodes swapping in, whose floating headers are hidden with them.
+ */
+type FlowState = { nodes: Node[]; edges: Edge[]; headers?: Node[]; cover?: EdgeCover; entering?: string[]; committed: () => void };
 
 /** A floating header's height above its node (FloatingNodeHeader's top offset). */
 const HEADER_HEIGHT = 26;
@@ -218,6 +225,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
       <StoreSocketConnections>
         <style>{LIVE_STYLE}</style>
         <EdgeMask cover={state.cover} />
+        {state.entering?.length ? <style>{state.entering.map((id) => `[data-gpu-canvas-live] [data-node-header="${CSS.escape(id)}"]`).join(", ")}{" { visibility: hidden; }"}</style> : null}
         <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
           defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
           nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
@@ -246,6 +254,8 @@ export class LiveLayer {
   readonly live = new Set<string>();
   /** Nodes on their way back to the scene, waiting for a current image. */
   private leaving = new Set<string>();
+  /** Nodes swapping in: rendered but invisible while their painted image still shows. */
+  private entering = new Set<string>();
   private generation = 0;
   private pending: Promise<void> = Promise.resolve();
   private unsubscribe: () => void;
@@ -483,6 +493,7 @@ export class LiveLayer {
 
   private drop(id: string) {
     this.wanted.delete(id);
+    this.entering.delete(id);
     this.live.delete(id);
     this.leaving.delete(id);
   }
@@ -503,7 +514,8 @@ export class LiveLayer {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
-      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected, dimClassName(id, nodes[i].type, dimmedNodeIds, skippedNodeIds));
+      const className = [dimClassName(id, nodes[i].type, dimmedNodeIds, skippedNodeIds), this.entering.has(id) ? ENTERING : ""].filter(Boolean).join(" ");
+      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected, className || undefined);
       const measured = lookup?.get(id)?.measured;
       if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
       flowNodes.push(node);
@@ -552,7 +564,7 @@ export class LiveLayer {
         this.scene.setHeadersLive(headers.map((h) => graph.indexOf.get(h.id)).filter((i): i is number => i != null));
         resolve();
       };
-      this.setNodes({ nodes: flowNodes, edges: flowEdges, headers, cover, committed }, sync);
+      this.setNodes({ nodes: flowNodes, edges: flowEdges, headers, cover, entering: [...this.entering].filter((id) => present.has(id)), committed }, sync);
     });
   }
 
@@ -568,8 +580,11 @@ export class LiveLayer {
       this.leaving.add(id);
       void this.leave(id);
     }
-    await this.render();
     const entering = [...this.wanted.keys()].filter((id) => !this.live.has(id) && graph.indexOf.has(id));
+    // Invisible over its painted image until the swap. One still leaving shows already (its painted copy is
+    // hidden), and one with no image yet (just added: the scene draws its stand-in card) shows at once.
+    this.entering = new Set(entering.filter((id) => !this.leaving.has(id) && this.scene.hasPainted(graph.indexOf.get(id)!)));
+    await this.render();
     if (!entering.length || generation !== this.generation) return;
     for (const id of entering) this.leaving.delete(id);
     await settleNodes(this.element, entering, performance.now() + 3000, () => generation !== this.generation);
@@ -581,6 +596,11 @@ export class LiveLayer {
       this.live.add(id);
       this.scene.setHidden(i, true);
       this.applyLiveSize(id);
+    }
+    // Shown in the frame the scene stops drawing their painted copies.
+    if (this.entering.size) {
+      this.entering.clear();
+      void this.render(true);
     }
     this.stats.record("live.swapMs", performance.now() - started);
   }
@@ -615,6 +635,7 @@ export class LiveLayer {
     const measured = state?.nodeLookup.get(id)?.measured, height = measured?.height;
     if (!this.live.has(id) || i == null || !state || !height) return;
     if (Math.abs(this.scene.graph.nodes[i].h - height) > 0.5) this.scene.setNodeHeight(i, height);
+    this.scene.setOverhang(i, controlsOverhangBox(this.element, id));
     const handles = handleAnchors(state, id, this.element);
     // Measured at the live node's width, which reaches the store (and the scene's box) just after.
     if (handles) this.scene.setHandles(i, handles, measured?.width);

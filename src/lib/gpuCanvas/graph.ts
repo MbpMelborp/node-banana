@@ -42,6 +42,20 @@ export interface SceneNode {
   card?: { x: number; y: number; w: number; h: number } | null;
   /** The node's width when its handles and card were measured: a new width moves them (`refitMeasured`). */
   measuredW?: number;
+  /**
+   * The controls card's box within the node, once measured, when it reaches past the node's sides (widened by its
+   * grips past the node): presses and hover find the node there too, as on classic, where the card is the node's.
+   */
+  overhang?: { x: number; y: number; w: number; h: number } | null;
+}
+
+/**
+ * How far a node's controls card reaches past each side of the node (flow units): its width grips can make it
+ * wider than the node (data.controlsWidth), and it stays centred under the node, overflowing both sides evenly.
+ */
+export function controlsOverhang(data: unknown, w: number): number {
+  const width = (data as { controlsWidth?: unknown } | null | undefined)?.controlsWidth;
+  return typeof width === "number" && Number.isFinite(width) ? Math.max(0, (width - w) / 2) : 0;
 }
 
 /**
@@ -65,6 +79,8 @@ export function refitMeasured(n: SceneNode, w: number) {
     n.handles = handles;
   }
   if (n.card && n.card.x + n.card.w >= from - 0.5) n.card = { ...n.card, w: Math.max(0, n.card.w + dw) };
+  // A widened controls card stays centred.
+  if (n.overhang) n.overhang = n.overhang.w > w ? { ...n.overhang, x: n.overhang.x + dw / 2 } : null;
 }
 
 /**
@@ -277,6 +293,7 @@ export class SceneGraph {
         color: rgb(miniMapTypeColor(node.type)),
         handles: kept?.handles,
         card: kept?.card,
+        overhang: kept?.overhang,
         measuredW: kept?.measuredW,
       };
     });
@@ -390,8 +407,10 @@ export class GridIndex {
   }
 
   private keys(i: number): string[] {
-    const n = this.nodes[i], keys: string[] = [];
-    for (let cx = Math.floor(n.x / this.cell); cx <= Math.floor((n.x + n.w) / this.cell); cx++) {
+    const n = this.nodes[i], keys: string[] = [], o = n.overhang;
+    // A controls card reaching past the node's sides is filed too, so `at` finds it.
+    const x0 = Math.min(n.x, o ? n.x + o.x : n.x), x1 = Math.max(n.x + n.w, o ? n.x + o.x + o.w : n.x);
+    for (let cx = Math.floor(x0 / this.cell); cx <= Math.floor(x1 / this.cell); cx++) {
       for (let cy = Math.floor((n.y - this.top) / this.cell); cy <= Math.floor((n.y + n.h) / this.cell); cy++) keys.push(`${cx},${cy}`);
     }
     return keys;
@@ -432,8 +451,10 @@ export class GridIndex {
     const list = this.cells.get(`${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`);
     let best = -1, bestRank = -Infinity;
     for (const i of list ?? []) {
-      const n = this.nodes[i];
-      if (!(x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h)) continue;
+      const n = this.nodes[i], o = n.overhang;
+      const inside = (x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h)
+        || (!!o && x >= n.x + o.x && x <= n.x + o.x + o.w && y >= n.y + o.y && y <= n.y + o.y + o.h);
+      if (!inside) continue;
       const r = (rank?.(i) ?? 0) + (y < n.y ? HEADER_RAISE : 0);
       if (r > bestRank || (r === bestRank && i > best)) {
         best = i;
@@ -443,7 +464,7 @@ export class GridIndex {
     return best;
   }
 
-  /** Nodes whose rectangle overlaps the given one. */
+  /** Nodes whose rectangle (the node's own, without a controls card's overhang) overlaps the given one. */
   within(x0: number, y0: number, x1: number, y1: number): number[] {
     const found = new Set<number>();
     for (let cx = Math.floor(x0 / this.cell); cx <= Math.floor(x1 / this.cell); cx++) {

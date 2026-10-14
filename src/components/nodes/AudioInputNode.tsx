@@ -4,13 +4,13 @@ import { useCallback, useRef, useState, useEffect } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { AudioInputNodeData } from "@/types";
-import { useAudioVisualization } from "@/hooks/useAudioVisualization";
+import { audioSourceKey, useAudioVisualization } from "@/hooks/useAudioVisualization";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
 import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Music, Pause, Play, X } from "lucide-react";
-import { useUpdateNodeData } from "./paintMode";
+import { PaintPending, useUpdateNodeData } from "./paintMode";
 
 type AudioInputNodeType = Node<AudioInputNodeData, "audioInput">;
 
@@ -38,7 +38,7 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
     }
   }, [nodeData.audioFile]);
 
-  const { waveformData, isLoading } = useAudioVisualization(audioBlob);
+  const { waveformData, isLoading, error: waveformError } = useAudioVisualization(audioBlob, audioSourceKey(nodeData.audioFile));
   const {
     audioRef,
     canvasRef,
@@ -210,6 +210,7 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
               Optional
             </span>
           )}
+          <PaintPending pending={!waveformData && !waveformError} />
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-neutral-900/50">
               <span className="text-node text-neutral-500">Loading waveform...</span>

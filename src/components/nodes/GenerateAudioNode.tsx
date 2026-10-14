@@ -11,7 +11,7 @@ import { GenerateAudioNodeData, ProviderType } from "@/types";
 import { ProviderModel } from "@/lib/providers/types";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { modelSelectionData } from "@/store/utils/modelSelection";
-import { useAudioVisualization } from "@/hooks/useAudioVisualization";
+import { audioSourceKey, useAudioVisualization } from "@/hooks/useAudioVisualization";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
 import { SettingsTabBar } from "./SettingsTabBar";
 import { browseRegistry } from "@/utils/browseRegistry";
@@ -28,7 +28,7 @@ import {
   type SocketSpec,
 } from "./ui";
 import { Download, Pause, Play, X } from "lucide-react";
-import { useHoldLive, useIsPaintedNode, useUpdateNodeData, useNodeUiState } from "./paintMode";
+import { PaintPending, useHoldLive, useIsPaintedNode, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "audio", type: "audio", label: "Audio" }];
 const DEFAULT_INPUTS: SocketSpec[] = [{ id: "text", type: "text", label: "Prompt" }];
@@ -63,7 +63,7 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
 
   // Convert base64 data URL to Blob for visualization
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const { waveformData, isLoading: isLoadingWaveform } = useAudioVisualization(audioBlob);
+  const { waveformData, isLoading: isLoadingWaveform, error: waveformError } = useAudioVisualization(audioBlob, audioSourceKey(nodeData.outputAudio));
 
   useEffect(() => {
     if (nodeData.outputAudio) {
@@ -268,6 +268,7 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
                 Fallback used
               </div>
             )}
+            <PaintPending pending={!waveformData && !waveformError} />
             {isLoadingWaveform ? (
               <div className="absolute inset-0 flex items-center justify-center bg-neutral-900/50">
                 <span className="text-node text-neutral-500">Loading waveform...</span>

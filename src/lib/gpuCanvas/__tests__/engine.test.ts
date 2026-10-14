@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
-import { GridIndex, SceneGraph } from "../graph";
+import { controlsOverhang, GridIndex, refitMeasured, SceneGraph } from "../graph";
 import { AtlasLayout } from "../atlasLayout";
 import { atlasBudget } from "../budget";
 import { edgesByNode, hashData, paintKey, upstreamPaintKeys, type PaintKeyContext } from "../paintKey";
@@ -82,6 +82,40 @@ describe("GridIndex", () => {
     // (10, 90) is inside a's box and b's header band.
     expect(index.at(10, 90, true, (i) => (i === 0 ? 2 : 0))).toBe(1);
     expect(index.at(10, 90, false)).toBe(0);
+  });
+});
+
+describe("controls card overhang", () => {
+  it("is half of what a widened controls card reaches past its node, on each side", () => {
+    expect(controlsOverhang({ controlsWidth: 500 }, 300)).toBe(100);
+    expect(controlsOverhang({ controlsWidth: 200 }, 300)).toBe(0);
+    expect(controlsOverhang({}, 300)).toBe(0);
+    expect(controlsOverhang({ controlsWidth: Number.NaN }, 300)).toBe(0);
+  });
+
+  it("takes hits beside the node where the card reaches, and nowhere else beside it", () => {
+    const graph = new SceneGraph([node("a", 600, 0)], [], {});
+    graph.nodes[0].h = 400;
+    // A 500 wide card under a 300 wide node, from y 300 to 360: it reaches into the cell to the left.
+    graph.nodes[0].overhang = { x: -100, y: 300, w: 500, h: 60 };
+    const index = new GridIndex(graph.nodes);
+    expect(index.at(520, 330)).toBe(0);
+    expect(index.at(980, 330)).toBe(0);
+    expect(index.at(520, 100)).toBe(-1);
+    expect(index.at(980, 370)).toBe(-1);
+    // What lies within a box is the node's own rectangle.
+    expect(index.within(500, 300, 550, 350)).toEqual([]);
+  });
+
+  it("stays centred when the node's width changes, and goes once the node is as wide", () => {
+    const graph = new SceneGraph([node("a", 0, 0)], [], {});
+    const n = graph.nodes[0];
+    n.measuredW = 300;
+    n.overhang = { x: -100, y: 300, w: 500, h: 60 };
+    refitMeasured(n, 400);
+    expect(n.overhang).toEqual({ x: -50, y: 300, w: 500, h: 60 });
+    refitMeasured(n, 500);
+    expect(n.overhang).toBeNull();
   });
 });
 

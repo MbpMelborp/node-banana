@@ -197,12 +197,24 @@ export function handleAnchors(state: ReactFlowState, id: string, root?: ParentNo
   return anchors;
 }
 
-/** The node's media card (the box a marquee must hold), relative to the node, in flow units; null without one. */
-export function mediaCardBox(root: HTMLElement, id: string): { x: number; y: number; w: number; h: number } | null {
+/** An element of the node, relative to the node, in flow units; null without one. */
+function boxIn(root: HTMLElement, id: string, selector: string): { x: number; y: number; w: number; h: number; nodeW: number } | null {
   const node = root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
-  const card = node?.querySelector<HTMLElement>("[data-media-card]");
+  const card = node?.querySelector<HTMLElement>(selector);
   if (!node || !card || !node.offsetWidth) return null;
   const a = node.getBoundingClientRect(), b = card.getBoundingClientRect();
   const scale = a.width / node.offsetWidth || 1;
-  return { x: (b.left - a.left) / scale, y: (b.top - a.top) / scale, w: b.width / scale, h: b.height / scale };
+  return { x: (b.left - a.left) / scale, y: (b.top - a.top) / scale, w: b.width / scale, h: b.height / scale, nodeW: node.offsetWidth };
+}
+
+/** The node's media card (the box a marquee must hold), relative to the node, in flow units; null without one. */
+export function mediaCardBox(root: HTMLElement, id: string): { x: number; y: number; w: number; h: number } | null {
+  const box = boxIn(root, id, "[data-media-card]");
+  return box && { x: box.x, y: box.y, w: box.w, h: box.h };
+}
+
+/** The node's controls card when it reaches past the node's sides (SceneNode.overhang), in flow units; else null. */
+export function controlsOverhangBox(root: HTMLElement, id: string): { x: number; y: number; w: number; h: number } | null {
+  const box = boxIn(root, id, "[data-controls-card]");
+  return box && (box.x < -0.5 || box.x + box.w > box.nodeW + 0.5) ? { x: box.x, y: box.y, w: box.w, h: box.h } : null;
 }

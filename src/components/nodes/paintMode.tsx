@@ -105,3 +105,14 @@ export function useNodeUiState<T>(id: string, key: string, initial: T): [T, SetV
   if (!live && !painted) return [local, setLocal];
   return [stored === undefined ? initial : stored, setStored];
 }
+
+/**
+ * Marks a painted copy as not ready while `pending` (a waveform decoding, a
+ * video's poster being extracted): the GPU canvas waits for it before
+ * painting, and paints it again later if the wait runs out. Renders nothing
+ * elsewhere.
+ */
+export function PaintPending({ pending }: { pending: boolean }) {
+  const painted = useIsPaintedNode();
+  return painted && pending ? <div hidden data-paint-pending="" /> : null;
+}

@@ -33,7 +33,7 @@ import { indexOfNode, type NodeChanges } from "@/store/nodeChanges";
 import { useNodeUiStore } from "@/store/nodeUiStore";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import type { Scene } from "@/lib/gpuCanvas/scene";
-import { measuredChanges, type HandleAnchor } from "@/lib/gpuCanvas/graph";
+import { controlsOverhang, measuredChanges, type HandleAnchor, type SceneNode } from "@/lib/gpuCanvas/graph";
 import { PaintedAtlas, type BlitItem } from "@/lib/gpuCanvas/atlas";
 import type { Slot } from "@/lib/gpuCanvas/atlasLayout";
 import type { AtlasBudget } from "@/lib/gpuCanvas/budget";
@@ -44,7 +44,7 @@ import { cachedHandle, cacheKey, deflate, handleFromCache, inflate, PAINT_CACHE_
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { HEADER_HINTLESS_TYPES as HINTLESS_TYPES } from "@/components/nodes/FloatingNodeHeaders";
 import { PainterSheet } from "./PainterSheet";
-import { flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
+import { controlsOverhangBox, flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
 
 /** A sheet's size in device pixels while the canvas is in use: one upload is about 12 MB. */
 const SHEET_TEXELS = { w: 2048, h: 1536 };
@@ -83,6 +83,8 @@ interface HeldImage {
   /** Its size in flow units (node, header and margins). */
   w: number;
   h: number;
+  /** Where the node starts within it: the side margin, and a controls card's overhang (controlsOverhang). */
+  left: number;
 }
 
 interface NodePaint {
@@ -98,7 +100,7 @@ interface NodePaint {
 interface Readback {
   buffer: WebGLBuffer;
   sync: WebGLSync;
-  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: CachedHandle[]; card: [number, number, number, number] | null }[];
+  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: CachedHandle[]; card: [number, number, number, number] | null; overhang: [number, number, number, number] | null }[];
   bytes: number;
 }
 
@@ -617,11 +619,17 @@ export class Painter {
     this.options.stats.phase = name;
   }
 
+  /**
+   * A node's image box: the node with its header and margins, widened each side by a controls card that
+   * reaches past it (as classic shows it, overflowing the node); `left` is where the node starts within it.
+   */
   private boxOf(id: string) {
     const i = this.scene.graph.indexOf.get(id);
     const n = i == null ? undefined : this.scene.graph.nodes[i];
     const height = this.paints.get(id)?.height ?? (n ? n.h : 300);
-    return { w: (n?.w ?? 300) + PAD_X * 2, h: height + HEADER + PAD };
+    const nodes = useWorkflowStore.getState().nodes, k = indexOfNode(nodes, id);
+    const w = n?.w ?? 300, left = PAD_X + (k >= 0 ? controlsOverhang(nodes[k].data, w) : 0);
+    return { w: w + left * 2, h: height + HEADER + PAD, left };
   }
 
   private sheetFlowSize(zoom: number) {
@@ -668,7 +676,7 @@ export class Painter {
       packSheet(list.map((r) => ({ key: r.id, w: this.boxOf(r.id).w, h: heights(r.id) + HEADER + PAD })), sheet.width, sheet.height, sheet.gap);
     const sheetNodes = (list: PaintRequest[], placed: Map<string, { x: number; y: number }>) => list.flatMap((r) => {
       const node = sourceOf(r.id), at = placed.get(r.id), n = this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id)!];
-      return node && at && n ? [flowNode(node, at.x + PAD_X, at.y + HEADER, n.w)] : [];
+      return node && at && n ? [flowNode(node, at.x + this.boxOf(r.id).left, at.y + HEADER, n.w)] : [];
     });
 
     // First pass at estimated heights, to measure.
@@ -704,7 +712,7 @@ export class Painter {
     if (moved || fits.length !== misses.length) await this.sheet.render(sheetNodes(fits, placed), zoom);
     const nodePositions = new Map(fits.map((r) => {
       const p = placed.get(r.id)!;
-      return [r.id, { x: p.x + PAD_X, y: p.y + HEADER }];
+      return [r.id, { x: p.x + this.boxOf(r.id).left, y: p.y + HEADER }];
     }));
     const inPlace = await this.sheet.positioned(nodePositions, 2000, () => this.disposed || yielded());
     if (this.disposed) return;
@@ -762,9 +770,9 @@ export class Painter {
       const src = { x: p.x * tier, y: p.y * tier, w: box.w * tier, h: box.h * tier };
       const slot = this.slotFor(r.id, tier, Math.ceil(box.w * tier), Math.ceil(box.h * tier), r.priority !== PREFETCH);
       if (!slot) continue;
-      paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h });
+      paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h, left: box.left });
       const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
-      this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id), flow?.nodeLookup.get(r.id)?.measured.width);
+      this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id), flow?.nodeLookup.get(r.id)?.measured.width, controlsOverhangBox(this.sheet.element, r.id));
       items.push({ src, dst: slot });
       done.push(r);
     }
@@ -802,10 +810,11 @@ export class Painter {
   }
 
   /** The node's measured height and handles reach the scene (its edges move to them). */
-  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: { x: number; y: number; w: number; h: number } | null, width?: number) {
+  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: { x: number; y: number; w: number; h: number } | null, width?: number, overhang?: SceneNode["overhang"]) {
     const i = this.scene.graph.indexOf.get(id);
     if (i == null) return;
     if (card !== undefined) this.scene.graph.nodes[i].card = card;
+    if (overhang !== undefined) this.scene.setOverhang(i, overhang);
     this.scene.setNodeHeight(i, height);
     if (handles) {
       // At the width it was painted at: a width changed since moves them until the next paint.
@@ -954,7 +963,7 @@ export class Painter {
       this.scene.setPainted(i, null);
       return;
     }
-    this.scene.setPainted(i, { x: -PAD_X, y: -HEADER, w: best.w, h: best.h, layer: best.slot.layer, ...this.atlas.layout.uv(best.slot) });
+    this.scene.setPainted(i, { x: -best.left, y: -HEADER, w: best.w, h: best.h, layer: best.slot.layer, ...this.atlas.layout.uv(best.slot) });
   }
 
   // ---- the disk cache ----
@@ -1009,10 +1018,9 @@ export class Painter {
       texels += entry.width * entry.height;
       const paint = this.paint(r.id);
       paint.height = entry.nodeHeight;
-      const box = { w: this.boxOf(r.id).w, h: entry.nodeHeight + HEADER + PAD };
-      paint.images.set(r.tier, { slot, key, w: box.w, h: box.h });
-      const card = entry.card ? { x: entry.card[0], y: entry.card[1], w: entry.card[2], h: entry.card[3] } : entry.card;
-      this.applyMeasured(r.id, entry.nodeHeight, new Map(entry.handles.map(handleFromCache)), card);
+      const { w, left } = this.boxOf(r.id);
+      paint.images.set(r.tier, { slot, key, w, h: entry.nodeHeight + HEADER + PAD, left });
+      this.applyMeasured(r.id, entry.nodeHeight, new Map(entry.handles.map(handleFromCache)), boxFromTuple(entry.card), undefined, boxFromTuple(entry.overhang));
       this.show(r.id, true);
       hits.push(entry.key);
       this.status.cacheHits++;
@@ -1057,6 +1065,7 @@ export class Painter {
         key: cacheKey(image.key, r.tier), offset, width: slot.w, height: slot.h, nodeHeight: this.paints.get(r.id)?.height ?? 0,
         handles: handles ? [...handles].map(([k, a]) => cachedHandle(k, a)) : [],
         card: cardTuple(this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1]?.card),
+        overhang: cardTuple(this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1]?.overhang),
       });
       offset += slot.w * slot.h * 4;
     }
@@ -1105,7 +1114,7 @@ export class Painter {
       for (const entry of readback.entries) {
         const pixels = data.subarray(entry.offset, entry.offset + entry.width * entry.height * 4);
         const bytes = await deflate(pixels);
-        await cache.put({ key: entry.key, width: entry.width, height: entry.height, nodeHeight: entry.nodeHeight, handles: entry.handles, card: entry.card, bytes, size: bytes.size, usedAt: Date.now() });
+        await cache.put({ key: entry.key, width: entry.width, height: entry.height, nodeHeight: entry.nodeHeight, handles: entry.handles, card: entry.card, overhang: entry.overhang, bytes, size: bytes.size, usedAt: Date.now() });
       }
       this.storedSinceTrim += readback.entries.length;
       if (this.storedSinceTrim > 200) {
@@ -1138,4 +1147,8 @@ export class Painter {
 
 function cardTuple(card: { x: number; y: number; w: number; h: number } | null | undefined): [number, number, number, number] | null {
   return card ? [card.x, card.y, card.w, card.h] : null;
+}
+
+function boxFromTuple(box: [number, number, number, number] | null | undefined): { x: number; y: number; w: number; h: number } | null | undefined {
+  return box ? { x: box[0], y: box[1], w: box[2], h: box[3] } : box;
 }

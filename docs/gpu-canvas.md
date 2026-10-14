@@ -149,7 +149,10 @@ selected, holds focus, is opened, or is visible above 100% zoom. A node just
 added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
 until its first picture shows ("added"), as classic renders it whole at once. Its scene
 image stays until the live component is measured and decoded, then is
-hidden, so the swap shows no gap. When it stops being live it waits up to
+hidden, so the swap shows no gap; until then the live component and its
+floating header are laid out but invisible (`gpu-entering`), so nothing
+shows doubled over the picture (a node with no picture yet shows at once).
+When it stops being live it waits up to
 1.5 s for a current painted image (it may have been edited while live)
 before the scene shows it again.
 
@@ -160,6 +163,16 @@ measures of a live node (its height, its handles) also goes to the scene, so
 presses, the marquee and its connections follow a node that grew or shrank
 since it was painted; once it is painted again the scene takes the painted
 measure back.
+
+A controls card widened past its node (its grips, `data.controlsWidth`)
+overflows both sides, as on classic: the node's picture is widened by the
+overhang (`controlsOverhang`), and the card's measured box
+(`SceneNode.overhang`, kept in the disk cache) takes presses and hover.
+
+What marks a node's element from outside goes to its live copy: the
+agent's edit shimmer and the tutorial's ring hold the nodes in view live
+(the bridge's `holdLive`) and mark them there, never the painter's sheet
+(which never paints a shimmer).
 
 A node's own view state (a collapsed controls card, the Primary/Fallback
 tab, an Array's opened sections, a trim's source/output toggle) lives in
@@ -236,9 +249,12 @@ values derived from upstream in a node's data (a Switch's input type, a
 Prompt Constructor's text, an Array's items, a resize's source image, clip
 order, a generate node's model inputs and schema defaults) write through
 `useDerivedNodeData`; the schema writes check the stored node, since a copy
-can be a batch behind it. A copy still fetching its model's settings marks
-itself pending (`data-paint-pending`), and painting waits for it as for
-images. A node is painted again whenever
+can be a batch behind it. A copy still fetching its model's settings,
+decoding an audio waveform or extracting video posters (Output Gallery,
+Video Stitch) marks itself pending (`PaintPending`, `data-paint-pending`),
+and painting waits for it as for images, or paints it provisionally and
+again later. Waveforms are cached by their source and posters by their
+video (`videoPosterCache`), so a node mounted again shows them at once. A node is painted again whenever
 something upstream changes, so that is where it derives. Output nodes run on
 a new connection through a store watcher (`outputAutoRun.ts`) instead of
 their component. Annotation opens its editor from the live node, as today.

@@ -84,6 +84,7 @@ let mockVisualizationReturn = {
 };
 
 vi.mock("@/hooks/useAudioVisualization", () => ({
+  audioSourceKey: () => null,
   useAudioVisualization: () => mockVisualizationReturn,
 }));
 

@@ -14,7 +14,7 @@ import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workfl
 import { indexOfNode } from "@/store/nodeChanges";
 import { useNodeUiStore } from "@/store/nodeUiStore";
 import { APP_VERSION } from "@/lib/appVersion";
-import { SceneGraph } from "@/lib/gpuCanvas/graph";
+import { controlsOverhang, SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
 import type { SceneWheel } from "@/lib/gpuCanvas/wheel";
 import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
@@ -507,6 +507,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         }
         return paths;
       },
+      holdLive: (ids) => {
+        const visible = new Set(scene.visible(0).map((i) => scene.graph.nodes[i].id));
+        const releases = ids.filter((id) => visible.has(id)).map((id) => live.hold(id));
+        return { ready: live.settled(), release: () => { for (const release of releases) release(); } };
+      },
       subscribe: (listener) => {
         const offView = scene.onViewChanged(listener), offLayout = scene.onLayoutChanged(listener);
         return () => { offView(); offLayout(); };
@@ -529,8 +534,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       paintRect: (id) => {
         const i = scene.graph.indexOf.get(id);
         if (i == null) return null;
-        const n = scene.graph.nodes[i], a = scene.toScreen(n.x - PAD_X, n.y - HEADER), z = scene.view.zoom;
-        return { x: a.x, y: a.y, width: (n.w + PAD_X * 2) * z, height: (n.h + HEADER + PAD) * z };
+        const { nodes } = useWorkflowStore.getState(), k = indexOfNode(nodes, id);
+        const n = scene.graph.nodes[i], left = PAD_X + (k >= 0 ? controlsOverhang(nodes[k].data, n.w) : 0);
+        const a = scene.toScreen(n.x - left, n.y - HEADER), z = scene.view.zoom;
+        return { x: a.x, y: a.y, width: (n.w + left * 2) * z, height: (n.h + HEADER + PAD) * z };
       },
       nodeAt: (x, y) => {
         const i = scene.nodeAt(x, y);
