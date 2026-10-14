@@ -25,14 +25,20 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  // The source whose fetch failed: no waveform will come, so a painted copy does not wait for one.
+  const [failedSource, setFailedSource] = useState<string | null>(null);
 
   // Convert base64 data URL to Blob for the hook
   useEffect(() => {
     if (nodeData.audioFile) {
-      fetch(nodeData.audioFile)
+      const source = nodeData.audioFile;
+      fetch(source)
         .then((r) => r.blob())
         .then(setAudioBlob)
-        .catch(() => setAudioBlob(null));
+        .catch(() => {
+          setAudioBlob(null);
+          setFailedSource(source);
+        });
     } else {
       setAudioBlob(null);
     }
@@ -212,7 +218,7 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
               Optional
             </span>
           )}
-          <PaintPending pending={!waveformData && !waveformError} />
+          <PaintPending pending={!waveformData && !waveformError && failedSource !== nodeData.audioFile} />
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-neutral-900/50">
               <span className="text-node text-neutral-500">Loading waveform...</span>

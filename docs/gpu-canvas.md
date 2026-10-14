@@ -366,7 +366,8 @@ The scene takes every press and asks the editor what it starts:
   the drag puts them (`SceneGraph.hold`), so a store write to one mid-drag
   (a run's status, an edit elsewhere) does not move it back. Near the
   canvas's edge the view pans every frame and the nodes move with it
-  (React Flow's `autoPanOnNodeDrag`). Space held (the "space" pan mode)
+  (React Flow's `autoPanOnNodeDrag`); a floating header's drag has no
+  auto-pan, as FloatingNodeHeader's own drag. Space held (the "space" pan mode)
   pans only from empty canvas: a node still drags and a handle still
   connects, as they are React Flow's `nopan`. A connection is `nopan` too:
   a left drag from it moves nothing in any pan mode, and a release still on
@@ -426,8 +427,9 @@ The scene takes every press and asks the editor what it starts:
 - On a locked canvas nodes take no pointer, as React Flow gives them
   `pointer-events: none`: a press on one is the pane's (a drag pans as the
   pan mode says, a click is a pane click), and live nodes' controls are
-  inert. Sockets still connect and connection ends still reconnect, and a
-  floating header still selects and drags its node.
+  inert. Sockets still connect and connection ends still reconnect (a wire
+  released on a node's body, off its sockets, names no node, so it offers
+  the add-node menu), and a floating header still selects and drags its node.
 - Every change in the selected nodes or connections, a press's or the
   store's own (paste, undo, the agent), reaches WorkflowCanvas's
   `handleSelectionChange` once it is through, as React Flow's
@@ -441,8 +443,11 @@ The scene takes every press and asks the editor what it starts:
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
   dialog open) removes the selected connections, then nodes. The arrow keys
   move the selection 5 px (20 px with Shift) while focus is on nothing or on
-  a selected live node; Enter or Space selects a focused live node and Escape
-  unselects it. Escape leaves a gesture going, as React Flow does.
+  a selected live node; Enter, Space or Escape selects a focused node (a
+  live one holding focus, or the painted node last pressed while focus is
+  on nothing) that is not selected, and Escape (or Shift with Enter or
+  Space) unselects a selected one and drops its focus, as React Flow's
+  `handleNodeClick`; a Shift click that unselects a node drops it too. Escape leaves a gesture going, as React Flow does.
 - **Tab / Shift+Tab** step through the connections, then the nodes, in the
   store's order as on classic (`keyboardFocus.ts`): a node is made live,
   centred at the same zoom when off screen (React Flow's

@@ -560,6 +560,18 @@ describe("connection ends on the GPU canvas", () => {
     expect(settings.onConnectEnd).toHaveBeenCalledWith(expect.anything(), expect.anything(), "c");
   });
 
+  it("on a locked canvas a wire released on a node's body names no node (the add-node menu); on its socket it does", () => {
+    settings = { ...settings, locked: true, onConnectEnd: vi.fn(), isValidConnection: () => false };
+    drag([300, 100], [600, 100]);
+    expect(settings.onConnectEnd).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), null);
+    drag([300, 100], [795, 100]);
+    expect(settings.onConnectEnd).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), "c");
+    // Unlocked, the body names its node.
+    settings = { ...settings, locked: false };
+    drag([300, 100], [600, 100]);
+    expect(settings.onConnectEnd).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), "b");
+  });
+
   it("on a locked canvas a socket still connects, drawing no line, and the pressed socket's ghosts drop", () => {
     settings = { ...settings, locked: true, onConnect: vi.fn() };
     useWorkflowStore.getState().setHoveredHandle({ nodeId: "a", handleId: "text", type: "source" });
@@ -764,6 +776,25 @@ describe("a floating header's drag on the GPU canvas", () => {
     const scene = editor["scene"] as unknown as Record<string, unknown>;
     const nodeAt = scene.nodeAt as (x: number, y: number) => number;
     scene.nodeAt = (x: number, y: number) => (y < 0 && y >= -30 && x >= 800 && x < 1100 ? 2 : nodeAt(x, y));
+  });
+
+  it("does not pan the view near the canvas's edge, as FloatingNodeHeader's own drag", () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    try {
+      const scene = editor["scene"] as unknown as { view: { x: number; y: number; zoom: number }; canvas: HTMLCanvasElement } & Record<string, unknown>;
+      Object.defineProperty(scene.canvas, "clientWidth", { value: 1200 });
+      Object.defineProperty(scene.canvas, "clientHeight", { value: 800 });
+      scene.setView = (view: { x: number; y: number }) => Object.assign(scene.view, view);
+      const gesture = editor.press(pointer(900, -10))!;
+      gesture.move(pointer(1195, -10));
+      vi.advanceTimersToNextFrame();
+      vi.advanceTimersToNextFrame();
+      expect(scene.view).toEqual({ x: 0, y: 0, zoom: 1 });
+      gesture.up(pointer(1195, -10));
+      expect(position("c").x).toBe(1095);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("selects an unselected node on the press, whatever the keys, and moves it alone past 5px on an axis", () => {

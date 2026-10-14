@@ -162,4 +162,28 @@ describe("the GPU canvas's keys", () => {
     press("Escape", {}, wrapper);
     expect(ids((n) => !!n.selected)).toEqual([]);
   });
+
+  it("unselects a pressed painted node with Escape, then leaves it to nothing", () => {
+    // A press on a painted node: focus stays on the page, as the node's wrapper would hold it on classic.
+    editor.clickNode("a", false);
+    press("Escape");
+    expect(ids((n) => !!n.selected)).toEqual([]);
+    // Classic blurs the unselected node: Enter, and the arrows, then do nothing.
+    press("Enter");
+    expect(ids((n) => !!n.selected)).toEqual([]);
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: true }]);
+    press("ArrowRight");
+    expect(useWorkflowStore.getState().nodes[0].position).toEqual({ x: 0, y: 0 });
+  });
+
+  it("selects a pressed painted node with Enter, and a Shift click that unselects it drops the keys", () => {
+    editor.clickNode("b", false);
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "b", selected: false }]);
+    press("Enter");
+    expect(ids((n) => !!n.selected)).toEqual(["b"]);
+    editor.clickNode("b", true);
+    expect(ids((n) => !!n.selected)).toEqual([]);
+    press("Enter");
+    expect(ids((n) => !!n.selected)).toEqual([]);
+  });
 });

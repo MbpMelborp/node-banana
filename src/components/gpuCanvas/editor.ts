@@ -296,12 +296,26 @@ export class Editor {
       if (this.nudgeSelection(step.x * (event.shiftKey ? 4 : 1), step.y * (event.shiftKey ? 4 : 1))) event.preventDefault();
       return;
     }
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Escape") return;
+    // The focused node: a live one holding focus, or the painted node a press left the keys with (classic's press
+    // focuses the node's wrapper).
     const focused = this.focusedLiveNode();
-    if (!focused) return;
-    const node = useWorkflowStore.getState().nodes.find((n) => n.id === focused);
+    const target = focused ?? (this.keyboardFocusOnCanvas() && this.keyTarget?.kind === "node" ? this.keyTarget.id : null);
+    if (!target) return;
+    const node = useWorkflowStore.getState().nodes.find((n) => n.id === target);
     if (!node || node.selectable === false) return;
-    if ((event.key === "Enter" || event.key === " ") && !node.selected) this.selectNodes([focused], false);
-    else if (event.key === "Escape" && node.selected) useWorkflowStore.getState().onNodesChange([{ type: "select", id: focused, selected: false }]);
+    // React Flow's handleNodeClick: an unselected node is selected (Shift adds it); a selected one leaves the
+    // selection on Escape, or with Shift held (multiSelectionActive), and loses focus.
+    if (!node.selected) this.selectNodes([target], event.shiftKey);
+    else if (event.key === "Escape" || event.shiftKey) {
+      useWorkflowStore.getState().onNodesChange([{ type: "select", id: target, selected: false }]);
+      if (focused) {
+        const active = document.activeElement;
+        requestAnimationFrame(() => {
+          if (active instanceof HTMLElement && document.activeElement === active) active.blur();
+        });
+      } else this.keyTarget = null;
+    }
   }
 
   /** Whether an arrow key moves the selection: a focused live node, or the canvas's keyTarget, takes it. */
@@ -688,6 +702,8 @@ export class Editor {
     this.keyTarget = { kind: "node", id };
     const node = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     if (!node || (node.selected && !additive)) return;
+    // Shift on a selected node unselects it, and classic's handleNodeClick blurs it: the keys leave it.
+    if (node.selected && node.selectable !== false) this.keyTarget = null;
     this.selectNodes([id], additive);
   }
 
@@ -855,7 +871,8 @@ export class Editor {
       }
     };
     // React Flow's autoPanOnNodeDrag: near the canvas's edge the view pans every frame, the pointer still or not,
-    // and the nodes move with it so they stay under the pointer.
+    // and the nodes move with it so they stay under the pointer. A floating header's drag has none: its own drag
+    // (FloatingNodeHeader) stops the press before React Flow, so the view stays put at the edge.
     const autoPan = () => {
       if (ended || replaced() || scene.isDisposed) return;
       const { clientWidth: width, clientHeight: height } = scene.canvas;
@@ -893,7 +910,7 @@ export class Editor {
         if (node) this.editing().onNodeDragStop(event, node);
       }
     };
-    panFrame = requestAnimationFrame(autoPan);
+    if (!header) panFrame = requestAnimationFrame(autoPan);
     return { move: place, up: (event) => finish(event), cancel: () => finish(null) };
   }
 
@@ -1203,9 +1220,10 @@ export class Editor {
         // add-node menu (a reconnect too: the connection stays, and the new one starts from its other end).
         const fromNode = useWorkflowStore.getState().nodes.find((n) => n.id === fromId);
         if (!fromNode) return;
-        // Classic finds the node by its element: its floating header is not part of it, its sockets are.
+        // Classic finds the node by its element: its floating header is not part of it, its sockets are. A locked
+        // canvas's node bodies let the pointer through (pointer-events none): only a socket names the drop node.
         const at = scene.local(event);
-        let node = scene.nodeAt(at.x, at.y, false);
+        let node = editing.locked ? -1 : scene.nodeAt(at.x, at.y, false);
         if (node < 0) node = (this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y))?.node ?? -1;
         editing.onConnectEnd(event, { isValid: false, fromNode, fromHandle: { id: handleId, type: from.type } }, node >= 0 ? scene.graph.nodes[node].id : null);
       },
