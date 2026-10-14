@@ -2394,7 +2394,8 @@ export function WorkflowCanvas() {
   const gpuEditing = useMemo<GpuEditing>(() => ({
     navigation: canvasNavigationSettings,
     locked: canvasLocked,
-    disabled: isModalOpen || tutorialActive,
+    disabled: isModalOpen,
+    tutorial: tutorialActive,
     isValidConnection,
     onConnect: handleConnect,
     onConnectEnd: (event, state, nodeId) => handleConnectEnd(event, state as unknown as Parameters<OnConnectEnd>[1], nodeId),

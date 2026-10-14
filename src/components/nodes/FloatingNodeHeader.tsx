@@ -10,6 +10,7 @@ import { ProviderBadge } from "./ProviderBadge";
 import { menuSurfaceClass } from "@/components/ui/Menu";
 import { KbdGroup } from "@/components/ui/Kbd";
 import { cn } from "./ui/cn";
+import { useHoldLive } from "./paintMode";
 import {
   Box,
   ChevronDown,
@@ -134,6 +135,9 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
 
   // Check if comment is focused for navigation
   const isCommentFocused = focusedCommentNodeId === id;
+  // On the GPU canvas the node stays live while its header shows something of its own: the header
+  // sits outside the node (its own id, not the node's context), and unmounting would drop the edit.
+  useHoldLive(isEditingTitle || isEditingComment || isMenuOpen || isCommentFocused, id);
 
   /**
    * The name the user edits.

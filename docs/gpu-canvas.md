@@ -153,7 +153,9 @@ not. On the GPU canvas a node stays live for as long as it holds something
 
 - **held**: the node shows something of its own: a model browser, a
   lightbox, a variables or presets dialog, the grid editor, an open
-  dropdown. The component holds itself live with `useHoldLive(open)`.
+  dropdown, its floating header's title rename, comment editor or menu.
+  The component holds itself live with `useHoldLive(open)`; focus in the
+  floating header counts as focus in the node.
 - **playing**: its video or audio plays (play pressed, or a hover preview),
   so playback and its sound go on when the pointer leaves. Videos are not
   textures in the scene: a playing one is a real `<video>` on the live
@@ -210,6 +212,14 @@ The scene takes every press and asks the editor what it starts:
 - **Delete / Backspace** removes the selected connections, then nodes;
   right-click opens the pane or connection menu; a double-click on the pane
   opens the add-node menu.
+- While the tutorial runs no drag pans (React Flow's `panOnDrag` and
+  `panActivationKeyCode` off): a press that would pan selects, drags and
+  connects as a plain one. Nodes still move, connect and select.
+
+The live flow and the painter's sheets are React Flows too, so they take no
+keys (`deleteKeyCode`, `panActivationKeyCode` and the others null): React
+Flow's default handlers preventDefault Backspace and Space on the document,
+which would stop Backspace deleting.
 
 Strokes are always the scene's. A connection with more than a line (a label,
 a hidden stub, a bundle, pause, loop, the loading pulse, an array item) and

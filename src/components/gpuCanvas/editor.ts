@@ -55,8 +55,10 @@ export interface GpuEditing {
   navigation: CanvasNavigationSettings;
   /** The navigator's lock: nodes cannot be moved, connected or selected. */
   locked: boolean;
-  /** A dialog or the tutorial is over the canvas: no gesture but the wheel. */
+  /** A dialog is over the canvas: no gesture but the wheel. */
   disabled: boolean;
+  /** The tutorial is running: dragging never pans (React Flow's panOnDrag and panActivationKeyCode off). */
+  tutorial: boolean;
   isValidConnection: (connection: Connection) => boolean;
   onConnect: (connection: Connection) => void;
   /** A connection dropped without a handle: on a node (`nodeId`) or on empty canvas. */
@@ -148,10 +150,13 @@ export class Editor {
     if (editing.disabled) return null;
     const scene = this.scene;
     const at = scene.local(event);
-    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, space: this.space };
-    const action = paneDragAction(editing.navigation, modifiers, isMac);
+    const space = this.space && !editing.tutorial;
+    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, space };
+    const panning = paneDragAction(editing.navigation, modifiers, isMac);
+    // The tutorial turns panning off: such a press selects, drags and connects as a plain one.
+    const action = editing.tutorial && panning === "pan" ? null : panning;
     // Space held (or the pan button) pans wherever the press lands, as React Flow's pan key does.
-    if (action === "pan" && (this.space || event.button !== 0)) return scene.panGesture(event);
+    if (action === "pan" && (space || event.button !== 0)) return scene.panGesture(event);
     if (event.button !== 0) return null;
     if (!editing.locked) {
       const handle = this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y);
@@ -572,7 +577,7 @@ export class Editor {
     const e = scene.edgeAt(at.x, at.y);
     const edge = e >= 0 ? useWorkflowStore.getState().edges.find((candidate) => candidate.id === scene.graph.edges[e].id) : undefined;
     // The right button pans in "middleMouse" mode (React Flow's panOnDrag [2] swallows the menu).
-    if (editing.navigation.panMode === "middleMouse") {
+    if (editing.navigation.panMode === "middleMouse" && !editing.tutorial) {
       event.preventDefault();
       return;
     }

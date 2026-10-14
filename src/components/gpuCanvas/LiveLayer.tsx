@@ -132,7 +132,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
         defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
-        proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
+        panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
         <ViewSync connect={connect} onViewChanged={onViewChanged} />
         <FloatingNodeHeaders nodes={real} {...headers} />
         {children}
@@ -201,13 +201,13 @@ export class LiveLayer {
       this.pointerNode = null;
       this.onPointerNode?.(null);
     });
-    // The node holding focus stays live wherever the pointer goes.
+    // The node holding focus (in it or its floating header) stays live wherever the pointer goes.
     on("focusin", (event) => {
-      const id = (event.target as Element).closest(".react-flow__node")?.getAttribute("data-id");
+      const id = liveNodeId(event.target);
       if (id) this.wantOnly("focus", [id]);
     });
     on("focusout", (event) => {
-      const next = (event.relatedTarget as Element | null)?.closest?.("[data-gpu-canvas-live] .react-flow__node")?.getAttribute("data-id");
+      const next = liveNodeId(event.relatedTarget);
       this.wantOnly("focus", next ? [next] : []);
     });
     connection.hold = (id) => this.hold(id);
