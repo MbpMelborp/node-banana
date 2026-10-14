@@ -213,7 +213,14 @@ The scene takes every press and asks the editor what it starts:
   the edge (React Flow's `autoPanOnConnect`, speed 15). A live node's
   sockets start no React Flow connection of their own (Socket's
   `isConnectableStart` is off in the live layer): the editor's is the only
-  one.
+  one. Hidden connections' stubs give way to the socket labels meanwhile
+  (EditableEdge reads the connectDragStore too). The line is drawn in the
+  live flow's viewport at React Flow's z-index (1001), so it passes under
+  the multi-select toolbar; the marquee and the selection frame sit in the
+  flow after its renderer, under its panels (the navigator), as classic's
+  do. On a locked canvas a socket still connects, with no line drawn, as
+  classic's sockets do (React Flow hides the line while nodes are not
+  connectable).
 - **A connection's end** (React Flow's reconnect anchors: a circle of 10
   flow units round each end, shifted 10 outward, under nodes and handles;
   the `move` cursor): a drag hides the connection and draws the line from

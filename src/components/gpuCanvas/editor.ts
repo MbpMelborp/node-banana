@@ -64,7 +64,7 @@ export interface ConnectEndState {
 /** WorkflowCanvas's side of editing: its settings and handlers, read when used. */
 export interface GpuEditing {
   navigation: CanvasNavigationSettings;
-  /** The navigator's lock: nodes cannot be moved, connected or selected. */
+  /** The navigator's lock: nodes cannot be moved or selected; a socket still connects, with no line drawn (as classic). */
   locked: boolean;
   /** A dialog is over the canvas: no gesture but the wheel. */
   disabled: boolean;
@@ -123,23 +123,22 @@ export class Editor {
   /** Tab through the nodes and connections (keyboardFocus.ts). */
   readonly keyboard: KeyboardFocus;
 
-  constructor(private scene: Scene, private live: LiveLayer, host: HTMLElement, private editing: () => GpuEditing) {
+  constructor(private scene: Scene, private live: LiveLayer, private host: HTMLElement, private editing: () => GpuEditing) {
     this.keyboard = new KeyboardFocus(scene, live, host, () => this.editing().locked);
+    // The connection line, the marquee and the selection frame are mounted in the live flow as they show
+    // (mountInFlow), where classic's own sit: under the flow's panels (the navigator), the line also under
+    // what the viewport portal holds (the multi-select toolbar).
     this.overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.overlay.setAttribute("class", "pointer-events-none absolute inset-0 h-full w-full");
-    this.overlay.style.zIndex = "4";
     this.overlay.style.overflow = "visible";
-    host.appendChild(this.overlay);
     this.marquee = document.createElement("div");
     this.marquee.dataset.gpuCanvasMarquee = "";
     // React Flow's user selection look (globals.css styles .react-flow__selection the same way).
     this.marquee.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:4;background:rgba(0,89,220,0.08);border:1px dotted rgba(0,89,220,0.8);";
-    host.appendChild(this.marquee);
     this.selectionFrame = document.createElement("div");
     this.selectionFrame.dataset.gpuCanvasSelectionFrame = "";
-    // .react-flow__nodesselection-rect's look (React Flow's selection colours), under the marquee.
-    this.selectionFrame.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:3;background:rgba(0,89,220,0.08);border:1px dotted rgba(0,89,220,0.8);";
-    host.appendChild(this.selectionFrame);
+    // .react-flow__nodesselection-rect's look (React Flow's selection colours).
+    this.selectionFrame.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:4;background:rgba(0,89,220,0.08);border:1px dotted rgba(0,89,220,0.8);";
     // The frame follows the view, the nodes' moves and sizes, and the selection.
     const placeFrame = () => { if (this.selectionFrameActive) this.placeSelectionFrame(); };
     this.offs.push(scene.onViewChanged(placeFrame), scene.onLayoutChanged(placeFrame));
@@ -161,6 +160,19 @@ export class Editor {
     this.overlay.remove();
     this.marquee.remove();
     this.selectionFrame.remove();
+  }
+
+  /**
+   * Puts `element` in the live flow: in its wrapper after the renderer (z-index 4, under the panels' 5), as
+   * classic's marquee and selection frame sit in its pane; or in its viewport, as the connection line
+   * (z-index 1001, under the viewport portal's toolbar). The host stands in while the flow is not there.
+   * Returns whether it went into the viewport, whose transform then places what it draws.
+   */
+  private mountInFlow(element: Element, where: "wrapper" | "viewport"): boolean {
+    const wrapper = this.live.element?.querySelector<HTMLElement>(".react-flow") ?? null;
+    const parent = where === "viewport" ? wrapper?.querySelector<HTMLElement>(".react-flow__viewport") ?? null : wrapper;
+    if (element.parentNode !== (parent ?? this.host)) (parent ?? this.host).appendChild(element);
+    return where === "viewport" && !!parent;
   }
 
   // ── Keys ──────────────────────────────────────────────────────────────
@@ -257,7 +269,8 @@ export class Editor {
     if (event.button !== 0) return null;
     const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
     // With the selection key held, React Flow's pane takes the press before a handle can: no connection starts.
-    if (!editing.locked && !keyHeld) {
+    // A locked canvas still connects from a socket, as classic's do (Socket's handles stay connectable).
+    if (!keyHeld) {
       const handle = this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y);
       if (handle) return this.connectGesture(event, handle);
     }
@@ -520,6 +533,7 @@ export class Editor {
       last = at;
       const start = scene.toScreen(anchor.x, anchor.y);
       const left = Math.min(start.x, at.x), top = Math.min(start.y, at.y), width = Math.abs(at.x - start.x), height = Math.abs(at.y - start.y);
+      this.mountInFlow(this.marquee, "wrapper");
       Object.assign(this.marquee.style, { display: "block", left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       const a = scene.toWorld(left, top), b = scene.toWorld(left + width, top + height);
       const box = { left: a.x, top: a.y, right: b.x, bottom: b.y };
@@ -598,6 +612,7 @@ export class Editor {
       return;
     }
     const a = scene.toScreen(minX, minY), b = scene.toScreen(maxX, maxY);
+    this.mountInFlow(this.selectionFrame, "wrapper");
     Object.assign(this.selectionFrame.style, { display: "block", left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px` });
   }
 
@@ -638,7 +653,7 @@ export class Editor {
     const startX = down.clientX, startY = down.clientY;
     let dragging = false;
     let target: HandleHit | null = null;
-    let last = down, panFrame = 0;
+    let last = down, panFrame = 0, inViewport = false;
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     const wanted = from.type === "source" ? "target" : "source";
     const draw = (event: PointerEvent) => {
@@ -655,9 +670,10 @@ export class Editor {
       setConnectDrag(true, target ? { nodeId: scene.graph.nodes[target.node].id, handleId: target.handleId || null, type: target.type } : null);
       const under = scene.nodeAt(at.x, at.y);
       this.live.wantOnly("connect", [fromId, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [scene.graph.nodes[target.node].id] : [])]);
-      // React Flow's line runs between the handles' centres.
+      // React Flow's line runs between the handles' centres, in flow units inside the viewport (css px on the host).
       const end = target ? { x: target.cx, y: target.cy } : p;
-      const a = scene.toScreen(from.cx, from.cy), b = scene.toScreen(end.x, end.y);
+      const place = (x: number, y: number) => inViewport ? { x, y } : scene.toScreen(x, y);
+      const a = place(from.cx, from.cy), b = place(end.x, end.y);
       const fromSource = from.type === "source";
       const [d] = routeEdge({
         style: "curved",
@@ -665,7 +681,7 @@ export class Editor {
         targetX: fromSource ? b.x : a.x, targetY: fromSource ? b.y : a.y, targetPosition: Position.Left,
       });
       path.setAttribute("d", d);
-      path.setAttribute("stroke-width", String(scene.view.zoom));
+      path.setAttribute("stroke-width", inViewport ? "1" : String(scene.view.zoom));
     };
     // React Flow's autoPanOnConnect: near the canvas's edge the view pans every frame, the pointer still or not.
     const autoPan = () => {
@@ -686,9 +702,15 @@ export class Editor {
         scene.setHeldEdge(reconnecting);
         liveEdge()?.style.setProperty("visibility", "hidden");
       }
+      // The pointer has left the pressed socket: its hidden connections stop ghosting back.
+      this.hoveredHandle = null;
+      if (useWorkflowStore.getState().hoveredHandle) useWorkflowStore.getState().setHoveredHandle(null);
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", CONNECTION_LINE_STROKE);
-      this.overlay.append(path);
+      inViewport = this.mountInFlow(this.overlay, "viewport");
+      this.overlay.style.zIndex = inViewport ? "1001" : "4";
+      // React Flow draws no connection line while nodes are not connectable (a locked canvas).
+      if (!this.editing().locked) this.overlay.append(path);
       document.documentElement.classList.add("canvas-interacting");
       draw(event);
       panFrame = requestAnimationFrame(autoPan);

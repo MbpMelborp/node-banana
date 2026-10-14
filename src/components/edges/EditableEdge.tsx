@@ -14,6 +14,7 @@ import {
 import { shallow, useShallow } from "zustand/shallow";
 import { EdgeLabelRenderer } from "@/components/flowPortals";
 import { useWorkflowStore, type WorkflowStore } from "@/store/workflowStore";
+import { useConnectDragStore } from "@/store/connectDragStore";
 import { ArrayNodeData, WorkflowEdgeData, type WorkflowEdge, type WorkflowNode } from "@/types";
 import { getSharedGradientId } from "./SharedEdgeGradients";
 import { EDGE_COLORS, edgeColorKeyForHandles, edgeHighlightColor } from "@/lib/edges/colors";
@@ -135,7 +136,9 @@ export function EditableEdge({
   // Hidden connections: labelled stubs at the handles; hover ghosts the line back
   const isHidden = Boolean((data as EdgeData | undefined)?.hidden);
   // While a noodle is being dragged the handle labels take the stubs' place
-  const isConnecting = useConnection((c) => c.inProgress);
+  // (the GPU canvas draws its own, so it says so through connectDragStore)
+  const flowConnecting = useConnection((c) => c.inProgress);
+  const isConnecting = useConnectDragStore((s) => s.active) || flowConnecting;
   const [stubHovered, setStubHovered] = useState(false);
   const [stubWidths, setStubWidths] = useState({ source: 0, target: 0 });
   const [toolbarSide, setToolbarSide] = useState<"source" | "target">("source");

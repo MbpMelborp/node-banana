@@ -255,6 +255,35 @@ describe("connection ends on the GPU canvas", () => {
     drag([300, 100], [795, 100]);
     expect(settings.onConnectEnd).toHaveBeenCalledWith(expect.anything(), expect.anything(), "c");
   });
+
+  it("on a locked canvas a socket still connects, drawing no line, and the pressed socket's ghosts drop", () => {
+    settings = { ...settings, locked: true, onConnect: vi.fn() };
+    useWorkflowStore.getState().setHoveredHandle({ nodeId: "a", handleId: "text", type: "source" });
+    const gesture = editor.press(pointer(300, 100))!;
+    gesture.move(pointer(500, 100));
+    expect(host.querySelector("path")).toBeNull();
+    expect(useWorkflowStore.getState().hoveredHandle).toBeNull();
+    gesture.move(pointer(398, 100));
+    gesture.up(pointer(398, 100));
+    expect(settings.onConnect).toHaveBeenCalledWith({ source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
+  });
+
+  it("the line, the marquee and the selection frame sit in the live flow, under its panels", () => {
+    const flow = document.createElement("div");
+    flow.innerHTML = '<div class="react-flow"><div class="react-flow__renderer"><div class="react-flow__viewport"></div></div><div class="react-flow__panel"></div></div>';
+    host.appendChild(flow);
+    (editor["live"] as unknown as { element: HTMLElement }).element = flow;
+    const wrapper = flow.querySelector(".react-flow")!, viewport = flow.querySelector(".react-flow__viewport")!;
+    const gesture = editor.press(pointer(300, 100))!;
+    gesture.move(pointer(500, 100));
+    const line = viewport.querySelector("svg")!;
+    expect(line.querySelector("path")).not.toBeNull();
+    expect(line.style.zIndex).toBe("1001");
+    gesture.up(pointer(500, 100));
+    drag([-20, -20], [750, 250], { shiftKey: true });
+    expect(wrapper.querySelector("[data-gpu-canvas-marquee]")?.parentElement).toBe(wrapper);
+    expect(wrapper.querySelector<HTMLElement>("[data-gpu-canvas-selection-frame]")?.style.display).toBe("block");
+  });
 });
 
 describe("pressGoesToScene", () => {
