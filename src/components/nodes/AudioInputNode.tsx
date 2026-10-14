@@ -10,7 +10,7 @@ import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Music, Pause, Play, X } from "lucide-react";
-import { PaintPending, useUpdateNodeData } from "./paintMode";
+import { PaintPending, useHoldLive, useUpdateNodeData } from "./paintMode";
 
 type AudioInputNodeType = Node<AudioInputNodeData, "audioInput">;
 
@@ -53,6 +53,8 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
     waveformData,
     isLoadingWaveform: isLoading,
   });
+  // The clip plays from a detached Audio, which unmounting pauses: a playing node stays live (GPU canvas).
+  useHoldLive(isPlaying);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

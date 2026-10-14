@@ -154,8 +154,10 @@ image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap; until then the live component and its
 floating header are laid out but invisible (`gpu-entering`), so nothing
 shows doubled over the picture (a node with no picture yet shows at once).
-A pressed node stays live until the press ends, and a hover holds while a
-button is down (as NodeShell ignores a leave then). When it stops being live
+A pressed node stays live until the press ends, a press its fields keep (a
+slider, a Split Grid line) included, and a hover holds while a
+button is down (as NodeShell ignores a leave then). Focus survives the
+window losing it, so the field has it back on return. When it stops being live
 it stays on the layer until its painted image is current (it may have been
 edited while live), however long the painter holds that paint back (a pan, a
 wheel); only a paint that is not coming is given up on after 1.5 s.
@@ -229,7 +231,8 @@ not. On the GPU canvas a node stays live for as long as it holds something
   The component holds itself live with `useHoldLive(open)`; focus in the
   floating header counts as focus in the node.
 - **playing**: its video or audio plays (play pressed, or a hover preview),
-  so playback and its sound go on when the pointer leaves. Videos are not
+  so playback and its sound go on when the pointer leaves (the audio
+  nodes, whose clip is a detached `Audio`, hold themselves while it plays). Videos are not
   textures in the scene: a playing one is a real `<video>` on the live
   layer, and a still one is painted at its first frame (painting waits for
   it, as for images).
@@ -261,7 +264,9 @@ again later. Waveforms are cached by their source and posters by their
 video (`videoPosterCache`), so a node mounted again shows them at once. A node is painted again whenever
 something upstream changes, so that is where it derives. Output nodes run on
 a new connection through a store watcher (`outputAutoRun.ts`) instead of
-their component. Annotation opens its editor from the live node, as today.
+their component, and a failed generation's toast comes from one too
+(`errorToasts.ts`), once, whichever copies are mounted. A video player's
+sound icon follows the shared setting: it is part of the node's key. Annotation opens its editor from the live node, as today.
 
 ## Editing
 

@@ -274,6 +274,7 @@ export class LiveLayer {
 
   /** `element` holds the LiveFlow rendered with `connection`. */
   constructor(readonly element: HTMLElement, private connection: LiveConnection, private scene: Scene, private stats: GpuCanvasStats) {
+    let releasePress: (() => void) | null = null;
     const on = <K extends keyof HTMLElementEventMap>(type: K, listener: (event: HTMLElementEventMap[K]) => void, options?: AddEventListenerOptions | boolean) => {
       element.addEventListener(type, listener, options);
       this.listeners.push(() => element.removeEventListener(type, listener, options));
@@ -287,7 +288,15 @@ export class LiveLayer {
     on("pointerdown", (event) => {
       const target = event.target as Element;
       const middle = event.button === 1 && !!target.closest(".react-flow__node");
-      if (!middle && (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target))) return;
+      if (!middle && (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target))) {
+        // A press the node keeps (a slider, a grid line) may drag off it: the node stays live until it lifts.
+        const id = liveNodeId(target);
+        if (id) {
+          releasePress?.();
+          releasePress = this.hold(id);
+        }
+        return;
+      }
       // The header's own drag moves nodes through this flow, whose nodes are the layer's: the scene's drag stands in.
       if (!target.closest(".react-flow__node")) {
         event.preventDefault();
@@ -316,6 +325,8 @@ export class LiveLayer {
       this.onPointerNode?.(null);
     });
     const lifted = (event: PointerEvent) => {
+      releasePress?.();
+      releasePress = null;
       if (!heldOut) return;
       heldOut = false;
       const id = event.pointerType === "touch" ? null : liveNodeId(document.elementFromPoint(event.clientX, event.clientY));
@@ -336,7 +347,23 @@ export class LiveLayer {
     });
     on("focusout", (event) => {
       const next = liveNodeId(event.relatedTarget);
+      // The window losing focus keeps the field mounted, as classic's stays, so the browser can give it back.
+      if (!next && !event.relatedTarget && !document.hasFocus()) return;
       this.wantOnly("focus", next ? [next] : []);
+    });
+    // Back in the window: the node keeps the reason only if its field got the focus back.
+    let refocusFrame = 0;
+    const refocused = () => {
+      cancelAnimationFrame(refocusFrame);
+      refocusFrame = requestAnimationFrame(() => {
+        const id = liveNodeId(document.activeElement);
+        this.wantOnly("focus", id ? [id] : []);
+      });
+    };
+    window.addEventListener("focus", refocused);
+    this.listeners.push(() => {
+      window.removeEventListener("focus", refocused);
+      cancelAnimationFrame(refocusFrame);
     });
     connection.hold = (id) => this.hold(id);
     connection.measured = (id) => this.applyLiveSize(id);

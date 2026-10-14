@@ -43,6 +43,8 @@ import { BACKGROUND, EIGHTH, PREFETCH, PaintQueue, URGENT, VIEW, packSheet, tier
 import { cachedHandle, cacheKey, deflate, handleFromCache, inflate, PAINT_CACHE_BYTES, PAINT_CACHE_FORMAT, type CachedHandle, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { HEADER_HINTLESS_TYPES as HINTLESS_TYPES } from "@/components/nodes/FloatingNodeHeaders";
+import { SCRUB_ROW_NODE_TYPES } from "@/components/nodes/ui/ScrubRow";
+import { soundAudible, useVideoSoundStore } from "@/store/videoSoundStore";
 import { PainterSheet } from "./PainterSheet";
 import { controlsOverhangBox, flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
 
@@ -224,6 +226,11 @@ export class Painter {
     this.unsubscribers.push(useNodeUiStore.subscribe((state, previous) => {
       if (state.byNode === previous.byNode) return;
       this.rekey([...new Set([...Object.keys(previous.byNode), ...Object.keys(state.byNode)])].filter((id) => previous.byNode[id] !== state.byNode[id]));
+    }));
+    // The video players' sound button shows the shared setting: their nodes are painted again as it turns.
+    this.unsubscribers.push(useVideoSoundStore.subscribe((state, previous) => {
+      if (soundAudible(state) === soundAudible(previous)) return;
+      this.rekey(useWorkflowStore.getState().nodes.filter((n) => SCRUB_ROW_NODE_TYPES.has(n.type ?? "")).map((n) => n.id));
     }));
   }
 
@@ -410,9 +417,10 @@ export class Painter {
   }
 
   /**
-   * A node's key: its base key, its run mark, the hint its header shows and
-   * its own view state (useNodeUiState), the last two kept out of the base so
-   * they reach no node downstream.
+   * A node's key: its base key, its run mark, the hint its header shows, its
+   * own view state (useNodeUiState) and, for a video player, the sound
+   * setting, the last three kept out of the base so they reach no node
+   * downstream.
    */
   private fullKey(node: WorkflowNode, base: string) {
     const hint = HINTLESS_TYPES.has(node.type) ? "" : this.hints[node.id] ?? "";
@@ -420,6 +428,7 @@ export class Painter {
     let key = withRunMark(base, runMark(node, this.runState));
     if (hint) key += `|h:${hint}`;
     if (ui) key += `|ui:${JSON.stringify(ui)}`;
+    if (SCRUB_ROW_NODE_TYPES.has(node.type ?? "")) key += `|snd:${soundAudible(useVideoSoundStore.getState()) ? 1 : 0}`;
     return key;
   }
 

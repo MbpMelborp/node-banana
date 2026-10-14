@@ -90,6 +90,8 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
     waveformData,
     isLoadingWaveform,
   });
+  // The clip plays from a detached Audio, which unmounting pauses: a playing node stays live (GPU canvas).
+  useHoldLive(isPlaying);
 
   const handleClearAudio = useCallback(() => {
     if (audioRef.current) {

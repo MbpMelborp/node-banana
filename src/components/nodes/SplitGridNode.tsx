@@ -141,6 +141,8 @@ export function SplitGridNode({ id, data, selected }: NodeProps<SplitGridNodeTyp
   // Live positions while dragging a grid line (null when idle).
   const innerRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<{ axis: "col" | "row"; offsets: number[] } | null>(null);
+  // The drag measures the grid as the pointer goes, off the node as well: the node stays live until it ends.
+  useHoldLive(drag !== null);
   const activeColOffsets = drag?.axis === "col" ? drag.offsets : colOffsets;
   const activeRowOffsets = drag?.axis === "row" ? drag.offsets : rowOffsets;
   const colFractions = gridFractions(gridCols, activeColOffsets);
