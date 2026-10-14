@@ -16,8 +16,8 @@
  * painted image is current (it may have been edited while live), then goes
  * back to the scene.
  */
-import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
+import { useCallback, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
@@ -125,10 +125,22 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   const real = useMemo(() => nodes.filter((n) => n.type !== "gpuGhost"), [nodes]);
   useLayoutEffect(() => connect({ setNodes: setState }), [connect]);
   useLayoutEffect(() => state.committed(), [state]);
+  // A live node's measured size reaches the store, as on the classic canvas (the painted ones' come from painting).
+  const realIds = useMemo(() => new Set(real.map((n) => n.id)), [real]);
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const store = useWorkflowStore.getState();
+    const measured = changes.filter((change): change is NodeDimensionChange => {
+      if (change.type !== "dimensions" || !change.dimensions || !realIds.has(change.id)) return false;
+      const k = indexOfNode(store.nodes, change.id);
+      const known = k < 0 ? undefined : store.nodes[k].measured;
+      return k >= 0 && !(known?.width != null && known.height != null && Math.abs(known.width - change.dimensions.width) <= 0.5 && Math.abs(known.height - change.dimensions.height) <= 0.5);
+    });
+    if (measured.length) store.onNodesChange(measured.map((change) => ({ ...change, setAttributes: false })));
+  }, [realIds]);
   return (
     <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
-      <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange}
+      <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange}
         defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}

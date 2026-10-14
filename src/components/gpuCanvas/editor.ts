@@ -13,7 +13,9 @@
  *   empty canvas as today; a click on a handle opens its menu;
  * - a drag on empty canvas pans or draws a marquee, as the navigation
  *   settings say;
- * - Delete and Backspace remove the selected nodes and connections.
+ * - Delete and Backspace remove the selected nodes and connections; the
+ *   arrow keys move the selection, and Enter, Space and Escape select and
+ *   unselect a focused live node, as React Flow's keyboard handling does.
  *
  * Painted nodes are pictures, so their handles and media cards are the ones
  * painting measured (SceneNode.handles, SceneNode.card). Live nodes are real
@@ -81,6 +83,21 @@ function typing(target: EventTarget | null) {
   return field(target) || field(active);
 }
 
+/** React Flow's arrow-key velocity: 5px a press (Shift moves four times as far). */
+const ARROW_STEPS: Record<string, { x: number; y: number }> = {
+  ArrowUp: { x: 0, y: -5 },
+  ArrowDown: { x: 0, y: 5 },
+  ArrowLeft: { x: -5, y: 0 },
+  ArrowRight: { x: 5, y: 0 },
+};
+
+/** React Flow's isInputDOMNode: the key went to a form field, an editable element, or something inside `.nokey`. */
+function keyInField(event: KeyboardEvent) {
+  const target = event.composedPath?.()[0] ?? event.target;
+  if (!(target instanceof Element)) return false;
+  return target.matches("input, select, textarea, [contenteditable]") || !!target.closest(".nokey") || typing(target);
+}
+
 export class Editor {
   private space = false;
   private hoveredHandle: string | null = null;
@@ -120,14 +137,64 @@ export class Editor {
 
   private keyDown(event: KeyboardEvent) {
     if (event.code === "Space" && !typing(event.target)) this.space = true;
-    if (event.key === "Escape") this.scene.cancelGesture();
-    if (event.key !== "Delete" && event.key !== "Backspace") return;
-    if (typing(event.target) || event.defaultPrevented) return;
+    if (event.defaultPrevented || keyInField(event)) return;
     const { disabled, locked } = this.editing();
-    if (disabled || locked || useAssetStore.getState().appView !== "canvas") return;
-    // A menu or dialog open over the canvas keeps its keys.
-    if (document.querySelector('[role="menu"], [role="listbox"], [data-dialog-overlay]') || (event.target instanceof Element && event.target.closest('[role="dialog"]'))) return;
-    if (this.deleteSelection()) event.preventDefault();
+    if (disabled || useAssetStore.getState().appView !== "canvas") return;
+    if (event.key === "Delete" || event.key === "Backspace") {
+      // React Flow's delete key: the key alone, with no modifier held.
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      // A dialog open over the canvas keeps its keys.
+      if (document.querySelector("[data-dialog-overlay]") || (event.target instanceof Element && event.target.closest('[role="dialog"]'))) return;
+      if (this.deleteSelection()) event.preventDefault();
+      return;
+    }
+    // The keys React Flow gives a focused node: arrows move the selection, Enter and Space select, Escape unselects.
+    if (locked) return;
+    const step = ARROW_STEPS[event.key];
+    if (step) {
+      // A focused live node moves the selection only while it is part of it.
+      const focusedNode = this.focusedLiveNode();
+      if (focusedNode ? !useWorkflowStore.getState().nodes.find((n) => n.id === focusedNode)?.selected : !this.keyboardFocusOnCanvas()) return;
+      if (this.nudgeSelection(step.x * (event.shiftKey ? 4 : 1), step.y * (event.shiftKey ? 4 : 1))) event.preventDefault();
+      return;
+    }
+    const focused = this.focusedLiveNode();
+    if (!focused) return;
+    const node = useWorkflowStore.getState().nodes.find((n) => n.id === focused);
+    if (!node || node.selectable === false) return;
+    if ((event.key === "Enter" || event.key === " ") && !node.selected) this.selectNodes([focused], false);
+    else if (event.key === "Escape" && node.selected) useWorkflowStore.getState().onNodesChange([{ type: "select", id: focused, selected: false }]);
+  }
+
+  /** The live node holding keyboard focus (React Flow focuses a node when it is clicked). */
+  private focusedLiveNode(): string | null {
+    const active = document.activeElement;
+    if (!(active instanceof Element) || !active.closest("[data-gpu-canvas-live]")) return null;
+    return active.closest(".react-flow__node:not(.react-flow__node-gpuGhost)")?.getAttribute("data-id") ?? null;
+  }
+
+  /** Focus where a click on a painted node or empty canvas leaves it: on nothing. */
+  private keyboardFocusOnCanvas() {
+    const active = document.activeElement;
+    return !active || active === document.body || active === this.scene.canvas;
+  }
+
+  /** Moves the selected nodes by (dx, dy) as React Flow's arrow keys do (one position change, no undo step of its own). */
+  private nudgeSelection(dx: number, dy: number): boolean {
+    const graph = this.scene.graph;
+    const moving = useWorkflowStore.getState().nodes
+      .filter((n) => n.selected && n.draggable !== false)
+      .map((n) => graph.indexOf.get(n.id))
+      .filter((i): i is number => i != null);
+    if (!moving.length) return false;
+    for (const i of moving) {
+      graph.nodes[i].x += dx;
+      graph.nodes[i].y += dy;
+    }
+    this.scene.nodesMoved(moving);
+    this.live.refresh();
+    useWorkflowStore.getState().onNodesChange(this.positionChanges(moving, false));
+    return true;
   }
 
   /** Removes the selected nodes and connections, as React Flow's delete key does: connections first, then nodes. */

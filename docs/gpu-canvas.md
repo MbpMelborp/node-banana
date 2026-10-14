@@ -88,7 +88,9 @@ Batches are 48 nodes, 96 at the 1/4 tier.
   them again at their measured heights and waits until React Flow has moved
   them (it applies positions a render after ours). Only then is the sheet
   painted. The measured height and handle positions go to the scene, so
-  edges meet the painted sockets.
+  edges meet the painted sockets, and the size goes to the store as React
+  Flow's "dimensions" change (as do a live node's), so `getNodeSize` and the
+  arrange commands see real heights as on the classic canvas.
 - **Painting gives way to input.** A batch starts only 120 ms after the last
   input, and a batch whose sheet became ready after input arrived goes back
   to the queue unpainted. Sheets are 2048×1536 texels; disk cache uploads
@@ -209,8 +211,12 @@ The scene takes every press and asks the editor what it starts:
   (the Mac default) starts only from empty canvas. The marquee
   takes a node only when it holds its media card, or the whole node without
   one; with no nodes taken it selects the connections it crosses.
-- **Delete / Backspace** removes the selected connections, then nodes;
-  right-click opens the pane or connection menu; a double-click on the pane
+- **Delete / Backspace** (alone, outside a field or `.nokey`, with no
+  dialog open) removes the selected connections, then nodes. The arrow keys
+  move the selection 5 px (20 px with Shift) while focus is on nothing or on
+  a selected live node; Enter or Space selects a focused live node and Escape
+  unselects it. Escape leaves a gesture going, as React Flow does.
+  Right-click opens the pane or connection menu; a double-click on the pane
   opens the add-node menu.
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
   `panActivationKeyCode` off): a press that would pan selects, drags and
@@ -232,6 +238,8 @@ handles. That happens on screen at 30% zoom and above, for up to 250.
 
 - Sweeping connections with the hook key (H), and dragging a connection's
   end to reconnect it.
+- Painted nodes and connections take no keyboard focus, so Tab does not step
+  through them and a connection has no Enter/Escape of its own.
 - Hidden connections' stubs below 30% zoom.
 - A live connection's decorations draw over painted nodes they pass under.
 - A node whose look depends on state outside its data and its inputs (a

@@ -3,7 +3,7 @@ import { getBezierPath, getSmoothStepPath, Position } from "@xyflow/react";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
-import { SceneGraph } from "../graph";
+import { measuredChanges, SceneGraph } from "../graph";
 import { cubicAt, distanceToCubic, pathToCubics, routeSceneEdge, type RouteContext } from "../edgeRoutes";
 import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 
@@ -163,5 +163,20 @@ describe("hit tests", () => {
     const marquee = { left: -10, top: -10, right: 1000, bottom: 250 };
     expect(marqueeNodes(graph, [0, 1], marquee)).toEqual([0]);
     expect(marqueeNodes(graph, [0, 1], { ...marquee, bottom: 400 })).toEqual([0, 1]);
+  });
+});
+
+describe("measuredChanges", () => {
+  it("reports the scene's measured sizes the store does not know yet", () => {
+    const nodes = [node("a", 0, 0), { ...node("b", 400, 0), measured: { width: 300, height: 180 } }, { ...node("c", 800, 0), measured: { width: 300, height: 100 } }] as WorkflowNode[];
+    const graph = new SceneGraph(nodes, [], {});
+    graph.nodes[0].h = 150;
+    graph.nodes[1].h = 180.3;
+    graph.nodes[2].h = 240;
+    const indexOf = (id: string) => nodes.findIndex((n) => n.id === id);
+    expect(measuredChanges(nodes, indexOf, graph, ["a", "b", "c", "gone"])).toEqual([
+      { type: "dimensions", id: "a", dimensions: { width: 300, height: 150 }, setAttributes: false },
+      { type: "dimensions", id: "c", dimensions: { width: 300, height: 240 }, setAttributes: false },
+    ]);
   });
 });

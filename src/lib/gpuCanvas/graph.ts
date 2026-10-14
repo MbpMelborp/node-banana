@@ -71,6 +71,32 @@ export function storeNodeSize(node: WorkflowNode): { w: number; h: number } {
   return { w: Number(w) || defaults.width, h: Number(h) || defaults.height };
 }
 
+/** What React Flow reports when it measures a node (a "dimensions" NodeChange that keeps width and height unset). */
+export interface MeasuredChange {
+  type: "dimensions";
+  id: string;
+  dimensions: { width: number; height: number };
+  setAttributes: false;
+}
+
+/**
+ * The "dimensions" changes that bring the store's measured sizes up to the
+ * sizes the scene measured, for these node ids: only where the store's
+ * differs by more than half a pixel, as React Flow measures on the classic
+ * canvas (getNodeSize and the arrange commands read them).
+ */
+export function measuredChanges(nodes: readonly WorkflowNode[], indexOf: (id: string) => number, graph: SceneGraph, ids: Iterable<string>): MeasuredChange[] {
+  const changes: MeasuredChange[] = [];
+  for (const id of ids) {
+    const i = graph.indexOf.get(id), k = indexOf(id);
+    if (i == null || k < 0) continue;
+    const { w, h } = graph.nodes[i], measured = nodes[k].measured;
+    if (measured?.width != null && measured.height != null && Math.abs(measured.width - w) <= 0.5 && Math.abs(measured.height - h) <= 0.5) continue;
+    changes.push({ type: "dimensions", id, dimensions: { width: w, height: h }, setAttributes: false });
+  }
+  return changes;
+}
+
 function edgeColor(edge: WorkflowEdge): Rgb {
   const data = edge.data as { isLoop?: boolean; hasPause?: boolean } | undefined;
   const key = data?.isLoop ? "loop" : data?.hasPause ? "pause" : edge.type === "reference" ? "reference" : edgeColorKeyForHandles(edge.sourceHandle, edge.targetHandle);

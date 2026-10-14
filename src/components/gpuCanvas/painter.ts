@@ -32,7 +32,7 @@ import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workfl
 import { indexOfNode, type NodeChanges } from "@/store/nodeChanges";
 import type { WorkflowEdge } from "@/types";
 import type { Scene } from "@/lib/gpuCanvas/scene";
-import type { HandleAnchor } from "@/lib/gpuCanvas/graph";
+import { measuredChanges, type HandleAnchor } from "@/lib/gpuCanvas/graph";
 import { PaintedAtlas, type BlitItem } from "@/lib/gpuCanvas/atlas";
 import type { Slot } from "@/lib/gpuCanvas/atlasLayout";
 import type { AtlasBudget } from "@/lib/gpuCanvas/budget";
@@ -178,6 +178,8 @@ export class Painter {
   private loading = false;
   private storedSinceTrim = 0;
   private disposed = false;
+  /** Nodes measured since the store last heard their sizes. */
+  private measuredIds = new Set<string>();
   private onStatus: () => void = noop;
 
   constructor(private scene: Scene, private options: PainterOptions) {
@@ -750,6 +752,18 @@ export class Painter {
     if (card !== undefined) this.scene.graph.nodes[i].card = card;
     this.scene.setNodeHeight(i, height);
     if (handles) this.scene.setHandles(i, handles);
+    if (!this.measuredIds.size) queueMicrotask(() => this.reportMeasured());
+    this.measuredIds.add(id);
+  }
+
+  /** The measured sizes reach the store as React Flow's measuring does on the classic canvas (no undo step, nothing unsaved). */
+  private reportMeasured() {
+    const ids = this.measuredIds;
+    this.measuredIds = new Set();
+    if (this.disposed) return;
+    const store = useWorkflowStore.getState();
+    const changes = measuredChanges(store.nodes, (id) => indexOfNode(store.nodes, id), this.scene.graph, ids);
+    if (changes.length) store.onNodesChange(changes);
   }
 
   /** Resolves paintNow for these nodes on the next frame, once the scene has drawn them. */
