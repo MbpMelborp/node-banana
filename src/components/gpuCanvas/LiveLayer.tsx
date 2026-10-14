@@ -28,7 +28,7 @@ import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import type { SceneNode } from "@/lib/gpuCanvas/graph";
-import { paintedCover } from "@/lib/gpuCanvas/edgeRoutes";
+import { PAINTED_HEADER_HEIGHT, paintedCover } from "@/lib/gpuCanvas/edgeRoutes";
 import { dimClassName } from "@/lib/gpuCanvas/dimming";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
@@ -80,7 +80,7 @@ type EdgeCover = { edgeIds: string[]; boxes: { x: number; y: number; w: number; 
 type FlowState = { nodes: Node[]; edges: Edge[]; headers?: Node[]; cover?: EdgeCover; entering?: string[]; committed: () => void };
 
 /** A floating header's height above its node (FloatingNodeHeader's top offset). */
-const HEADER_HEIGHT = 26;
+const HEADER_HEIGHT = PAINTED_HEADER_HEIGHT;
 
 /** The mask live connections under painted nodes wear: the nodes' boxes cut out, at the card's corner radius (--radius-card). */
 const EDGE_MASK_ID = "gpu-live-edge-mask";

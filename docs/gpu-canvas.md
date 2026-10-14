@@ -494,7 +494,8 @@ layer, with its path hidden, for its decorations and toolbar; the painted
 nodes it ends at are stood in for by invisible nodes with the painted
 handles. That happens near the view (a quarter screen round it, checked
 every frame while the view moves) from 15% zoom, where classic stops
-drawing connections, for up to 250, the nearest the view's centre first.
+drawing connections: every one on screen, however many, and those in the
+margin while fewer than 250 are live, the nearest the view's centre first.
 The live layer draws over the scene, so a live connection's SVG
 decorations (the comet, pause badge, hidden stubs and ghost) are masked
 where a painted node lies over them (`paintedCover`, `EdgeMask`), as

@@ -315,6 +315,26 @@ export function routePolylines(route: EdgeRoute, step: number): { x: number; y: 
 const DECORATION_REACH = 100;
 
 /**
+ * Which decorated connections near the view go live: every one on screen, whatever their number (classic
+ * draws all their decorations), then those in the margin round it, nearest the view's centre first, while
+ * fewer than `max` are live in all.
+ */
+export function pickLiveEdges(candidates: { id: string; distance: number; onScreen: boolean }[], max: number): string[] {
+  const ids: string[] = [], margin: { id: string; distance: number }[] = [];
+  for (const c of candidates) {
+    if (c.onScreen) ids.push(c.id);
+    else margin.push(c);
+  }
+  if (ids.length >= max) return ids;
+  margin.sort((p, q) => p.distance - q.distance);
+  for (let k = 0; k < margin.length && ids.length < max; k++) ids.push(margin[k].id);
+  return ids;
+}
+
+/** A floating header's height above its node (FloatingNodeHeader's top offset); the scene paints it for painted nodes. */
+export const PAINTED_HEADER_HEIGHT = 26;
+
+/**
  * The painted nodes that cover live connections' decorations, and which of those connections they cover.
  * On classic every node covers the edge layer; the live layer draws a connection's decorations over the
  * scene, so they are masked where a painted node lies over them (LiveLayer). Live nodes cover them themselves.
@@ -344,7 +364,8 @@ export function paintedCover(
       covered = true;
       if (taken.has(i)) continue;
       taken.add(i);
-      boxes.push({ x: n.x, y: n.y, w: n.w, h: n.h });
+      // The node and its painted header strip: classic's floating headers sit above every edge (z-index 1500).
+      boxes.push({ x: n.x, y: n.y - PAINTED_HEADER_HEIGHT, w: n.w, h: n.h + PAINTED_HEADER_HEIGHT });
     }
     if (covered) edgeIds.push(graph.edges[e].id);
   }

@@ -34,7 +34,7 @@ import { watchVideoTrimDurations } from "@/lib/gpuCanvas/videoTrimDuration";
 import { watchGenerationErrors } from "@/lib/gpuCanvas/errorToasts";
 import { useToast } from "@/components/Toast";
 import { HISTORY_DRAG_TYPE } from "@/components/GlobalImageHistory";
-import { routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
+import { pickLiveEdges, routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
 import { dimOpacities } from "@/lib/gpuCanvas/dimming";
 import type { HookPath } from "@/components/edges/EdgeHookSelection";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
@@ -56,7 +56,7 @@ const LIVE_ZOOM = 1;
  * where classic stops drawing connections (its overview). Those showing a run's comet are live at any zoom.
  */
 const LIVE_EDGE_ZOOM = OVERVIEW_ZOOM_THRESHOLD;
-/** At most this many live connections besides the selected ones (the nearest the view's centre). */
+/** At most this many live connections besides the selected ones, unless more are on screen (pickLiveEdges). */
 const MAX_LIVE_EDGES = 250;
 /** Added nodes on screen made live until painted (a large paste leaves the rest to the painter's queue). */
 const MAX_ADDED_LIVE = 8;
@@ -404,16 +404,17 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       const all = scene.view.zoom >= LIVE_EDGE_ZOOM;
       const w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
       const a = scene.toWorld(-w * 0.25, -h * 0.25), b = scene.toWorld(w * 1.25, h * 1.25);
-      const candidates: { id: string; distance: number }[] = [];
+      const candidates: { id: string; distance: number; onScreen: boolean }[] = [];
       const centre = scene.toWorld(w / 2, h / 2);
+      const s0 = scene.toWorld(0, 0), s1 = scene.toWorld(w, h);
+      const onScreen = new Set(scene.edgesWithin(s0.x, s0.y, s1.x, s1.y));
       for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
         const edge = scene.graph.edges[e], route = scene.edgeRoute(e);
         if (!route?.decorated || edge.edge.selected || (!all && !route.running)) continue;
-        candidates.push({ id: edge.id, distance: Math.hypot(route.labelX - centre.x, route.labelY - centre.y) });
+        candidates.push({ id: edge.id, distance: Math.hypot(route.labelX - centre.x, route.labelY - centre.y), onScreen: onScreen.has(e) });
       }
-      // Past the limit, the connections on screen win over those in the margin.
-      if (candidates.length > MAX_LIVE_EDGES) candidates.sort((p, q) => p.distance - q.distance).length = MAX_LIVE_EDGES;
-      for (const candidate of candidates) ids.push(candidate.id);
+      // Those on screen are never capped; the limit bounds only those made live early in the margin.
+      for (const id of pickLiveEdges(candidates, MAX_LIVE_EDGES)) ids.push(id);
       const key = ids.join("\n");
       if (key === liveEdgesKey && edges === liveEdgesSource) return;
       liveEdgesKey = key;

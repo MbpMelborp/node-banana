@@ -4,7 +4,7 @@ import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
 import { measuredChanges, refitMeasured, resolveHandle, SceneGraph, type SceneNode } from "../graph";
-import { cubicArcLength, cubicAt, cubicPieces, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routeGradientRange, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { cubicArcLength, cubicAt, cubicPieces, cubicXExtent, distanceToCubic, PAINTED_HEADER_HEIGHT, paintedCover, pickLiveEdges, pathToCubics, routeGradientRange, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
 import { EDGE_CAP_END, EDGE_CAP_START, Scene } from "../scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
@@ -241,9 +241,25 @@ describe("connections and painted nodes", () => {
       graph.nodes.flatMap((n, i) => (n.x <= x1 && n.x + n.w >= x0 && n.y <= y1 && n.y + n.h >= y0 ? [i] : []));
     const cover = paintedCover(graph, [0], (e) => routes[e], within, (id) => id === "a" || id === "b");
     expect(cover.edgeIds).toEqual(["e"]);
-    expect(cover.boxes).toEqual([{ x: 300, y: -50, w: 300, h: graph.nodes[2].h }]);
+    // The box reaches up over the painted header strip, which classic keeps above every edge.
+    expect(cover.boxes).toEqual([{ x: 300, y: -50 - PAINTED_HEADER_HEIGHT, w: 300, h: graph.nodes[2].h + PAINTED_HEADER_HEIGHT }]);
     // Nothing painted near it: nothing to mask.
     expect(paintedCover(graph, [0], (e) => routes[e], within, () => true)).toEqual({ edgeIds: [], boxes: [] });
+  });
+});
+
+describe("pickLiveEdges", () => {
+  it("keeps every connection on screen and fills what is left of the limit from the margin, nearest first", () => {
+    const candidates = [
+      { id: "far", distance: 900, onScreen: false },
+      { id: "s1", distance: 500, onScreen: true },
+      { id: "near", distance: 100, onScreen: false },
+      { id: "s2", distance: 50, onScreen: true },
+    ];
+    expect(pickLiveEdges(candidates, 3)).toEqual(["s1", "s2", "near"]);
+    expect(pickLiveEdges(candidates, 10)).toEqual(["s1", "s2", "near", "far"]);
+    // More on screen than the limit: all of them, none from the margin.
+    expect(pickLiveEdges(candidates, 1)).toEqual(["s1", "s2"]);
   });
 });
 

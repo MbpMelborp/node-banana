@@ -1211,10 +1211,14 @@ export class Editor {
     scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
     // A live connection's label brightens under the pointer, as EditableEdge's own hover does.
     setHoveredSceneEdge(edge >= 0 ? scene.graph.edges[edge].id : null);
-    this.idleOnPane = !handle && node < 0 && edge < 0;
+    // React Flow's `selectable` edge class (and its pointer cursor): the edge's own flag, else elementsSelectable,
+    // which a locked canvas and a dialog turn off. An unselectable connection shows the pane's cursor.
+    const editing = this.editing(), flagged = edge >= 0 ? scene.graph.edges[edge].edge.selectable : undefined;
+    const edgeSelectable = edge >= 0 && (flagged === true || (!editing.locked && !editing.disabled && flagged === undefined));
+    this.idleOnPane = !handle && node < 0 && !end && !edgeSelectable;
     // A node is React Flow's draggable one (grab), but under a dialog (nodesDraggable off: the default arrow).
-    const nodeCursor = this.editing().disabled ? "" : "grab";
-    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? nodeCursor : end ? "move" : edge >= 0 ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
+    const nodeCursor = editing.disabled ? "" : "grab";
+    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? nodeCursor : end ? "move" : edgeSelectable ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
   };
 
   /**
