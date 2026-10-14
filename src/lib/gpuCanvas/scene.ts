@@ -706,6 +706,11 @@ export class Scene {
         const distance = distanceToCubic(c, p.x, p.y) - route.width / 2;
         if (distance < bestDistance) { bestDistance = distance; best = e; }
       }
+      // A bundle's shared stem is part of the connection that draws it (BundleStem's hit path).
+      for (const stem of route.stems) {
+        const distance = distanceToCubic(stem.segment, p.x, p.y) - stem.width / 2;
+        if (distance < bestDistance) { bestDistance = distance; best = e; }
+      }
     }
     return bestDistance <= reach ? best : -1;
   }

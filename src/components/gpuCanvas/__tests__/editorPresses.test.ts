@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useEdgeHoverStore } from "@/store/edgeHoverStore";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
@@ -229,6 +230,19 @@ describe("presses on the GPU canvas", () => {
     editor.idleMove(pointer(850, 100) as PointerEvent);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
     expect(canvas.style.cursor).toBe("grab");
+  });
+
+  it("the connection under the pointer is the live connections' hovered one, until the pointer leaves the canvas", () => {
+    (editor["scene"] as unknown as Record<string, unknown>).setHoveredEdge = noop;
+    edgeHit = 0;
+    editor.idleMove(pointer(600, 1000) as PointerEvent);
+    expect(useEdgeHoverStore.getState().edgeId).toBe("ac");
+    editor["scene"].canvas.dispatchEvent(new MouseEvent("pointerleave"));
+    expect(useEdgeHoverStore.getState().edgeId).toBe(null);
+    editor.idleMove(pointer(600, 1000) as PointerEvent);
+    edgeHit = -1;
+    editor.idleMove(pointer(2000, 2000) as PointerEvent);
+    expect(useEdgeHoverStore.getState().edgeId).toBe(null);
   });
 
   it("with the selection key held a drag from a handle draws a marquee; without it, it starts a connection", () => {

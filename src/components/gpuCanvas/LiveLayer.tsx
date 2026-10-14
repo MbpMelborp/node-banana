@@ -26,6 +26,7 @@ import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import type { HandleAnchor, SceneNode } from "@/lib/gpuCanvas/graph";
+import { paintedCover } from "@/lib/gpuCanvas/edgeRoutes";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
@@ -36,6 +37,7 @@ import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./
 // Its sockets start no connection of their own (the editor draws them), so React Flow's connectionindicator
 // cursor is given back here. On a locked canvas the nodes take no pointer, as classic's (presses go to the scene's pane).
 // A panel that opts out (the navigator in the locked tutorial) stays inert, as classic's.
+// A selected angular connection's segment handle drags its middle segment (EditableEdge's own drag), so it takes the pointer.
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel:not(.pointer-events-none) { pointer-events: all !important; }
@@ -43,6 +45,7 @@ const LIVE_STYLE = `
   [data-gpu-canvas-live][data-locked] .react-flow__node { pointer-events: none !important; }
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
   [data-gpu-canvas-live] .react-flow__handle.connectable { cursor: crosshair; }
+  [data-gpu-canvas-live] .edge-segment-handle { pointer-events: all !important; }
 `;
 
 /**
@@ -54,7 +57,38 @@ function GhostNode() {
   return null;
 }
 
-type FlowState = { nodes: Node[]; edges: Edge[]; committed: () => void };
+/** Painted nodes over live connections (paintedCover): the connections they cover, and their boxes. */
+type EdgeCover = { edgeIds: string[]; boxes: { x: number; y: number; w: number; h: number }[] };
+
+type FlowState = { nodes: Node[]; edges: Edge[]; cover?: EdgeCover; committed: () => void };
+
+/** The mask live connections under painted nodes wear: the nodes' boxes cut out, at the card's corner radius (--radius-card). */
+const EDGE_MASK_ID = "gpu-live-edge-mask";
+const NODE_RADIUS = 12;
+const FAR = 1e6;
+
+/**
+ * On classic every node covers the edge layer. The live layer draws over the scene, so a live connection
+ * passing under a painted node is masked there (its comet, pause badge, stubs and ghost); its HTML labels are not,
+ * since a stacking context round them would change what sits over what.
+ */
+function EdgeMask({ cover }: { cover?: EdgeCover }) {
+  if (!cover?.edgeIds.length) return null;
+  const selector = cover.edgeIds.map((id) => `[data-gpu-canvas-live] .react-flow__edge[data-id="${CSS.escape(id)}"]`).join(", ");
+  return (
+    <>
+      <style>{`${selector} { mask: url(#${EDGE_MASK_ID}); }`}</style>
+      <svg aria-hidden width={0} height={0} style={{ position: "absolute" }}>
+        <defs>
+          <mask id={EDGE_MASK_ID} maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x={-FAR} y={-FAR} width={2 * FAR} height={2 * FAR}>
+            <rect x={-FAR} y={-FAR} width={2 * FAR} height={2 * FAR} fill="white" />
+            {cover.boxes.map((b, k) => <rect key={k} x={b.x} y={b.y} width={b.w} height={b.h} rx={Math.min(NODE_RADIUS, b.w / 2, b.h / 2)} fill="black" />)}
+          </mask>
+        </defs>
+      </svg>
+    </>
+  );
+}
 
 /** How long a leaving node waits for its painted image to be current. */
 const LEAVE_TIMEOUT_MS = 1500;
@@ -161,6 +195,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   return (
     <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
+      <EdgeMask cover={state.cover} />
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
         defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
@@ -300,6 +335,11 @@ export class LiveLayer {
     };
   }
 
+  /** Whether any connection is live. */
+  get hasEdges() {
+    return this.edgeIds.length > 0;
+  }
+
   /** Sets the live connections; renders when they or what they show changed. */
   setEdges(ids: string[]) {
     this.edgeIds = ids;
@@ -406,10 +446,14 @@ export class LiveLayer {
       }
       flowEdges.push(edge.edge);
     }
+    const scene = this.scene;
+    const cover = flowEdges.length
+      ? paintedCover(graph, flowEdges.map((edge) => graph.edgeIndexOf.get(edge.id)!), (e) => scene.edgeRoute(e), (x0, y0, x1, y1) => scene.nodesWithin(x0, y0, x1, y1), (id) => this.live.has(id))
+      : undefined;
     // A commit that never comes (the tree failed) must not hold up whoever waits on the layer.
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, RENDER_TIMEOUT_MS);
-      this.setNodes({ nodes: flowNodes, edges: flowEdges, committed: () => { clearTimeout(timer); resolve(); } }, sync);
+      this.setNodes({ nodes: flowNodes, edges: flowEdges, cover, committed: () => { clearTimeout(timer); resolve(); } }, sync);
     });
   }
 

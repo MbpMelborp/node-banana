@@ -14,7 +14,7 @@ import type { EdgeAppearance, EdgeStyle, WorkflowEdge, WorkflowNode } from "@/ty
 import { routeEdge } from "@/lib/edges/route";
 import { bundleReach, edgeBundles } from "@/lib/edges/bundles";
 import { edgeGraphIndex, nodeGraphIndex } from "@/lib/edges/graphIndex";
-import { hookHandles } from "@/lib/edges/hook";
+import { hookHandles, insertHookHandle } from "@/lib/edges/hook";
 import type { HandleAnchor, SceneGraph } from "./graph";
 
 /** A cubic segment: start, two controls, end (flow units). */
@@ -113,6 +113,8 @@ export interface RouteContext {
   edges: WorkflowEdge[];
   nodes: readonly WorkflowNode[];
   thicknessPx: number;
+  /** A hook sweep under way (the store's hookDrag): the connections it caught route through the fork. */
+  hookDrag?: { x: number; y: number; edgeIds: string[] } | null;
 }
 
 const POSITIONS: Record<string, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
@@ -148,7 +150,10 @@ export function routeSceneEdge(graph: SceneGraph, e: number, context: RouteConte
   let startX = source.x, endX = target.x, decorated = hidden || loading || !!data?.hasPause || !!data?.isLoop || !!data?.label?.trim();
   // Hook bundles that gather more than this edge.
   const index = edge ? edgeGraphIndex(context.edges) : null;
-  const hooks = edge && index ? hookHandles(data).filter((hook) => (index.hookBundles.get(hook.id)?.length ?? 0) > 1) : [];
+  let hooks = edge && index ? hookHandles(data).filter((hook) => (index.hookBundles.get(hook.id)?.length ?? 0) > 1) : [];
+  // Mid-sweep, a caught noodle is carried on the fork, as if a handle sat there (EditableEdge's hook-drag handle).
+  const drag = context.hookDrag;
+  if (edge && drag?.edgeIds.includes(edge.id)) hooks = insertHookHandle(hooks, { id: "hook-drag", x: drag.x, y: drag.y }, source, target);
   if (hooks.length) decorated = true;
   else if (edge && !hidden) {
     // Bundles split apart while one of their members is selected.
@@ -180,4 +185,59 @@ export function routeSceneEdge(graph: SceneGraph, e: number, context: RouteConte
     hooks: hooks.length ? hooks : undefined,
   });
   return { segments: hidden ? [] : pathToCubics(path), stems, ends: [source.x, source.y, target.x, target.y], labelX, labelY, width, dashed: false, hidden, decorated, running: loading && !hidden };
+}
+
+/** A route's noodle and its stems as polylines, a point about every `step` flow units (for sweeping across them). */
+export function routePolylines(route: EdgeRoute, step: number): { x: number; y: number }[][] {
+  const sample = (segments: Cubic[]) => {
+    const points: { x: number; y: number }[] = [];
+    for (const c of segments) {
+      const steps = Math.max(1, Math.ceil(cubicLength(c) / step));
+      for (let k = points.length ? 1 : 0; k <= steps; k++) points.push(cubicAt(c, k / steps));
+    }
+    return points;
+  };
+  const lines = route.segments.length ? [sample(route.segments)] : [];
+  for (const stem of route.stems) lines.push(sample([stem.segment]));
+  return lines;
+}
+
+/** How far (flow units) past a route's ends and segments its decorations reach: a pause badge, a hidden connection's stubs and ghost. */
+const DECORATION_REACH = 100;
+
+/**
+ * The painted nodes that cover live connections' decorations, and which of those connections they cover.
+ * On classic every node covers the edge layer; the live layer draws a connection's decorations over the
+ * scene, so they are masked where a painted node lies over them (LiveLayer). Live nodes cover them themselves.
+ */
+export function paintedCover(
+  graph: SceneGraph,
+  edges: Iterable<number>,
+  routeOf: (e: number) => EdgeRoute | null,
+  nodesWithin: (x0: number, y0: number, x1: number, y1: number) => number[],
+  isLive: (id: string) => boolean,
+): { edgeIds: string[]; boxes: { x: number; y: number; w: number; h: number }[] } {
+  const edgeIds: string[] = [], boxes: { x: number; y: number; w: number; h: number }[] = [], taken = new Set<number>();
+  for (const e of edges) {
+    const route = routeOf(e);
+    if (!route) continue;
+    let [x0, y0, x1, y1] = route.ends;
+    [x0, x1] = [Math.min(x0, x1), Math.max(x0, x1)];
+    [y0, y1] = [Math.min(y0, y1), Math.max(y0, y1)];
+    for (const c of [...route.segments, ...route.stems.map((stem) => stem.segment)]) for (let k = 0; k < 8; k += 2) {
+      x0 = Math.min(x0, c[k]); x1 = Math.max(x1, c[k]);
+      y0 = Math.min(y0, c[k + 1]); y1 = Math.max(y1, c[k + 1]);
+    }
+    let covered = false;
+    for (const i of nodesWithin(x0 - DECORATION_REACH, y0 - DECORATION_REACH, x1 + DECORATION_REACH, y1 + DECORATION_REACH)) {
+      const n = graph.nodes[i];
+      if (!n || isLive(n.id)) continue;
+      covered = true;
+      if (taken.has(i)) continue;
+      taken.add(i);
+      boxes.push({ x: n.x, y: n.y, w: n.w, h: n.h });
+    }
+    if (covered) edgeIds.push(graph.edges[e].id);
+  }
+  return { edgeIds, boxes };
 }

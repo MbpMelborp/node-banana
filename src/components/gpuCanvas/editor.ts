@@ -27,6 +27,7 @@
 import type { Connection, EdgeChange, NodeChange } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { setConnectDrag } from "@/store/connectDragStore";
+import { setHoveredSceneEdge, useEdgeHoverStore } from "@/store/edgeHoverStore";
 import { useAssetStore } from "@/store/assetStore";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import type { CanvasNavigationSettings } from "@/types/canvas";
@@ -173,6 +174,16 @@ export class Editor {
     on("keyup", (event) => {
       if (event.code === "Space") this.space = false;
       this.modifierChanged(event);
+    });
+    // Off the canvas no connection is under the pointer, unless it went onto that live connection's own handle.
+    const leave = (event: PointerEvent) => {
+      const into = event.relatedTarget instanceof Element ? event.relatedTarget.closest(".react-flow__edge") : null;
+      if (into?.getAttribute("data-id") !== useEdgeHoverStore.getState().edgeId) setHoveredSceneEdge(null);
+    };
+    scene.canvas.addEventListener("pointerleave", leave);
+    this.offs.push(() => {
+      scene.canvas.removeEventListener("pointerleave", leave);
+      setHoveredSceneEdge(null);
     });
     on("blur", () => {
       this.space = false;
@@ -962,6 +973,8 @@ export class Editor {
     // The connection holding keyboard focus looks hovered while the pointer is on no other.
     const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
     scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
+    // A live connection's label brightens under the pointer, as EditableEdge's own hover does.
+    setHoveredSceneEdge(edge >= 0 ? scene.graph.edges[edge].id : null);
     this.idleOnPane = !handle && node < 0 && edge < 0;
     scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : end ? "move" : edge >= 0 ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
   };

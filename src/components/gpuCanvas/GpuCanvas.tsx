@@ -28,8 +28,10 @@ import { Editor, type GpuEditing } from "./editor";
 import { setGpuCanvasBridge } from "./bridge";
 import { LiveContent } from "./liveContent";
 import { watchOutputAutoRun } from "@/lib/gpuCanvas/outputAutoRun";
-import { routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
+import { routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
+import type { HookPath } from "@/components/edges/EdgeHookSelection";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
+import { OVERVIEW_ZOOM_THRESHOLD } from "@/utils/canvasPerformance";
 import { boundedNodeTypes, HEADER, noop, PAD, type HeaderProps } from "./nodeSheets";
 
 /** Workflows at least this large open behind the loading screen while they paint. */
@@ -40,9 +42,12 @@ const LOADING_DELAY_MS = 300;
 const REFRAME_WAIT_MS = 2000;
 /** Above this zoom every visible node is live. */
 const LIVE_ZOOM = 1;
-/** From this zoom, connections that show more than a line (labels, stubs, clamps) are live while on screen; those showing a run's comet at any zoom. */
-const LIVE_EDGE_ZOOM = 0.3;
-/** At most this many live connections besides the selected ones. */
+/**
+ * From this zoom, connections that show more than a line (labels, stubs, clamps) are live while near the view:
+ * where classic stops drawing connections (its overview). Those showing a run's comet are live at any zoom.
+ */
+const LIVE_EDGE_ZOOM = OVERVIEW_ZOOM_THRESHOLD;
+/** At most this many live connections besides the selected ones (the nearest the view's centre). */
 const MAX_LIVE_EDGES = 250;
 /** A view still this long has stopped moving: d3-zoom's wheel end delay, after which classic's onMoveEnd fires. */
 const MOVE_END_MS = 150;
@@ -208,7 +213,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onPaneDoubleClick: (x, y, screen) => editor.paneDoubleClick(x, y, screen),
         routeEdge: (e) => {
           const state = useWorkflowStore.getState();
-          return routeSceneEdge(graph, e, { style: state.edgeStyle, appearance: state.edgeAppearance, edges: state.edges, nodes: state.nodes, thicknessPx: EDGE_THICKNESS_PX[state.edgeAppearance.thickness] });
+          return routeSceneEdge(graph, e, { style: state.edgeStyle, appearance: state.edgeAppearance, edges: state.edges, nodes: state.nodes, thicknessPx: EDGE_THICKNESS_PX[state.edgeAppearance.thickness], hookDrag: state.hookDrag });
         },
         onViewChange: (view) => live.setView(view),
         runningHaloBelow: haloBelow,
@@ -322,7 +327,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         painter?.graphRebuilt();
         live.graphRebuilt();
       } else {
-        if (moved.length) scene.nodesMoved(moved);
+        if (moved.length) {
+          scene.nodesMoved(moved);
+          // Painted nodes that moved mask the live connections they now lie over (LiveLayer's EdgeMask).
+          if (live.hasEdges) live.refresh();
+        }
         // What a node's connections show can follow its data (a run's loading pulse, a bundle's clamp).
         const edges = new Set<number>();
         for (const id of changes.updated) for (const e of scene.graph.edgesOf[scene.graph.indexOf.get(id) ?? -1] ?? []) edges.add(e);
@@ -345,14 +354,16 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       const all = scene.view.zoom >= LIVE_EDGE_ZOOM;
       const w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
       const a = scene.toWorld(-w * 0.25, -h * 0.25), b = scene.toWorld(w * 1.25, h * 1.25);
-      let count = 0;
+      const candidates: { id: string; distance: number }[] = [];
+      const centre = scene.toWorld(w / 2, h / 2);
       for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
-        if (count >= MAX_LIVE_EDGES) break;
         const edge = scene.graph.edges[e], route = scene.edgeRoute(e);
         if (!route?.decorated || edge.edge.selected || (!all && !route.running)) continue;
-        ids.push(edge.id);
-        count++;
+        candidates.push({ id: edge.id, distance: Math.hypot(route.labelX - centre.x, route.labelY - centre.y) });
       }
+      // Past the limit, the connections on screen win over those in the margin.
+      if (candidates.length > MAX_LIVE_EDGES) candidates.sort((p, q) => p.distance - q.distance).length = MAX_LIVE_EDGES;
+      for (const candidate of candidates) ids.push(candidate.id);
       const key = ids.join("\n");
       if (key === liveEdgesKey && edges === liveEdgesSource) return;
       liveEdgesKey = key;
@@ -363,6 +374,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     const unsubscribeStore = useWorkflowStore.subscribe((state, previous) => {
       if (state.edgeAppearance !== previous.edgeAppearance) scene.setEdgeAppearance(state.edgeAppearance.gradient, state.edgeAppearance.fadedOpacity);
       if (state.edgeStyle !== previous.edgeStyle || state.edgeAppearance.thickness !== previous.edgeAppearance.thickness || state.edgeAppearance.loadingPulse !== previous.edgeAppearance.loadingPulse) scene.rerouteAll();
+      // A hook sweep carries the connections it caught on the fork, and lets go of them as it ends.
+      if (state.hookDrag !== previous.hookDrag) {
+        const swept = new Set([...(previous.hookDrag?.edgeIds ?? []), ...(state.hookDrag?.edgeIds ?? [])]);
+        scene.reroute([...swept].map((id) => scene.graph.edgeIndexOf.get(id)).filter((e): e is number => e != null));
+      }
       if (state.edges === previous.edges && state.groups === previous.groups) return;
       const sync = scene.graph.sync(state.nodes, state.edges, state.groups);
       if (sync.rebuilt) {
@@ -391,8 +407,13 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // As classic's onMoveStart: a moving view drops the hovered node's header controls and video preview,
     // and live nodes take no hover (NodeShell reads isPanningRef) until it has been still a moment (onMoveEnd).
     // The scene still hovers what comes under the pointer, so a node turning live there takes the next wheels.
-    let settleTimer = 0, moveEndTimer = 0, lastView = { ...scene.view };
+    let settleTimer = 0, moveEndTimer = 0, liveEdgesFrame = 0, lastView = { ...scene.view };
     const unsubscribeView = scene.onViewChanged(() => {
+      // Connections coming into view are live as they arrive, once a frame while the view moves.
+      if (!liveEdgesFrame) liveEdgesFrame = requestAnimationFrame(() => {
+        liveEdgesFrame = 0;
+        showLiveEdges();
+      });
       const { x, y, zoom } = scene.view;
       if (x !== lastView.x || y !== lastView.y || zoom !== lastView.zoom) {
         lastView = { x, y, zoom };
@@ -420,6 +441,23 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       setView: (view) => scene.setView(view),
       animateView: (view, duration) => scene.animateView(view, duration),
       fit: () => scene.fit(),
+      edgePaths: (ids) => {
+        // The connections near the view, sampled every 5 css px or so, in client px (as EdgeHookSelection samples classic's).
+        const box = scene.canvas.getBoundingClientRect(), w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
+        const a = scene.toWorld(0, 0), b = scene.toWorld(w, h), step = 5 / scene.view.zoom;
+        const paths: HookPath[] = [];
+        for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
+          const id = scene.graph.edges[e].id, route = scene.edgeRoute(e);
+          if (!route || !ids.has(id)) continue;
+          for (const line of routePolylines(route, step)) {
+            paths.push({ id, points: line.map((p) => {
+              const at = scene.toScreen(p.x, p.y);
+              return { x: box.left + at.x, y: box.top + at.y };
+            }) });
+          }
+        }
+        return paths;
+      },
       subscribe: (listener) => {
         const offView = scene.onViewChanged(listener), offLayout = scene.onLayoutChanged(listener);
         return () => { offView(); offLayout(); };
@@ -504,6 +542,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
       clearTimeout(moveEndTimer);
+      cancelAnimationFrame(liveEdgesFrame);
       isPanningRef.current = false;
       clearTimeout(hoverTimer);
       disposed = true;

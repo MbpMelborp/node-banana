@@ -178,7 +178,7 @@ not. On the GPU canvas a node stays live for as long as it holds something
   workflow…" to answer, or a run streaming previews.
 - **running**: a node loading its output, so its spinner turns. Its
   connections show the comet at any zoom (other decorated connections go
-  live from 30%).
+  live from 15%, where classic stops drawing connections).
 
 Zoomed out past the low-detail zoom (Settings › Canvas), running nodes stay
 pictures and the scene draws today's low-detail running halo over every node
@@ -265,7 +265,8 @@ The scene takes every press and asks the editor what it starts:
   headers and sockets move in the frame that draws their connections. While
   any gesture runs, no text selection or native drag starts (d3-drag's
   `nodrag`).
-- **A connection** (within 7 px): selects it, as React Flow would; Shift
+- **A connection** (within 7 px, a bundle's shared stem counting for the
+  connection that draws it, as BundleStem's hit path): selects it, as React Flow would; Shift
   adds it, unless nodes are selected (WorkflowCanvas drops connections from
   a selection with nodes in it). On a locked canvas it selects nothing but
   still moves the connection toolbar there.
@@ -297,6 +298,11 @@ The scene takes every press and asks the editor what it starts:
   `handleSelectionChange` once it is through, as React Flow's
   `onSelectionChange`: it closes a connection toolbar whose connection is
   no longer selected and drops connections from a selection with nodes.
+- **Hold H** and drag across connections (classic's `EdgeHookSelection`,
+  mounted over the GPU canvas too): the sweep crosses the scene's routes
+  (`routePolylines`, through the bridge's `edgePaths`) instead of SVG paths,
+  and the caught connections route through the fork as they are carried
+  (`RouteContext.hookDrag`); the release bundles them there.
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
   dialog open) removes the selected connections, then nodes. The arrow keys
   move the selection 5 px (20 px with Shift) while focus is on nothing or on
@@ -364,15 +370,24 @@ a hidden stub, a bundle, pause, loop, the loading pulse, an array item) and
 every selected one is also rendered as a real `EditableEdge` on the live
 layer, with its path hidden, for its decorations and toolbar; the painted
 nodes it ends at are stood in for by invisible nodes with the painted
-handles. That happens on screen at 30% zoom and above, for up to 250.
+handles. That happens near the view (a quarter screen round it, checked
+every frame while the view moves) from 15% zoom, where classic stops
+drawing connections, for up to 250, the nearest the view's centre first.
+The live layer draws over the scene, so a live connection's SVG
+decorations (the comet, pause badge, hidden stubs and ghost) are masked
+where a painted node lies over them (`paintedCover`, `EdgeMask`), as
+classic's nodes cover its edge layer. A selected angular connection's
+segment handle takes the pointer and drags as on classic, and the scene's
+hovered connection brightens its live label (`edgeHoverStore`).
 
 ## What phase 3 leaves out
 
-- Sweeping connections with the hook key (H).
-- Hidden connections' stubs below 30% zoom.
 - While a connection is drawn, painted nodes away from the pointer keep
   their pictures without socket labels (classic shows every node's).
-- A live connection's decorations draw over painted nodes they pass under.
+- A live connection's HTML labels (its pill, hidden stubs' chips, a
+  bundle's clamp) draw over painted nodes it passes under, and its SVG
+  decorations are masked by a painted node's whole box, gaps between its
+  cards included.
 - A node whose look depends on state outside its data and its inputs (a
   file loading elsewhere, a timer) may paint stale until its key changes.
 - A wheel over a painted node's scrolling text pans the canvas until the

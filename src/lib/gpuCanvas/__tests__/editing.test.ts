@@ -4,7 +4,8 @@ import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
 import { measuredChanges, SceneGraph } from "../graph";
-import { cubicAt, distanceToCubic, pathToCubics, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { cubicAt, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { Scene } from "../scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
 
@@ -90,6 +91,26 @@ describe("routeSceneEdge", () => {
     expect(second.segments[0][0]).toBe(first.segments[0][0]);
   });
 
+  it("carries the connections a hook sweep caught through the fork", () => {
+    const edges = [edge("e", "a", "b"), edge("f", "a", "b")];
+    const graph = new SceneGraph(nodes, edges, {});
+    const hookDrag = { x: 450, y: -300, edgeIds: ["e"] };
+    const caught = routeSceneEdge(graph, 0, { ...context(edges, nodes), hookDrag });
+    const passes = (route: typeof caught) => Math.min(...route.segments.map((c) => distanceToCubic(c, 450, -300))) < 2;
+    expect(passes(caught)).toBe(true);
+    expect(passes(routeSceneEdge(graph, 1, { ...context(edges, nodes), hookDrag }))).toBe(false);
+  });
+
+  it("samples a route's noodle and stems as polylines", () => {
+    const route = { segments: pathToCubics("M0,0 L100,0 L100,50"), stems: [{ segment: pathToCubics("M0,0 L-20,0")[0], width: 6 }] } as Parameters<typeof routePolylines>[0];
+    const [noodle, stem] = routePolylines(route, 10);
+    expect(noodle[0]).toEqual({ x: 0, y: 0 });
+    expect(noodle[noodle.length - 1]).toEqual({ x: 100, y: 50 });
+    // A point every 10 units or so, the joint not repeated.
+    expect(noodle).toHaveLength(16);
+    expect(stem[stem.length - 1]).toEqual({ x: -20, y: 0 });
+  });
+
   it("draws a reference link dashed and curved", () => {
     const edges = [{ ...edge("r", "a", "b"), type: "reference" } as WorkflowEdge];
     const graph = new SceneGraph(nodes, edges, {});
@@ -97,6 +118,33 @@ describe("routeSceneEdge", () => {
     expect(route.dashed).toBe(true);
     expect(route.width).toBe(2);
     expect(route.segments).toHaveLength(1);
+  });
+});
+
+describe("connections and painted nodes", () => {
+  it("finds a connection by its bundle's stem as well as its noodle", () => {
+    const stemmed = { segments: pathToCubics("M100,0 L300,0"), stems: [{ segment: pathToCubics("M0,0 L60,0")[0], width: 6 }], width: 3 };
+    const graph = { edges: [{}] };
+    const fake = { graph, view: { x: 0, y: 0, zoom: 1 }, routes: [stemmed], edgeBounds: new Float32Array([0, 0, 300, 0]), toWorld: (x: number, y: number) => ({ x, y }) };
+    expect(Scene.prototype.edgeAt.call(fake as unknown as Scene, 20, 4)).toBe(0);
+    expect(Scene.prototype.edgeAt.call(fake as unknown as Scene, 20, 40)).toBe(-1);
+  });
+
+  it("names the painted nodes over live connections and the connections they cover", () => {
+    const nodes = [node("a", 0, 0), node("b", 600, 0), node("over", 300, -50), node("far", 0, 2000)];
+    const edges = [edge("e", "a", "b"), edge("f", "a", "far")];
+    const graph = new SceneGraph(nodes, edges, {});
+    const routes = [
+      { ends: [300, 50, 600, 50], segments: pathToCubics("M300,50 L600,50"), stems: [] },
+      { ends: [300, 50, 0, 2050], segments: [], stems: [] },
+    ] as unknown as ReturnType<typeof routeSceneEdge>[];
+    const within = (x0: number, y0: number, x1: number, y1: number) =>
+      graph.nodes.flatMap((n, i) => (n.x <= x1 && n.x + n.w >= x0 && n.y <= y1 && n.y + n.h >= y0 ? [i] : []));
+    const cover = paintedCover(graph, [0], (e) => routes[e], within, (id) => id === "a" || id === "b");
+    expect(cover.edgeIds).toEqual(["e"]);
+    expect(cover.boxes).toEqual([{ x: 300, y: -50, w: 300, h: graph.nodes[2].h }]);
+    // Nothing painted near it: nothing to mask.
+    expect(paintedCover(graph, [0], (e) => routes[e], within, () => true)).toEqual({ edgeIds: [], boxes: [] });
   });
 });
 

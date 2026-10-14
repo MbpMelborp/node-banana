@@ -106,6 +106,7 @@ import { reportGpuCanvasFailure, useGpuCanvasActive, useGpuCanvasFailure } from 
 import { sceneWheel } from "@/lib/gpuCanvas/wheel";
 import type { GpuEditing } from "./gpuCanvas/editor";
 import type { GpuWheelState } from "./gpuCanvas/GpuCanvas";
+import { gpuEdgePaths } from "./gpuCanvas/bridge";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
 import { logger } from "@/utils/logger";
 import { WelcomeModal } from "./quickstart";
@@ -2733,6 +2734,7 @@ export function WorkflowCanvas() {
       )}
 
       {gpuCanvasActive ? (
+        <>
         <GpuCanvas
           key={gpuCanvasBuild}
           onFailure={reportGpuCanvasFailure}
@@ -2761,6 +2763,9 @@ export function WorkflowCanvas() {
           <PerfOverlay />
           {agentButton}
         </GpuCanvas>
+        {/* The scene draws the connections: the sweep crosses its routes rather than SVG paths */}
+        <EdgeHookSelection canvas={reactFlowWrapper} disabled={isModalOpen || isCanvasOverview} paths={gpuEdgePaths} />
+        </>
       ) : (
       <>
       <ReactFlow
