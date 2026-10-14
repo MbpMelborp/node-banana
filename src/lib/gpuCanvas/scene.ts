@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import { getViewportForBounds } from "@xyflow/react";
 import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
-import { cubicLength, cubicXExtent, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
+import { cubicArcLength, cubicLength, cubicXExtent, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
@@ -30,8 +30,14 @@ const FLAG_SELECTED = 1, FLAG_HOVERED = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG
 const EDGE_STRIDE = 20;
 const EDGE_SEGMENTS = 24;
 const EDGE_SELECTED = 1, EDGE_HOVERED = 2, EDGE_ACTIVE = 4, EDGE_HIDDEN = 8, EDGE_DASHED = 16, EDGE_STEM = 32;
-/** How near (css px) a press must be to a connection to take it. */
+/** The segment starts or ends its connection, and so takes a round cap there (joints inside a route take none, or they would overlap and darken). */
+export const EDGE_CAP_START = 64, EDGE_CAP_END = 128;
+/** How near (css px) past its stroke a press must be to a connection to take it, at least. */
 const EDGE_HIT_PX = 7;
+/** How near (flow units) a press must be to a connection's centre line: half React Flow's default interactionWidth (20). */
+const EDGE_HIT_FLOW = 10;
+/** The same for a bundle's stem, past its stroke: its hit path is 12 wider than it (EditableEdge's BundleStem). */
+const STEM_HIT_FLOW = 6;
 
 export const MIN_ZOOM = CANVAS_MIN_ZOOM;
 export const MAX_ZOOM = CANVAS_MAX_ZOOM;
@@ -250,8 +256,10 @@ const EDGE_VERTEX = /* glsl */ `
     vAlong = iLength.x + iLength.y * t;
     vX = p.x;
     vRange = iRange;
-    // Round caps: the ends reach past the segment by half the width.
-    vec2 cap = (t == 0.0 ? -dir : t == 1.0 ? dir : vec2(0.0)) * half_;
+    // Round caps: the connection's ends reach past it by half the width (its inner joints meet edge to edge).
+    float capped = (t == 0.0 && (vFlags & ${EDGE_CAP_START}) != 0) ? -1.0 : (t == 1.0 && (vFlags & ${EDGE_CAP_END}) != 0) ? 1.0 : 0.0;
+    vec2 cap = dir * capped * half_;
+    vAlong += capped * half_;
     gl_Position = toClip(p + cap + vec2(-dir.y, dir.x) * position.y * reach);
   }
 `;
@@ -260,6 +268,7 @@ const EDGE_FRAGMENT = /* glsl */ `
   precision highp float;
   uniform float uGradient;
   uniform float uFaded;
+  uniform vec3 uView;
   in float vSide;
   in vec3 vColor;
   in float vAlong;
@@ -269,9 +278,15 @@ const EDGE_FRAGMENT = /* glsl */ `
   flat in vec2 vRange;
   out vec4 outColor;
   void main() {
-    // Dashes of 6 and gaps of 4 flow units (reference links).
-    if ((vFlags & ${EDGE_DASHED}) != 0 && mod(vAlong, 10.0) > 6.0) discard;
-    float coverage = clamp(vHalf + 0.5 - abs(vSide), 0.0, 1.0);
+    float coverage;
+    if ((vFlags & ${EDGE_DASHED}) != 0) {
+      // Dashes of 6 and gaps of 4 flow units with round caps (reference links' "6 4" and round linecap):
+      // each dash a capsule, its ends reaching half the width into the gaps.
+      float d = mod(vAlong, 10.0);
+      float outside = d > 6.0 ? min(d - 6.0, 10.0 - d) : 0.0;
+      coverage = clamp(vHalf + 0.5 - length(vec2(outside * uView.z, vSide)), 0.0, 1.0);
+      if (coverage <= 0.0) discard;
+    } else coverage = clamp(vHalf + 0.5 - abs(vSide), 0.0, 1.0);
     bool isActive = (vFlags & ${EDGE_ACTIVE}) != 0;
     bool highlight = (vFlags & (${EDGE_SELECTED} | ${EDGE_HOVERED})) != 0;
     float alpha;
@@ -646,16 +661,19 @@ export class Scene {
     }
     let at = this.routeOffset[e] * EDGE_STRIDE, along = 0;
     const [r, g, b] = edge.color;
-    for (const c of route.segments) {
-      const length = cubicLength(c);
+    const last = route.segments.length - 1;
+    route.segments.forEach((c, k) => {
+      // Dashes are laid out by true arc length (a dashed route comes in short pieces, near even in speed).
+      const length = route.dashed ? cubicArcLength(c) : cubicLength(c);
+      const caps = (k === 0 ? EDGE_CAP_START : 0) | (k === last ? EDGE_CAP_END : 0);
       this.edgeData.set(c, at);
-      this.edgeData.set([r, g, b, flags, route.width, along, length, gradientMin, gradientMax], at + 8);
+      this.edgeData.set([r, g, b, flags | caps, route.width, along, length, gradientMin, gradientMax], at + 8);
       along += length;
       at += EDGE_STRIDE;
-    }
+    });
     for (const stem of route.stems) {
       this.edgeData.set(stem.segment, at);
-      this.edgeData.set([r, g, b, (flags & ~EDGE_DASHED) | EDGE_STEM, stem.width, 0, cubicLength(stem.segment), 0, 1], at + 8);
+      this.edgeData.set([r, g, b, (flags & ~EDGE_DASHED) | EDGE_STEM | EDGE_CAP_START | EDGE_CAP_END, stem.width, 0, cubicLength(stem.segment), 0, 1], at + 8);
       for (let k = 0; k < 8; k += 2) {
         minX = Math.min(minX, stem.segment[k]); maxX = Math.max(maxX, stem.segment[k]);
         minY = Math.min(minY, stem.segment[k + 1]); maxY = Math.max(maxY, stem.segment[k + 1]);
@@ -707,25 +725,34 @@ export class Scene {
     return this.routes[e] ?? null;
   }
 
-  /** The connection under a point (css px), or -1: the nearest within a few pixels. */
+  /**
+   * The connection under a point (css px), or -1: the nearest whose hit band takes it. The band is classic's
+   * interaction path (10 flow units either side of the centre line), and never under a few pixels past the
+   * stroke, so connections stay easy to take zoomed out.
+   */
   edgeAt(cssX: number, cssY: number): number {
     const p = this.toWorld(cssX, cssY);
-    const reach = EDGE_HIT_PX / this.view.zoom;
+    const floor = EDGE_HIT_PX / this.view.zoom;
     let best = -1, bestDistance = Infinity;
     for (let e = 0; e < this.graph.edges.length; e++) {
       const b = e * 4, route = this.routes[e];
-      if (!route || p.x < this.edgeBounds[b] - reach || p.x > this.edgeBounds[b + 2] + reach || p.y < this.edgeBounds[b + 1] - reach || p.y > this.edgeBounds[b + 3] + reach) continue;
+      if (!route) continue;
+      const reach = Math.max(EDGE_HIT_FLOW, route.width / 2 + floor);
+      let outer = reach;
+      for (const stem of route.stems) outer = Math.max(outer, stem.width / 2 + Math.max(STEM_HIT_FLOW, floor));
+      if (p.x < this.edgeBounds[b] - outer || p.x > this.edgeBounds[b + 2] + outer || p.y < this.edgeBounds[b + 1] - outer || p.y > this.edgeBounds[b + 3] + outer) continue;
+      // How far inside its band the point is (negative): the deepest wins.
       for (const c of route.segments) {
-        const distance = distanceToCubic(c, p.x, p.y) - route.width / 2;
+        const distance = distanceToCubic(c, p.x, p.y) - reach;
         if (distance < bestDistance) { bestDistance = distance; best = e; }
       }
       // A bundle's shared stem is part of the connection that draws it (BundleStem's hit path).
       for (const stem of route.stems) {
-        const distance = distanceToCubic(stem.segment, p.x, p.y) - stem.width / 2;
+        const distance = distanceToCubic(stem.segment, p.x, p.y) - stem.width / 2 - Math.max(STEM_HIT_FLOW, floor);
         if (distance < bestDistance) { bestDistance = distance; best = e; }
       }
     }
-    return bestDistance <= reach ? best : -1;
+    return bestDistance <= 0 ? best : -1;
   }
 
   /** Edges whose bounds overlap a rectangle (flow units). */

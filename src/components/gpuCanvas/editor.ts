@@ -1018,23 +1018,21 @@ export class Editor {
   /** The scene's onContextMenu: the add-node menu on empty canvas, the connection menu on a connection. */
   contextMenu = (event: MouseEvent) => {
     const editing = this.editing();
-    if (editing.disabled) return;
     const scene = this.scene, at = scene.local(event);
     // A node, its header band or a painted handle is not the pane: the browser's own menu shows.
     if (scene.nodeAt(at.x, at.y) >= 0 || this.paintedHandleAt(at.x, at.y)) return;
-    // A connection's reconnect anchors are part of it.
+    // A connection's reconnect anchors are part of it. Its menu opens in every pan mode, as classic's
+    // onEdgeContextMenu does (React Flow's pane swallows only presses on the pane itself).
     const e = this.edgeEndAt(at.x, at.y)?.edge ?? scene.edgeAt(at.x, at.y);
     const edge = e >= 0 ? useWorkflowStore.getState().edges.find((candidate) => candidate.id === scene.graph.edges[e].id) : undefined;
-    // The right button pans in "middleMouse" mode (React Flow's panOnDrag [2] swallows the menu).
-    if (editing.navigation.panMode === "middleMouse" && !editing.tutorial) {
-      event.preventDefault();
-      return;
-    }
     if (edge) {
       editing.onEdgeContextMenu(event, edge);
       return;
     }
+    // The pane never shows the browser's menu. The right button pans in "middleMouse" mode (React Flow's
+    // panOnDrag [2] swallows the menu); with a modal or the tutorial open there is no pan, and no add-node menu.
     event.preventDefault();
+    if (editing.disabled || editing.tutorial || editing.navigation.panMode === "middleMouse") return;
     editing.onPaneMenu(event.clientX, event.clientY);
   };
 

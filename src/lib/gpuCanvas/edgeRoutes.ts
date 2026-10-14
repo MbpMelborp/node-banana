@@ -99,6 +99,61 @@ export function cubicLength(c: Cubic): number {
   return (chord + polygon) / 2;
 }
 
+/** A cubic's arc length, sampled (flow units): for dashes, which must not drift along a curve. */
+export function cubicArcLength(c: Cubic, steps = 12): number {
+  let length = 0, previous = cubicAt(c, 0);
+  for (let s = 1; s <= steps; s++) {
+    const p = cubicAt(c, s / steps);
+    length += Math.hypot(p.x - previous.x, p.y - previous.y);
+    previous = p;
+  }
+  return length;
+}
+
+/** A cubic split in two at t (de Casteljau). */
+function splitCubic(c: Cubic, t: number): [Cubic, Cubic] {
+  const lerp = (a: number, b: number) => a + (b - a) * t;
+  const [x0, y0, x1, y1, x2, y2, x3, y3] = c;
+  const ax = lerp(x0, x1), ay = lerp(y0, y1), bx = lerp(x1, x2), by = lerp(y1, y2), cx = lerp(x2, x3), cy = lerp(y2, y3);
+  const dx = lerp(ax, bx), dy = lerp(ay, by), ex = lerp(bx, cx), ey = lerp(by, cy);
+  const fx = lerp(dx, ex), fy = lerp(dy, ey);
+  return [[x0, y0, ax, ay, dx, dy, fx, fy], [fx, fy, ex, ey, cx, cy, x3, y3]];
+}
+
+/**
+ * A cubic cut into pieces of about `step` flow units of arc each, so that along each piece its parameter
+ * runs near evenly with distance (the scene lays dashes out by the parameter).
+ */
+export function cubicPieces(c: Cubic, step: number, samples = 32): Cubic[] {
+  const lengths = [0];
+  let previous = cubicAt(c, 0);
+  for (let k = 1; k <= samples; k++) {
+    const p = cubicAt(c, k / samples);
+    lengths.push(lengths[k - 1] + Math.hypot(p.x - previous.x, p.y - previous.y));
+    previous = p;
+  }
+  const total = lengths[samples];
+  const count = Math.min(samples, Math.max(1, Math.ceil(total / step)));
+  const pieces: Cubic[] = [];
+  let rest = c, done = 0, k = 1;
+  for (let j = 1; j < count; j++) {
+    // The parameter at this cut's share of the arc, from the sampled lengths.
+    const target = (total * j) / count;
+    while (lengths[k] < target) k++;
+    const t = (k - 1 + (target - lengths[k - 1]) / Math.max(lengths[k] - lengths[k - 1], 1e-9)) / samples;
+    // Where t falls within what is left of the cubic.
+    const [piece, after] = splitCubic(rest, (t - done) / (1 - done));
+    pieces.push(piece);
+    rest = after;
+    done = t;
+  }
+  pieces.push(rest);
+  return pieces;
+}
+
+/** How long (flow units) the pieces of a dashed route are. */
+const DASH_PIECE = 40;
+
 /** The distance from a point to a cubic, sampled (flow units). */
 export function distanceToCubic(c: Cubic, x: number, y: number, steps = 24): number {
   let best = Infinity;
@@ -172,7 +227,8 @@ export function routeSceneEdge(graph: SceneGraph, e: number, context: RouteConte
   const loading = context.appearance.loadingPulse && (targetNode?.data as { status?: string } | undefined)?.status === "loading";
   if (isReference && !hidden) {
     const [path, labelX, labelY] = routeEdge({ style: "curved", sourceX: source.x, sourceY: source.y, sourcePosition: source.position, targetX: target.x, targetY: target.y, targetPosition: target.position });
-    return { segments: pathToCubics(path), stems: [], ends: [source.x, source.y, target.x, target.y], labelX, labelY, width, dashed: true, hidden, decorated: false, running: false };
+    const segments = pathToCubics(path).flatMap((c) => cubicPieces(c, DASH_PIECE));
+    return { segments, stems: [], ends: [source.x, source.y, target.x, target.y], labelX, labelY, width, dashed: true, hidden, decorated: false, running: false };
   }
   const stems: EdgeRoute["stems"] = [];
   let startX = source.x, endX = target.x, decorated = hidden || loading || !!data?.hasPause || !!data?.isLoop || !!data?.label?.trim();

@@ -128,8 +128,10 @@ export function measuredChanges(nodes: readonly WorkflowNode[], indexOf: (id: st
 }
 
 function edgeColor(edge: WorkflowEdge): Rgb {
-  const data = edge.data as { isLoop?: boolean; hasPause?: boolean } | undefined;
-  const key = data?.isLoop ? "loop" : data?.hasPause ? "pause" : edge.type === "reference" ? "reference" : edgeColorKeyForHandles(edge.sourceHandle, edge.targetHandle);
+  const data = edge.data as { isLoop?: boolean; hasPause?: boolean; hidden?: boolean } | undefined;
+  // ReferenceEdge reads neither a loop nor a pause: it stays grey. A hidden one is drawn as EditableEdge.
+  const key = edge.type === "reference" && !data?.hidden ? "reference"
+    : data?.isLoop ? "loop" : data?.hasPause ? "pause" : edge.type === "reference" ? "reference" : edgeColorKeyForHandles(edge.sourceHandle, edge.targetHandle);
   return rgb(EDGE_COLORS[key]);
 }
 

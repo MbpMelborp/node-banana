@@ -289,6 +289,26 @@ describe("presses on the GPU canvas", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("a right-click on a connection opens its menu in the middleMouse pan mode; on the pane it shows no menu", () => {
+    settings = { ...settings, navigation: { ...settings.navigation, panMode: "middleMouse" }, onEdgeContextMenu: vi.fn() };
+    edgeHit = 0;
+    editor.contextMenu(new MouseEvent("contextmenu", { clientX: 2000, clientY: 2000, cancelable: true }));
+    expect(settings.onEdgeContextMenu).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));
+    edgeHit = -1;
+    const pane = new MouseEvent("contextmenu", { clientX: 2000, clientY: 2000, cancelable: true });
+    editor.contextMenu(pane);
+    expect(pane.defaultPrevented).toBe(true);
+    expect(settings.onPaneMenu).not.toHaveBeenCalled();
+  });
+
+  it("under a dialog a right-click on the pane shows neither menu", () => {
+    settings = { ...settings, disabled: true };
+    const pane = new MouseEvent("contextmenu", { clientX: 2000, clientY: 2000, cancelable: true });
+    editor.contextMenu(pane);
+    expect(pane.defaultPrevented).toBe(true);
+    expect(settings.onPaneMenu).not.toHaveBeenCalled();
+  });
+
   it("a double-click opens the add-node menu on empty canvas only, not on a connection", () => {
     edgeHit = 0;
     editor.paneDoubleClick(2000, 2000, { x: 1, y: 1 });

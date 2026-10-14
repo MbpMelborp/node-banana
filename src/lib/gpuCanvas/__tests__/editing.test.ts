@@ -4,8 +4,8 @@ import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
 import { measuredChanges, refitMeasured, SceneGraph, type SceneNode } from "../graph";
-import { cubicAt, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
-import { Scene } from "../scene";
+import { cubicArcLength, cubicAt, cubicPieces, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { EDGE_CAP_END, EDGE_CAP_START, Scene } from "../scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
 
@@ -117,7 +117,28 @@ describe("routeSceneEdge", () => {
     const route = routeSceneEdge(graph, 0, context(edges, nodes, "angular"));
     expect(route.dashed).toBe(true);
     expect(route.width).toBe(2);
-    expect(route.segments).toHaveLength(1);
+    // In short pieces along one curve, so its dashes keep their spacing.
+    expect(route.segments.length).toBeGreaterThan(1);
+    for (let i = 1; i < route.segments.length; i++) expect(route.segments[i][0]).toBeCloseTo(route.segments[i - 1][6]);
+  });
+
+  it("keeps a paused reference link grey, as ReferenceEdge does", () => {
+    const edges = [{ ...edge("r", "a", "b", { hasPause: true }), type: "reference" } as WorkflowEdge, edge("p", "a", "b", { hasPause: true })];
+    const graph = new SceneGraph(nodes, edges, {});
+    expect(graph.edges[0].color).not.toEqual(graph.edges[1].color);
+  });
+
+  it("cuts a cubic into pieces of even arc length that trace it", () => {
+    const c = [0, 0, 300, 0, 0, 200, 300, 200] as Parameters<typeof cubicPieces>[0];
+    const pieces = cubicPieces(c, 40);
+    const lengths = pieces.map((piece) => cubicArcLength(piece));
+    expect(lengths.reduce((a, b) => a + b)).toBeCloseTo(cubicArcLength(c, 200), 0);
+    for (const length of lengths) expect(Math.abs(length - lengths[0])).toBeLessThan(1);
+    expect(pieces[0].slice(0, 2)).toEqual([0, 0]);
+    expect(pieces[pieces.length - 1].slice(6)).toEqual([300, 200]);
+    // A point on a piece lies on the cubic.
+    const mid = cubicAt(pieces[3], 0.5);
+    expect(distanceToCubic(c, mid.x, mid.y, 400)).toBeLessThan(0.5);
   });
 });
 
@@ -128,6 +149,28 @@ describe("connections and painted nodes", () => {
     const fake = { graph, view: { x: 0, y: 0, zoom: 1 }, routes: [stemmed], edgeBounds: new Float32Array([0, 0, 300, 0]), toWorld: (x: number, y: number) => ({ x, y }) };
     expect(Scene.prototype.edgeAt.call(fake as unknown as Scene, 20, 4)).toBe(0);
     expect(Scene.prototype.edgeAt.call(fake as unknown as Scene, 20, 40)).toBe(-1);
+  });
+
+  it("takes a connection within classic's 10-unit band of its centre line, never under 7 px past its stroke", () => {
+    const route = { segments: pathToCubics("M0,0 L300,0"), stems: [], width: 2 };
+    const fake = (zoom: number) => ({ graph: { edges: [{}] }, view: { x: 0, y: 0, zoom }, routes: [route], edgeBounds: new Float32Array([0, 0, 300, 0]), toWorld: (x: number, y: number) => ({ x: x / zoom, y: y / zoom }) });
+    const at = (zoom: number, y: number) => Scene.prototype.edgeAt.call(fake(zoom) as unknown as Scene, 100 * zoom, y * zoom);
+    expect(at(1, 9.5)).toBe(0);
+    expect(at(1, 10.5)).toBe(-1);
+    expect(at(2, 9.5)).toBe(0);
+    // Zoomed out, 7 px past the stroke is more than 10 units.
+    expect(at(0.25, 25)).toBe(0);
+  });
+
+  it("caps a connection's ends only, so its joints do not overlap", () => {
+    const route = { segments: pathToCubics("M0,0 L100,0 L100,100 L200,100"), stems: [{ segment: pathToCubics("M0,0 L-20,0")[0], width: 6 }], ends: [0, 0, 200, 100], width: 2, dashed: false, hidden: false };
+    const fake = {
+      routes: [route], graph: { edges: [{ source: 0, target: 1, color: [1, 1, 1] }] }, edgeLive: new Set(), edgeHeld: -1, edgeSelected: new Set(), hoveredEdge: -1, selected: new Set(),
+      routeOffset: [0], edgeData: new Float32Array(4 * 20), edgeBounds: new Float32Array(4),
+    };
+    (Scene.prototype as unknown as { writeEdge(e: number): void }).writeEdge.call(fake, 0);
+    const caps = [0, 1, 2, 3].map((k) => fake.edgeData[k * 20 + 11] & (EDGE_CAP_START | EDGE_CAP_END));
+    expect(caps).toEqual([EDGE_CAP_START, 0, EDGE_CAP_END, EDGE_CAP_START | EDGE_CAP_END]);
   });
 
   it("names the painted nodes over live connections and the connections they cover", () => {

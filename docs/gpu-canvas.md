@@ -268,8 +268,10 @@ The scene takes every press and asks the editor what it starts:
   headers and sockets move in the frame that draws their connections. While
   any gesture runs, no text selection or native drag starts (d3-drag's
   `nodrag`).
-- **A connection** (within 7 px, a bundle's shared stem counting for the
-  connection that draws it, as BundleStem's hit path): selects it, as React Flow would; Shift
+- **A connection** (within 10 flow units of its centre line, React Flow's
+  interaction path, and never less than 7 px past its stroke; a bundle's
+  shared stem counting for the connection that draws it, as BundleStem's
+  hit path): selects it, as React Flow would; Shift
   adds it, unless nodes are selected (WorkflowCanvas drops connections from
   a selection with nodes in it). On a locked canvas it selects nothing but
   still moves the connection toolbar there.
@@ -319,7 +321,10 @@ The scene takes every press and asks the editor what it starts:
   scene draws it hovered, and Enter or Space selects it, Escape unselects
   it. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu (on a node, its header or a
-  handle the browser's own, as on classic); a double-click on the pane
+  handle the browser's own, as on classic). The connection menu opens in
+  every pan mode; on the pane the browser's menu never shows, and the
+  add-node menu does not open in the "middleMouse" mode, under a dialog or
+  in the tutorial. A double-click on the pane
   opens the add-node menu (not on a connection or a handle), and one on a
   node is the node's own: the view stays put.
 - The wheel is decided as classic's two handlers decide it (`wheel.ts`):
@@ -384,7 +389,11 @@ segment handle takes the pointer and drags as on classic, and the scene's
 hovered connection brightens its live label (`edgeHoverStore`). A hovered
 connection (and its bundle stem) is drawn at full strength, as classic's
 `:hover` stroke, and the gradient spans the route's own extent, as classic's
-`objectBoundingBox` gradient. Hover over connections and painted handles
+`objectBoundingBox` gradient. Only a route's two ends take round caps, so a
+faded connection's bends are not darker where its segments meet. A reference
+link's dashes are laid out by arc length (its curve is cut into short pieces)
+with round ends, as the SVG's "6 4" round-capped dashes, and it stays grey when
+paused, as `ReferenceEdge` reads no pause. Hover over connections and painted handles
 ends when the pointer leaves the canvas, a gesture moves or a wheel moves the
 view (classic's edges and nodes take no pointer events while the canvas is
 interacting), until the pointer moves again.
