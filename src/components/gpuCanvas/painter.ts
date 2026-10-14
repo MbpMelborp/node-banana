@@ -716,7 +716,7 @@ export class Painter {
       if (!slot) continue;
       paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h });
       const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
-      this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id));
+      this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id), flow?.nodeLookup.get(r.id)?.measured.width);
       items.push({ src, dst: slot });
       done.push(r);
     }
@@ -754,13 +754,14 @@ export class Painter {
   }
 
   /** The node's measured height and handles reach the scene (its edges move to them). */
-  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: { x: number; y: number; w: number; h: number } | null) {
+  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: { x: number; y: number; w: number; h: number } | null, width?: number) {
     const i = this.scene.graph.indexOf.get(id);
     if (i == null) return;
     if (card !== undefined) this.scene.graph.nodes[i].card = card;
     this.scene.setNodeHeight(i, height);
     if (handles) {
-      this.scene.setHandles(i, handles);
+      // At the width it was painted at: a width changed since moves them until the next paint.
+      this.scene.setHandles(i, handles, width);
       this.paint(id).handles = handles;
     }
     if (!this.measuredIds.size) queueMicrotask(() => this.reportMeasured());

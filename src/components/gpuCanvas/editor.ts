@@ -980,6 +980,23 @@ export class Editor {
   };
 
   /**
+   * The scene's onHoverEnd: no connection is hovered (the one holding keyboard focus still looks it) until
+   * the next idle move. Off the canvas or under a wheel the painted handle is no longer hovered either, so
+   * its hidden connections stop ghosting in; a pressed handle keeps it until its drag starts. The live
+   * label's hover is the canvas's own pointerleave listener's on a leave (it may have gone onto that label).
+   */
+  hoverEnd = (reason: "leave" | "gesture" | "wheel") => {
+    const scene = this.scene;
+    if (reason !== "gesture" && this.hoveredHandle !== null) {
+      this.hoveredHandle = null;
+      if (useWorkflowStore.getState().hoveredHandle) useWorkflowStore.getState().setHoveredHandle(null);
+    }
+    const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
+    scene.setHoveredEdge(focused ?? -1);
+    if (reason !== "leave") setHoveredSceneEdge(null);
+  };
+
+  /**
    * Empty canvas's cursor: the pointer while a drag there would draw a marquee, as React Flow's pane with its
    * `selection` class (the selection key held, or selectionOnDrag while panOnDrag is not on; Space in the
    * "space" pan mode turns panOnDrag on). No class while a dialog is open.

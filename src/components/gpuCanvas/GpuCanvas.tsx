@@ -209,6 +209,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         },
         onPress: (event) => editor.press(event),
         onIdleMove: (event) => editor.idleMove(event),
+        onHoverEnd: (reason) => editor.hoverEnd(reason),
         onContextMenu: (event) => editor.contextMenu(event),
         onPaneDoubleClick: (x, y, screen) => editor.paneDoubleClick(x, y, screen),
         routeEdge: (e) => {

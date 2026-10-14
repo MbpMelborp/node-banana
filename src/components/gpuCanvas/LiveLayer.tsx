@@ -513,11 +513,12 @@ export class LiveLayer {
    */
   private applyLiveSize(id: string) {
     const state = this.flowState(), i = this.scene.graph.indexOf.get(id);
-    const height = state?.nodeLookup.get(id)?.measured.height;
+    const measured = state?.nodeLookup.get(id)?.measured, height = measured?.height;
     if (!this.live.has(id) || i == null || !state || !height) return;
     if (Math.abs(this.scene.graph.nodes[i].h - height) > 0.5) this.scene.setNodeHeight(i, height);
     const handles = handleAnchors(state, id, this.element);
-    if (handles) this.scene.setHandles(i, handles);
+    // Measured at the live node's width, which reaches the store (and the scene's box) just after.
+    if (handles) this.scene.setHandles(i, handles, measured?.width);
   }
 
   /** The graph was rebuilt: the scene forgot which nodes it hid. */

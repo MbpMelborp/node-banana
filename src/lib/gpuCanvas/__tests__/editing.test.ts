@@ -3,8 +3,8 @@ import { getBezierPath, getSmoothStepPath, Position } from "@xyflow/react";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
-import { measuredChanges, SceneGraph } from "../graph";
-import { cubicAt, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { measuredChanges, refitMeasured, SceneGraph, type SceneNode } from "../graph";
+import { cubicAt, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
 import { Scene } from "../scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
@@ -343,5 +343,65 @@ describe("autoPanVelocity", () => {
     expect(autoPanVelocity({ x: 0, y: 400 }, size)).toEqual([15, 0]);
     expect(autoPanVelocity({ x: 20, y: 790 }, size)).toEqual([7.5, -11.25]);
     expect(autoPanVelocity({ x: 1100, y: -50 }, size)).toEqual([-15, 15]);
+  });
+});
+
+describe("cubicXExtent", () => {
+  it("spans a backward curve's own overshoot, not its control points", () => {
+    // A 400-unit backward bezier, as getBezierPath draws one (offset 0.25 * 25 * sqrt(400) = 125).
+    const c = [400, 0, 525, 0, -125, 200, 0, 200] as Parameters<typeof cubicXExtent>[0];
+    const [min, max] = cubicXExtent(c);
+    let lo = Infinity, hi = -Infinity;
+    for (let k = 0; k <= 1000; k++) {
+      const { x } = cubicAt(c, k / 1000);
+      lo = Math.min(lo, x);
+      hi = Math.max(hi, x);
+    }
+    expect(min).toBeCloseTo(lo, 1);
+    expect(max).toBeCloseTo(hi, 1);
+    expect(max - min).toBeLessThan(450);
+  });
+
+  it("is the ends for a forward curve and a line", () => {
+    expect(cubicXExtent([0, 0, 100, 0, 100, 50, 200, 50])).toEqual([0, 200]);
+    expect(cubicXExtent([50, 0, 40, 0, 10, 0, 0, 0])).toEqual([0, 50]);
+  });
+});
+
+describe("refitMeasured", () => {
+  it("keeps right-hand handles on the right side and stretches a full-width card", () => {
+    const n: SceneNode = {
+      id: "a", type: "prompt", x: 0, y: 0, w: 300, h: 200, color: [0, 0, 0], measuredW: 300,
+      handles: new Map([
+        ["source:text", { x: 300, y: 40, position: "right", box: { x: 292, y: 32, w: 16, h: 16 } }],
+        ["source:legacy", { x: 300, y: 60 }],
+        ["target:text", { x: 0, y: 40, position: "left" }],
+        ["target:top", { x: 150, y: 0, position: "top" }],
+      ]),
+      card: { x: 0, y: 0, w: 300, h: 120 },
+    };
+    n.w = 400;
+    refitMeasured(n, 400);
+    expect(n.handles!.get("source:text")).toMatchObject({ x: 400, box: { x: 392 } });
+    expect(n.handles!.get("source:legacy")!.x).toBe(400);
+    expect(n.handles!.get("target:text")!.x).toBe(0);
+    expect(n.handles!.get("target:top")!.x).toBe(200);
+    expect(n.card).toEqual({ x: 0, y: 0, w: 400, h: 120 });
+    expect(n.measuredW).toBe(400);
+    // Measured at that width already: nothing moves.
+    refitMeasured(n, 400);
+    expect(n.handles!.get("source:text")!.x).toBe(400);
+  });
+
+  it("moves a node's handles when the store widens it in place", () => {
+    const nodes = [node("a", 0, 0), node("b", 600, 0)];
+    const edges = [edge("e", "a", "b")];
+    const graph = new SceneGraph(nodes, edges, {});
+    graph.nodes[0].handles = new Map([["source:text", { x: 300, y: 40, position: "right" }]]);
+    graph.nodes[0].measuredW = 300;
+    const wider = [{ ...nodes[0], width: 360 } as WorkflowNode, nodes[1]];
+    graph.sync(wider, edges, {});
+    expect(graph.nodes[0].w).toBe(360);
+    expect(graph.nodes[0].handles!.get("source:text")!.x).toBe(360);
   });
 });

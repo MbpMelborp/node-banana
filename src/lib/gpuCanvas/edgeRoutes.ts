@@ -64,6 +64,34 @@ export function cubicAt(c: Cubic, t: number): { x: number; y: number } {
   };
 }
 
+/**
+ * A cubic's tight horizontal extent [min, max]: its ends and any turning point between them, not its
+ * control points (an SVG path's bounding box, which classic's objectBoundingBox gradient spans).
+ */
+export function cubicXExtent(c: Cubic): [number, number] {
+  const [x0, , x1, , x2, , x3] = c;
+  let min = Math.min(x0, x3), max = Math.max(x0, x3);
+  // dx/dt = a t² + b t + k
+  const a = 3 * (-x0 + 3 * x1 - 3 * x2 + x3), b = 6 * (x0 - 2 * x1 + x2), k = 3 * (x1 - x0);
+  const roots: number[] = [];
+  if (Math.abs(a) < 1e-9) {
+    if (Math.abs(b) > 1e-9) roots.push(-k / b);
+  } else {
+    const disc = b * b - 4 * a * k;
+    if (disc >= 0) {
+      const sq = Math.sqrt(disc);
+      roots.push((-b + sq) / (2 * a), (-b - sq) / (2 * a));
+    }
+  }
+  for (const t of roots) {
+    if (t <= 0 || t >= 1) continue;
+    const x = cubicAt(c, t).x;
+    min = Math.min(min, x);
+    max = Math.max(max, x);
+  }
+  return [min, max];
+}
+
 /** A cubic's length, near enough for dashes (the chord and control polygon averaged). */
 export function cubicLength(c: Cubic): number {
   const chord = Math.hypot(c[6] - c[0], c[7] - c[1]);

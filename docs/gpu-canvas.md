@@ -90,7 +90,10 @@ Batches are 48 nodes, 96 at the 1/4 tier.
   painted. The measured height and handle positions go to the scene, so
   edges meet the painted sockets, and the size goes to the store as React
   Flow's "dimensions" change (as do a live node's), so `getNodeSize` and the
-  arrange commands see real heights as on the classic canvas.
+  arrange commands see real heights as on the classic canvas. A width change
+  moves the measured handles at once (right-hand ones with the right side,
+  `refitMeasured`) until the node is measured again, as React Flow measures
+  its handles on the frame a node's size changes.
 - **Painting gives way to input.** A batch starts only 120 ms after the last
   input, and a batch whose sheet became ready after input arrived goes back
   to the queue unpainted. Sheets are 2048×1536 texels; disk cache uploads
@@ -378,7 +381,13 @@ decorations (the comet, pause badge, hidden stubs and ghost) are masked
 where a painted node lies over them (`paintedCover`, `EdgeMask`), as
 classic's nodes cover its edge layer. A selected angular connection's
 segment handle takes the pointer and drags as on classic, and the scene's
-hovered connection brightens its live label (`edgeHoverStore`).
+hovered connection brightens its live label (`edgeHoverStore`). A hovered
+connection (and its bundle stem) is drawn at full strength, as classic's
+`:hover` stroke, and the gradient spans the route's own extent, as classic's
+`objectBoundingBox` gradient. Hover over connections and painted handles
+ends when the pointer leaves the canvas, a gesture moves or a wheel moves the
+view (classic's edges and nodes take no pointer events while the canvas is
+interacting), until the pointer moves again.
 
 ## What phase 3 leaves out
 

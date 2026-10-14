@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import { getViewportForBounds } from "@xyflow/react";
 import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
-import { cubicLength, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
+import { cubicLength, cubicXExtent, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
@@ -281,7 +281,7 @@ const EDGE_FRAGMENT = /* glsl */ `
       float pos = clamp((vX - vRange.x) / span, 0.0, 1.0);
       vec3 stops = isActive || highlight ? vec3(1.0, 0.55, 1.0) : vec3(uFaded, uFaded * 0.4, uFaded);
       alpha = pos < 0.5 ? mix(stops.x, stops.y, pos * 2.0) : mix(stops.y, stops.z, (pos - 0.5) * 2.0);
-    } else alpha = isActive ? 1.0 : uFaded;
+    } else alpha = isActive || highlight ? 1.0 : uFaded;
     outColor = vec4(vColor, alpha * coverage);
   }
 `;
@@ -349,6 +349,12 @@ export interface SceneCallbacks {
   onPress?: (event: PointerEvent) => Gesture | null;
   /** The pointer moved with no gesture under way (hover). */
   onIdleMove?: (event: PointerEvent) => void;
+  /**
+   * Hover over handles and connections ends until the next idle move: the pointer left the canvas
+   * ("leave"), a gesture is moving ("gesture") or a wheel moved the view ("wheel"), as classic's edges
+   * and nodes take no pointer events while the canvas is interacting or wheel-navigating.
+   */
+  onHoverEnd?: (reason: "leave" | "gesture" | "wheel") => void;
   onContextMenu?: (event: MouseEvent) => void;
   /** A double-click on empty canvas, at a flow position (one on a node is the node's own, as on classic). */
   onPaneDoubleClick?: (x: number, y: number, screen: { x: number; y: number }) => void;
@@ -627,16 +633,23 @@ export class Scene {
     if (route.dashed) flags |= EDGE_DASHED;
     const [sx, sy, tx, ty] = route.ends;
     let minX = Math.min(sx, tx), maxX = Math.max(sx, tx), minY = Math.min(sy, ty), maxY = Math.max(sy, ty);
-    for (const c of route.segments) for (let k = 0; k < 8; k += 2) {
-      minX = Math.min(minX, c[k]); maxX = Math.max(maxX, c[k]);
-      minY = Math.min(minY, c[k + 1]); maxY = Math.max(maxY, c[k + 1]);
+    // The gradient spans the route's own extent, as classic's objectBoundingBox does: a backward
+    // curve's control points overshoot it, which would dim its ends.
+    let gradientMin = minX, gradientMax = maxX;
+    for (const c of route.segments) {
+      const [lo, hi] = cubicXExtent(c);
+      gradientMin = Math.min(gradientMin, lo); gradientMax = Math.max(gradientMax, hi);
+      for (let k = 0; k < 8; k += 2) {
+        minX = Math.min(minX, c[k]); maxX = Math.max(maxX, c[k]);
+        minY = Math.min(minY, c[k + 1]); maxY = Math.max(maxY, c[k + 1]);
+      }
     }
     let at = this.routeOffset[e] * EDGE_STRIDE, along = 0;
     const [r, g, b] = edge.color;
     for (const c of route.segments) {
       const length = cubicLength(c);
       this.edgeData.set(c, at);
-      this.edgeData.set([r, g, b, flags, route.width, along, length, minX, maxX], at + 8);
+      this.edgeData.set([r, g, b, flags, route.width, along, length, gradientMin, gradientMax], at + 8);
       along += length;
       at += EDGE_STRIDE;
     }
@@ -838,11 +851,12 @@ export class Scene {
     this.layoutChanged();
   }
 
-  /** Where a node's handles are, once measured; moves its edges' ends. */
-  setHandles(i: number, handles: Map<string, { x: number; y: number }>) {
+  /** Where a node's handles are, once measured (at `width`, the node's own by default); moves its edges' ends. */
+  setHandles(i: number, handles: Map<string, { x: number; y: number }>, width?: number) {
     const node = this.graph.nodes[i];
     if (!node) return;
     node.handles = handles;
+    node.measuredW = width ?? node.w;
     this.touchEdges(i);
   }
 
@@ -1176,6 +1190,7 @@ export class Scene {
       this.callbacks.onIdleMove?.(event);
       return;
     }
+    this.callbacks.onHoverEnd?.("gesture");
     gesture.move(event);
   };
 
@@ -1196,7 +1211,9 @@ export class Scene {
 
   private onPointerLeave = () => {
     this.pointerAt = null;
-    if (!this.gesture) this.setHovered(-1);
+    if (this.gesture) return;
+    this.setHovered(-1);
+    this.callbacks.onHoverEnd?.("leave");
   };
 
   private onDoubleClick = (event: MouseEvent) => {
@@ -1218,6 +1235,7 @@ export class Scene {
     if (!action) return;
     event.preventDefault();
     if (action.type === "block") return;
+    this.callbacks.onHoverEnd?.("wheel");
     this.noteInput(event);
     if (action.type === "pan") this.setView({ x: this.view.x - action.dx, y: this.view.y - action.dy });
     else {

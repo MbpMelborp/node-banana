@@ -40,6 +40,31 @@ export interface SceneNode {
   handles?: Map<string, HandleAnchor>;
   /** The media card's box within the node, once measured: what a marquee must hold to take the node. */
   card?: { x: number; y: number; w: number; h: number } | null;
+  /** The node's width when its handles and card were measured: a new width moves them (`refitMeasured`). */
+  measuredW?: number;
+}
+
+/**
+ * A measured node's handles and card at a new width, until it is measured again: React Flow measures
+ * a node's handles on the frame its size changes, so a connection on a right-hand socket follows a
+ * width change at once. Right-hand handles keep their distance from the right side, top and bottom
+ * ones their share of the width, left ones stay; a card reaching the right side stretches with it.
+ */
+export function refitMeasured(n: SceneNode, w: number) {
+  const from = n.measuredW;
+  if (from == null || from === w) return;
+  n.measuredW = w;
+  const dw = w - from, scale = from > 0 ? w / from : 1;
+  if (n.handles) {
+    const handles = new Map<string, HandleAnchor>();
+    for (const [key, anchor] of n.handles) {
+      const side = anchor.position ?? (key.startsWith("source:") ? "right" : "left");
+      const shift = side === "right" ? dw : side === "top" || side === "bottom" ? anchor.x * scale - anchor.x : 0;
+      handles.set(key, shift ? { ...anchor, x: anchor.x + shift, ...(anchor.box ? { box: { ...anchor.box, x: anchor.box.x + shift } } : {}) } : anchor);
+    }
+    n.handles = handles;
+  }
+  if (n.card && n.card.x + n.card.w >= from - 0.5) n.card = { ...n.card, w: Math.max(0, n.card.w + dw) };
 }
 
 export interface SceneEdge {
@@ -161,6 +186,7 @@ export class SceneGraph {
             n.x = x;
             n.y = y;
             n.w = w;
+            refitMeasured(n, w);
             result.moved.push(i);
           }
         }
@@ -203,6 +229,7 @@ export class SceneGraph {
         n.x = x;
         n.y = y;
         n.w = w;
+        refitMeasured(n, w);
         moved.push(i);
       }
     }
@@ -217,9 +244,10 @@ export class SceneGraph {
   private rebuildNodes(nodes: readonly WorkflowNode[]) {
     const previous = new Map(this.nodes.map((n) => [n.id, n]));
     this.sourceNodes = nodes;
-    this.nodes = nodes.map((node) => {
+    this.nodes = nodes.map((node): SceneNode => {
       const { w, h } = storeNodeSize(node);
       const kept = previous.get(node.id), { x, y } = this.positionOf(node);
+      if (kept) refitMeasured(kept, w);
       return {
         id: node.id,
         type: String(node.type),
@@ -229,8 +257,9 @@ export class SceneGraph {
         // A node already measured keeps its height until it is painted again.
         h: kept && kept.w === w ? kept.h : h,
         color: rgb(miniMapTypeColor(node.type)),
-        handles: kept && kept.w === w ? kept.handles : undefined,
-        card: kept && kept.w === w ? kept.card : undefined,
+        handles: kept?.handles,
+        card: kept?.card,
+        measuredW: kept?.measuredW,
       };
     });
     this.indexOf = new Map(this.nodes.map((n, i) => [n.id, i]));
