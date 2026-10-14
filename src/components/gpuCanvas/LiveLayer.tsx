@@ -127,8 +127,9 @@ const RENDER_TIMEOUT_MS = 2000;
  * while it works on its output (its spinner turns). "added" holds a node just added until its first paint shows. "cover" keeps a later node in the store over an
  * unselected live node it overlaps, as classic stacks nodes in store order (the layer sets it, coverChanged).
  * "groupChrome" holds a node whose header a group's label or open menu overlaps, so the header stays above them as on classic.
+ * "drop" holds the node a file is dragged over, so the file lands on the node's own drop zone as on classic.
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "press" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover" | "groupChrome";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "press" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover" | "groupChrome" | "drop";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {

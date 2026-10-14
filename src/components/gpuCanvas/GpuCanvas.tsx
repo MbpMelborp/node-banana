@@ -453,6 +453,32 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     document.addEventListener("click", measureChrome, true);
     document.addEventListener("keydown", measureChrome, true);
 
+    // A file dragged over a painted node makes it live, so the drop lands on the node's own drop zone (an empty
+    // input loads it) rather than the canvas's, which adds a node: browsers send no pointer events during a drag.
+    let dropTarget: string | null = null;
+    const showDropTarget = (id: string | null) => {
+      if (id === dropTarget) return;
+      dropTarget = id;
+      live.wantOnly("drop", id ? [id] : []);
+    };
+    const fileDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      const at = scene.local(event), i = scene.nodeAt(at.x, at.y, false);
+      showDropTarget(i >= 0 ? scene.graph.nodes[i].id : null);
+    };
+    const fileDragLeave = (event: DragEvent) => {
+      if (!(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))) showDropTarget(null);
+    };
+    // A task later, so the node is still mounted when its own drop handler runs.
+    const fileDragEnd = () => setTimeout(() => {
+      if (!disposed) showDropTarget(null);
+    }, 0);
+    host.addEventListener("dragenter", fileDragOver, true);
+    host.addEventListener("dragover", fileDragOver, true);
+    host.addEventListener("dragleave", fileDragLeave, true);
+    window.addEventListener("drop", fileDragEnd, true);
+    window.addEventListener("dragend", fileDragEnd, true);
+
     const unsubscribeStore = useWorkflowStore.subscribe((state, previous) => {
       if (state.dimmedNodeIds !== previous.dimmedNodeIds || state.skippedNodeIds !== previous.skippedNodeIds) showDimming();
       if (state.edgeAppearance !== previous.edgeAppearance) scene.setEdgeAppearance(state.edgeAppearance.gradient, state.edgeAppearance.fadedOpacity);
@@ -643,6 +669,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       unsubscribeChromeLayout();
       document.removeEventListener("click", measureChrome, true);
       document.removeEventListener("keydown", measureChrome, true);
+      host.removeEventListener("dragenter", fileDragOver, true);
+      host.removeEventListener("dragover", fileDragOver, true);
+      host.removeEventListener("dragleave", fileDragLeave, true);
+      window.removeEventListener("drop", fileDragEnd, true);
+      window.removeEventListener("dragend", fileDragEnd, true);
       isPanningRef.current = false;
       clearTimeout(hoverTimer);
       disposed = true;

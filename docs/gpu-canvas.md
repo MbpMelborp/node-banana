@@ -150,7 +150,10 @@ A node is live (a real component on the live layer) while it is hovered
 (its painted sockets, a little outside its box, hover it too, as classic's
 handles sit in the node's element), selected, holds focus, is opened, or is visible above 100% zoom. A node just
 added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
-until its first picture shows ("added"), as classic renders it whole at once. Its scene
+until its first picture shows ("added"), as classic renders it whole at once. A node a
+file is dragged over is live ("drop"), so the file lands on its own drop
+zone (an empty input loads it) rather than the canvas's, which adds a node:
+browsers send no pointer events during a drag. Its scene
 image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap; until then the live component and its
 floating header are laid out but invisible (`gpu-entering`), so nothing
