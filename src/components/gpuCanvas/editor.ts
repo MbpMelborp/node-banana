@@ -29,7 +29,7 @@ import { EDGE_COLORS, edgeColorForHandles } from "@/lib/edges/colors";
 import { routeEdge } from "@/lib/edges/route";
 import { Position } from "@xyflow/react";
 import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
-import { handleAt, marqueeNodes, paneDragAction, type HandleHit } from "@/lib/gpuCanvas/gestures";
+import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import type { LiveLayer } from "./LiveLayer";
@@ -148,7 +148,8 @@ export class Editor {
     if (editing.disabled) return null;
     const scene = this.scene;
     const at = scene.local(event);
-    const action = paneDragAction(editing.navigation, { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, space: this.space }, isMac);
+    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, space: this.space };
+    const action = paneDragAction(editing.navigation, modifiers, isMac);
     // Space held (or the pan button) pans wherever the press lands, as React Flow's pan key does.
     if (action === "pan" && (this.space || event.button !== 0)) return scene.panGesture(event);
     if (event.button !== 0) return null;
@@ -156,14 +157,29 @@ export class Editor {
       const handle = this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y);
       if (handle) return this.connectGesture(event, handle);
     }
-    const node = scene.nodeAt(at.x, at.y);
-    if (node >= 0 && action !== "select") return this.nodeGesture(event, node);
-    const edge = node < 0 && action !== "select" ? scene.edgeAt(at.x, at.y) : -1;
+    const node = this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
+    const edge = node < 0 ? scene.edgeAt(at.x, at.y) : -1;
+    // With the selection key held, a press on a node or connection starts a selection: a drag draws a
+    // marquee at once, a release is still a click (Shift toggles it, as multiSelectionKeyCode).
+    if ((node >= 0 || edge >= 0) && selectionKeyHeld(editing.navigation, modifiers) && !editing.locked) {
+      const click = node >= 0 ? () => this.selectNodes([scene.graph.nodes[node].id], event.shiftKey) : () => this.clickEdge(event, edge);
+      return this.clickGesture(event, click, () => this.marqueeGesture(event), 0);
+    }
+    // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
+    if (node >= 0) return this.nodeGesture(event, node);
     if (edge >= 0) return this.clickGesture(event, () => this.clickEdge(event, edge));
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     if (action === "select" && !editing.locked) return this.marqueeGesture(event);
     return this.paneGesture(event, null);
   };
+
+  /** The live node (or its floating header) a press from the live layer landed on. */
+  private nodeFromEvent(event: PointerEvent): number | null {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest("[data-gpu-canvas-live]")) return null;
+    const id = target.closest("[data-node-header]")?.getAttribute("data-node-header") ?? target.closest(".react-flow__node:not(.react-flow__node-gpuGhost)")?.getAttribute("data-id");
+    return id ? this.scene.graph.indexOf.get(id) ?? null : null;
+  }
 
   /** A handle of a live node, when the press came from the live layer. */
   private handleFromEvent(event: PointerEvent): HandleHit | null {
@@ -204,15 +220,20 @@ export class Editor {
     return this.scene.nodesWithin(x - reach, y - reach, x + reach, y + reach);
   }
 
-  /** Follows a press until it moves past the click distance or ends; a release before that is a click. */
-  private clickGesture(event: PointerEvent, click: () => void, drag?: (move: PointerEvent) => Gesture | null): Gesture {
+  /**
+   * Follows a press until it moves past `distance` (any movement at 0) or ends; a release before that is a click.
+   * A drag takes the pointer (the scene leaves a press on a live node uncaptured until then, so its click lands).
+   */
+  private clickGesture(event: PointerEvent, click: () => void, drag?: (move: PointerEvent) => Gesture | null, distance = CLICK_DISTANCE): Gesture {
     const startX = event.clientX, startY = event.clientY;
     let dragging: Gesture | null = null, moved = false;
     return {
       move: (move) => {
         if (dragging) return dragging.move(move);
-        if (moved || Math.hypot(move.clientX - startX, move.clientY - startY) < CLICK_DISTANCE) return;
+        const travel = Math.hypot(move.clientX - startX, move.clientY - startY);
+        if (moved || travel === 0 || travel < distance) return;
         moved = true;
+        this.scene.capture();
         dragging = drag?.(move) ?? null;
         dragging?.move(move);
       },
@@ -452,6 +473,7 @@ export class Editor {
     };
     const start = (event: PointerEvent) => {
       dragging = true;
+      scene.capture();
       path.setAttribute("fill", "none");
       path.setAttribute("stroke-width", "3");
       path.setAttribute("stroke-linecap", "round");
@@ -497,7 +519,8 @@ export class Editor {
         // No handle: WorkflowCanvas connects to a compatible handle of the node under the pointer, or offers the add-node menu.
         const fromNode = useWorkflowStore.getState().nodes.find((n) => n.id === fromId);
         if (!fromNode) return;
-        const at = scene.local(event), node = scene.nodeAt(at.x, at.y);
+        // Classic finds the node by its element: its floating header is not part of it.
+        const at = scene.local(event), node = scene.nodeAt(at.x, at.y, false);
         editing.onConnectEnd(event, { isValid: false, fromNode, fromHandle: { id: handleId, type: from.type } }, node >= 0 ? scene.graph.nodes[node].id : null);
       },
       cancel: end,

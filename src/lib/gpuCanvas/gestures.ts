@@ -27,14 +27,22 @@ export interface PaneModifiers {
  */
 export function paneDragAction(settings: CanvasNavigationSettings, modifiers: PaneModifiers, isMac: boolean): PaneAction {
   const { button } = modifiers;
-  const selectionKey = settings.selectionMode === "altDrag" ? modifiers.altKey : modifiers.shiftKey;
-  if (button === 0 && selectionKey) return "select";
+  if (selectionKeyHeld(settings, modifiers)) return "select";
   if (settings.panMode === "space" && modifiers.space && (button === 0 || button === 1)) return "pan";
   const panButtons = settings.panMode === "always" ? [0, 1] : settings.panMode === "middleMouse" ? [2] : isMac ? [] : [0, 1];
   if (panButtons.includes(button)) return "pan";
   const selectionOnDrag = settings.selectionMode === "altDrag" || settings.selectionMode === "shiftDrag" ? false : settings.panMode === "always" ? false : isMac;
   if (button === 0 && selectionOnDrag) return "select";
   return null;
+}
+
+/**
+ * A left press with React Flow's `selectionKeyCode` held (Shift, or Alt for
+ * "altDrag"). Unlike `selectionOnDrag`, which draws a marquee only from empty
+ * canvas, it starts a selection over nodes and connections too.
+ */
+export function selectionKeyHeld(settings: CanvasNavigationSettings, modifiers: PaneModifiers): boolean {
+  return modifiers.button === 0 && (settings.selectionMode === "altDrag" ? modifiers.altKey : modifiers.shiftKey);
 }
 
 export interface HandleHit {

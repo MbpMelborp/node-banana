@@ -12,7 +12,7 @@
  * callbacks; it never writes to the workflow store.
  */
 import * as THREE from "three";
-import { GridIndex, type SceneGraph } from "./graph";
+import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
 import { cubicLength, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
 
 /** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the rect (4), unused (3). */
@@ -405,6 +405,8 @@ export class Scene {
   private frameHandle = 0;
   private disposed = false;
   private gesture: Gesture | null = null;
+  /** A press handed over by the live layer and not captured yet: its moves and release come through the window. */
+  private uncaptured: { pointerId: number; off: () => void } | null = null;
   /** The earliest input event not yet drawn (its timeStamp). */
   private pendingInputAt = 0;
   private resizeObserver: ResizeObserver;
@@ -418,7 +420,7 @@ export class Scene {
       this.callbacks.onFailure?.(`a shader failed to compile${log ? `: ${log}` : ""}`);
     };
     this.graph = graph;
-    this.index = new GridIndex(graph.nodes);
+    this.index = new GridIndex(graph.nodes, 512, NODE_HEADER);
 
     const grid = new THREE.BufferGeometry();
     grid.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
@@ -726,7 +728,7 @@ export class Scene {
     this.edgeSelected.clear();
     this.edgeLive.clear();
     this.hoveredEdge = -1;
-    this.index = new GridIndex(graph.nodes);
+    this.index = new GridIndex(graph.nodes, 512, NODE_HEADER);
     this.buildGraphMeshes();
     this.layoutChanged();
   }
@@ -890,9 +892,10 @@ export class Scene {
     return { x: x * this.view.zoom + this.view.x, y: y * this.view.zoom + this.view.y };
   }
 
-  nodeAt(cssX: number, cssY: number) {
+  /** The node under a point (css px): its floating header's band counts, unless `header` is false. */
+  nodeAt(cssX: number, cssY: number, header = true) {
     const p = this.toWorld(cssX, cssY);
-    return this.index.at(p.x, p.y);
+    return this.index.at(p.x, p.y, header);
   }
 
   /** Nodes whose rectangle overlaps a rectangle (flow units). */
@@ -932,9 +935,49 @@ export class Scene {
     // The owner decides what a press does (select, drag, connect, marquee); by default a drag pans.
     const gesture = this.callbacks.onPress ? this.callbacks.onPress(event) : event.button === 0 || event.button === 1 ? this.panGesture(event) : null;
     if (!gesture) return;
-    this.canvas.setPointerCapture?.(event.pointerId);
     this.gesture = gesture;
+    if (event.target === this.canvas) this.canvas.setPointerCapture?.(event.pointerId);
+    else this.followUncaptured(event.pointerId);
   };
+
+  /**
+   * Captures the pointer for the gesture in progress. A press on a live node
+   * is captured only once it turns into a drag (the gestures call this), so
+   * a click still lands on the element under it and runs its onClick (an
+   * Output node's image opens its lightbox), as React Flow's drag allows.
+   */
+  capture() {
+    const pending = this.uncaptured;
+    if (!pending) return;
+    this.stopFollowing();
+    this.canvas.setPointerCapture?.(pending.pointerId);
+  }
+
+  private followUncaptured(pointerId: number) {
+    // Events on the canvas itself reach its own listeners.
+    const move = (event: PointerEvent) => {
+      if (event.pointerId === pointerId && event.target !== this.canvas) this.onPointerMove(event);
+    };
+    const up = (event: PointerEvent) => {
+      if (event.pointerId === pointerId && event.target !== this.canvas) this.onPointerUp(event);
+    };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    this.uncaptured = {
+      pointerId,
+      off: () => {
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("pointercancel", up, true);
+      },
+    };
+  }
+
+  private stopFollowing() {
+    this.uncaptured?.off();
+    this.uncaptured = null;
+  }
 
   /** A gesture that pans the view with the pointer. */
   panGesture(event: PointerEvent): Gesture {
@@ -945,6 +988,7 @@ export class Scene {
         x = move.clientX;
         y = move.clientY;
         if (dx || dy) {
+          this.capture();
           this.noteInput(move);
           this.setView({ x: this.view.x + dx, y: this.view.y + dy });
         }
@@ -963,6 +1007,7 @@ export class Scene {
   cancelGesture() {
     const gesture = this.gesture;
     this.gesture = null;
+    this.stopFollowing();
     gesture?.cancel();
   }
 
@@ -980,6 +1025,7 @@ export class Scene {
   private onPointerUp = (event: PointerEvent) => {
     const gesture = this.gesture;
     this.gesture = null;
+    this.stopFollowing();
     if (!gesture) return;
     if (event.type === "pointercancel") gesture.cancel();
     else gesture.up(event);
@@ -995,9 +1041,10 @@ export class Scene {
 
   private onDoubleClick = (event: MouseEvent) => {
     const at = this.local(event);
-    const hit = this.nodeAt(at.x, at.y);
+    const hit = this.nodeAt(at.x, at.y, false);
     if (hit >= 0) this.callbacks.onOpen?.(hit);
-    else {
+    // A node's header band is not empty canvas (a double-click on its title renames, on the live header).
+    else if (this.nodeAt(at.x, at.y) < 0) {
       const p = this.toWorld(at.x, at.y);
       this.callbacks.onPaneDoubleClick?.(p.x, p.y, { x: event.clientX, y: event.clientY });
     }
@@ -1073,6 +1120,7 @@ export class Scene {
 
   dispose() {
     this.disposed = true;
+    this.stopFollowing();
     cancelAnimationFrame(this.frameHandle);
     this.resizeObserver.disconnect();
     const { canvas } = this;

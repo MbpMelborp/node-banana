@@ -11,10 +11,10 @@ import type { Node, NodeTypes, ReactFlowState } from "@xyflow/react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeaderActions } from "@/components/nodes/FloatingNodeHeaders";
 import type { WorkflowNode } from "@/types";
-import type { HandleAnchor } from "@/lib/gpuCanvas/graph";
+import { NODE_HEADER, type HandleAnchor } from "@/lib/gpuCanvas/graph";
 
 /** Flow units above a node that its painted image takes in, for the floating header. */
-export const HEADER = 30;
+export const HEADER = NODE_HEADER;
 /** Margin on the other sides, for the node's shadow. */
 export const PAD = 8;
 

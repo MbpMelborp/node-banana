@@ -191,13 +191,20 @@ The scene takes every press and asks the editor what it starts:
   opposite handle within 20 px. A valid drop connects; anything else goes to
   `handleConnectEnd` with the node under the pointer, which opens the
   connection drop menu as today.
-- **A node**: a click selects it (Shift adds or removes it); a drag moves the
-  selection. The first move records the undo step, the moves in between go
-  only to the scene graph and the live layer, and the drop goes to the store
-  and to `onNodeDragStop` (group membership).
+- **A node**, its floating header included (the 30 flow units above it,
+  painted or live): a click selects it (Shift adds or removes it); a drag
+  moves the selection. The first move records the undo step, the moves in
+  between go only to the scene graph and the live layer, and the drop goes
+  to the store and to `onNodeDragStop` (group membership). A press on a
+  live node takes the pointer only once it becomes a drag, so a click still
+  reaches what it lands on (an Output image's lightbox, a waveform's seek).
 - **A connection** (within 7 px): selects it, as React Flow would.
+- With the selection key held (Shift, or Alt in "altDrag"), a press on a
+  node or connection is a click that toggles it, and any movement turns it
+  into a marquee.
 - **The pane**: a click clears the selection; a drag pans or draws the
-  marquee as the navigation settings say (`paneDragAction`). The marquee
+  marquee as the navigation settings say (`paneDragAction`); drawing on drag
+  (the Mac default) starts only from empty canvas. The marquee
   takes a node only when it holds its media card, or the whole node without
   one; with no nodes taken it selects the connections it crosses.
 - **Delete / Backspace** removes the selected connections, then nodes;

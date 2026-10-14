@@ -5,7 +5,7 @@ import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "
 import { defaultEdgeAppearance } from "@/types";
 import { SceneGraph } from "../graph";
 import { cubicAt, distanceToCubic, pathToCubics, routeSceneEdge, type RouteContext } from "../edgeRoutes";
-import { handleAt, marqueeNodes, paneDragAction } from "../gestures";
+import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 
 function node(id: string, x: number, y: number, data: Record<string, unknown> = {}, type = "prompt"): WorkflowNode {
   return { id, type, position: { x, y }, data, width: 300 } as unknown as WorkflowNode;
@@ -135,6 +135,15 @@ describe("paneDragAction", () => {
     expect(paneDragAction(settings({ selectionMode: "altDrag" }), press({ altKey: true }), false)).toBe("select");
     expect(paneDragAction(settings({ selectionMode: "altDrag" }), press({ shiftKey: true }), false)).toBe("pan");
     expect(paneDragAction(settings({ selectionMode: "shiftDrag" }), press(), true)).toBe(null);
+  });
+
+  it("tells the selection key, which selects over nodes too, from selecting on drag, which starts only on the pane", () => {
+    const defaults = settings({});
+    expect(selectionKeyHeld(defaults, press())).toBe(false);
+    expect(selectionKeyHeld(defaults, press({ shiftKey: true }))).toBe(true);
+    expect(selectionKeyHeld(defaults, press({ shiftKey: true, button: 1 }))).toBe(false);
+    expect(selectionKeyHeld(settings({ selectionMode: "altDrag" }), press({ shiftKey: true }))).toBe(false);
+    expect(selectionKeyHeld(settings({ selectionMode: "altDrag" }), press({ altKey: true }))).toBe(true);
   });
 });
 

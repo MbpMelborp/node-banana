@@ -175,12 +175,17 @@ export class LiveLayer {
       if (target.closest(".nowheel, textarea")) return;
       scene.wheel(event);
     }, { passive: false });
-    // A press on a live node's body goes to the scene (click to select, drag to move), and so does
-    // one on its handles (drag to connect); its fields and buttons keep theirs.
+    // A press on a live node's body or floating header goes to the scene (click to select, drag to
+    // move), and so does one on its handles (drag to connect); its fields and buttons keep theirs.
     on("pointerdown", (event) => {
       const target = event.target as Element;
-      if (!target.closest(".react-flow__node")) return;
+      if (!target.closest(".react-flow__node, [data-node-header]")) return;
       if (!target.closest(".react-flow__handle") && target.closest("input, textarea, select, button, a, [contenteditable='true'], .nodrag")) return;
+      // The header's own drag moves nodes through this flow, whose nodes are the layer's: the scene's drag stands in.
+      if (!target.closest(".react-flow__node")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       scene.pointerDown(event);
     }, true);
     // The pointer over a live node: it is hovered, though the scene below no longer sees the pointer.

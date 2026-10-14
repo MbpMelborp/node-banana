@@ -270,20 +270,27 @@ export class SceneGraph {
   }
 }
 
-/** A uniform grid over node rectangles, for finding the node under a point. */
+/** Flow units above a node that its floating header takes: a press there is on the node. */
+export const NODE_HEADER = 30;
+
+/**
+ * A uniform grid over node rectangles, for finding the node under a point.
+ * `top` extends each node's hit area upwards (its floating header); `within`
+ * still answers for the node boxes alone.
+ */
 export class GridIndex {
   private cells = new Map<string, number[]>();
   /** The cells each node was inserted under, so a node can leave them after it moved. */
   private keysOf = new Map<number, string[]>();
 
-  constructor(private nodes: readonly SceneNode[], private cell = 512) {
+  constructor(private nodes: readonly SceneNode[], private cell = 512, private top = 0) {
     for (let i = 0; i < nodes.length; i++) this.insert(i);
   }
 
   private keys(i: number): string[] {
     const n = this.nodes[i], keys: string[] = [];
     for (let cx = Math.floor(n.x / this.cell); cx <= Math.floor((n.x + n.w) / this.cell); cx++) {
-      for (let cy = Math.floor(n.y / this.cell); cy <= Math.floor((n.y + n.h) / this.cell); cy++) keys.push(`${cx},${cy}`);
+      for (let cy = Math.floor((n.y - this.top) / this.cell); cy <= Math.floor((n.y + n.h) / this.cell); cy++) keys.push(`${cx},${cy}`);
     }
     return keys;
   }
@@ -313,13 +320,14 @@ export class GridIndex {
     this.insert(i);
   }
 
-  /** The topmost (last drawn) node containing the point, or -1. */
-  at(x: number, y: number): number {
+  /** The topmost (last drawn) node containing the point, its header band included unless `header` is false, or -1. */
+  at(x: number, y: number, header = true): number {
+    const top = header ? this.top : 0;
     const list = this.cells.get(`${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`);
     let best = -1;
     for (const i of list ?? []) {
       const n = this.nodes[i];
-      if (x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h && i > best) best = i;
+      if (x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h && i > best) best = i;
     }
     return best;
   }

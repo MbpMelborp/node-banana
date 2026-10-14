@@ -56,6 +56,16 @@ describe("GridIndex", () => {
     expect(index.at(2100, 150)).toBe(1);
     expect(index.within(1900, 0, 2500, 400)).toEqual([1]);
   });
+
+  it("counts the header band above a node for hits, but not for what lies within a box", () => {
+    const graph = new SceneGraph([node("a", 0, 520)], [], {});
+    const index = new GridIndex(graph.nodes, 512, 30);
+    // The band crosses into the cell above the node's.
+    expect(index.at(10, 500)).toBe(0);
+    expect(index.at(10, 500, false)).toBe(-1);
+    expect(index.at(10, 480)).toBe(-1);
+    expect(index.within(0, 495, 50, 505)).toEqual([]);
+  });
 });
 
 describe("AtlasLayout", () => {
