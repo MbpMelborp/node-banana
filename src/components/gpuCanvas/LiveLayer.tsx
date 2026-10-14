@@ -327,6 +327,13 @@ export class LiveLayer {
   pointerNode: string | null = null;
   /** Called when the pointer moves onto a live node or off the live nodes. */
   onPointerNode: ((id: string | null) => void) | null = null;
+  /**
+   * Whether React Flow's pane would take this press for a selection on classic (the editor's settings: the
+   * selection key held, no dialog open, the canvas unlocked). Set by the Editor.
+   */
+  selectionKeyActive: ((event: PointerEvent) => boolean) | null = null;
+  /** Whether a press on a group's title or resize grip pans the canvas, as classic's zoom pane takes it. Set by the Editor. */
+  groupChromePans: ((event: MouseEvent) => boolean) | null = null;
 
   /** `element` holds the LiveFlow rendered with `connection`. */
   constructor(readonly element: HTMLElement, private connection: LiveConnection, private scene: Scene, private stats: GpuCanvasStats) {
@@ -343,6 +350,19 @@ export class LiveLayer {
     // except from the middle button, which pans from anywhere in a node as classic's zoom pane lets it.
     on("pointerdown", (event) => {
       const target = event.target as Element;
+      // With the selection key held, classic's pane takes every left press inside it first (fields, nodrag
+      // controls, floating headers, group chrome, connection labels), save on `.nokey`: a drag draws a marquee.
+      if (selectionKeyTakesPress(event, this.selectionKeyActive)) {
+        event.preventDefault();
+        event.stopPropagation();
+        scene.pointerDown(event);
+        return;
+      }
+      // A group's title or grip pans where classic's zoom pane takes the press (d3-zoom swallows its mousedown).
+      if (this.groupChromePans?.(event)) {
+        scene.pointerDown(event);
+        return;
+      }
       const middle = event.button === 1 && !!target.closest(".react-flow__node");
       if (!middle && (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target))) {
         // A press the node keeps (a slider, a grid line) may drag off it: the node stays live until it lifts.
@@ -363,6 +383,10 @@ export class LiveLayer {
         event.stopPropagation();
       }
       scene.pointerDown(event);
+    }, true);
+    // ...and the group's own drag and resize, which listen for mousedown, do not start: d3-zoom stops it on classic.
+    on("mousedown", (event) => {
+      if (this.groupChromePans?.(event)) event.stopImmediatePropagation();
     }, true);
     // The pointer over a live node: it is hovered, though the scene below no longer sees the pointer.
     on("pointerover", (event) => {
@@ -863,6 +887,18 @@ export class LiveLayer {
 export function rightPressPansFromHeader(event: { button: number; target: EventTarget | null }): boolean {
   const target = event.target instanceof Element ? event.target : null;
   return event.button === 2 && !!target && !target.closest(".react-flow__node") && !!target.closest("[data-node-header]") && !target.closest(".nopan");
+}
+
+/**
+ * React Flow's Pane `onPointerDownCapture` on classic: with the selection key held, a primary left press anywhere
+ * inside the pane (nodes, the viewport portal, connection labels) starts a selection, whatever element it lands on,
+ * unless that element is in `.nokey`. The press never reaches the element: no focus, no control moves.
+ */
+export function selectionKeyTakesPress(event: PointerEvent, keyActive: ((event: PointerEvent) => boolean) | null): boolean {
+  const target = event.target;
+  if (!keyActive || !(target instanceof Element) || event.button !== 0 || event.isPrimary === false) return false;
+  if (!target.closest(".react-flow__pane") || target.closest(".nokey")) return false;
+  return keyActive(event);
 }
 
 export function pressGoesToScene(target: Element): boolean {

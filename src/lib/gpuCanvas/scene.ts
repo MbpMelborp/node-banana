@@ -581,6 +581,8 @@ export class Scene {
   /** Each node's position as last drawn (x, y per node): where a trail starts from. */
   private drawnAt = new Float64Array(0);
   private hidden = new Set<number>();
+  /** Nodes (by id) drawn as nothing rather than as the stand-in card until their painted image lands (holdStandIn). */
+  private standInHeld = new Set<string>();
   /** Painted nodes whose header the live layer shows (setHeadersLive). */
   private headersLive = new Set<number>();
   private selected = new Set<number>();
@@ -717,12 +719,12 @@ export class Scene {
 
   private writeNode(i: number) {
     const node = this.graph.nodes[i];
-    let flags = this.hidden.has(i) ? FLAG_HIDDEN : 0;
+    const painted = this.painted.get(i), alpha = this.opacityOf(node.id, performance.now());
+    let flags = this.hidden.has(i) || (!painted && this.standInHeld.has(node.id)) ? FLAG_HIDDEN : 0;
     if (this.selected.has(i)) flags |= FLAG_SELECTED;
     if (this.hovered === i) flags |= FLAG_HOVERED;
     if (this.running.has(node.id)) flags |= FLAG_RUNNING;
     if (this.headersLive.has(i)) flags |= FLAG_HEADER_LIVE;
-    const painted = this.painted.get(i), alpha = this.opacityOf(node.id, performance.now());
     // The media card's box, once measured (the node's own box until then).
     const card = node.card ?? { x: 0, y: 0, w: node.w, h: node.h };
     if (painted) {
@@ -1125,6 +1127,18 @@ export class Scene {
     if (hidden) this.hidden.add(i);
     else this.hidden.delete(i);
     this.touchNode(i);
+  }
+
+  /**
+   * Holds a node's stand-in card back: until its painted image lands the scene draws nothing for it (classic shows
+   * a node whole at once, never a placeholder). Held by id, so a rebuilt graph keeps it; released by the owner.
+   */
+  holdStandIn(id: string, held: boolean) {
+    if (held === this.standInHeld.has(id)) return;
+    if (held) this.standInHeld.add(id);
+    else this.standInHeld.delete(id);
+    const i = this.graph.indexOf.get(id);
+    if (i != null) this.touchNode(i);
   }
 
   /** Painted nodes whose floating header the live layer shows instead, above the live node covering it. */

@@ -39,7 +39,7 @@ import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, mar
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { connectCandidates } from "@/lib/gpuCanvas/connectCandidates";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
-import { liveButtonPress, type LiveLayer } from "./LiveLayer";
+import { liveButtonPress, pressGoesToScene, type LiveLayer } from "./LiveLayer";
 import { mediaCardBox } from "./nodeSheets";
 import { KeyboardFocus } from "./keyboardFocus";
 
@@ -122,6 +122,31 @@ function onLiveButton(event: PointerEvent): boolean {
   return target instanceof Element && !!target.closest("[data-gpu-canvas-live]") && liveButtonPress(target);
 }
 
+/**
+ * A live node's element whose click selects through LiveFlow's nodeClick (React Flow's NodeWrapper click on classic):
+ * its buttons and links, and the fields and nodrag controls that keep their presses.
+ */
+function liveNodeClickSelects(event: PointerEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest("[data-gpu-canvas-live]") || !target.closest(".react-flow__node")) return false;
+  return !pressGoesToScene(target) || liveButtonPress(target);
+}
+
+/**
+ * A group's title or resize grips (GroupsOverlay's interactive chrome), on the live layer. On classic they sit in
+ * React Flow's zoom pane without `nopan`, and only listen for mousedown, which d3-zoom swallows when it pans.
+ */
+export function onGroupChrome(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest("[data-gpu-canvas-live]") && !!target.closest(".group-controls-overlay")
+    && !!target.closest("[data-group-label], .group-resize-controls") && !target.closest(".nopan");
+}
+
+/** A press on the live layer outside any node body: a floating header, group chrome, a connection's label. */
+function onLiveChrome(event: PointerEvent): boolean {
+  const target = event.target;
+  return target instanceof Element && !!target.closest("[data-gpu-canvas-live]") && !target.closest(".react-flow__node");
+}
+
 function swallowNextClick() {
   const swallow = (event: MouseEvent) => {
     event.preventDefault();
@@ -165,6 +190,9 @@ export class Editor {
 
   constructor(private scene: Scene, private live: LiveLayer, private host: HTMLElement, private editing: () => GpuEditing) {
     this.keyboard = new KeyboardFocus(scene, live, host, () => this.editing().locked);
+    // The live layer hands the editor every press React Flow's pane would take for a selection on classic.
+    live.selectionKeyActive = (event) => this.selectionKeyTakes(event);
+    live.groupChromePans = (event) => this.groupChromePans(event);
     // The connection line, the marquee and the selection frame are mounted in the live flow as they show
     // (mountInFlow), where classic's own sit: under the flow's panels (the navigator), the line also under
     // what the viewport portal holds (the multi-select toolbar).
@@ -387,7 +415,20 @@ export class Editor {
       return this.pan(event);
     }
     if (editing.disabled) return null;
-    // A floating header's own drag (FloatingNodeHeader) takes a left press whatever the keys and the pan mode say.
+    // With the selection key held, classic's pane takes the press before anything in it (React Flow's Pane
+    // onPointerDownCapture): a floating header, group chrome or a connection's label does not get it. Their
+    // click selects nothing (it never reaches a node's wrapper or the pane itself); a drag draws a marquee.
+    const keyTakes = this.selectionKeyTakes(event);
+    if (keyTakes && (onLiveChrome(event) || this.headerFromEvent(event, at) >= 0)) {
+      return this.clickGesture(event, () => {}, () => this.marqueeGesture(event), 0);
+    }
+    // A group's title or grip pans where classic's zoom pane would take the press (its mousedown, which the group's
+    // own drag and resize listen for, the live layer then stops): the live layer sends only those presses here.
+    if (onGroupChrome(event.target)) {
+      if (!this.groupChromePans(event)) return null;
+      return event.button === 2 ? this.rightPan(event) : this.pan(event);
+    }
+    // A floating header's own drag (FloatingNodeHeader) takes a left press whatever the pan mode and the lock say.
     if (event.button === 0) {
       const header = this.headerFromEvent(event, at);
       if (header >= 0) return this.headerGesture(event, header);
@@ -438,17 +479,17 @@ export class Editor {
     if ((node >= 0 || edge >= 0) && keyHeld && !editing.locked) {
       // Held by id from the press: a graph rebuilt before the release renumbers the nodes and connections.
       const nodeId = node >= 0 ? scene.graph.nodes[node].id : null, edgeId = edge >= 0 ? scene.graph.edges[edge].id : "";
-      // A live node's button or link selects through LiveFlow's nodeClick (once, or not when the button stops its
-      // click), as classic's NodeWrapper click: toggling here as well would undo it.
+      // A live node's button, link, field or nodrag control selects through LiveFlow's nodeClick (once, or not when
+      // the element stops its click), as classic's NodeWrapper click: toggling here as well would undo it.
       const click = nodeId != null
-        ? (onLiveButton(event) ? () => {} : () => this.clickNode(nodeId, event.shiftKey))
+        ? (liveNodeClickSelects(event) ? () => {} : () => this.clickNode(nodeId, event.shiftKey))
         : () => this.clickEdge(event, edgeId);
       return this.clickGesture(event, click, () => this.marqueeGesture(event), 0);
     }
     // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
     if (node >= 0) return this.nodeGesture(event, node);
     // A connection is React Flow's nopan: only the middle button pans from it (above), and a left drag moves nothing.
-    if (edge >= 0) return this.edgePressGesture(event, scene.graph.edges[edge].id);
+    if (edge >= 0) return this.edgePressGesture(scene.graph.edges[edge].id);
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     // A marquee starts once the press moves (at once with the selection key held); a release before that is a pane click.
     if (action === "select" && !editing.locked) {
@@ -492,6 +533,29 @@ export class Editor {
     }
     const i = this.scene.nodeAt(at.x, at.y);
     return i >= 0 && this.scene.toWorld(at.x, at.y).y < graph.nodes[i].y ? i : -1;
+  }
+
+  /**
+   * React Flow's Pane takes this press for a selection on classic: a primary left press with the selection key held
+   * (Shift, or Alt in "altDrag"), the canvas selectable (no dialog, not locked), not from a `.nokey` element.
+   */
+  private selectionKeyTakes(event: PointerEvent): boolean {
+    const editing = this.editing();
+    if (editing.disabled || editing.locked || event.button !== 0 || event.isPrimary === false) return false;
+    if (event.target instanceof Element && event.target.closest(".nokey")) return false;
+    return selectionKeyHeld(editing.navigation, { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, space: false });
+  }
+
+  /**
+   * Whether a press on a group's title or resize grip pans the canvas, as on classic, where d3-zoom takes its
+   * mousedown whenever React Flow's filter lets the pane pan with that button (panOnDrag, or Space in the "space"
+   * mode; never with Control, the selection key, a dialog or the tutorial).
+   */
+  groupChromePans(event: MouseEvent): boolean {
+    const editing = this.editing();
+    if (editing.disabled || editing.tutorial || !onGroupChrome(event.target)) return false;
+    const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, space: this.space };
+    return paneDragAction(editing.navigation, modifiers, isMac) === "pan";
   }
 
   /** A handle of a live node, when the press came from the live layer. */
@@ -568,7 +632,7 @@ export class Editor {
    * A left press on a connection: it never drags or captures. As the browser's click, which needs the press and the
    * release on the same element, a release still on that connection clicks it, however far the pointer travelled.
    */
-  private edgePressGesture(event: PointerEvent, edgeId: string): Gesture {
+  private edgePressGesture(edgeId: string): Gesture {
     return {
       move: () => {},
       up: (up) => {
@@ -576,7 +640,8 @@ export class Editor {
         // A node over the release point (its element on classic, unless locked) takes the release: no click.
         if (!this.editing().locked && this.scene.nodeAt(at.x, at.y) >= 0) return;
         const edge = this.scene.edgeAt(at.x, at.y);
-        if (edge >= 0 && this.scene.graph.edges[edge]?.id === edgeId) this.clickEdge(event, edgeId);
+        // The browser's click fires at the release: its point anchors the toolbar and its Shift selects.
+        if (edge >= 0 && this.scene.graph.edges[edge]?.id === edgeId) this.clickEdge(up, edgeId);
       },
       cancel: () => {},
     };

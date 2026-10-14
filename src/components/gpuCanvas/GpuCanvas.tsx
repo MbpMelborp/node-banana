@@ -58,7 +58,7 @@ const LIVE_ZOOM = 1;
 const LIVE_EDGE_ZOOM = OVERVIEW_ZOOM_THRESHOLD;
 /** At most this many live connections besides the selected ones, unless more are on screen (pickLiveEdges). */
 const MAX_LIVE_EDGES = 250;
-/** Added nodes on screen made live until painted (a large paste leaves the rest to the painter's queue). */
+/** Added nodes on screen made live until painted (the rest are held undrawn until painted: `Scene.holdStandIn`). */
 const MAX_ADDED_LIVE = 8;
 /** How long an added node stays live at most, should its paint not land. */
 const ADDED_LIVE_TIMEOUT_MS = 3000;
@@ -344,17 +344,34 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // as classic renders it whole at once: the scene would draw its stand-in card while it paints.
     const added = new Set<string>();
     let loadSeen = store.workflowLoadCount;
+    // Visible added nodes past MAX_ADDED_LIVE (a large agent batch, grid cells) show nothing until painted rather
+    // than the stand-in card: they appear whole, as the rest of the batch does.
+    const heldAdded = new Set<string>();
+    const releaseHeld = (id: string) => {
+      if (heldAdded.delete(id)) scene.holdStandIn(id, false);
+    };
     const showAdded = (ids: ReadonlySet<string>) => {
       if (!painter) return;
       const visible = new Set(scene.visible(0).map((i) => scene.graph.nodes[i].id));
-      const shown = [...ids].filter((id) => visible.has(id)).slice(0, MAX_ADDED_LIVE);
+      const onScreen = [...ids].filter((id) => visible.has(id));
+      const shown = onScreen.slice(0, MAX_ADDED_LIVE);
       if (!shown.length) return;
+      // A paint that never lands must not pin a node live, nor keep one undrawn.
+      const painted = (id: string) => Promise.race([painter.paintNow(id), new Promise((resolve) => setTimeout(resolve, ADDED_LIVE_TIMEOUT_MS))]);
       for (const id of shown) {
         added.add(id);
-        // A paint that never lands must not pin it live.
-        void Promise.race([painter.paintNow(id), new Promise((resolve) => setTimeout(resolve, ADDED_LIVE_TIMEOUT_MS))]).then(() => {
+        void painted(id).then(() => {
           if (disposed || !added.delete(id)) return;
           live.wantOnly("added", added);
+        });
+      }
+      for (const id of onScreen.slice(MAX_ADDED_LIVE)) {
+        // A node the live layer renders anyway (selected) needs no hold.
+        if (selectedIds.has(id) || live.renders(id) || heldAdded.has(id)) continue;
+        heldAdded.add(id);
+        scene.holdStandIn(id, true);
+        void painted(id).then(() => {
+          if (!disposed) releaseHeld(id);
         });
       }
       live.wantOnly("added", added);
@@ -378,7 +395,12 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         scene.setGraph(scene.graph);
         painter?.graphRebuilt();
         live.graphRebuilt();
-        for (const id of changes.removed) added.delete(id);
+        for (const id of changes.removed) {
+          added.delete(id);
+          releaseHeld(id);
+        }
+        // An opened workflow paints behind its loading screen: nothing of the canvas before it stays held.
+        if (opened) for (const id of [...heldAdded]) releaseHeld(id);
         if (!opened && changes.added.size) showAdded(changes.added);
         // The view state of nodes that went (or of the workflow before an opened one) goes with them, as classic's unmount.
         if (opened) useNodeUiStore.getState().forget();

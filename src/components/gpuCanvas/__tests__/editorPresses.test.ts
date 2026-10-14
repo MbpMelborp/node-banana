@@ -6,7 +6,7 @@ import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
 import type { Scene } from "@/lib/gpuCanvas/scene";
 import { Editor, type GpuEditing } from "../editor";
-import { LIVE_STYLE, liveButtonPress, pressGoesToScene, rightPressPansFromHeader, type LiveLayer } from "../LiveLayer";
+import { LIVE_STYLE, liveButtonPress, pressGoesToScene, rightPressPansFromHeader, selectionKeyTakesPress, type LiveLayer } from "../LiveLayer";
 
 function node(id: string, x: number, y: number, selected = false): WorkflowNode {
   return { id, type: "prompt", position: { x, y }, data: { prompt: "" }, width: 300, height: 200, selected } as unknown as WorkflowNode;
@@ -828,18 +828,18 @@ describe("a floating header's drag on the GPU canvas", () => {
     }
   });
 
-  it("selects an unselected node on the press, whatever the keys, and moves it alone past 5px on an axis", () => {
+  it("selects an unselected node on the press, whatever the keys but the selection key, and moves it alone past 5px on an axis", () => {
     const stops: string[] = [];
     settings.onNodeDragStop = (_event, node) => stops.push(node.id);
     useWorkflowStore.getState().onEdgesChange([{ type: "select", id: "ac", selected: true }]);
-    const gesture = editor.press(pointer(900, -10, { shiftKey: true }))!;
+    const gesture = editor.press(pointer(900, -10, { altKey: true, ctrlKey: true }))!;
     expect(selected()).toEqual(["c"]);
     expect(selectedEdges()).toEqual([]);
     // 4px on each axis: not yet a drag (FloatingNodeHeader's per-axis threshold).
-    gesture.move(pointer(904, -6, { shiftKey: true }));
+    gesture.move(pointer(904, -6, { altKey: true, ctrlKey: true }));
     expect(position("c")).toEqual({ x: 800, y: 0 });
-    gesture.move(pointer(920, -10, { shiftKey: true }));
-    gesture.up(pointer(920, -10, { shiftKey: true }));
+    gesture.move(pointer(920, -10, { altKey: true, ctrlKey: true }));
+    gesture.up(pointer(920, -10, { altKey: true, ctrlKey: true }));
     // Measured from the press, as the header's drag is.
     expect([position("a").x, position("b").x, position("c").x]).toEqual([0, 400, 820]);
     expect(selected()).toEqual(["c"]);
@@ -1106,5 +1106,106 @@ describe("a still press on a live node's button", () => {
     const loose = document.createElement("button");
     expect(liveButtonPress(loose)).toBe(false);
     live.remove();
+  });
+});
+
+describe("the GPU canvas against classic's pane and zoom pane", () => {
+  /** The live layer's root, with React Flow's pane in it, and an element built from `html` inside the pane. */
+  function liveElement(html: string, id: string) {
+    const live = editor["live"].element;
+    live.setAttribute("data-gpu-canvas-live", "");
+    live.innerHTML = `<div class="react-flow__pane">${html}</div>`;
+    document.body.appendChild(live);
+    return live.querySelector<HTMLElement>(`#${id}`)!;
+  }
+  function on(target: Element, x: number, y: number, init: MouseEventInit = {}) {
+    const event = pointer(x, y, init);
+    Object.defineProperty(event, "target", { value: target });
+    return event;
+  }
+  afterEach(() => editor["live"].element.remove());
+
+  it("a click on a connection reads Shift and its point at the release, as the browser's click", () => {
+    settings.onEdgeClick = vi.fn();
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
+    edgeHit = 0;
+    const gesture = editor.press(pointer(500, 1000))!;
+    gesture.up(pointer(700, 1000, { shiftKey: true }));
+    expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.objectContaining({ clientX: 700, clientY: 1000, shiftKey: true }), expect.objectContaining({ id: "ac" }));
+  });
+
+  it("hands the editor every left press with the selection key held inside the pane, except .nokey ones", () => {
+    const field = liveElement(`<div class="react-flow__node"><textarea id="field"></textarea></div><div class="nokey"><input id="kept"></div><div class="edge-overlay"><span id="label"></span></div>`, "field");
+    const keyActive = (event: PointerEvent) => editor["selectionKeyTakes"](event);
+    const label = document.getElementById("label")!, kept = document.getElementById("kept")!;
+    expect(selectionKeyTakesPress(on(field, 100, 100, { shiftKey: true }), keyActive)).toBe(true);
+    expect(selectionKeyTakesPress(on(label, 100, 100, { shiftKey: true }), keyActive)).toBe(true);
+    expect(selectionKeyTakesPress(on(kept, 100, 100, { shiftKey: true }), keyActive)).toBe(false);
+    expect(selectionKeyTakesPress(on(field, 100, 100), keyActive)).toBe(false);
+    // Alt is the key only in the "altDrag" mode.
+    expect(selectionKeyTakesPress(on(field, 100, 100, { altKey: true }), keyActive)).toBe(false);
+    settings.navigation = { ...defaultCanvasNavigationSettings, selectionMode: "altDrag" };
+    expect(selectionKeyTakesPress(on(field, 100, 100, { altKey: true }), keyActive)).toBe(true);
+    // Not under a dialog, nor on a locked canvas (React Flow's elementsSelectable off).
+    settings.disabled = true;
+    expect(selectionKeyTakesPress(on(field, 100, 100, { altKey: true }), keyActive)).toBe(false);
+    settings.disabled = false;
+    settings.locked = true;
+    expect(selectionKeyTakesPress(on(field, 100, 100, { altKey: true }), keyActive)).toBe(false);
+  });
+
+  it("with Shift held, a live node's field selects only through the node's click, and a drag from it draws a marquee", () => {
+    const field = liveElement(`<div class="react-flow__node" data-id="c"><textarea id="field"></textarea></div>`, "field");
+    let gesture = editor.press(on(field, 900, 100, { shiftKey: true }))!;
+    gesture.up(on(field, 900, 100, { shiftKey: true }));
+    // LiveFlow's nodeClick (React Flow's NodeWrapper click on classic) does the toggling: the scene leaves it.
+    expect(selected()).toEqual(["a", "b"]);
+    gesture = editor.press(on(field, 780, -20, { shiftKey: true }))!;
+    gesture.move(on(field, 1200, 400, { shiftKey: true }));
+    gesture.up(on(field, 1200, 400, { shiftKey: true }));
+    expect(selected()).toEqual(["c"]);
+  });
+
+  it("with Shift held, a floating header (live or painted) or a connection's label selects nothing on a click and draws a marquee on a drag", () => {
+    withHeaderBands();
+    const header = liveElement(`<div data-node-header="c"><button id="header"></button></div><div class="edge-overlay"><span id="label"></span></div>`, "header");
+    const label = document.getElementById("label")!;
+    edgeHit = 0;
+    for (const target of [header, label]) {
+      const gesture = editor.press(on(target, 900, -10, { shiftKey: true }))!;
+      gesture.up(on(target, 900, -10, { shiftKey: true }));
+    }
+    // The painted header band.
+    click(900, -10, { shiftKey: true });
+    expect(selected()).toEqual(["a", "b"]);
+    expect(selectedEdges()).toEqual([]);
+    expect(settings.onPaneClick).not.toHaveBeenCalled();
+    const gesture = editor.press(on(header, 380, -20, { shiftKey: true }))!;
+    gesture.move(on(header, 1200, 400, { shiftKey: true }));
+    gesture.up(on(header, 1200, 400, { shiftKey: true }));
+    expect(selected()).toEqual(["b", "c"]);
+    // Without the key the header still drags its node.
+    expect(editor.press(on(header, 900, -10))).not.toBeNull();
+  });
+
+  it("a group's title or grip pans wherever classic's zoom pane would take the press", () => {
+    const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
+    const title = liveElement(`<div class="group-controls-overlay"><div data-group-label="g"><span id="title"></span><input class="nopan" id="rename"></div><div class="group-resize-controls"><div id="grip"></div></div></div>`, "title");
+    const grip = document.getElementById("grip")!, rename = document.getElementById("rename")!;
+    // Off the Mac the default ("space") mode pans on the left and middle buttons.
+    expect(editor.groupChromePans(on(title, 0, 0))).toBe(true);
+    expect(editor.groupChromePans(on(grip, 0, 0, { button: 1 }))).toBe(true);
+    expect(editor.groupChromePans(on(rename, 0, 0))).toBe(false);
+    expect(editor.groupChromePans(on(title, 0, 0, { ctrlKey: true }))).toBe(false);
+    expect(editor.groupChromePans(on(title, 0, 0, { shiftKey: true }))).toBe(false);
+    expect(editor.press(on(title, 0, 0))).not.toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(1);
+    // The "middleMouse" mode pans on the right button only.
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    expect(editor.groupChromePans(on(grip, 0, 0))).toBe(false);
+    expect(editor.groupChromePans(on(grip, 0, 0, { button: 2 }))).toBe(true);
+    settings.tutorial = true;
+    expect(editor.groupChromePans(on(grip, 0, 0, { button: 2 }))).toBe(false);
   });
 });

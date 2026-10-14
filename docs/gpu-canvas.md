@@ -150,7 +150,9 @@ A node is live (a real component on the live layer) while it is hovered
 (its painted sockets, a little outside its box, hover it too, as classic's
 handles sit in the node's element), selected, holds focus, is opened, or is visible above 100% zoom. A node just
 added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
-until its first picture shows ("added"), as classic renders it whole at once. A node a
+until its first picture shows ("added"), as classic renders it whole at once; further
+added nodes on screen (a large agent batch, grid cells) are drawn as nothing rather than as
+the stand-in card until their picture lands (`Scene.holdStandIn`, 3 s at most). A node a
 file, a node type from the action bar or a history image is dragged over
 is live ("drop"), so the drop lands on its own drop zone (an empty input
 loads a file and swallows the rest, as on classic) rather than the
@@ -249,7 +251,13 @@ node's box, as classic's headers take them. Classic's headers sit above the
 group labels and menus too, which are DOM in the live flow: a node whose
 header a group's label or open menu overlaps goes live ("groupChrome", the
 chrome measured once it settles), so its header shows above them again.
-Groups are classic's faint wash (`groupFill`) with no outline.
+Groups are classic's faint wash (`groupFill`) with no outline. A group's
+title and resize grips sit in classic's zoom pane without `nopan` and listen
+only for mousedown, which d3-zoom swallows when it pans: wherever the pane
+would pan with that button (off the Mac by default, "always", the right
+button in "middleMouse", Space held in "space"; never with Control or the
+selection key), a press on them pans on the GPU canvas too and the live
+layer stops their mousedown (`Editor.groupChromePans`).
 
 ## Live content
 
@@ -378,8 +386,10 @@ The scene takes every press and asks the editor what it starts:
   pans only from empty canvas: a node still drags and a handle still
   connects, as they are React Flow's `nopan`. A connection is `nopan` too:
   a left drag from it moves nothing in any pan mode, and a release still on
-  it clicks it, however far the pointer went. A press on a floating header
-  is FloatingNodeHeader's drag whatever the keys, the pan mode and the lock: it makes
+  it clicks it, however far the pointer went; that click is the release's
+  (its point places the toolbar, its Shift selects). A press on a floating header
+  is FloatingNodeHeader's drag whatever the pan mode and the lock (and the keys, but the
+  selection key: see below): it makes
   an unselected node the only selection at once, moves past 5 px on either
   axis (the selection too only if the node was already selected, following
   the pointer from the press) and regroups every moved node on release.
@@ -409,7 +419,14 @@ The scene takes every press and asks the editor what it starts:
   connection, and any movement turns it into a marquee: no connection
   starts, as React Flow's pane takes the press first. A socket, its half
   outside the node's box too, counts as its node, as the click bubbles from
-  the handle to the node's wrapper.
+  the handle to the node's wrapper. As React Flow's pane captures every such
+  press inside it (save on `.nokey`), the live layer hands the scene presses
+  on a live node's fields, `.nodrag` controls and buttons, on floating headers,
+  group chrome and connection labels too, before they get them
+  (`selectionKeyTakesPress`): no focus, no control moves, a drag draws the
+  marquee. A still press clicks only what classic's click reaches: a node's
+  own click (LiveFlow's `onNodeClick`) from inside a live node, nothing from a
+  header, group chrome or label.
 - **The pane**: a click clears the selection (not on a locked canvas) and
   is WorkflowCanvas's pane click, whatever a drag would do; a drag pans or draws the marquee as the
   navigation settings say (`paneDragAction`); drawing on drag (the Mac
