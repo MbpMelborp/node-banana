@@ -66,6 +66,15 @@ const STEM_HIT_FLOW = 6;
 export const MIN_ZOOM = CANVAS_MIN_ZOOM;
 export const MAX_ZOOM = CANVAS_MAX_ZOOM;
 
+/**
+ * The offset (flow units) that moves flow coordinate `at`, drawn at `zoom` css px per unit after a translation of
+ * `translate` css px, onto the nearest whole css pixel: NODE_VERTEX's snap, for the live nodes to match it.
+ */
+export function pixelSnap(at: number, zoom: number, translate: number): number {
+  const origin = at * zoom + translate;
+  return (Math.floor(origin + 0.5) - origin) / zoom;
+}
+
 export interface View {
   x: number;
   y: number;
@@ -131,6 +140,7 @@ const NODE_VERTEX = /* glsl */ `
     vLocal = local; vSize = iRect.zw; vUv = iUv; vColor = iColor; vLayer = iLayer;
     // The node starts on a whole pixel, as the page lays it out, so a painted
     // image at its own scale is copied texel for pixel rather than blurred.
+    // The live layer moves a live node by the same offset (pixelSnap).
     vec2 origin = iRect.xy * uView.z + uView.xy;
     vec2 snap = (floor(origin + 0.5) - origin) / uView.z;
     gl_Position = toClip(iRect.xy + snap + local);
@@ -451,6 +461,8 @@ export interface SceneCallbacks {
   /** Every animation frame, with the JavaScript the scene ran in it (ms). */
   onFrame?: (now: number, jsMs: number) => void;
   onHover?: (node: number) => void;
+  /** The node a point (css px) hovers, when more than its box does (its sockets, a little outside it): nodeAt otherwise. */
+  hoverAt?: (cssX: number, cssY: number) => number;
   /**
    * A press on the canvas (or handed over by the live layer): returns the
    * gesture it starts, or null to ignore it. Without it a drag pans.
@@ -983,6 +995,17 @@ export class Scene {
     this.index.update(i);
   }
 
+  /**
+   * How far (flow units) the scene moves node `i` to start its painted image on a whole css pixel (NODE_VERTEX's
+   * snap), so its live copy can sit at the same place and a swap does not shift it.
+   */
+  pixelSnap(i: number): [number, number] {
+    const node = this.graph.nodes[i], painted = this.painted.get(i);
+    if (!node) return [0, 0];
+    const { x, y, zoom } = this.view;
+    return [pixelSnap(node.x + (painted?.x ?? 0), zoom, x), pixelSnap(node.y + (painted?.y ?? 0), zoom, y)];
+  }
+
   /** Whether the scene draws a painted image for the node (not its stand-in card). */
   hasPainted(i: number): boolean {
     return this.painted.has(i);
@@ -1052,7 +1075,11 @@ export class Scene {
     this.hoverStale = false;
     if (!this.pointerAt || this.gesture || this.pinch) return;
     const at = this.local(this.pointerAt);
-    this.setHovered(this.nodeAt(at.x, at.y));
+    this.setHovered(this.hoverAt(at.x, at.y));
+  }
+
+  private hoverAt(cssX: number, cssY: number) {
+    return this.callbacks.hoverAt?.(cssX, cssY) ?? this.nodeAt(cssX, cssY);
   }
 
   private setHovered(i: number) {
@@ -1386,7 +1413,7 @@ export class Scene {
     if (event.pointerType === "mouse") this.pointerAt = { clientX: event.clientX, clientY: event.clientY };
     if (!gesture) {
       const at = this.local(event);
-      this.setHovered(this.nodeAt(at.x, at.y));
+      this.setHovered(this.hoverAt(at.x, at.y));
       this.callbacks.onIdleMove?.(event);
       return;
     }

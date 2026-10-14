@@ -215,6 +215,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
           showHover();
         },
         onPress: (event) => editor.press(event),
+        hoverAt: (x, y) => editor.hoverAt(x, y),
         onIdleMove: (event) => editor.idleMove(event),
         onHoverEnd: (reason) => editor.hoverEnd(reason),
         onContextMenu: (event) => editor.contextMenu(event),

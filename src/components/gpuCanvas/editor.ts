@@ -1002,6 +1002,15 @@ export class Editor {
 
   // ── Hover, double-click and context menus ─────────────────────────────
 
+  /**
+   * The scene's hoverAt: a painted socket hovers its node, as classic's handle sits in the node's element, so
+   * the node goes live (its labels, hover controls and the handle's own tooltip) from outside its box too.
+   */
+  hoverAt = (cssX: number, cssY: number) => {
+    const handle = this.editing().disabled ? null : this.paintedHandleAt(cssX, cssY);
+    return handle ? handle.node : this.scene.nodeAt(cssX, cssY);
+  };
+
   /** The scene's onIdleMove: the cursor, and the handle under the pointer (hidden connections ghost back). */
   idleMove = (event: PointerEvent) => {
     const scene = this.scene, at = scene.local(event);

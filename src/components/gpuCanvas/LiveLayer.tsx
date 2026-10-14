@@ -441,10 +441,39 @@ export class LiveLayer {
     void this.render();
   }
 
+  /** The nodes the flow shows (live, or for their floating header), which alignToPixels places. */
+  private shown: string[] = [];
+  private snapStyle: HTMLStyleElement | null = null;
+
+  /**
+   * The scene starts a painted node on a whole css pixel (Scene.pixelSnap): each node the flow shows, and its
+   * floating header, is moved by the same offset, so a swap between painted and live does not shift it.
+   */
+  private alignToPixels() {
+    const graph = this.scene.graph;
+    const rules: string[] = [];
+    for (const id of this.shown) {
+      const i = graph.indexOf.get(id);
+      if (i == null) continue;
+      const [dx, dy] = this.scene.pixelSnap(i);
+      if (!dx && !dy) continue;
+      const key = CSS.escape(id);
+      rules.push(`[data-gpu-canvas-live] .react-flow__node[data-id="${key}"], [data-gpu-canvas-live] [data-node-header="${key}"] { translate: ${dx}px ${dy}px; }`);
+    }
+    const text = rules.join("\n");
+    if (!this.snapStyle) {
+      if (!text) return;
+      this.snapStyle = document.createElement("style");
+      document.head.appendChild(this.snapStyle);
+    }
+    if (this.snapStyle.textContent !== text) this.snapStyle.textContent = text;
+  }
+
   /** Set while the scene follows a view the flow moved to (connection.viewChanged). */
   private followingFlow = false;
 
   setView(view: View) {
+    this.alignToPixels();
     if (this.followingFlow) return;
     this.connection.setView?.({ ...view });
   }
@@ -621,6 +650,8 @@ export class LiveLayer {
         // The flow shows these headers now: the scene stops drawing them.
         const graph = this.scene.graph;
         this.scene.setHeadersLive(headers.map((h) => graph.indexOf.get(h.id)).filter((i): i is number => i != null));
+        this.shown = [...flowNodes.filter((n) => n.type !== "gpuGhost").map((n) => n.id), ...headers.map((h) => h.id)];
+        this.alignToPixels();
         resolve();
       };
       this.setNodes({ nodes: flowNodes, edges: flowEdges, headers, cover, entering: [...this.entering].filter((id) => present.has(id)), committed }, sync);
@@ -731,6 +762,7 @@ export class LiveLayer {
     this.connection.hold = undefined;
     this.connection.measured = undefined;
     this.generation++;
+    this.snapStyle?.remove();
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
 }

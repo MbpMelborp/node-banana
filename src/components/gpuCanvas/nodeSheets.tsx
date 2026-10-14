@@ -103,11 +103,17 @@ function videoLoaded(video: HTMLVideoElement): Promise<void> {
 
 /**
  * Waits for React Flow to measure the nodes (it hides a node until then),
- * then for every image in `root` to decode and every video to show its
- * first frame (a picture of a video is of that frame).
+ * then for every image in those nodes (and their floating headers) to decode
+ * and every video to show its first frame (a picture of a video is of that
+ * frame). Media in other nodes of `root` never holds them.
  */
 export async function settleNodes(root: HTMLElement, ids: readonly string[], until: number, cancelled: () => boolean = () => false): Promise<{ decodeMs: number; unloaded: Set<string> }> {
   const element = (id: string) => root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+  // The settled nodes' own elements: each node and its floating header.
+  const scope = ids.length ? ids.flatMap((id) => [`.react-flow__node[data-id="${CSS.escape(id)}"]`, `[data-node-header="${CSS.escape(id)}"]`]).join(", ") : null;
+  const within = <K extends keyof HTMLElementTagNameMap>(selector: K): HTMLElementTagNameMap[K][] =>
+    scope ? [...root.querySelectorAll(scope)].flatMap((part) => [...part.querySelectorAll(selector)]) : [];
+  const pendingMarks = () => scope ? [...root.querySelectorAll(scope)].flatMap((part) => [...part.querySelectorAll("[data-paint-pending]")]) : [];
   for (;;) {
     const pending = ids.filter((id) => {
       const node = element(id);
@@ -117,7 +123,7 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
     await nextFrame();
   }
   // What a node still fetches before it shows its fields (a model's settings) marks itself pending.
-  while (root.querySelector("[data-paint-pending]") && performance.now() < until && !cancelled()) await nextFrame();
+  while (pendingMarks().length && performance.now() < until && !cancelled()) await nextFrame();
   const started = performance.now();
   // An image's source can arrive or change after the first render (a
   // thumbnail swapped in, a reference resolved), and its card resizes once
@@ -126,10 +132,10 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
   let decodeMs = 0;
   let seen = "";
   for (;;) {
-    const images = [...root.querySelectorAll("img")];
+    const images = within("img");
     // A broken image is complete with no width: it is not waited for again.
     const loading = images.filter((img) => img.getAttribute("src") && !(img.complete && (img.naturalWidth || seen)));
-    const videos = [...root.querySelectorAll("video")];
+    const videos = within("video");
     const loadingVideos = videos.filter(videoLoading);
     const signature = [...images.map((img) => img.currentSrc || img.getAttribute("src") || ""), ...videos.map((v) => v.currentSrc || v.getAttribute("src") || "")].join("\n");
     if (!loading.length && !loadingVideos.length && signature === seen) break;
@@ -145,18 +151,22 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
   }
   // Nodes with an image still loading at the deadline: painted as they are, but not for keeps.
   const unloaded = new Set<string>();
-  for (const img of root.querySelectorAll("img")) {
+  const owner = (el: Element) => {
+    const part = el.closest(".react-flow__node, [data-node-header]");
+    return part?.getAttribute("data-id") ?? part?.getAttribute("data-node-header");
+  };
+  for (const img of within("img")) {
     if (!img.getAttribute("src") || img.complete) continue;
-    const id = img.closest(".react-flow__node")?.getAttribute("data-id");
+    const id = owner(img);
     if (id) unloaded.add(id);
   }
-  for (const video of root.querySelectorAll("video")) {
+  for (const video of within("video")) {
     if (!videoLoading(video)) continue;
-    const id = video.closest(".react-flow__node")?.getAttribute("data-id");
+    const id = owner(video);
     if (id) unloaded.add(id);
   }
-  for (const mark of root.querySelectorAll("[data-paint-pending]")) {
-    const id = mark.closest(".react-flow__node")?.getAttribute("data-id");
+  for (const mark of pendingMarks()) {
+    const id = owner(mark);
     if (id) unloaded.add(id);
   }
   return { decodeMs, unloaded };

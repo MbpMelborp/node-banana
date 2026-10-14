@@ -146,14 +146,19 @@ them repaints nothing.
 
 ## Live nodes
 
-A node is live (a real component on the live layer) while it is hovered,
-selected, holds focus, is opened, or is visible above 100% zoom. A node just
+A node is live (a real component on the live layer) while it is hovered
+(its painted sockets, a little outside its box, hover it too, as classic's
+handles sit in the node's element), selected, holds focus, is opened, or is visible above 100% zoom. A node just
 added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
 until its first picture shows ("added"), as classic renders it whole at once. Its scene
 image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap; until then the live component and its
 floating header are laid out but invisible (`gpu-entering`), so nothing
 shows doubled over the picture (a node with no picture yet shows at once).
+Only the entering nodes' own images and videos (and their headers') hold
+the swap, never media elsewhere on the layer. The scene starts a painted
+image on a whole css pixel; a live node and its floating header are moved
+(CSS `translate`) by the same offset, so the swap does not shift them.
 A pressed node stays live until the press ends, a press its fields keep (a
 slider, a Split Grid line) included, and a hover holds while a
 button is down (as NodeShell ignores a leave then). Focus survives the

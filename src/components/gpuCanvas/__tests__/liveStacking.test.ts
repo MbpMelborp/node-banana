@@ -23,7 +23,7 @@ beforeEach(() => {
   const noop = () => {};
   const scene = {
     graph, nodesWithin: (x0: number, y0: number, x1: number, y1: number) => index.within(x0, y0, x1, y1),
-    setHidden: noop, setHeadersLive: noop, wheel: noop, pointerDown: noop, hasPainted: () => true,
+    setHidden: noop, setHeadersLive: noop, wheel: noop, pointerDown: noop, hasPainted: () => true, pixelSnap: () => [0, 0],
   } as unknown as Scene;
   element = document.createElement("div");
   layer = new LiveLayer(element, {} as LiveConnection, scene, new GpuCanvasStats());
