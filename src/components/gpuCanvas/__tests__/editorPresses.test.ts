@@ -653,3 +653,74 @@ describe("pressGoesToScene", () => {
     expect(pressGoesToScene(at("link"))).toBe(false);
   });
 });
+
+describe("presses held through a rebuilt graph", () => {
+  /** Renumbers the scene's graph as GpuCanvas's sync does: a node (and a connection) added ahead of the rest. */
+  function rebuild() {
+    const state = useWorkflowStore.getState();
+    const nodes = [node("z", 0, 600), ...state.nodes];
+    const edges = [{ id: "ab", source: "a", target: "b", sourceHandle: "text", targetHandle: "text" } as WorkflowEdge, ...state.edges];
+    useWorkflowStore.setState({ nodes, edges });
+    (editor["scene"] as unknown as Record<string, unknown>).graph = new SceneGraph(nodes, edges, {});
+  }
+  const position = (id: string) => useWorkflowStore.getState().nodes.find((n) => n.id === id)!.position;
+
+  it("a drag that starts after the rebuild moves the pressed node", () => {
+    const gesture = editor.press(pointer(900, 100))!;
+    rebuild();
+    // The drag starts past its threshold, from where the pointer is then.
+    gesture.move(pointer(910, 100));
+    gesture.move(pointer(1010, 150));
+    gesture.up(pointer(1010, 150));
+    expect(position("c")).toEqual({ x: 900, y: 50 });
+    expect(position("b")).toEqual({ x: 400, y: 0 });
+  });
+
+  it("a selection-key click released after the rebuild takes the pressed node", () => {
+    const gesture = editor.press(pointer(900, 100, { shiftKey: true }))!;
+    rebuild();
+    gesture.up(pointer(900, 100, { shiftKey: true }));
+    expect(selected().sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("a connection click released after the rebuild selects the pressed connection", () => {
+    settings.onEdgeClick = vi.fn();
+    edgeHit = 0;
+    const gesture = editor.press(pointer(500, 1000))!;
+    rebuild();
+    gesture.up(pointer(500, 1000));
+    expect(selectedEdges()).toEqual(["ac"]);
+    expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));
+  });
+});
+
+describe("a click on a live node's socket", () => {
+  function livePress(x: number, y: number, handle: HTMLElement) {
+    const event = pointer(x, y);
+    Object.defineProperty(event, "target", { value: handle });
+    return event;
+  }
+
+  it("that moves a little opens the handle menu from the editor (the capture took the native click); a still one leaves it to the click", () => {
+    document.elementsFromPoint ??= () => [];
+    settings.onHandleClick = vi.fn();
+    const live = editor["live"].element;
+    live.setAttribute("data-gpu-canvas-live", "");
+    document.body.appendChild(live);
+    const handle = document.createElement("div");
+    handle.className = "react-flow__handle source connectable connectableend";
+    handle.dataset.nodeid = "c";
+    handle.dataset.handleid = "text";
+    handle.getBoundingClientRect = () => ({ left: 1095, top: 95, width: 10, height: 10, right: 1105, bottom: 105, x: 1095, y: 95, toJSON: noop });
+    live.appendChild(handle);
+    let gesture = editor.press(livePress(1100, 100, handle))!;
+    gesture.up(pointer(1100, 100));
+    expect(settings.onHandleClick).not.toHaveBeenCalled();
+    gesture = editor.press(livePress(1100, 100, handle))!;
+    gesture.move(pointer(1103, 100));
+    gesture.up(pointer(1103, 100));
+    expect(settings.onHandleClick).toHaveBeenCalledTimes(1);
+    expect(settings.onHandleClick).toHaveBeenCalledWith({ nodeId: "c", handleId: "text", type: "source", position: { x: 1100, y: 100 } });
+    live.remove();
+  });
+});

@@ -1397,6 +1397,11 @@ export class Scene {
     this.noteInput(event);
   }
 
+  /** Whether dispose has run: per-frame loops a gesture started stop on it. */
+  get isDisposed() {
+    return this.disposed;
+  }
+
   /** Ends the gesture in progress, if any (a key cancels it, the canvas is replaced). */
   cancelGesture() {
     const gesture = this.gesture;

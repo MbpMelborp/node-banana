@@ -121,7 +121,10 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
     const cancel = () => { drag = null; };
     const wheel = (event: WheelEvent) => {
       if (disabledRef.current) return;
+      // The minimap's zoom is the wheel's only move, as d3-zoom's noevent on classic's: the scene and the
+      // canvas's own wheel listeners (ancestors) must not pan or step-zoom the view on top of it.
       event.preventDefault();
+      event.stopImmediatePropagation();
       const view = bridge.view(), size = bridge.size();
       // React Flow's minimap step: by line, page or pixel deltas, ten times a Mac pinch's (Ctrl) deltas.
       const step = event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002;

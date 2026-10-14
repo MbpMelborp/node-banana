@@ -657,6 +657,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     }
 
     return () => {
+      // A node or connection drag still running ends first (its cancel path: the auto-pan loop, the connection
+      // drag store and the held `canvas-interacting`), while the live layer and the store subscriptions are there.
+      scene.cancelGesture();
       canvas.removeEventListener("webglcontextlost", contextLost);
       wheelRoot.removeEventListener("wheel", chromeWheel);
       canvas.removeEventListener("webglcontextrestored", rebuild);
