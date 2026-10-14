@@ -16,7 +16,7 @@
  * painted image is current (it may have been edited while live), then goes
  * back to the scene.
  */
-import { useCallback, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
@@ -75,6 +75,8 @@ export interface LiveConnection {
   viewChanged?: (view: View) => void;
   /** Set by the layer: keeps a node live until the returned release is called (useHoldLive). */
   hold?: HoldLive;
+  /** Set by the canvas: a click in a live node that its fields kept from the scene selects the node (Editor.clickNode). */
+  nodeClick?: (id: string, additive: boolean) => void;
 }
 
 function ViewSync({ connect, onViewChanged }: { connect: (part: LiveConnection) => void; onViewChanged: (view: View) => void }) {
@@ -106,6 +108,8 @@ interface LiveFlowProps {
   headers: HeaderProps;
   /** Keeps a node live while it shows something of its own (useHoldLive in the nodes). */
   hold: HoldLive;
+  /** A click in a live node that did not go to the scene (on a field or button): it selects the node, as React Flow's node click. */
+  onNodeClick: (id: string, additive: boolean) => void;
   /** Drawn inside the flow, in its viewport's context (group controls, the navigator). */
   children?: ReactNode;
 }
@@ -117,7 +121,7 @@ interface LiveFlowProps {
  * portal, the selection's positions) answers for the GPU canvas, its
  * viewport kept equal to the scene's.
  */
-export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, hold, children }: LiveFlowProps) {
+export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, hold, onNodeClick, children }: LiveFlowProps) {
   const [state, setState] = useState<FlowState>({ nodes: [], edges: [], committed: noop });
   const { nodes, edges } = state;
   const types = useMemo(() => ({ ...nodeTypes, gpuGhost: GhostNode }), [nodeTypes]);
@@ -137,10 +141,15 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
     });
     if (measured.length) store.onNodesChange(measured.map((change) => ({ ...change, setAttributes: false })));
   }, [realIds]);
+  // Presses the scene took have selected already; a stopped click (OutputNode, the curve editor) never arrives.
+  const nodeClick = useCallback((event: ReactMouseEvent, node: Node) => {
+    if (node.type === "gpuGhost" || !(event.target instanceof Element) || pressGoesToScene(event.target)) return;
+    onNodeClick(node.id, event.shiftKey);
+  }, [onNodeClick]);
   return (
     <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
-      <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange}
+      <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
         defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
@@ -191,8 +200,7 @@ export class LiveLayer {
     // move), and so does one on its handles (drag to connect); its fields and buttons keep theirs.
     on("pointerdown", (event) => {
       const target = event.target as Element;
-      if (!target.closest(".react-flow__node, [data-node-header]")) return;
-      if (!target.closest(".react-flow__handle") && target.closest("input, textarea, select, button, a, [contenteditable='true'], .nodrag")) return;
+      if (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target)) return;
       // The header's own drag moves nodes through this flow, whose nodes are the layer's: the scene's drag stands in.
       if (!target.closest(".react-flow__node")) {
         event.preventDefault();
@@ -439,6 +447,11 @@ export class LiveLayer {
     this.generation++;
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
+}
+
+/** A press in a live node or its header that the scene takes: on a handle, or on anything but its fields and buttons. */
+export function pressGoesToScene(target: Element): boolean {
+  return !!target.closest(".react-flow__handle") || !target.closest("input, textarea, select, button, a, [contenteditable='true'], .nodrag");
 }
 
 /** The live node (not a stand-in) an element belongs to. */

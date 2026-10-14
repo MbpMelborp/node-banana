@@ -892,11 +892,17 @@ export class Scene {
     return { x: x * this.view.zoom + this.view.x, y: y * this.view.zoom + this.view.y };
   }
 
-  /** The node under a point (css px): its floating header's band counts, unless `header` is false. */
+  /**
+   * The node under a point (css px): its floating header's band counts, unless `header` is false.
+   * Where nodes overlap, the one on top answers: a live node (drawn above the scene), then a selected
+   * one (React Flow's elevateNodesOnSelect), then the last drawn.
+   */
   nodeAt(cssX: number, cssY: number, header = true) {
     const p = this.toWorld(cssX, cssY);
-    return this.index.at(p.x, p.y, header);
+    return this.index.at(p.x, p.y, header, this.raised);
   }
+
+  private raised = (i: number) => (this.hidden.has(i) ? 2 : 0) + (this.selected.has(i) ? 1 : 0);
 
   /** Nodes whose rectangle overlaps a rectangle (flow units). */
   nodesWithin(x0: number, y0: number, x1: number, y1: number): number[] {

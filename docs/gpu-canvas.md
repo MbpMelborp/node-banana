@@ -196,7 +196,11 @@ The scene takes every press and asks the editor what it starts:
   `handleConnectEnd` with the node under the pointer, which opens the
   connection drop menu as today.
 - **A node**, its floating header included (the 30 flow units above it,
-  painted or live): a click selects it (Shift adds or removes it); a drag
+  painted or live): a click selects it (Shift adds or removes it), and
+  leaves a selection it is already part of as it is; a click on a live
+  node's field or button selects it too (the live flow's `onNodeClick`).
+  Where nodes overlap, a live node answers before a painted one and a
+  selected one before the others (React Flow raises selected nodes). A drag
   moves the selection. The first move records the undo step, the moves in
   between go only to the scene graph and the live layer, and the drop goes
   to the store and to `onNodeDragStop` (group membership). A press on a
@@ -206,9 +210,11 @@ The scene takes every press and asks the editor what it starts:
 - With the selection key held (Shift, or Alt in "altDrag"), a press on a
   node or connection is a click that toggles it, and any movement turns it
   into a marquee.
-- **The pane**: a click clears the selection; a drag pans or draws the
-  marquee as the navigation settings say (`paneDragAction`); drawing on drag
-  (the Mac default) starts only from empty canvas. The marquee
+- **The pane**: a click clears the selection and is WorkflowCanvas's pane
+  click, whatever a drag would do; a drag pans or draws the marquee as the
+  navigation settings say (`paneDragAction`); drawing on drag (the Mac
+  default) starts only from empty canvas, once the press moves (at once with
+  the selection key), and clears the selection as it starts. The marquee
   takes a node only when it holds its media card, or the whole node without
   one; with no nodes taken it selects the connections it crosses.
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
@@ -224,7 +230,7 @@ The scene takes every press and asks the editor what it starts:
   scene draws it hovered, and Enter or Space selects it, Escape unselects
   it. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu; a double-click on the pane
-  opens the add-node menu.
+  opens the add-node menu (not on a connection or a handle).
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
   `panActivationKeyCode` off): a press that would pan selects, drags and
   connects as a plain one. Nodes still move, connect and select.

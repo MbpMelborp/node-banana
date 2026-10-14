@@ -346,14 +346,22 @@ export class GridIndex {
     this.insert(i);
   }
 
-  /** The topmost (last drawn) node containing the point, its header band included unless `header` is false, or -1. */
-  at(x: number, y: number, header = true): number {
+  /**
+   * The topmost node containing the point, its header band included unless `header` is false, or -1.
+   * Topmost is the highest `rank` (nodes raised above the others), then the last drawn.
+   */
+  at(x: number, y: number, header = true, rank?: (i: number) => number): number {
     const top = header ? this.top : 0;
     const list = this.cells.get(`${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`);
-    let best = -1;
+    let best = -1, bestRank = -Infinity;
     for (const i of list ?? []) {
       const n = this.nodes[i];
-      if (x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h && i > best) best = i;
+      if (!(x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h)) continue;
+      const r = rank?.(i) ?? 0;
+      if (r > bestRank || (r === bestRank && i > best)) {
+        best = i;
+        bestRank = r;
+      }
     }
     return best;
   }

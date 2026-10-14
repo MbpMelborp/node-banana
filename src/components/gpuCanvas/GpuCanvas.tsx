@@ -117,6 +117,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const connectLive = useCallback((part: LiveConnection) => void Object.assign(liveConnection, part), [liveConnection]);
   const liveViewChanged = useCallback((view: View) => liveConnection.viewChanged?.(view), [liveConnection]);
   const holdLive = useCallback((id: string) => liveConnection.hold?.(id) ?? noop, [liveConnection]);
+  const liveNodeClick = useCallback((id: string, additive: boolean) => liveConnection.nodeClick?.(id, additive), [liveConnection]);
   const [initialView] = useState(() => useWorkflowStore.getState().canvasViewport ?? { x: 0, y: 0, zoom: 1 });
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
@@ -177,7 +178,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onIdleMove: (event) => editor.idleMove(event),
         onContextMenu: (event) => editor.contextMenu(event),
         onOpen: (i) => open(scene.graph.nodes[i].id),
-        onPaneDoubleClick: (_x, _y, screen) => editor.paneDoubleClick(screen),
+        onPaneDoubleClick: (x, y, screen) => editor.paneDoubleClick(x, y, screen),
         routeEdge: (e) => {
           const state = useWorkflowStore.getState();
           return routeSceneEdge(graph, e, { style: state.edgeStyle, appearance: state.edgeAppearance, edges: state.edges, nodes: state.nodes, thicknessPx: EDGE_THICKNESS_PX[state.edgeAppearance.thickness] });
@@ -223,6 +224,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     });
     const stopAutoRun = watchOutputAutoRun(useWorkflowStore);
     const editor = new Editor(scene, live, host, () => propsRef.current.editing);
+    connectLive({ nodeClick: (id, additive) => editor.clickNode(id, additive) });
     // The routes above read the store: compute them now that the scene exists.
     scene.setEdgeAppearance(store.edgeAppearance.gradient, store.edgeAppearance.fadedOpacity);
     scene.rerouteAll();
@@ -441,6 +443,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       interacting.dispose();
       setGpuCanvasBridge(null);
       editor.dispose();
+      connectLive({ nodeClick: undefined });
       liveContent.dispose();
       stopAutoRun();
       stats.dispose();
@@ -449,7 +452,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       scene.dispose();
     };
     // The engine is built once per mount; props it needs later are read through propsRef.
-  }, [types, liveConnection]);
+  }, [types, liveConnection, connectLive]);
 
   // A workflow opened (or the canvas mounted): the tab's view, else the graph framed as today's
   // canvas frames it; painting starts over from the view, behind the loading screen when large.
@@ -497,7 +500,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
       <div ref={liveRef} data-gpu-canvas-live="" className="pointer-events-none absolute inset-0 overflow-hidden">
         <LiveFlow connect={connectLive} onViewChanged={liveViewChanged} initialView={initialView} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
-          onEdgesChange={onEdgesChange} headers={headers} hold={holdLive}>
+          onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick}>
           {flowChildren}
         </LiveFlow>
       </div>

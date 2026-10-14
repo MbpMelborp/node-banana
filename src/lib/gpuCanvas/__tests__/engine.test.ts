@@ -66,6 +66,15 @@ describe("GridIndex", () => {
     expect(index.at(10, 480)).toBe(-1);
     expect(index.within(0, 495, 50, 505)).toEqual([]);
   });
+
+  it("lets a raised node (live, selected) answer over a later one it overlaps", () => {
+    const graph = new SceneGraph([node("a", 0, 0), node("b", 100, 100)], [], {});
+    const index = new GridIndex(graph.nodes);
+    expect(index.at(150, 150, true, (i) => (i === 0 ? 1 : 0))).toBe(0);
+    expect(index.at(150, 150, true, () => 1)).toBe(1);
+    // Only nodes containing the point compete.
+    expect(index.at(50, 50, true, (i) => (i === 1 ? 1 : 0))).toBe(0);
+  });
 });
 
 describe("AtlasLayout", () => {
