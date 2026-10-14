@@ -53,6 +53,7 @@ beforeEach(() => {
     toWorld: (x: number, y: number) => ({ x, y }),
     toScreen: (x: number, y: number) => ({ x, y }),
     nodeAt: (x: number, y: number) => index.at(x, y),
+    drawnAtOrAbove: (i: number, top: number) => i >= top,
     nodesWithin: (x0: number, y0: number, x1: number, y1: number) => index.within(x0, y0, x1, y1),
     edgeAt: () => edgeHit,
     edgesWithin: () => [0],
@@ -265,6 +266,70 @@ describe("connection ends on the GPU canvas", () => {
     expect(useWorkflowStore.getState().hoveredHandle).toBeNull();
     gesture.move(pointer(398, 100));
     gesture.up(pointer(398, 100));
+    expect(settings.onConnect).toHaveBeenCalledWith({ source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
+  });
+
+  it("a node on top covers the sockets of a node under it: a press there takes the top node", () => {
+    settings.onConnectEnd = vi.fn();
+    const graph = editor["scene"].graph;
+    // b moved over a's output socket (b is drawn above a).
+    graph.nodes[1].x = 250;
+    (editor["scene"] as unknown as Record<string, unknown>).nodeAt = (x: number, y: number) => (x >= 250 && x <= 550 && y >= 0 && y <= 200 ? 1 : -1);
+    drag([300, 100], [320, 100]);
+    expect(settings.onConnectEnd).not.toHaveBeenCalled();
+    expect(useWorkflowStore.getState().nodes.find((n) => n.id === "b")?.position.x).not.toBe(400);
+  });
+
+  it("a wire released within 4px of its press is a click on the handle: its menu, not the add-node menu", () => {
+    settings.onConnectEnd = vi.fn();
+    settings.onHandleClick = vi.fn();
+    const gesture = editor.press(pointer(300, 100))!;
+    // The line shows after a pixel of travel.
+    gesture.move(pointer(302, 100));
+    expect(host.querySelector("path")).not.toBeNull();
+    gesture.move(pointer(380, 100));
+    gesture.move(pointer(303, 100));
+    gesture.up(pointer(303, 100));
+    expect(host.querySelector("path")).toBeNull();
+    expect(settings.onConnectEnd).not.toHaveBeenCalled();
+    expect(settings.onHandleClick).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "a", handleId: "text", type: "source" }));
+  });
+
+  it("the line follows its socket when the view moves mid-drag", () => {
+    const scene = editor["scene"] as unknown as Record<string, unknown>;
+    let panX = 0;
+    const listeners = new Set<() => void>();
+    Object.assign(scene, {
+      toScreen: (x: number, y: number) => ({ x: x + panX, y }),
+      toWorld: (x: number, y: number) => ({ x: x - panX, y }),
+      onViewChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+    });
+    const gesture = editor.press(pointer(300, 100))!;
+    gesture.move(pointer(1500, 600));
+    const d = () => host.querySelector("path")!.getAttribute("d")!;
+    expect(d().startsWith("M300,100") || d().startsWith("M 300")).toBe(true);
+    panX = -100;
+    for (const listener of listeners) listener();
+    expect(d().startsWith("M200,100") || d().startsWith("M 200")).toBe(true);
+    gesture.up(pointer(1500, 600));
+    expect(listeners.size).toBe(0);
+  });
+
+  it("a connection holds its nodes by id: a node added mid-drag does not change what it connects", () => {
+    settings.onConnect = vi.fn();
+    const scene = editor["scene"] as unknown as Record<string, unknown>;
+    const gesture = editor.press(pointer(300, 100))!;
+    gesture.move(pointer(398, 100));
+    // A node inserted first renumbers the graph.
+    const nodes = [node("z", 5000, 5000), ...useWorkflowStore.getState().nodes];
+    useWorkflowStore.setState({ nodes });
+    const graph = new SceneGraph(nodes, useWorkflowStore.getState().edges, {});
+    graph.nodes[1].handles = new Map([["source:text", { x: 300, y: 100, position: "right" }]]);
+    graph.nodes[2].handles = new Map([["target:text", { x: 0, y: 100, position: "left" }]]);
+    const index = new GridIndex(graph.nodes);
+    Object.assign(scene, { graph, nodeAt: (x: number, y: number) => index.at(x, y), nodesWithin: (x0: number, y0: number, x1: number, y1: number) => index.within(x0, y0, x1, y1) });
+    gesture.move(pointer(399, 100));
+    gesture.up(pointer(399, 100));
     expect(settings.onConnect).toHaveBeenCalledWith({ source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
   });
 

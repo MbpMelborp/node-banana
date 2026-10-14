@@ -47,6 +47,8 @@ const CLICK_DISTANCE = 5;
 const PANE_CLICK_DISTANCE = 1;
 /** Under this a press on a handle is a click that opens its menu. */
 const HANDLE_CLICK_SLOP = 4;
+/** Pointer travel (css px) past which a press on a handle draws its connection line (React Flow's connectionDragThreshold). */
+const CONNECTION_DRAG_THRESHOLD = 1;
 /** How near (css px) to a painted handle's centre a press takes it, however small the zoom makes its socket. */
 const HANDLE_HIT_PX = 9;
 /** How near (flow units) to a handle's centre a dragged connection finds it (React Flow's connectionRadius). */
@@ -327,7 +329,11 @@ export class Editor {
   private paintedHandleAt(cssX: number, cssY: number): HandleHit | null {
     const scene = this.scene, p = scene.toWorld(cssX, cssY), floor = HANDLE_HIT_PX / scene.view.zoom;
     // Handles sit on a node's sides, a little outside it.
-    return handleAt(scene.graph, this.nodesNear(p.x, p.y, Math.max(floor, 24) + 24), p.x, p.y, floor);
+    let near = this.nodesNear(p.x, p.y, Math.max(floor, 24) + 24);
+    // A node over the point covers the sockets of the nodes under it, as its element takes the pointer on today's canvas.
+    const top = scene.nodeAt(cssX, cssY);
+    if (top >= 0) near = near.filter((i) => scene.drawnAtOrAbove(i, top));
+    return handleAt(scene.graph, near, p.x, p.y, floor);
   }
 
   /** The connection end (its reconnect anchor) under a point (css px). */
@@ -459,9 +465,21 @@ export class Editor {
     const pressedNode = store.nodes.find((n) => n.id === pressedId);
     if (!pressedNode || pressedNode.draggable === false) return null;
     // A selected node carries the selection; an unselected one moves alone (selectNodesOnDrag is off).
-    const ids = pressedNode.selected ? store.nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id) : [pressedId];
-    const moving = ids.map((nodeId) => graph.indexOf.get(nodeId)).filter((n): n is number => n != null);
-    const start = moving.map((n) => ({ x: graph.nodes[n].x, y: graph.nodes[n].y }));
+    const ids = (pressedNode.selected ? store.nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id) : [pressedId])
+      .filter((id) => graph.indexOf.has(id));
+    const start = new Map(ids.map((id) => {
+      const n = graph.nodes[graph.indexOf.get(id)!];
+      return [id, { x: n.x, y: n.y }];
+    }));
+    // The nodes are held by id: nodes added or removed mid-drag renumber the graph (GpuCanvas's sync).
+    const moving = () => ids.map((id) => scene.graph.indexOf.get(id)).filter((n): n is number => n != null);
+    const moveTo = (indices: number[], dx: number, dy: number) => {
+      for (const n of indices) {
+        const node = scene.graph.nodes[n], from = start.get(node.id)!;
+        node.x = from.x + dx;
+        node.y = from.y + dy;
+      }
+    };
     const generation = store.canvasGeneration;
     const origin = scene.toWorld(scene.local(down).x, scene.local(down).y);
     // The dragged nodes stay live while they move (the pressed one is hovered, a selection is live).
@@ -474,17 +492,15 @@ export class Editor {
       const dx = w.x - origin.x, dy = w.y - origin.y;
       if (dx === last.dx && dy === last.dy) return;
       last = { dx, dy };
-      moving.forEach((n, k) => {
-        graph.nodes[n].x = start[k].x + dx;
-        graph.nodes[n].y = start[k].y + dy;
-      });
+      const indices = moving();
+      moveTo(indices, dx, dy);
       scene.input(event);
-      scene.nodesMoved(moving);
+      scene.nodesMoved(indices);
       this.live.refresh();
       // The first move reaches the store: it records the undo step.
       if (!committedFirst) {
         committedFirst = true;
-        useWorkflowStore.getState().onNodesChange(this.positionChanges(moving, true));
+        useWorkflowStore.getState().onNodesChange(this.positionChanges(indices, true));
       }
     };
     const finish = (event: PointerEvent | null) => {
@@ -493,16 +509,14 @@ export class Editor {
       const state = useWorkflowStore.getState();
       // The canvas was replaced mid-drag: the positions belong to the old one.
       if (state.canvasGeneration !== generation) return;
+      const indices = moving();
       if (!event) {
-        moving.forEach((n, k) => {
-          graph.nodes[n].x = start[k].x;
-          graph.nodes[n].y = start[k].y;
-        });
-        scene.nodesMoved(moving);
-        state.onNodesChange(this.positionChanges(moving, false));
+        moveTo(indices, 0, 0);
+        scene.nodesMoved(indices);
+        state.onNodesChange(this.positionChanges(indices, false));
         return;
       }
-      state.onNodesChange(this.positionChanges(moving, false));
+      state.onNodesChange(this.positionChanges(indices, false));
       const node = useWorkflowStore.getState().nodes.find((n) => n.id === pressedId);
       if (node) this.editing().onNodeDragStop(event, node);
     };
@@ -644,36 +658,48 @@ export class Editor {
    * edge is hidden while it is drawn and a valid drop moves its end (React Flow's reconnect anchors);
    * a press that does not move is a click on the edge.
    */
-  private connectGesture(down: PointerEvent, from: HandleHit, reconnecting?: number): Gesture {
+  private connectGesture(down: PointerEvent, pressed: HandleHit, reconnecting?: number): Gesture {
     const scene = this.scene;
     const fromLive = reconnecting == null && down.target instanceof Element && !!down.target.closest(".react-flow__handle");
-    const fromId = scene.graph.nodes[from.node].id;
+    // The nodes and the connection are held by id, as React Flow's are: nodes added or removed mid-drag
+    // renumber the graph (GpuCanvas's sync), so `from` and the target are looked up again as they are used.
+    const fromId = scene.graph.nodes[pressed.node].id;
+    let from = pressed;
     const heldEdgeId = reconnecting == null ? null : scene.graph.edges[reconnecting].id;
     const handleId = from.handleId || null;
     const startX = down.clientX, startY = down.clientY;
-    let dragging = false;
-    let target: HandleHit | null = null;
+    let dragging = false, ended = false;
+    let target: { hit: HandleHit; nodeId: string } | null = null;
     let last = down, panFrame = 0, inViewport = false;
+    let offs: (() => void)[] = [];
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     const wanted = from.type === "source" ? "target" : "source";
     const draw = (event: PointerEvent) => {
+      const fromIndex = scene.graph.indexOf.get(fromId);
+      // The node it starts from was removed: the connection goes with it.
+      if (fromIndex == null) {
+        end();
+        return;
+      }
+      if (fromIndex !== from.node) from = { ...from, node: fromIndex };
       const at = scene.local(event), p = scene.toWorld(at.x, at.y);
       // As React Flow finds it: the handle under the pointer, else the one whose centre is nearest within the
       // connection radius, of either kind. The line ends on it only if the connection would be made.
       const candidate = this.liveHandleAt(event) ?? this.paintedHandleAt(at.x, at.y)
         ?? closestHandle(scene.graph, this.nodesNear(p.x, p.y, CONNECTION_RADIUS + 24), p.x, p.y, CONNECTION_RADIUS, wanted, from);
+      const candidateId = candidate ? scene.graph.nodes[candidate.node].id : "";
       const valid = !!candidate && candidate.type === wanted && candidate.connectableEnd
-        && !(candidate.node === from.node && candidate.handleId === from.handleId && candidate.type === from.type)
-        && this.editing().isValidConnection(this.connection(from, candidate));
-      target = valid ? candidate : null;
+        && !(candidateId === fromId && candidate.handleId === from.handleId && candidate.type === from.type)
+        && this.editing().isValidConnection(this.connection(fromId, from, candidateId, candidate));
+      target = valid ? { hit: candidate, nodeId: candidateId } : null;
       // The nodes React Flow would show sockets for: their labels show, and a valid target's socket fills.
-      setConnectDrag(true, target ? { nodeId: scene.graph.nodes[target.node].id, handleId: target.handleId || null, type: target.type } : null);
+      setConnectDrag(true, target ? { nodeId: target.nodeId, handleId: target.hit.handleId || null, type: target.hit.type } : null);
       const under = scene.nodeAt(at.x, at.y);
-      this.live.wantOnly("connect", [fromId, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [scene.graph.nodes[target.node].id] : [])]);
+      this.live.wantOnly("connect", [fromId, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [target.nodeId] : [])]);
       // React Flow's line runs between the handles' centres, in flow units inside the viewport (css px on the host).
-      const end = target ? { x: target.cx, y: target.cy } : p;
+      const tip = target ? { x: target.hit.cx, y: target.hit.cy } : p;
       const place = (x: number, y: number) => inViewport ? { x, y } : scene.toScreen(x, y);
-      const a = place(from.cx, from.cy), b = place(end.x, end.y);
+      const a = place(from.cx, from.cy), b = place(tip.x, tip.y);
       const fromSource = from.type === "source";
       const [d] = routeEdge({
         style: "curved",
@@ -683,23 +709,26 @@ export class Editor {
       path.setAttribute("d", d);
       path.setAttribute("stroke-width", inViewport ? "1" : String(scene.view.zoom));
     };
-    // React Flow's autoPanOnConnect: near the canvas's edge the view pans every frame, the pointer still or not.
+    // React Flow's autoPanOnConnect: near the canvas's edge the view pans every frame, the pointer still or not
+    // (the pan redraws the line through the view listener).
     const autoPan = () => {
       const { clientWidth: width, clientHeight: height } = scene.canvas;
       const [vx, vy] = width && height ? autoPanVelocity(scene.local(last), { width, height }) : [0, 0];
-      if (vx || vy) {
-        scene.setView({ x: scene.view.x + vx, y: scene.view.y + vy });
-        draw(last);
-      }
-      panFrame = requestAnimationFrame(autoPan);
+      if (vx || vy) scene.setView({ x: scene.view.x + vx, y: scene.view.y + vy });
+      if (!ended) panFrame = requestAnimationFrame(autoPan);
     };
     // The reconnected edge's live copy (its decorations), hidden with the scene's stroke.
     const liveEdge = () => heldEdgeId == null ? null : this.live.element?.querySelector<SVGElement>(`.react-flow__edge[data-id="${CSS.escape(heldEdgeId)}"]`) ?? null;
+    // The reconnected edge stays hidden through a rebuilt graph (which shows it again, at its new index).
+    const holdEdge = () => {
+      const e = heldEdgeId == null ? undefined : scene.graph.edgeIndexOf.get(heldEdgeId);
+      if (e != null) scene.setHeldEdge(e);
+    };
     const start = (event: PointerEvent) => {
       dragging = true;
       scene.capture();
-      if (reconnecting != null) {
-        scene.setHeldEdge(reconnecting);
+      if (heldEdgeId != null) {
+        holdEdge();
         liveEdge()?.style.setProperty("visibility", "hidden");
       }
       // The pointer has left the pressed socket: its hidden connections stop ghosting back.
@@ -712,13 +741,25 @@ export class Editor {
       // React Flow draws no connection line while nodes are not connectable (a locked canvas).
       if (!this.editing().locked) this.overlay.append(path);
       document.documentElement.classList.add("canvas-interacting");
+      // A wheel, pinch or auto-pan keeps the line on its socket (React Flow's line is in flow units) and finds
+      // what is now under the still pointer; a rebuilt graph renumbers the nodes and connections.
+      offs = [
+        scene.onViewChanged(() => draw(last)),
+        scene.onLayoutChanged(() => {
+          holdEdge();
+          draw(last);
+        }),
+      ];
       draw(event);
-      panFrame = requestAnimationFrame(autoPan);
+      if (!ended) panFrame = requestAnimationFrame(autoPan);
     };
     const end = () => {
+      if (ended) return;
+      ended = true;
+      for (const off of offs) off();
       cancelAnimationFrame(panFrame);
       path.remove();
-      if (reconnecting != null) {
+      if (heldEdgeId != null) {
         scene.setHeldEdge(-1);
         liveEdge()?.style.removeProperty("visibility");
       }
@@ -728,9 +769,11 @@ export class Editor {
     };
     return {
       move: (event) => {
+        if (ended) return;
         last = event;
         if (!dragging) {
-          if (Math.hypot(event.clientX - startX, event.clientY - startY) <= HANDLE_CLICK_SLOP) return;
+          // React Flow's connectionDragThreshold: the line shows as soon as the pointer moves.
+          if (Math.hypot(event.clientX - startX, event.clientY - startY) <= CONNECTION_DRAG_THRESHOLD) return;
           start(event);
           return;
         }
@@ -738,27 +781,34 @@ export class Editor {
         draw(event);
       },
       up: (event) => {
-        if (!dragging) {
-          // A press on a connection's end that did not move is a click on the connection.
-          if (reconnecting != null) {
-            this.clickEdge(event, reconnecting);
-            return;
-          }
+        if (ended) return;
+        const wasDragging = dragging;
+        if (dragging) end();
+        // A press on a connection's end that did not move is a click on the connection.
+        if (!wasDragging && heldEdgeId != null) {
+          const e = scene.graph.edgeIndexOf.get(heldEdgeId);
+          if (e != null) this.clickEdge(event, e);
+          return;
+        }
+        const editing = this.editing();
+        if (wasDragging && target) {
+          const connection = this.connection(fromId, from, target.nodeId, target.hit);
+          const store = useWorkflowStore.getState();
+          if (!store.nodes.some((n) => n.id === connection.source) || !store.nodes.some((n) => n.id === connection.target)) return;
+          const edge = heldEdgeId == null ? undefined : store.edges.find((e) => e.id === heldEdgeId);
+          if (heldEdgeId == null) editing.onConnect(connection);
+          else if (edge) editing.onReconnect(edge, connection);
+          return;
+        }
+        // Released within HANDLE_CLICK_SLOP of the press, a handle's press is a click (WorkflowCanvas's handle
+        // menu listener), wherever its line went: no add-node menu (handleConnectEnd's own guard).
+        if (heldEdgeId == null && Math.hypot(event.clientX - startX, event.clientY - startY) <= HANDLE_CLICK_SLOP) {
           // The click reaches the node as well: it selects it, as React Flow's node click (connectOnClick is off).
           this.clickNode(fromId, event.shiftKey);
           // A click on the handle opens its menu at its centre (a live node's handle opens it through WorkflowCanvas's own listener).
-          if (fromLive) return;
+          if (fromLive || !scene.graph.indexOf.has(fromId)) return;
           const p = scene.toScreen(from.cx, from.cy), box = scene.canvas.getBoundingClientRect();
-          this.editing().onHandleClick({ nodeId: fromId, handleId, type: from.type, position: { x: box.left + p.x, y: box.top + p.y } });
-          return;
-        }
-        end();
-        const editing = this.editing();
-        if (target) {
-          const connection = this.connection(from, target);
-          const edge = heldEdgeId == null ? undefined : useWorkflowStore.getState().edges.find((e) => e.id === heldEdgeId);
-          if (heldEdgeId == null) editing.onConnect(connection);
-          else if (edge) editing.onReconnect(edge, connection);
+          editing.onHandleClick({ nodeId: fromId, handleId, type: from.type, position: { x: box.left + p.x, y: box.top + p.y } });
           return;
         }
         // No handle: WorkflowCanvas connects to a compatible handle of the node under the pointer, or offers the
@@ -785,10 +835,9 @@ export class Editor {
     return null;
   }
 
-  private connection(from: HandleHit, to: HandleHit): Connection {
-    const graph = this.scene.graph;
-    const [source, target] = from.type === "source" ? [from, to] : [to, from];
-    return { source: graph.nodes[source.node].id, sourceHandle: source.handleId || null, target: graph.nodes[target.node].id, targetHandle: target.handleId || null };
+  private connection(fromId: string, from: HandleHit, toId: string, to: HandleHit): Connection {
+    const [source, target] = from.type === "source" ? [{ id: fromId, hit: from }, { id: toId, hit: to }] : [{ id: toId, hit: to }, { id: fromId, hit: from }];
+    return { source: source.id, sourceHandle: source.hit.handleId || null, target: target.id, targetHandle: target.hit.handleId || null };
   }
 
   // ── Hover, double-click and context menus ─────────────────────────────

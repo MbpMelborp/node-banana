@@ -199,7 +199,10 @@ The scene takes every press and asks the editor what it starts:
   its box and the 30×34 ellipse round it, or 9 px from its centre at small
   zooms; never a hidden legacy socket, which takes no pointer): a click
   selects its node as a node click does and opens the handle menu at the
-  socket; a drag draws React Flow's default connection line (1 px of
+  socket, and so does a release within 4 px of the press after the line
+  showed; a node over a socket covers it, as its element takes the pointer
+  on classic. A drag (from the first pixel, React Flow's
+  `connectionDragThreshold`) draws React Flow's default connection line (1 px of
   `#b1b1b7` in flow units) and finds a handle as React Flow does: the one
   under the pointer, else the nearest centre within 20 flow units. The line
   ends on it only if the connection would be made. While it is drawn, the
@@ -220,7 +223,10 @@ The scene takes every press and asks the editor what it starts:
   flow after its renderer, under its panels (the navigator), as classic's
   do. On a locked canvas a socket still connects, with no line drawn, as
   classic's sockets do (React Flow hides the line while nodes are not
-  connectable).
+  connectable). The line is held in flow units: a wheel, pinch or auto-pan
+  mid-drag keeps it on its socket and finds what is under the pointer again.
+  Connections and drags hold their nodes by id, so nodes added or removed
+  meanwhile (which rebuild the scene graph) do not change what they act on.
 - **A connection's end** (React Flow's reconnect anchors: a circle of 10
   flow units round each end, shifted 10 outward, under nodes and handles;
   the `move` cursor): a drag hides the connection and draws the line from

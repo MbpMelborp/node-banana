@@ -916,6 +916,12 @@ export class Scene {
 
   private raised = (i: number) => (this.hidden.has(i) ? 2 : 0) + (this.selected.has(i) ? 1 : 0);
 
+  /** Whether node `i` is drawn at or above node `top`, in nodeAt's order: `top` does not cover it. */
+  drawnAtOrAbove(i: number, top: number) {
+    const a = this.raised(i), b = this.raised(top);
+    return a > b || (a === b && i >= top);
+  }
+
   /** Nodes whose rectangle overlaps a rectangle (flow units). */
   nodesWithin(x0: number, y0: number, x1: number, y1: number): number[] {
     return this.index.within(x0, y0, x1, y1);
