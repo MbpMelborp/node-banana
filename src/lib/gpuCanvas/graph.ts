@@ -130,6 +130,12 @@ export class SceneGraph {
   private sourceNodes: readonly WorkflowNode[] = [];
   private sourceEdges: readonly WorkflowEdge[] = [];
   private sourceGroups: Record<string, NodeGroup> = {};
+  /**
+   * Where a node being dragged is held (the editor's drag sets it): the store's position for it is
+   * left behind by the drag until the drop, so it is not taken over the dragged one (classic lays
+   * its drag positions over the store's nodes the same way).
+   */
+  hold: ((id: string) => { x: number; y: number } | undefined) | null = null;
 
   constructor(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], groups: Record<string, NodeGroup>) {
     this.rebuildNodes(nodes);
@@ -149,11 +155,11 @@ export class SceneGraph {
         for (let i = 0; i < nodes.length; i++) {
           if (nodes[i] === this.sourceNodes[i]) continue;
           const n = this.nodes[i], node = nodes[i];
-          const { w } = storeNodeSize(node);
+          const { w } = storeNodeSize(node), { x, y } = this.positionOf(node);
           // Heights come from painting once known; the store's only seeds them.
-          if (n.x !== node.position.x || n.y !== node.position.y || n.w !== w) {
-            n.x = node.position.x;
-            n.y = node.position.y;
+          if (n.x !== x || n.y !== y || n.w !== w) {
+            n.x = x;
+            n.y = y;
             n.w = w;
             result.moved.push(i);
           }
@@ -192,10 +198,10 @@ export class SceneGraph {
       const i = this.indexOf.get(id);
       if (i == null || nodes[i]?.id !== id) return null;
       const n = this.nodes[i], node = nodes[i];
-      const { w } = storeNodeSize(node);
-      if (n.x !== node.position.x || n.y !== node.position.y || n.w !== w) {
-        n.x = node.position.x;
-        n.y = node.position.y;
+      const { w } = storeNodeSize(node), { x, y } = this.positionOf(node);
+      if (n.x !== x || n.y !== y || n.w !== w) {
+        n.x = x;
+        n.y = y;
         n.w = w;
         moved.push(i);
       }
@@ -204,17 +210,21 @@ export class SceneGraph {
     return moved;
   }
 
+  private positionOf(node: WorkflowNode): { x: number; y: number } {
+    return this.hold?.(node.id) ?? node.position;
+  }
+
   private rebuildNodes(nodes: readonly WorkflowNode[]) {
     const previous = new Map(this.nodes.map((n) => [n.id, n]));
     this.sourceNodes = nodes;
     this.nodes = nodes.map((node) => {
       const { w, h } = storeNodeSize(node);
-      const kept = previous.get(node.id);
+      const kept = previous.get(node.id), { x, y } = this.positionOf(node);
       return {
         id: node.id,
         type: String(node.type),
-        x: node.position.x,
-        y: node.position.y,
+        x,
+        y,
         w,
         // A node already measured keeps its height until it is painted again.
         h: kept && kept.w === w ? kept.h : h,

@@ -180,7 +180,8 @@ export class Editor {
   // ── Keys ──────────────────────────────────────────────────────────────
 
   private keyDown(event: KeyboardEvent) {
-    if (event.code === "Space" && !typing(event.target)) this.space = true;
+    // Space is the pan key only in the "space" pan mode (WorkflowCanvas's panActivationKeyCode).
+    if (event.code === "Space" && !typing(event.target) && this.editing().navigation.panMode === "space") this.space = true;
     if (event.defaultPrevented || keyInField(event)) return;
     const { disabled, locked } = this.editing();
     if (disabled || useAssetStore.getState().appView !== "canvas") return;
@@ -266,8 +267,9 @@ export class Editor {
     const panning = paneDragAction(editing.navigation, modifiers, isMac);
     // The tutorial turns panning off: such a press selects, drags and connects as a plain one.
     const action = editing.tutorial && panning === "pan" ? null : panning;
-    // Space held (or the pan button) pans wherever the press lands, as React Flow's pan key does.
-    if (action === "pan" && (space || event.button !== 0)) return scene.panGesture(event);
+    // The pan button pans wherever the press lands (React Flow lets the middle button pan from a node too).
+    // A left press, Space held or not, still takes a handle or a node first: they are React Flow's nopan.
+    if (action === "pan" && event.button !== 0) return scene.panGesture(event);
     if (event.button !== 0) return null;
     const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
     // With the selection key held, React Flow's pane takes the press before a handle can: no connection starts.
@@ -291,7 +293,8 @@ export class Editor {
     }
     // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
     if (node >= 0) return this.nodeGesture(event, node);
-    if (edge >= 0) return this.clickGesture(event, () => this.clickEdge(event, edge));
+    // A connection is not nopan: a drag from it pans as the pane's does.
+    if (edge >= 0) return this.clickGesture(event, () => this.clickEdge(event, edge), action === "pan" ? () => scene.panGesture(event) : undefined);
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     // A marquee starts once the press moves (at once with the selection key held); a release before that is a pane click.
     if (action === "select" && !editing.locked) {
@@ -464,36 +467,51 @@ export class Editor {
     const pressedId = graph.nodes[pressed].id;
     const pressedNode = store.nodes.find((n) => n.id === pressedId);
     if (!pressedNode || pressedNode.draggable === false) return null;
-    // A selected node carries the selection; an unselected one moves alone (selectNodesOnDrag is off).
-    const ids = (pressedNode.selected ? store.nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id) : [pressedId])
-      .filter((id) => graph.indexOf.has(id));
+    // React Flow's XYDrag with selectNodesOnDrag off: a selected node carries the selection; an unselected one
+    // clears it and moves alone, unless Shift (multiSelectionKeyCode) is held, when it moves with the selection.
+    if (!pressedNode.selected && !down.shiftKey) this.clearSelection();
+    const carried = pressedNode.selected || down.shiftKey
+      ? useWorkflowStore.getState().nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id)
+      : [];
+    const ids = [...new Set([...carried, pressedId])].filter((id) => graph.indexOf.has(id));
     const start = new Map(ids.map((id) => {
       const n = graph.nodes[graph.indexOf.get(id)!];
       return [id, { x: n.x, y: n.y }];
     }));
     // The nodes are held by id: nodes added or removed mid-drag renumber the graph (GpuCanvas's sync).
     const moving = () => ids.map((id) => scene.graph.indexOf.get(id)).filter((n): n is number => n != null);
-    const moveTo = (indices: number[], dx: number, dy: number) => {
+    const generation = store.canvasGeneration;
+    const replaced = () => useWorkflowStore.getState().canvasGeneration !== generation;
+    let last = { dx: 0, dy: 0 };
+    const held = (id: string) => {
+      const from = start.get(id);
+      return from && { x: from.x + last.dx, y: from.y + last.dy };
+    };
+    const moveTo = (indices: number[]) => {
       for (const n of indices) {
-        const node = scene.graph.nodes[n], from = start.get(node.id)!;
-        node.x = from.x + dx;
-        node.y = from.y + dy;
+        const node = scene.graph.nodes[n], at = held(node.id)!;
+        node.x = at.x;
+        node.y = at.y;
       }
     };
-    const generation = store.canvasGeneration;
-    const origin = scene.toWorld(scene.local(down).x, scene.local(down).y);
+    // A store write to a dragged node mid-drag (a run's status, an edit elsewhere) keeps it where the drag holds it,
+    // as classic's drag positions are laid over the store's nodes; a replaced canvas holds nothing.
+    scene.graph.hold = (id) => replaced() ? undefined : held(id);
+    // As React Flow's drag starts once past its threshold: from where the pointer is then, so the nodes do not jump.
+    const at0 = scene.local(first), origin = scene.toWorld(at0.x, at0.y);
     // The dragged nodes stay live while they move (the pressed one is hovered, a selection is live).
     this.live.wantOnly("drag", ids);
     document.documentElement.classList.add("canvas-interacting");
-    let committedFirst = false;
-    let last = { dx: 0, dy: 0 };
+    let committedFirst = false, ended = false, panFrame = 0, pointer = first;
     const place = (event: PointerEvent) => {
+      if (ended || replaced()) return;
+      pointer = event;
       const p = scene.local(event), w = scene.toWorld(p.x, p.y);
       const dx = w.x - origin.x, dy = w.y - origin.y;
       if (dx === last.dx && dy === last.dy) return;
       last = { dx, dy };
       const indices = moving();
-      moveTo(indices, dx, dy);
+      moveTo(indices);
       scene.input(event);
       scene.nodesMoved(indices);
       this.live.refresh();
@@ -503,24 +521,40 @@ export class Editor {
         useWorkflowStore.getState().onNodesChange(this.positionChanges(indices, true));
       }
     };
+    // React Flow's autoPanOnNodeDrag: near the canvas's edge the view pans every frame, the pointer still or not,
+    // and the nodes move with it so they stay under the pointer.
+    const autoPan = () => {
+      if (ended || replaced()) return;
+      const { clientWidth: width, clientHeight: height } = scene.canvas;
+      const [vx, vy] = width && height ? autoPanVelocity(scene.local(pointer), { width, height }) : [0, 0];
+      if (vx || vy) {
+        scene.setView({ x: scene.view.x + vx, y: scene.view.y + vy });
+        place(pointer);
+      }
+      panFrame = requestAnimationFrame(autoPan);
+    };
     const finish = (event: PointerEvent | null) => {
+      ended = true;
+      cancelAnimationFrame(panFrame);
       this.live.wantOnly("drag", []);
       document.documentElement.classList.remove("canvas-interacting");
-      const state = useWorkflowStore.getState();
       // The canvas was replaced mid-drag: the positions belong to the old one.
-      if (state.canvasGeneration !== generation) return;
-      const indices = moving();
-      if (!event) {
-        moveTo(indices, 0, 0);
-        scene.nodesMoved(indices);
-        state.onNodesChange(this.positionChanges(indices, false));
+      if (replaced()) {
+        scene.graph.hold = null;
         return;
       }
+      const state = useWorkflowStore.getState();
+      const indices = moving();
+      if (!event) last = { dx: 0, dy: 0 };
+      moveTo(indices);
+      if (!event) scene.nodesMoved(indices);
       state.onNodesChange(this.positionChanges(indices, false));
+      scene.graph.hold = null;
+      if (!event) return;
       const node = useWorkflowStore.getState().nodes.find((n) => n.id === pressedId);
       if (node) this.editing().onNodeDragStop(event, node);
     };
-    place(first);
+    panFrame = requestAnimationFrame(autoPan);
     return { move: place, up: (event) => finish(event), cancel: () => finish(null) };
   }
 

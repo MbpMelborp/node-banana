@@ -351,6 +351,109 @@ describe("connection ends on the GPU canvas", () => {
   });
 });
 
+describe("node drags on the GPU canvas", () => {
+  const position = (id: string) => useWorkflowStore.getState().nodes.find((n) => n.id === id)!.position;
+  const sceneNode = (id: string) => editor["scene"].graph.nodes[editor["scene"].graph.indexOf.get(id)!];
+
+  it("starts from where the pointer is once past the threshold: no jump", () => {
+    const gesture = editor.press(pointer(900, 100))!;
+    gesture.move(pointer(906, 100));
+    expect(sceneNode("c").x).toBe(800);
+    gesture.move(pointer(916, 103));
+    gesture.up(pointer(916, 103));
+    expect(position("c")).toEqual({ x: 810, y: 3 });
+  });
+
+  it("an unselected node clears the selection and moves alone; a selected one carries the selection", () => {
+    useWorkflowStore.getState().onEdgesChange([{ type: "select", id: "ac", selected: true }]);
+    drag([900, 100], [920, 100]);
+    expect(selected()).toEqual([]);
+    expect(selectedEdges()).toEqual([]);
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([0, 400, 800]);
+    editor.selectNodes(["a", "b"], false);
+    const gesture = editor.press(pointer(100, 100))!;
+    gesture.move(pointer(110, 100));
+    gesture.move(pointer(130, 100));
+    gesture.up(pointer(130, 100));
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([20, 420, 800]);
+  });
+
+  it("Shift (when it is not the selection key) drags an unselected node with the selection", () => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, selectionMode: "altDrag" };
+    const gesture = editor.press(pointer(900, 100, { shiftKey: true }))!;
+    gesture.move(pointer(910, 100, { shiftKey: true }));
+    gesture.move(pointer(930, 100, { shiftKey: true }));
+    gesture.up(pointer(930, 100, { shiftKey: true }));
+    expect(selected()).toEqual(["a", "b"]);
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([20, 420, 820]);
+  });
+
+  it("with Space held a press on a node drags it and one on a handle connects; only empty canvas pans", () => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "space" };
+    settings.onConnect = vi.fn();
+    document.elementsFromPoint ??= () => [];
+    const scene = editor["scene"] as unknown as Record<string, unknown>;
+    const pan = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    scene.panGesture = pan;
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", key: " " }));
+    const gesture = editor.press(pointer(900, 100))!;
+    gesture.move(pointer(910, 100));
+    gesture.move(pointer(930, 100));
+    gesture.up(pointer(930, 100));
+    expect(position("c").x).toBe(820);
+    editor["scene"].graph.nodes[0].handles = new Map([["source:text", { x: 300, y: 100, position: "right" }]]);
+    editor["scene"].graph.nodes[1].handles = new Map([["target:text", { x: 0, y: 100, position: "left" }]]);
+    drag([300, 100], [400, 100]);
+    expect(settings.onConnect).toHaveBeenCalledWith({ source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
+    expect(pan).not.toHaveBeenCalled();
+    drag([2000, 2000], [2100, 2000]);
+    expect(pan).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", key: " " }));
+  });
+
+  it("a store write to a dragged node mid-drag leaves it where the drag holds it", () => {
+    const gesture = editor.press(pointer(900, 100))!;
+    gesture.move(pointer(910, 100));
+    gesture.move(pointer(950, 100));
+    const graph = editor["scene"].graph;
+    // A run's status reaches the store with the position of the drag's first move.
+    const nodes = useWorkflowStore.getState().nodes.map((n) => n.id === "c" ? { ...n, position: { x: 800, y: 0 }, data: { prompt: "running" } } : n) as WorkflowNode[];
+    graph.updateNodes(nodes, ["c"]);
+    expect(sceneNode("c").x).toBe(840);
+    graph.sync([node("z", 5000, 5000), ...nodes], useWorkflowStore.getState().edges, {});
+    expect(sceneNode("c").x).toBe(840);
+    gesture.up(pointer(950, 100));
+    expect(position("c").x).toBe(840);
+    expect(graph.hold).toBeNull();
+  });
+
+  it("near the canvas's edge the view pans every frame and the dragged node moves with it", () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    try {
+      const scene = editor["scene"] as unknown as { view: { x: number; y: number; zoom: number }; canvas: HTMLCanvasElement } & Record<string, unknown>;
+      Object.defineProperty(scene.canvas, "clientWidth", { value: 1200 });
+      Object.defineProperty(scene.canvas, "clientHeight", { value: 800 });
+      Object.assign(scene, {
+        toWorld: (x: number, y: number) => ({ x: x - scene.view.x, y: y - scene.view.y }),
+        setView: (view: { x: number; y: number }) => Object.assign(scene.view, view),
+      });
+      const gesture = editor.press(pointer(900, 100))!;
+      gesture.move(pointer(910, 100));
+      gesture.move(pointer(1200, 100));
+      expect(sceneNode("c").x).toBe(1090);
+      vi.advanceTimersToNextFrame();
+      expect(scene.view.x).toBe(-15);
+      expect(sceneNode("c").x).toBe(1105);
+      gesture.up(pointer(1200, 100));
+      vi.advanceTimersToNextFrame();
+      expect(scene.view.x).toBe(-15);
+      expect(position("c").x).toBe(1105);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("pressGoesToScene", () => {
   it("sends a node's body and handles to the scene, and keeps its fields and buttons", () => {
     document.body.innerHTML = `<div class="react-flow__node"><div id="body"><button id="button"><span id="label"></span></button><div class="react-flow__handle nodrag" id="handle"></div><textarea id="field"></textarea></div></div>`;

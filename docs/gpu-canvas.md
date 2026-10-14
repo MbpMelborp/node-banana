@@ -239,9 +239,19 @@ The scene takes every press and asks the editor what it starts:
   node's field or button selects it too (the live flow's `onNodeClick`).
   Where nodes overlap, a live node answers before a painted one and a
   selected one before the others (React Flow raises selected nodes). A drag
-  moves the selection. The first move records the undo step, the moves in
-  between go only to the scene graph and the live layer, and the drop goes
-  to the store and to `onNodeDragStop` (group membership). A press on a
+  (from where the pointer is once past 5 px, so nothing jumps) moves the
+  selection when the node is part of it; an unselected node clears the
+  selection and moves alone, or with the selection while Shift is held and
+  is not the selection key (React Flow's `selectNodesOnDrag` off). The
+  first move records the undo step, the moves in between go only to the
+  scene graph and the live layer, and the drop goes to the store and to
+  `onNodeDragStop` (group membership). Dragged nodes are held by id where
+  the drag puts them (`SceneGraph.hold`), so a store write to one mid-drag
+  (a run's status, an edit elsewhere) does not move it back. Near the
+  canvas's edge the view pans every frame and the nodes move with it
+  (React Flow's `autoPanOnNodeDrag`). Space held (the "space" pan mode)
+  pans only from empty canvas or a connection: a node still drags and a
+  handle still connects, as they are React Flow's `nopan`. A press on a
   live node takes the pointer only once it becomes a drag, so a click still
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
 - **A connection** (within 7 px): selects it, as React Flow would; Shift
