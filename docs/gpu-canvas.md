@@ -337,7 +337,8 @@ The scene takes every press and asks the editor what it starts:
   live flow's viewport at React Flow's z-index (1001), so it passes under
   the multi-select toolbar; the marquee and the selection frame sit in the
   flow after its renderer, under its panels (the navigator), as classic's
-  do. On a locked canvas a socket still connects, with no line drawn, as
+  do. The selection frame is sized in flow units and scaled by the zoom, as
+  React Flow's nodesselection rect, so its dotted border scales too. On a locked canvas a socket still connects, with no line drawn, as
   classic's sockets do (React Flow hides the line while nodes are not
   connectable). The line is held in flow units: a wheel, pinch or auto-pan
   mid-drag keeps it on its socket and finds what is under the pointer again.
@@ -487,8 +488,10 @@ The scene takes every press and asks the editor what it starts:
   React Flow's zoom filter allows (not on a floating header, which sits
   outside the node, nor on a locked canvas, whose nodes let the pointer
   through: those follow the pan mode); a right press (the "middleMouse" mode) pans only
-  from empty canvas, as nodes, handles and connections are React Flow's
-  `nopan` (a left drag from a connection pans in no mode). No drag pans with Control or the selection key held.
+  from empty canvas or a floating header (live or painted, its buttons
+  included, not its `nopan` elements), as nodes, handles and connections are
+  React Flow's `nopan` and the header sits outside the node (a left drag from a
+  connection pans in no mode). No drag pans with Control or the selection key held.
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
   the live flow's too). Fit view frames every node as React Flow's
   `fitView` (10% padding); a minimap click glides the view there over 250
@@ -496,7 +499,7 @@ The scene takes every press and asks the editor what it starts:
   minimap step (line and pixel deltas, a Mac pinch ten times over). While
   the tutorial locks the navigator it takes no gestures, as classic's.
 - The dot grid is React Flow's `<Background gap={20} size={1}>`: the same
-  offset, dots of half a flow unit's radius that grow and shrink with the
+  offset, one dot every 20 flow units at every zoom, dots of half a flow unit's radius that grow and shrink with the
   zoom, at 30% while the tutorial locks the canvas. A move the page asks of the flow (`setCenter` or `fitView` with a
   duration) runs to its end: the scene follows the flow's transition
   without handing the view back, which would interrupt it.
@@ -524,7 +527,8 @@ margin while fewer than 250 are live, the nearest the view's centre first.
 The live layer draws over the scene, so a live connection's SVG
 decorations (the comet, pause badge, hidden stubs and ghost) are masked
 where a painted node lies over them (`paintedCover`, `EdgeMask`), as
-classic's nodes cover its edge layer. A selected angular connection's
+classic's nodes cover its edge layer; its pills (`EdgeLabel`) are clipped
+by the same boxes through `EdgeLabelCoverContext` (null on classic). A selected angular connection's
 segment handle takes the pointer and drags as on classic, and the scene's
 hovered connection brightens its live label (`edgeHoverStore`). A hovered
 connection (and its bundle stem) is drawn at full strength, as classic's
@@ -553,10 +557,10 @@ interacting), until the pointer moves again.
 
 - While a connection is drawn, painted nodes away from the pointer keep
   their pictures without socket labels (classic shows every node's).
-- A live connection's HTML labels (its pill, hidden stubs' chips, a
-  bundle's clamp) draw over painted nodes it passes under, and its SVG
-  decorations are masked by a painted node's whole box, gaps between its
-  cards included.
+- A live connection's SVG decorations and pills are masked by a painted
+  node's whole box, gaps between its cards included (the pills by its
+  square corners). Hidden stubs' chips and a bundle's clamp sit over every
+  node on classic too, and are left unmasked.
 - A node whose look depends on state outside its data and its inputs (a
   file loading elsewhere, a timer) may paint stale until its key changes.
 - A wheel over a painted node's scrolling text pans the canvas until the

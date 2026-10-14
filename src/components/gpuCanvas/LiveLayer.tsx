@@ -34,6 +34,7 @@ import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import type { WorkflowNode } from "@/types";
 import { controlsOverhangBox, flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
+import { EdgeLabelCoverContext } from "@/components/edges/edgeLabelCover";
 
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
@@ -90,8 +91,8 @@ const FAR = 1e6;
 
 /**
  * On classic every node covers the edge layer. The live layer draws over the scene, so a live connection
- * passing under a painted node is masked there (its comet, pause badge, stubs and ghost); its HTML labels are not,
- * since a stacking context round them would change what sits over what.
+ * passing under a painted node is masked there (its comet, pause badge, stubs and ghost). Its HTML pills (EdgeLabel)
+ * are cut by the same boxes through EdgeLabelCoverContext: a stacking context round them would change what sits over what.
  */
 function EdgeMask({ cover }: { cover?: EdgeCover }) {
   if (!cover?.edgeIds.length) return null;
@@ -277,6 +278,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
         <style>{LIVE_STYLE}</style>
         <EdgeMask cover={state.cover} />
         {state.entering?.length ? <style>{state.entering.map((id) => `[data-gpu-canvas-live] [data-node-header="${CSS.escape(id)}"]`).join(", ")}{" { visibility: hidden; }"}</style> : null}
+        <EdgeLabelCoverContext.Provider value={state.cover?.edgeIds.length ? state.cover.boxes : null}>
         <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
           defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
           nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
@@ -287,6 +289,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
           <FloatingNodeHeaders nodes={headerNodes} {...headers} />
           {children}
         </ReactFlow>
+        </EdgeLabelCoverContext.Provider>
       </StoreSocketConnections>
     </HoldLiveProvider>
   );
@@ -345,6 +348,10 @@ export class LiveLayer {
           releasePress?.();
           releasePress = this.hold(id);
         }
+        // A right press on a floating header's button or link is still the zoom pane's on classic (the header sits
+        // outside the node, and only nopan stops React Flow's filter): the scene may pan from it ("middleMouse"
+        // mode), while the element keeps the press as well (its own handlers ignore the right button).
+        if (rightPressPansFromHeader(event)) scene.pointerDown(event);
         return;
       }
       // The header's own drag moves nodes through this flow, whose nodes are the layer's: the scene's drag stands in.
@@ -828,6 +835,12 @@ export class LiveLayer {
  * leaves the pointer uncaptured until the press drags, so a click still lands); a floating header's own
  * drag leaves its buttons and links out.
  */
+/** A right press on a floating header outside any nopan element: classic's React Flow lets it reach the zoom pane. */
+export function rightPressPansFromHeader(event: { button: number; target: EventTarget | null }): boolean {
+  const target = event.target instanceof Element ? event.target : null;
+  return event.button === 2 && !!target && !target.closest(".react-flow__node") && !!target.closest("[data-node-header]") && !target.closest(".nopan");
+}
+
 export function pressGoesToScene(target: Element): boolean {
   if (target.closest(".react-flow__handle")) return true;
   const kept = target.closest(".react-flow__node") ? "input, textarea, select, [contenteditable='true'], .nodrag" : "input, textarea, select, button, a, [contenteditable='true'], .nodrag";

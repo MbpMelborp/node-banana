@@ -6,7 +6,7 @@ import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
 import type { Scene } from "@/lib/gpuCanvas/scene";
 import { Editor, type GpuEditing } from "../editor";
-import { LIVE_STYLE, liveButtonPress, pressGoesToScene, type LiveLayer } from "../LiveLayer";
+import { LIVE_STYLE, liveButtonPress, pressGoesToScene, rightPressPansFromHeader, type LiveLayer } from "../LiveLayer";
 
 function node(id: string, x: number, y: number, selected = false): WorkflowNode {
   return { id, type: "prompt", position: { x, y }, data: { prompt: "" }, width: 300, height: 200, selected } as unknown as WorkflowNode;
@@ -158,6 +158,36 @@ describe("presses on the GPU canvas", () => {
     expect(panGesture).toHaveBeenCalledTimes(2);
   });
 
+  it("in the middleMouse mode a right drag pans from a floating header (live or painted), not from a nopan element in it", () => {
+    const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
+    withHeaderBands();
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    const live = editor["live"].element;
+    live.setAttribute("data-gpu-canvas-live", "");
+    document.body.appendChild(live);
+    const header = document.createElement("div");
+    header.setAttribute("data-node-header", "c");
+    const title = document.createElement("input");
+    title.className = "nodrag nopan";
+    header.appendChild(title);
+    live.appendChild(header);
+    const on = (target: Element) => {
+      const event = pointer(900, 100, { button: 2 });
+      Object.defineProperty(event, "target", { value: target });
+      return event;
+    };
+    // The live header, over the node's body on screen: still the pane's.
+    expect(editor.press(on(header))).not.toBeNull();
+    expect(editor.press(on(title))).toBeNull();
+    // A painted header band.
+    expect(editor.press(pointer(900, -10, { button: 2 }))).not.toBeNull();
+    // The node's body stays nopan.
+    expect(editor.press(pointer(900, 100, { button: 2 }))).toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(2);
+    live.remove();
+  });
+
   it("in the middleMouse mode a still right press on empty canvas opens the add-node menu at the release; a moved one pans only", () => {
     settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
     let gesture = editor.press(pointer(2000, 2000, { button: 2 }))!;
@@ -280,6 +310,7 @@ describe("presses on the GPU canvas", () => {
     expect(selected()).toEqual(["a", "b"]);
     expect(frame().style.display).toBe("block");
     expect([frame().style.left, frame().style.top, frame().style.width, frame().style.height]).toEqual(["0px", "0px", "700px", "200px"]);
+    expect(frame().style.transform).toBe(`translate(0px, 0px) scale(${editor["scene"].view.zoom})`);
     // Taking a node out of the selection reframes the rest.
     editor.selectNodes(["b"], true);
     expect(frame().style.display).toBe("block");
@@ -927,6 +958,15 @@ describe("pressGoesToScene", () => {
     expect(pressGoesToScene(at("title"))).toBe(true);
     expect(pressGoesToScene(at("button"))).toBe(false);
     expect(pressGoesToScene(at("link"))).toBe(false);
+  });
+
+  it("sends a right press on a floating header's button to the scene unless it is nopan", () => {
+    document.body.innerHTML = `<div data-node-header="a"><button id="run"></button><button class="nodrag nopan" id="menu"></button></div><div class="react-flow__node"><button id="inner"></button></div>`;
+    const press = (id: string, button = 2) => ({ button, target: document.getElementById(id) });
+    expect(rightPressPansFromHeader(press("run"))).toBe(true);
+    expect(rightPressPansFromHeader(press("run", 0))).toBe(false);
+    expect(rightPressPansFromHeader(press("menu"))).toBe(false);
+    expect(rightPressPansFromHeader(press("inner"))).toBe(false);
   });
 });
 

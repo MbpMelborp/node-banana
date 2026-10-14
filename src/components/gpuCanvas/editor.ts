@@ -406,7 +406,11 @@ export class Editor {
     // A left press, Space held or not, still takes a handle or a node first, for the same reason.
     if (action === "pan" && event.button !== 0) {
       if (event.button === 1) return this.pan(event);
-      const onNode = !editing.locked && (this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y)) >= 0;
+      // Only a node's body is a node here: classic's floating header sits outside .react-flow__node, so React Flow's
+      // filter lets a right press on it pan, except from an element marked nopan (its title field, picker, buttons).
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[data-gpu-canvas-live]") && target.closest(".nopan")) return null;
+      const onNode = this.middlePanOnNode(event, at);
       if (onNode || this.handleFromEvent(event) || this.paintedHandleAt(at.x, at.y) || scene.edgeAt(at.x, at.y) >= 0) return null;
       return this.rightPan(event);
     }
@@ -455,7 +459,7 @@ export class Editor {
   };
 
   /**
-   * Whether a middle press is on a node's body, as React Flow's zoom filter sees it: the live node's element (not
+   * Whether a middle (or the right, panning) press is on a node's body, as React Flow's zoom filter sees it: the live node's element (not
    * its floating header) or a painted node's box (not its header band). A locked canvas's nodes are the pane's.
    */
   private middlePanOnNode(event: PointerEvent, at: { x: number; y: number }): boolean {
@@ -1019,9 +1023,15 @@ export class Editor {
       this.hideSelectionFrame();
       return;
     }
-    const a = scene.toScreen(minX, minY), b = scene.toScreen(maxX, maxY);
+    // Sized in flow units and scaled by the zoom, as React Flow's nodesselection wrapper is: its dotted border
+    // is a flow pixel, thin zoomed out and heavy zoomed in.
+    const a = scene.toScreen(minX, minY);
     this.mountInFlow(this.selectionFrame, "wrapper");
-    Object.assign(this.selectionFrame.style, { display: "block", left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px` });
+    Object.assign(this.selectionFrame.style, {
+      display: "block", left: "0px", top: "0px", transformOrigin: "0 0",
+      transform: `translate(${a.x}px, ${a.y}px) scale(${scene.view.zoom})`,
+      width: `${maxX - minX}px`, height: `${maxY - minY}px`,
+    });
   }
 
   private hideSelectionFrame() {

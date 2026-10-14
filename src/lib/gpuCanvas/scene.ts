@@ -446,9 +446,8 @@ const GRID_FRAGMENT = /* glsl */ `
     // circle of radius size/2 flow units at its tile's corner, so the dots sit a little over half a cell off
     // the multiples of 20 and grow and shrink with the zoom.
     float origin = -10.0 - (1.0 - 0.5 * z) / z;
+    // One dot every 20 flow units at every zoom, as React Flow's gap: zoomed out they crowd into a faint texture.
     float spacing = 20.0;
-    // Coarser dots when they would crowd under 8 css px apart (every fourth of the ones above).
-    for (int i = 0; i < 6; i++) if (spacing * z < 8.0) spacing *= 4.0;
     vec2 cell = mod(world - origin + spacing * 0.5, spacing) - spacing * 0.5;
     // In device pixels, antialiased over one; a dot under a pixel fades by its area, as the SVG's does.
     float r = 0.5 * z * uDpr;
