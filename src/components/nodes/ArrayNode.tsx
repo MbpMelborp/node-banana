@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ChevronRight, CircleAlert, SlidersHorizontal, Split } from "lucide-react";
 import { Node, NodeProps, useReactFlow } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
@@ -112,7 +112,10 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
   const [showAdvanced, setShowAdvanced] = useNodeUiState(id, "showAdvanced", false);
   const [showAllItems, setShowAllItems] = useNodeUiState(id, "showAllItems", false);
   // The item shown in full; the others stay one truncated line
-  const [openItem, setOpenItem] = useState<number | null>(null);
+  // (node view state, so the GPU canvas's painted copy shows it open too). It
+  // names the split it was opened in: a copy mounted after a new split shows
+  // none open, as classic's reset below does.
+  const [openEntry, setOpenEntry] = useNodeUiState<{ index: number; of: string } | null>(id, "openItem", null);
 
   const hasIncomingTextConnection = useMemo(
     () =>
@@ -278,10 +281,19 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
     }
   }, [id, nodeData.selectedOutputIndex, previewItems.length, deriveNodeData]);
 
-  // A new split closes the open item rather than opening whatever now sits at its index
+  const itemsKey = useMemo(() => parsed.items.join("\u0000"), [parsed.items]);
+  const openItem = openEntry && openEntry.of === itemsKey ? openEntry.index : null;
+  const setOpenItem = (index: number | null) => setOpenEntry(index === null ? null : { index, of: itemsKey });
+
+  // A new split closes the open item rather than opening whatever now sits at
+  // its index. Not on mount: nothing is open on classic then, and on the GPU
+  // canvas a remount must not close what the user opened.
+  const splitItemsRef = useRef(parsed.items);
   useEffect(() => {
-    setOpenItem(null);
-  }, [parsed.items]);
+    if (splitItemsRef.current === parsed.items) return;
+    splitItemsRef.current = parsed.items;
+    setOpenEntry(null);
+  }, [parsed.items, setOpenEntry]);
 
   const itemTotal = previewItems.length;
   const batch = nodeData.batchMode;

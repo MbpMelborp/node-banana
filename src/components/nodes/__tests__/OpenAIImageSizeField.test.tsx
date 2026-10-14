@@ -1,7 +1,14 @@
 import React, { useState } from "react";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { OpenAIImageSizeField } from "../OpenAIImageSizeField";
+import { HoldLiveProvider, PaintedNodes } from "../paintMode";
+import { useNodeUiStore } from "@/store/nodeUiStore";
+
+vi.mock("@xyflow/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@xyflow/react")>()),
+  useNodeId: () => "gen-1",
+}));
 import { pickOption } from "@/test/dropdown";
 
 afterEach(cleanup);
@@ -26,5 +33,15 @@ describe("OpenAI output dimensions", () => {
     render(<Harness initial="1601x864" />);
     expect(screen.getByLabelText("Width")).toHaveValue(1601);
     expect(screen.getByRole("alert")).toHaveTextContent("multiples of 16");
+  });
+  it("keeps Custom… chosen with a preset size in the GPU canvas's painted copy", () => {
+    useNodeUiStore.getState().forget();
+    const live = render(<HoldLiveProvider hold={() => () => {}}><Harness initial="1024x1024" /></HoldLiveProvider>);
+    pickOption(screen.getByLabelText("Size"), "custom");
+    expect(screen.getByLabelText("Width")).toHaveValue(1024);
+    live.unmount();
+    render(<PaintedNodes><OpenAIImageSizeField value="1024x1024" onChange={() => {}} /></PaintedNodes>);
+    expect(screen.getByLabelText("Width")).toHaveValue(1024);
+    useNodeUiStore.getState().forget();
   });
 });

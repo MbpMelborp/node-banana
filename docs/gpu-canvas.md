@@ -203,10 +203,12 @@ agent's edit shimmer and the tutorial's ring hold the nodes in view live
 (which never paints a shimmer).
 
 A node's own view state (a collapsed controls card, the Primary/Fallback
-tab, an Array's opened sections, a trim's source/output toggle) lives in
+tab, an Array's opened sections and item, a trim's source/output toggle,
+an OpenAI size field's "Custom…", an Image Compare divider) lives in
 `nodeUiStore` on the GPU canvas (`useNodeUiState`; plain local state on
 classic), so the live component and its painted copies show the same, and a
-change repaints the node. It is forgotten when the node goes or another
+change repaints the node. The divider is written once it rests, not per
+drag frame. It is forgotten when the node goes or another
 workflow opens, as classic's remount forgets it. Painted copies never show
 hover: their headers' hover-only controls and hover video previews read no
 hovered node.
