@@ -108,7 +108,8 @@ Batches are 48 nodes, 96 at the 1/4 tier.
 
 - **Navigating holds `canvas-interacting`** on the document, as today's
   canvas does, so work that waits for a still canvas (the desktop recovery
-  checkpoint) does not land mid-pan.
+  checkpoint) does not land mid-pan. A node or wire drag holds it for its
+  whole length: a pause mid-drag does not let the pan tracker drop it.
 
 ## Opening a workflow
 
@@ -236,7 +237,7 @@ The scene takes every press and asks the editor what it starts:
 - **A node**, its floating header included (the 30 flow units above it,
   painted or live): a click selects it (Shift adds or removes it), and
   leaves a selection it is already part of as it is; a click on a live
-  node's field or button selects it too (the live flow's `onNodeClick`).
+  node's field selects it too (the live flow's `onNodeClick`).
   Where nodes overlap, a live node answers before a painted one and a
   selected one before the others (React Flow raises selected nodes). A drag
   (from where the pointer is once past 5 px, so nothing jumps) moves the
@@ -254,6 +255,13 @@ The scene takes every press and asks the editor what it starts:
   handle still connects, as they are React Flow's `nopan`. A press on a
   live node takes the pointer only once it becomes a drag, so a click still
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
+  A live node's buttons and links drag it too, as React Flow's do (only
+  fields and `.nodrag` keep their presses); a drag from one swallows the
+  click its release makes, as d3-drag's does. Dragged live nodes re-render
+  synchronously with each move (`LiveLayer.refresh(true)`), so their bodies,
+  headers and sockets move in the frame that draws their connections. While
+  any gesture runs, no text selection or native drag starts (d3-drag's
+  `nodrag`).
 - **A connection** (within 7 px): selects it, as React Flow would; Shift
   adds it, unless nodes are selected (WorkflowCanvas drops connections from
   a selection with nodes in it). On a locked canvas it selects nothing but

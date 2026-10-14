@@ -106,6 +106,17 @@ const ARROW_STEPS: Record<string, { x: number; y: number }> = {
   ArrowRight: { x: 5, y: 0 },
 };
 
+/** Stops the click the browser sends after a drag's release (removed a task later, if no click came). */
+function swallowNextClick() {
+  const swallow = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.removeEventListener("click", swallow, true);
+  };
+  window.addEventListener("click", swallow, true);
+  setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+}
+
 /** React Flow's isInputDOMNode: the key went to a form field, an editable element, or something inside `.nokey`. */
 function keyInField(event: KeyboardEvent) {
   const target = event.composedPath?.()[0] ?? event.target;
@@ -122,6 +133,10 @@ export class Editor {
   private selectionFrame: HTMLDivElement;
   private selectionFrameActive = false;
   private offs: (() => void)[] = [];
+  /** Node and wire drags holding `canvas-interacting` (holdInteracting). */
+  private interactingHolds = 0;
+  /** Called as a drag lets go of `canvas-interacting` (the canvas resets its pan tracker, as classic's handleNodeDragEnd). */
+  onInteractingEnd: (() => void) | null = null;
   /** Tab through the nodes and connections (keyboardFocus.ts). */
   readonly keyboard: KeyboardFocus;
 
@@ -175,6 +190,20 @@ export class Editor {
     const parent = where === "viewport" ? wrapper?.querySelector<HTMLElement>(".react-flow__viewport") ?? null : wrapper;
     if (element.parentNode !== (parent ?? this.host)) (parent ?? this.host).appendChild(element);
     return where === "viewport" && !!parent;
+  }
+
+  /** Whether a node or wire drag holds `canvas-interacting`: the pan tracker must not take it away mid-drag. */
+  get holdsInteracting() {
+    return this.interactingHolds > 0;
+  }
+
+  private holdInteracting(on: boolean) {
+    this.interactingHolds = Math.max(0, this.interactingHolds + (on ? 1 : -1));
+    if (on) document.documentElement.classList.add("canvas-interacting");
+    else if (!this.interactingHolds) {
+      document.documentElement.classList.remove("canvas-interacting");
+      this.onInteractingEnd?.();
+    }
   }
 
   // ── Keys ──────────────────────────────────────────────────────────────
@@ -356,6 +385,7 @@ export class Editor {
    */
   private clickGesture(event: PointerEvent, click: () => void, drag?: (move: PointerEvent) => Gesture | null, distance = CLICK_DISTANCE): Gesture {
     const startX = event.clientX, startY = event.clientY;
+    const fromLive = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]");
     let dragging: Gesture | null = null, moved = false;
     return {
       move: (move) => {
@@ -363,13 +393,18 @@ export class Editor {
         const travel = Math.hypot(move.clientX - startX, move.clientY - startY);
         if (moved || travel === 0 || travel < distance) return;
         moved = true;
-        this.scene.capture();
         dragging = drag?.(move) ?? null;
-        dragging?.move(move);
+        // No drag (a locked canvas): the pointer stays free, so a press on a live node's button still clicks it.
+        if (!dragging) return;
+        this.scene.capture();
+        dragging.move(move);
       },
       up: (up) => {
-        if (dragging) dragging.up(up);
-        else if (!moved) click();
+        if (dragging) {
+          dragging.up(up);
+          // As d3-drag's noclick: a drag that began on a live node's button or link does not click it as it drops.
+          if (fromLive) swallowNextClick();
+        } else if (!moved) click();
       },
       cancel: () => dragging?.cancel(),
     };
@@ -501,7 +536,7 @@ export class Editor {
     const at0 = scene.local(first), origin = scene.toWorld(at0.x, at0.y);
     // The dragged nodes stay live while they move (the pressed one is hovered, a selection is live).
     this.live.wantOnly("drag", ids);
-    document.documentElement.classList.add("canvas-interacting");
+    this.holdInteracting(true);
     let committedFirst = false, ended = false, panFrame = 0, pointer = first;
     const place = (event: PointerEvent) => {
       if (ended || replaced()) return;
@@ -514,7 +549,7 @@ export class Editor {
       moveTo(indices);
       scene.input(event);
       scene.nodesMoved(indices);
-      this.live.refresh();
+      this.live.refresh(true);
       // The first move reaches the store: it records the undo step.
       if (!committedFirst) {
         committedFirst = true;
@@ -537,7 +572,7 @@ export class Editor {
       ended = true;
       cancelAnimationFrame(panFrame);
       this.live.wantOnly("drag", []);
-      document.documentElement.classList.remove("canvas-interacting");
+      this.holdInteracting(false);
       // The canvas was replaced mid-drag: the positions belong to the old one.
       if (replaced()) {
         scene.graph.hold = null;
@@ -774,7 +809,7 @@ export class Editor {
       this.overlay.style.zIndex = inViewport ? "1001" : "4";
       // React Flow draws no connection line while nodes are not connectable (a locked canvas).
       if (!this.editing().locked) this.overlay.append(path);
-      document.documentElement.classList.add("canvas-interacting");
+      this.holdInteracting(true);
       // A wheel, pinch or auto-pan keeps the line on its socket (React Flow's line is in flow units) and finds
       // what is now under the still pointer; a rebuilt graph renumbers the nodes and connections.
       offs = [
@@ -799,7 +834,7 @@ export class Editor {
       }
       setConnectDrag(false);
       this.live.wantOnly("connect", []);
-      document.documentElement.classList.remove("canvas-interacting");
+      if (dragging) this.holdInteracting(false);
     };
     return {
       move: (event) => {

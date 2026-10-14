@@ -454,13 +454,39 @@ describe("node drags on the GPU canvas", () => {
   });
 });
 
+describe("canvas-interacting during a node drag", () => {
+  it("is held for the whole drag, and the canvas hears when it is let go", () => {
+    const ended = vi.fn();
+    editor.onInteractingEnd = ended;
+    const classes = document.documentElement.classList;
+    const gesture = editor.press(pointer(900, 100))!;
+    gesture.move(pointer(920, 100));
+    expect(editor.holdsInteracting).toBe(true);
+    expect(classes.contains("canvas-interacting")).toBe(true);
+    gesture.up(pointer(920, 100));
+    expect(editor.holdsInteracting).toBe(false);
+    expect(classes.contains("canvas-interacting")).toBe(false);
+    expect(ended).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("pressGoesToScene", () => {
-  it("sends a node's body and handles to the scene, and keeps its fields and buttons", () => {
-    document.body.innerHTML = `<div class="react-flow__node"><div id="body"><button id="button"><span id="label"></span></button><div class="react-flow__handle nodrag" id="handle"></div><textarea id="field"></textarea></div></div>`;
+  it("sends a node's body, buttons and handles to the scene, and keeps its fields and .nodrag", () => {
+    document.body.innerHTML = `<div class="react-flow__node"><div id="body"><button id="button"><span id="label"></span></button><a id="link"></a><button class="nodrag" id="kept"></button><div class="react-flow__handle nodrag" id="handle"></div><textarea id="field"></textarea></div></div>`;
     const at = (id: string) => document.getElementById(id)!;
     expect(pressGoesToScene(at("body"))).toBe(true);
     expect(pressGoesToScene(at("handle"))).toBe(true);
-    expect(pressGoesToScene(at("label"))).toBe(false);
+    expect(pressGoesToScene(at("label"))).toBe(true);
+    expect(pressGoesToScene(at("link"))).toBe(true);
+    expect(pressGoesToScene(at("kept"))).toBe(false);
     expect(pressGoesToScene(at("field"))).toBe(false);
+  });
+
+  it("keeps a floating header's buttons and links for the header", () => {
+    document.body.innerHTML = `<div data-node-header="a"><span id="title"></span><button id="button"></button><a id="link"></a></div>`;
+    const at = (id: string) => document.getElementById(id)!;
+    expect(pressGoesToScene(at("title"))).toBe(true);
+    expect(pressGoesToScene(at("button"))).toBe(false);
+    expect(pressGoesToScene(at("link"))).toBe(false);
   });
 });

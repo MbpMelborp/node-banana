@@ -409,6 +409,8 @@ export class Scene {
   private gesture: Gesture | null = null;
   /** A press handed over by the live layer and not captured yet: its moves and release come through the window. */
   private uncaptured: { pointerId: number; off: () => void } | null = null;
+  /** Lifts the block on text selection and native drags a gesture holds (blockNativeDrag). */
+  private nativeDragBlock: (() => void) | null = null;
   /** The earliest input event not yet drawn (its timeStamp). */
   private pendingInputAt = 0;
   private resizeObserver: ResizeObserver;
@@ -960,9 +962,27 @@ export class Scene {
     const gesture = this.callbacks.onPress ? this.callbacks.onPress(event) : event.button === 0 || event.button === 1 ? this.panGesture(event) : null;
     if (!gesture) return;
     this.gesture = gesture;
+    this.blockNativeDrag();
     if (event.target === this.canvas) this.canvas.setPointerCapture?.(event.pointerId);
     else this.followUncaptured(event.pointerId);
   };
+
+  /**
+   * As d3-drag's nodrag under React Flow's pans and drags: while a gesture runs, no text selection
+   * and no native drag (an image, a link in a live node) starts. Lifted when the gesture ends.
+   */
+  private blockNativeDrag() {
+    this.nativeDragBlock?.();
+    const prevent = (event: Event) => event.preventDefault();
+    const options = { capture: true, passive: false };
+    window.addEventListener("selectstart", prevent, options);
+    window.addEventListener("dragstart", prevent, options);
+    this.nativeDragBlock = () => {
+      window.removeEventListener("selectstart", prevent, options);
+      window.removeEventListener("dragstart", prevent, options);
+      this.nativeDragBlock = null;
+    };
+  }
 
   /**
    * Captures the pointer for the gesture in progress. A press on a live node
@@ -1032,6 +1052,7 @@ export class Scene {
     const gesture = this.gesture;
     this.gesture = null;
     this.stopFollowing();
+    this.nativeDragBlock?.();
     gesture?.cancel();
   }
 
@@ -1050,6 +1071,7 @@ export class Scene {
     const gesture = this.gesture;
     this.gesture = null;
     this.stopFollowing();
+    this.nativeDragBlock?.();
     if (!gesture) return;
     if (event.type === "pointercancel") gesture.cancel();
     else gesture.up(event);
@@ -1145,6 +1167,7 @@ export class Scene {
   dispose() {
     this.disposed = true;
     this.stopFollowing();
+    this.nativeDragBlock?.();
     cancelAnimationFrame(this.frameHandle);
     this.resizeObserver.disconnect();
     const { canvas } = this;

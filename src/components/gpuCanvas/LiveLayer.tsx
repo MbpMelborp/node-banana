@@ -17,6 +17,7 @@
  * back to the scene.
  */
 import { useCallback, useLayoutEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
@@ -207,7 +208,7 @@ export class LiveLayer {
       scene.wheel(event);
     }, { passive: false });
     // A press on a live node's body or floating header goes to the scene (click to select, drag to
-    // move), and so does one on its handles (drag to connect); its fields and buttons keep theirs.
+    // move), and so does one on its handles (drag to connect); its fields keep theirs (pressGoesToScene).
     on("pointerdown", (event) => {
       const target = event.target as Element;
       if (!target.closest(".react-flow__node, [data-node-header]") || !pressGoesToScene(target)) return;
@@ -262,8 +263,10 @@ export class LiveLayer {
     });
   }
 
-  private setNodes(next: FlowState) {
-    (this.connection.setNodes ?? ((n: FlowState) => n.committed()))(next);
+  private setNodes(next: FlowState, sync = false) {
+    const set = this.connection.setNodes ?? ((n: FlowState) => n.committed());
+    if (sync) flushSync(() => set(next));
+    else set(next);
   }
 
   /** Connections the layer renders (their labels, stubs, clamps and toolbars; the scene draws their strokes). */
@@ -309,9 +312,13 @@ export class LiveLayer {
     return !!this.wanted.get(id)?.has(reason);
   }
 
-  /** Re-renders the live nodes at the scene graph's positions (a drag moved them). */
-  refresh() {
-    void this.render();
+  /**
+   * Re-renders the live nodes at the scene graph's positions (a drag moved them). `sync` commits before it
+   * returns, the flow's store and nodes included, so a dragged live node moves in the same frame as the
+   * connections the scene reroutes, as React Flow's drag writes its store from the pointer handler.
+   */
+  refresh(sync = false) {
+    void this.render(sync);
   }
 
   /** Resolves once the latest change of live nodes has finished swapping. */
@@ -355,7 +362,7 @@ export class LiveLayer {
   }
 
   /** The nodes the layer renders (wanted ones and those still leaving), and the live connections with stand-ins for their painted ends. */
-  private render(): Promise<void> {
+  private render(sync = false): Promise<void> {
     const { nodes } = useWorkflowStore.getState();
     const graph = this.scene.graph;
     const flowNodes: Node[] = [];
@@ -390,7 +397,7 @@ export class LiveLayer {
     // A commit that never comes (the tree failed) must not hold up whoever waits on the layer.
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, RENDER_TIMEOUT_MS);
-      this.setNodes({ nodes: flowNodes, edges: flowEdges, committed: () => { clearTimeout(timer); resolve(); } });
+      this.setNodes({ nodes: flowNodes, edges: flowEdges, committed: () => { clearTimeout(timer); resolve(); } }, sync);
     });
   }
 
@@ -483,9 +490,16 @@ export class LiveLayer {
   }
 }
 
-/** A press in a live node or its header that the scene takes: on a handle, or on anything but its fields and buttons. */
+/**
+ * A press in a live node or its header that the scene takes: on a handle, or on anything but its fields
+ * and `.nodrag`. In a node a button or link is taken too, as React Flow's drag starts from them (the scene
+ * leaves the pointer uncaptured until the press drags, so a click still lands); a floating header's own
+ * drag leaves its buttons and links out.
+ */
 export function pressGoesToScene(target: Element): boolean {
-  return !!target.closest(".react-flow__handle") || !target.closest("input, textarea, select, button, a, [contenteditable='true'], .nodrag");
+  if (target.closest(".react-flow__handle")) return true;
+  const kept = target.closest(".react-flow__node") ? "input, textarea, select, [contenteditable='true'], .nodrag" : "input, textarea, select, button, a, [contenteditable='true'], .nodrag";
+  return !target.closest(kept);
 }
 
 /** The live node (not a stand-in) an element belongs to. */

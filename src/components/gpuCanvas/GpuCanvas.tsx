@@ -143,7 +143,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // Held while the user navigates, as today's canvas does, so work that
     // waits for a quiet canvas (the desktop recovery checkpoint) waits for it.
     const interacting = createPanActivityTracker({
-      setActive: (active) => document.documentElement.classList.toggle("canvas-interacting", active),
+      // A node or wire drag holds the class itself: a pause mid-drag must not take it away (as classic's isDraggingNodeRef).
+      setActive: (active) => {
+        if (active || !editor.holdsInteracting) document.documentElement.classList.toggle("canvas-interacting", active);
+      },
       endDelayMs: 300,
     });
     // The hovered node: the one under the pointer in the scene, or the live node it moved onto
@@ -225,6 +228,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     });
     const stopAutoRun = watchOutputAutoRun(useWorkflowStore);
     const editor = new Editor(scene, live, host, () => propsRef.current.editing);
+    // A press just before the drag may still hold the tracker active: resetting it lets the next pan put the class back.
+    editor.onInteractingEnd = () => interacting.dispose();
     connectLive({ nodeClick: (id, additive) => editor.clickNode(id, additive) });
     // The routes above read the store: compute them now that the scene exists.
     scene.setEdgeAppearance(store.edgeAppearance.gradient, store.edgeAppearance.fadedOpacity);
@@ -523,7 +528,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
 
   return (
     <div ref={hostRef} className="absolute inset-0 overflow-hidden bg-neutral-900" data-gpu-canvas="">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
+      {/* select-none: as globals.css gives React Flow's pane (Chromium need not hit-test the canvas to extend a selection). */}
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none select-none" />
       <div ref={liveRef} data-gpu-canvas-live="" className="pointer-events-none absolute inset-0 overflow-hidden">
         <LiveFlow connect={connectLive} onViewChanged={liveViewChanged} initialView={initialView} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
           onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick} onMeasured={liveMeasured}>
