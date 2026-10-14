@@ -221,7 +221,11 @@ Floating headers sit over every node: the scene draws painted nodes'
 headers in a pass of their own after the nodes, and where a live node would
 cover a painted node's header, the live flow shows that header and the scene
 leaves it out (`setHeadersLive`). A header band answers presses before any
-node's box, as classic's headers take them.
+node's box, as classic's headers take them. Classic's headers sit above the
+group labels and menus too, which are DOM in the live flow: a node whose
+header a group's label or open menu overlaps goes live ("groupChrome", the
+chrome measured once it settles), so its header shows above them again.
+Groups are classic's faint wash (`groupFill`) with no outline.
 
 ## Live content
 

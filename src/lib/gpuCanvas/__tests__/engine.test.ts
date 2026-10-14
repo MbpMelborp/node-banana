@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
-import { controlsOverhang, GridIndex, refitMeasured, SceneGraph } from "../graph";
+import { controlsOverhang, GridIndex, headersUnder, refitMeasured, SceneGraph } from "../graph";
+import { GROUP_COLORS } from "@/store/utils/nodeDefaults";
 import { AtlasLayout } from "../atlasLayout";
 import { atlasBudget } from "../budget";
 import { edgesByNode, hashData, paintKey, upstreamPaintKeys, type PaintKeyContext } from "../paintKey";
@@ -40,6 +41,25 @@ describe("SceneGraph", () => {
     graph.sync([node("a", 0, 0), node("b", 0, 900)], [edge("e", "a", "b")], {});
     expect(graph.nodes[0].h).toBe(777);
     expect(graph.edgeEnds(0)!.slice(0, 2)).toEqual([300, 40]);
+  });
+});
+
+describe("group chrome", () => {
+  it("paints a group in its hue, and an unknown colour key in neutral's", () => {
+    const group = (color: string) => ({ g: { id: "g", name: "G", color, position: { x: 0, y: 0 }, size: { width: 100, height: 100 } } });
+    const hue = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    expect(new SceneGraph([], [], group("blue") as never).groups[0].color).toEqual(hue(GROUP_COLORS.blue));
+    expect(new SceneGraph([], [], group("legacy-teal") as never).groups[0].color).toEqual(hue(GROUP_COLORS.neutral));
+  });
+
+  it("finds the nodes whose header band a label or menu overlaps", () => {
+    const graph = new SceneGraph([node("a", 0, 100), node("b", 400, 100), node("c", 0, 500)], [], {});
+    const all = graph.nodes.map((_, i) => i);
+    // Over a's header band (70..100), touching b's left edge only, nowhere near c.
+    expect(headersUnder(graph, all, [{ x0: 10, y0: 60, x1: 400, y1: 90 }])).toEqual(["a"]);
+    // Over a's body only: its header is not under it.
+    expect(headersUnder(graph, all, [{ x0: 10, y0: 120, x1: 100, y1: 140 }])).toEqual([]);
+    expect(headersUnder(graph, all, [{ x0: 10, y0: 60, x1: 410, y1: 90 }, { x0: 0, y0: 480, x1: 20, y1: 490 }])).toEqual(["a", "b", "c"]);
   });
 });
 

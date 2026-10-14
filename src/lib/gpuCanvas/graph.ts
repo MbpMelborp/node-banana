@@ -9,7 +9,8 @@
  * reordered them (the graph is rebuilt).
  */
 import type { NodeGroup, WorkflowEdge, WorkflowNode } from "@/types";
-import { defaultNodeDimensions, GROUP_COLORS } from "@/store/utils/nodeDefaults";
+import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
+import { groupBaseColor } from "@/utils/groupColors";
 import { miniMapTypeColor } from "@/components/CanvasMinimap";
 import { EDGE_COLORS, edgeColorKeyForHandles } from "@/lib/edges/colors";
 
@@ -348,7 +349,7 @@ export class SceneGraph {
       y: group.position.y,
       w: group.size.width,
       h: group.size.height,
-      color: rgb(GROUP_COLORS[group.color] ?? "#6b7280"),
+      color: rgb(groupBaseColor(group.color)),
     }));
   }
 
@@ -388,6 +389,19 @@ export class SceneGraph {
 
 /** Flow units above a node that its floating header takes: a press there is on the node. */
 export const NODE_HEADER = 30;
+
+/**
+ * The nodes whose floating header band (NODE_HEADER above the node, its width) overlaps one of `rects`
+ * (flow units), out of `candidates` (scene graph indices): classic draws headers over group labels and menus.
+ */
+export function headersUnder(graph: SceneGraph, candidates: Iterable<number>, rects: readonly { x0: number; y0: number; x1: number; y1: number }[]): string[] {
+  const ids: string[] = [];
+  for (const i of candidates) {
+    const n = graph.nodes[i];
+    if (n && rects.some((r) => r.x0 < n.x + n.w && r.x1 > n.x && r.y0 < n.y && r.y1 > n.y - NODE_HEADER)) ids.push(n.id);
+  }
+  return ids;
+}
 
 /** A rank above any node's raise (GridIndex.at): what a header band adds. */
 const HEADER_RAISE = 1000;

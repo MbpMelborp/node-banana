@@ -14,7 +14,7 @@ import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workfl
 import { indexOfNode } from "@/store/nodeChanges";
 import { useNodeUiStore } from "@/store/nodeUiStore";
 import { APP_VERSION } from "@/lib/appVersion";
-import { controlsOverhang, SceneGraph } from "@/lib/gpuCanvas/graph";
+import { controlsOverhang, headersUnder, NODE_HEADER, SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
 import type { SceneWheel } from "@/lib/gpuCanvas/wheel";
 import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
@@ -419,6 +419,40 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     };
     showDimming(true);
 
+    // Classic draws node headers (z-index 1500) over the group labels and menus (1000), but the live layer holding
+    // those draws over the scene's painted headers: a node whose header a label or open menu overlaps is made live,
+    // its header then above them again. The chrome is measured once its DOM has settled (a view, a group or a menu
+    // changed), and the overlaps follow the nodes as they move. Not when zoomed out to the overview.
+    let chromeRects: { x0: number; y0: number; x1: number; y1: number }[] = [], chromeFrame = 0, chromeKey = "";
+    const showChromeCover = () => {
+      const ids = new Set<string>();
+      if (scene.view.zoom >= OVERVIEW_ZOOM_THRESHOLD) {
+        for (const r of chromeRects) for (const id of headersUnder(scene.graph, scene.nodesWithin(r.x0, r.y0, r.x1, r.y1 + NODE_HEADER), [r])) ids.add(id);
+      }
+      const key = [...ids].join("\n");
+      if (key === chromeKey) return;
+      chromeKey = key;
+      live.wantOnly("groupChrome", ids);
+    };
+    const measureChrome = () => {
+      if (chromeFrame) return;
+      chromeFrame = requestAnimationFrame(() => {
+        chromeFrame = 0;
+        const box = canvas.getBoundingClientRect();
+        chromeRects = [...liveElement.querySelectorAll("[data-group-label], [data-group-label] [role=menu]")].map((element) => {
+          const r = element.getBoundingClientRect();
+          const a = scene.toWorld(r.left - box.left, r.top - box.top), b = scene.toWorld(r.right - box.left, r.bottom - box.top);
+          return { x0: a.x, y0: a.y, x1: b.x, y1: b.y };
+        }).filter((r) => r.x1 > r.x0 && r.y1 > r.y0);
+        showChromeCover();
+      });
+    };
+    measureChrome();
+    const unsubscribeChromeLayout = scene.onLayoutChanged(showChromeCover);
+    // A group's menu opens and closes on a click or a key.
+    document.addEventListener("click", measureChrome, true);
+    document.addEventListener("keydown", measureChrome, true);
+
     const unsubscribeStore = useWorkflowStore.subscribe((state, previous) => {
       if (state.dimmedNodeIds !== previous.dimmedNodeIds || state.skippedNodeIds !== previous.skippedNodeIds) showDimming();
       if (state.edgeAppearance !== previous.edgeAppearance) scene.setEdgeAppearance(state.edgeAppearance.gradient, state.edgeAppearance.fadedOpacity);
@@ -432,6 +466,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         const swept = new Set([...(previous.hookDrag?.edgeIds ?? []), ...(state.hookDrag?.edgeIds ?? [])]);
         scene.reroute([...swept].map((id) => scene.graph.edgeIndexOf.get(id)).filter((e): e is number => e != null));
       }
+      if (state.groups !== previous.groups) measureChrome();
       if (state.edges === previous.edges && state.groups === previous.groups) return;
       const sync = scene.graph.sync(state.nodes, state.edges, state.groups);
       if (sync.rebuilt) {
@@ -483,6 +518,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         const visible = scene.view.zoom > LIVE_ZOOM ? scene.visible(0).map((i) => scene.graph.nodes[i].id) : [];
         showLiveEdges();
         live.wantOnly("zoom", visible);
+        measureChrome();
         useWorkflowStore.getState().setCanvasViewport({ ...scene.view });
       }, 120);
     });
@@ -603,6 +639,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       clearTimeout(settleTimer);
       clearTimeout(moveEndTimer);
       cancelAnimationFrame(liveEdgesFrame);
+      cancelAnimationFrame(chromeFrame);
+      unsubscribeChromeLayout();
+      document.removeEventListener("click", measureChrome, true);
+      document.removeEventListener("keydown", measureChrome, true);
       isPanningRef.current = false;
       clearTimeout(hoverTimer);
       disposed = true;

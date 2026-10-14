@@ -62,8 +62,8 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       const s = 1 / scale;
       fit = { scale: s, x: x0, y: y0 };
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      context.fillStyle = bgColor;
-      context.fillRect(0, 0, width, height);
+      // Transparent, as classic's svg: the well's background and inset shadow show through from the wrapper.
+      context.clearRect(0, 0, width, height);
       for (const n of graph.nodes) {
         context.fillStyle = `rgb(${n.color[0] * 255},${n.color[1] * 255},${n.color[2] * 255})`;
         const w = Math.max(1, n.w * s), h = Math.max(1, n.h * s);
@@ -117,6 +117,8 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       // Glides there as the navigator's setCenter does on today's canvas.
       bridge.animateView({ zoom: view.zoom, x: size.width / 2 - p.x * view.zoom, y: size.height / 2 - p.y * view.zoom }, 250);
     };
+    // A press the browser cancels (or whose capture is lost) ends the drag, so hovering after it pans nothing.
+    const cancel = () => { drag = null; };
     const wheel = (event: WheelEvent) => {
       if (disabledRef.current) return;
       event.preventDefault();
@@ -132,6 +134,8 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
     canvas.addEventListener("pointerdown", down);
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", cancel);
+    canvas.addEventListener("lostpointercapture", cancel);
     canvas.addEventListener("wheel", wheel, { passive: false });
     return () => {
       cancelAnimationFrame(frame);
@@ -139,9 +143,16 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("pointercancel", cancel);
+      canvas.removeEventListener("lostpointercapture", cancel);
       canvas.removeEventListener("wheel", wheel);
     };
-  }, [bridge, width, height, bgColor, maskColor, maskStrokeColor]);
+  }, [bridge, width, height, maskColor, maskStrokeColor]);
 
-  return <canvas ref={canvasRef} className={className} style={{ width, height, display: "block" }} data-testid="gpu-minimap" />;
+  // The wrapper is React Flow's minimap panel: the classes, the background and the label go on it.
+  return (
+    <div className={className} style={{ width, height, background: bgColor }} role="img" aria-label="Mini Map">
+      <canvas ref={canvasRef} style={{ width, height, display: "block" }} data-testid="gpu-minimap" />
+    </div>
+  );
 }

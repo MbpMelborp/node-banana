@@ -18,6 +18,7 @@ import { cubicArcLength, cubicLength, cubicPieces, distanceToCubic, routeGradien
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
+import { GROUP_FILL_ALPHA } from "@/utils/groupColors";
 
 /**
  * Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the
@@ -191,9 +192,9 @@ const NODE_FRAGMENT = /* glsl */ `
     if ((vFlags & ${FLAG_GROUP}) != 0) {
       vec2 half_ = vSize * 0.5;
       float d = box(vLocal - half_, half_, 12.0);
+      // Classic's faint wash with no outline (groupFill).
       float inside = clamp(0.5 - d / px, 0.0, 1.0);
-      float border = clamp(1.0 - abs(d) / px, 0.0, 1.0);
-      outColor = vec4(vColor, max(inside * 0.08, border * 0.5));
+      outColor = vec4(vColor, inside * ${GROUP_FILL_ALPHA.toFixed(3)});
       return;
     }
     // The header pass draws painted nodes' floating headers over every node, as classic's sit above the nodes (z-index 1500).
