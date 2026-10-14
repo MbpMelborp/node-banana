@@ -29,7 +29,7 @@ describe("a painted measurement of a live node", () => {
       setHandles: (i: number, handles: Map<string, HandleAnchor>) => { graph.nodes[i].handles = handles; },
     };
     // Only what applyMeasured and its store report read: no WebGL, no sheet.
-    painter = Object.assign(Object.create(Painter.prototype) as Painter, { scene, paints: new Map(), measuredIds: new Set(), disposed: false });
+    painter = Object.assign(Object.create(Painter.prototype) as Painter, { scene, paints: new Map(), measuredIds: new Set(), reportedSizes: new Set(), disposed: false });
   });
 
   const apply = (height: number, handles?: Map<string, HandleAnchor>) =>

@@ -749,6 +749,7 @@ export class Scene {
 
   /** The edge instance geometry, for the current routes (computed here when missing). */
   private buildEdges() {
+    this.edgesResized = false;
     const { graph } = this;
     if (!this.edgeGeometry) {
       // Rows of (t, side, cap): a cap row before t = 0 and after t = 1, which the vertex shader pushes out
@@ -846,7 +847,7 @@ export class Scene {
 
   /** Writes edges again (their flags or routes changed) and uploads them. */
   private touchEdgeList(edges: Iterable<number>) {
-    if (!this.edgeAttr) return;
+    if (!this.edgeAttr || this.edgesResized) return;
     for (const e of edges) {
       if (e < 0 || e >= this.graph.edges.length) continue;
       this.writeEdge(e);
@@ -866,9 +867,20 @@ export class Scene {
       if (drawnPieces(route).length + route.stems.length !== this.routeCount[e]) resized = true;
       this.routes[e] = route;
     }
-    // A route with more or fewer segments than before moves every edge after it in the buffer.
-    if (resized) this.buildEdges();
-    else this.touchEdgeList(list);
+    // A route with more or fewer segments than before moves every edge after it in the buffer: rebuilt once, before the next draw or read.
+    if (resized || this.edgesResized) {
+      this.edgesResized = true;
+      this.dirty = true;
+    } else this.touchEdgeList(list);
+  }
+
+  /** Edges whose piece counts changed since the buffer was laid out: it is laid out again once. */
+  private edgesResized = false;
+
+  private flushEdges() {
+    if (!this.edgesResized) return;
+    this.edgesResized = false;
+    this.buildEdges();
   }
 
   /** Every edge's route again (the edge style or appearance changed). */
@@ -893,6 +905,7 @@ export class Scene {
    * past the stroke, so connections stay easy to take zoomed out.
    */
   edgeAt(cssX: number, cssY: number): number {
+    this.flushEdges?.();
     const p = this.toWorld(cssX, cssY);
     const floor = EDGE_HIT_PX / this.view.zoom;
     for (let e = this.graph.edges.length - 1; e >= 0; e--) {
@@ -911,6 +924,7 @@ export class Scene {
 
   /** Edges whose bounds overlap a rectangle (flow units). */
   edgesWithin(x0: number, y0: number, x1: number, y1: number): number[] {
+    this.flushEdges?.();
     const found: number[] = [];
     for (let e = 0; e < this.graph.edges.length; e++) {
       const b = e * 4;
@@ -1610,6 +1624,7 @@ export class Scene {
   private tick = (now: number) => {
     if (this.disposed) return;
     this.frameHandle = requestAnimationFrame(this.tick);
+    this.flushEdges();
     if (this.hoverStale) this.updateHover();
     if (this.fades.size) this.stepFades(performance.now());
     if (this.trails.size) this.stepTrails(performance.now());

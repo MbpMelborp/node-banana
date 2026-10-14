@@ -494,7 +494,11 @@ export class Painter {
 
   private nodesChanged(changes: NodeChanges) {
     if (!this.dirtyKeys.size) this.dirtySince = performance.now();
-    for (const id of changes.updated) this.dirtyKeys.add(id);
+    for (const id of changes.updated) {
+      // The painter's own size report changes no paint key: it must not preempt the batch being painted.
+      if (this.reportedSizes.delete(id)) continue;
+      this.dirtyKeys.add(id);
+    }
     for (const id of changes.added) this.dirtyKeys.add(id);
     this.scheduleKeys();
   }
@@ -880,8 +884,14 @@ export class Painter {
     }
     const store = useWorkflowStore.getState();
     const changes = measuredChanges(store.nodes, (id) => indexOfNode(store.nodes, id), this.scene.graph, ids);
-    if (changes.length) store.onNodesChange(changes);
+    if (!changes.length) return;
+    for (const change of changes) if ("id" in change) this.reportedSizes.add(change.id);
+    store.onNodesChange(changes);
+    requestAnimationFrame(() => this.reportedSizes.clear());
   }
+
+  /** Nodes whose measured size the painter just wrote to the store, until that change is seen. */
+  private reportedSizes = new Set<string>();
 
   /** Resolves paintNow for these nodes on the next frame, once the scene has drawn them. */
   private resolveWaiters(requests: readonly PaintRequest[]) {
