@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useCallback, useState, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useState, useEffect, useMemo } from "react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { ProviderBadge } from "./ProviderBadge";
 import { ModelParameters } from "./ModelParameters";
+import { useSchemaDerived } from "./schemaDerived";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { GenerateAudioNodeData, ProviderType, ModelInputDef } from "@/types";
+import { GenerateAudioNodeData, ProviderType } from "@/types";
 import { ProviderModel } from "@/lib/providers/types";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { modelSelectionData } from "@/store/utils/modelSelection";
@@ -24,11 +25,10 @@ import {
   EmptyState,
   ErrorMessage,
   Spinner,
-  sameInputSchema,
   type SocketSpec,
 } from "./ui";
 import { Download, Pause, Play, X } from "lucide-react";
-import { useHoldLive, useIsPaintedNode, useUpdateNodeData } from "./paintMode";
+import { useHoldLive, useIsPaintedNode, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "audio", type: "audio", label: "Audio" }];
 const DEFAULT_INPUTS: SocketSpec[] = [{ id: "text", type: "text", label: "Prompt" }];
@@ -42,7 +42,7 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
   const [isBrowseDialogOpen, setIsBrowseDialogOpen] = useState(false);
   useHoldLive(isBrowseDialogOpen);
   const painted = useIsPaintedNode();
-  const [settingsTab, setSettingsTab] = useState<"primary" | "fallback">("primary");
+  const [settingsTab, setSettingsTab] = useNodeUiState<"primary" | "fallback">(id, "settingsTab", "primary");
 
   useEffect(() => {
     if (!nodeData.fallbackModel && settingsTab === "fallback") {
@@ -107,19 +107,8 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
     [id, updateNodeData]
   );
 
-  // Read through a ref so the callback stays stable: it is a dependency of
-  // ModelParameters' schema effect, and a new identity would refetch.
-  const inputSchemaRef = useRef(nodeData.inputSchema);
-  inputSchemaRef.current = nodeData.inputSchema;
-  const handleInputsLoaded = useCallback(
-    (inputs: ModelInputDef[]) => {
-      // ModelParameters reports on every mount, and a culled node remounts on
-      // every pan; a schema the node already has must not dirty the workflow.
-      if (sameInputSchema(inputSchemaRef.current, inputs)) return;
-      updateNodeData(id, { inputSchema: inputs });
-    },
-    [id, updateNodeData]
-  );
+  // The schema's inputs (sockets) and defaults, stored from a painted copy too (schemaDerived.ts).
+  const schemaDerived = useSchemaDerived(id, nodeData);
 
   const isRunning = useWorkflowStore((state) => state.isRunning);
 
@@ -192,7 +181,8 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
           modelId={nodeData.selectedModel.modelId}
           parameters={nodeData.parameters || {}}
           onParametersChange={handleParametersChange}
-          onInputsLoaded={handleInputsLoaded}
+          onInputsLoaded={schemaDerived.inputsLoaded}
+          onDefaults={schemaDerived.defaults}
         />
       )}
       {settingsTab === "fallback" && nodeData.fallbackModel && (
@@ -201,6 +191,7 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
           provider={nodeData.fallbackModel.provider}
           parameters={nodeData.fallbackParameters || {}}
           onParametersChange={(p) => updateNodeData(id, { fallbackParameters: p })}
+          onDefaults={schemaDerived.fallbackDefaults}
         />
       )}
     </>

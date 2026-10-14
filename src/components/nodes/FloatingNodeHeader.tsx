@@ -10,7 +10,7 @@ import { ProviderBadge } from "./ProviderBadge";
 import { menuSurfaceClass } from "@/components/ui/Menu";
 import { KbdGroup } from "@/components/ui/Kbd";
 import { cn } from "./ui/cn";
-import { useHoldLive } from "./paintMode";
+import { useHoldLive, useIsPaintedNode } from "./paintMode";
 import {
   Box,
   ChevronDown,
@@ -117,7 +117,9 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
   const canRun = RUNNABLE_TYPES.has(type);
   const canExpand = EXPANDABLE_TYPES.has(type);
   const [isHeaderHovered, setIsHeaderHovered] = useState(false);
-  const isBodyHovered = useWorkflowStore((state) => state.hoveredNodeId === id);
+  // A painted copy never shows hover-only controls: its picture outlives the hover it was painted under.
+  const painted = useIsPaintedNode();
+  const isBodyHovered = useWorkflowStore((state) => !painted && state.hoveredNodeId === id);
   const isHovered = isHeaderHovered || isBodyHovered;
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState(customTitle || (titleLogo ? title : ""));

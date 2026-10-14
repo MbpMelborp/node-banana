@@ -115,10 +115,10 @@ const RENDER_TIMEOUT_MS = 2000;
  * stay live as they stay mounted on today's canvas (the 3D viewer), and
  * "pending" while it has work to pick up only a mounted node can (a
  * ComfyUI workflow to import, a run streaming previews), and "running"
- * while it works on its output (its spinner turns). "cover" keeps a later node in the store over an
+ * while it works on its output (its spinner turns). "added" holds a node just added until its first paint shows. "cover" keeps a later node in the store over an
  * unselected live node it overlaps, as classic stacks nodes in store order (the layer sets it, coverChanged).
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "cover";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {

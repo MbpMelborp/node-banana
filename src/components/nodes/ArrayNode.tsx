@@ -11,7 +11,7 @@ import { ArrayNodeData } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
 import { arrayItemWireCounts } from "@/lib/edges/arrayItems";
-import { useIsPaintedNode, useDerivedNodeData, useUpdateNodeData } from "./paintMode";
+import { useIsPaintedNode, useDerivedNodeData, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type ArrayNodeType = Node<ArrayNodeData, "array">;
 
@@ -109,8 +109,8 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
   const { getNodes } = useReactFlow();
   const lastSyncedInputRef = useRef<string | null>(null);
   const lastDerivedWriteRef = useRef<string | null>(null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showAllItems, setShowAllItems] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useNodeUiState(id, "showAdvanced", false);
+  const [showAllItems, setShowAllItems] = useNodeUiState(id, "showAllItems", false);
   // The item shown in full; the others stay one truncated line
   const [openItem, setOpenItem] = useState<number | null>(null);
 

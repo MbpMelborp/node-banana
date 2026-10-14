@@ -23,7 +23,7 @@ import { VideoStitchNodeData, WorkflowNode } from "@/types";
 import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
-import { useDerivedNodeData, useUpdateNodeData } from "./paintMode";
+import { useDerivedNodeData, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type VideoStitchNodeType = Node<VideoStitchNodeData, "videoStitch">;
 
@@ -46,7 +46,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   const removeEdge = useWorkflowStore((state) => state.removeEdge);
   const videoBlobUrl = useVideoBlobUrl(nodeData.outputVideo ?? null);
   const videoAutoplayRef = useVideoAutoplay(id, videoBlobUrl);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useNodeUiState(id, "expanded", true);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Check encoder support on mount

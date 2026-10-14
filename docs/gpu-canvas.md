@@ -52,7 +52,7 @@ out.
 | Scene | `src/lib/gpuCanvas/scene.ts` | WebGL2: dot grid, groups, instanced node quads reading the atlas, instanced edge segments, the selection outline of a node still swapping in (classic's card border, ring and shadow). Owns pan, zoom and the pointer, handing presses to the editor |
 | Edge routes | `src/lib/edges/route.ts`, `src/lib/gpuCanvas/edgeRoutes.ts` | The route today's edges draw (curved, angular, straight, hooks, loops), shared with `EditableEdge`, read into cubic segments for the scene, with bundles' stems, reference dashes and loading state |
 | Editor | `src/components/gpuCanvas/editor.ts`, `src/lib/gpuCanvas/gestures.ts` | Drag, connect, the marquee, edge clicks, Delete and the context menus, against painted handles and media cards; what a drag on the pane does follows the navigation settings as WorkflowCanvas's React Flow props do |
-| Paint keys | `src/lib/gpuCanvas/paintKey.ts` | A hash of what a node's picture shows: type, width, data, socket connections and the keys of what feeds it, so a change anywhere upstream reaches it. Position and selection are not in it |
+| Paint keys | `src/lib/gpuCanvas/paintKey.ts` | A hash of what a node's picture shows: type, width, data, socket connections and the keys of what feeds it, so a change anywhere upstream reaches it. Its header's readiness hint, its view state (`nodeUiStore`) and a run's mark are added apart, reaching nothing downstream. Position, selection and hover are not in it |
 | Queue | `src/lib/gpuCanvas/paintQueue.ts` | Paint requests by priority (urgent changes, the view, background) and tier |
 | Atlas | `src/lib/gpuCanvas/atlasLayout.ts`, `atlas.ts` | A 2048² texture array: 1/8 images shelf-packed for good, larger tiers in freeable cells |
 | Budget | `src/lib/gpuCanvas/budget.ts` | 16 layers (256 MB); 8 on an integrated GPU or under 8 GB of memory |
@@ -145,7 +145,9 @@ them repaints nothing.
 ## Live nodes
 
 A node is live (a real component on the live layer) while it is hovered,
-selected, holds focus, is opened, or is visible above 100% zoom. Its scene
+selected, holds focus, is opened, or is visible above 100% zoom. A node just
+added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
+until its first picture shows ("added"), as classic renders it whole at once. Its scene
 image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap. When it stops being live it waits up to
 1.5 s for a current painted image (it may have been edited while live)
@@ -158,6 +160,15 @@ measures of a live node (its height, its handles) also goes to the scene, so
 presses, the marquee and its connections follow a node that grew or shrank
 since it was painted; once it is painted again the scene takes the painted
 measure back.
+
+A node's own view state (a collapsed controls card, the Primary/Fallback
+tab, an Array's opened sections, a trim's source/output toggle) lives in
+`nodeUiStore` on the GPU canvas (`useNodeUiState`; plain local state on
+classic), so the live component and its painted copies show the same, and a
+change repaints the node. It is forgotten when the node goes or another
+workflow opens, as classic's remount forgets it. Painted copies never show
+hover: their headers' hover-only controls and hover video previews read no
+hovered node.
 
 Neither flow holds every connection (the sheet holds none, the live layer
 only those it decorates), so sockets read whether they are connected from the
@@ -223,7 +234,11 @@ the rest as the view reaches them, and the nodes they feed are not touched.
 A painted copy writes nothing, with one exception: effects that keep
 values derived from upstream in a node's data (a Switch's input type, a
 Prompt Constructor's text, an Array's items, a resize's source image, clip
-order) write through `useDerivedNodeData`. A node is painted again whenever
+order, a generate node's model inputs and schema defaults) write through
+`useDerivedNodeData`; the schema writes check the stored node, since a copy
+can be a batch behind it. A copy still fetching its model's settings marks
+itself pending (`data-paint-pending`), and painting waits for it as for
+images. A node is painted again whenever
 something upstream changes, so that is where it derives. Output nodes run on
 a new connection through a store watcher (`outputAutoRun.ts`) instead of
 their component. Annotation opens its editor from the live node, as today.
@@ -454,6 +469,8 @@ interacting), until the pointer moves again.
   file loading elsewhere, a timer) may paint stale until its key changes.
 - A wheel over a painted node's scrolling text pans the canvas until the
   node is live, a few frames after it comes under the pointer.
+- A painted node shows its scrolling areas at the top and a paused video at
+  its first frame, wherever they were left while it was live.
 
 ## What phase 4 leaves out
 

@@ -30,7 +30,8 @@ import * as THREE from "three";
 import type { NodeTypes } from "@xyflow/react";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode, type NodeChanges } from "@/store/nodeChanges";
-import type { WorkflowEdge } from "@/types";
+import { useNodeUiStore } from "@/store/nodeUiStore";
+import type { WorkflowEdge, WorkflowNode } from "@/types";
 import type { Scene } from "@/lib/gpuCanvas/scene";
 import { measuredChanges, type HandleAnchor } from "@/lib/gpuCanvas/graph";
 import { PaintedAtlas, type BlitItem } from "@/lib/gpuCanvas/atlas";
@@ -41,6 +42,7 @@ import { edgesByNode, READS_RUN_IN_PROGRESS, runMark, upstreamPaintKeys, withRun
 import { BACKGROUND, EIGHTH, PREFETCH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier, type PaintRequest } from "@/lib/gpuCanvas/paintQueue";
 import { cachedHandle, cacheKey, deflate, handleFromCache, inflate, PAINT_CACHE_BYTES, PAINT_CACHE_FORMAT, type CachedHandle, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
+import { HEADER_HINTLESS_TYPES as HINTLESS_TYPES } from "@/components/nodes/FloatingNodeHeaders";
 import { PainterSheet } from "./PainterSheet";
 import { flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
 
@@ -152,6 +154,8 @@ export class Painter {
   /** Each node's key without its run mark: what the nodes it feeds take in. */
   private baseKeys = new Map<string, string>();
   private runState: RunState = { isRunning: false, currentNodeIds: [] };
+  /** The readiness hint each node's header shows ("needs a prompt"), as WorkflowCanvas last worked them out. */
+  private hints: Record<string, string>;
   private queue = new PaintQueue();
   private running = false;
   private startedAt = 0;
@@ -187,7 +191,10 @@ export class Painter {
   constructor(private scene: Scene, private options: PainterOptions) {
     enableLayoutSubtree(scene.canvas);
     this.tiers = tiersFor(scene.scale);
-    const headers = { ...NO_HEADERS, getNodeTitle: options.headers.getNodeTitle, hints: options.headers.hints };
+    this.hints = options.headers.hints ?? {};
+    // A getter: the sheet spreads the headers on every batch, and takes the hints as they are then.
+    const hints = () => this.hints;
+    const headers: HeaderProps = { ...NO_HEADERS, getNodeTitle: options.headers.getNodeTitle, get hints() { return hints(); } };
     this.sheet = new PainterSheet(scene.canvas, SHEET_TEXELS.w / scene.scale, SHEET_TEXELS.h / scene.scale, options.nodeTypes, headers);
     this.atlas = new PaintedAtlas(scene.renderer, options.budget.layerSize, options.budget.layers);
     scene.setPaintedAtlas(this.atlas.target.texture);
@@ -210,6 +217,11 @@ export class Painter {
     this.unsubscribers.push(useWorkflowStore.subscribe((state, previous) => {
       if (state.edges !== previous.edges) this.edgesChanged(previous.edges, state.edges);
       if (state.isRunning !== previous.isRunning || state.currentNodeIds !== previous.currentNodeIds) this.runChanged(state);
+    }));
+    // A node's view state (a collapsed card, a settings tab) is painted as the live node shows it.
+    this.unsubscribers.push(useNodeUiStore.subscribe((state, previous) => {
+      if (state.byNode === previous.byNode) return;
+      this.rekey([...new Set([...Object.keys(previous.byNode), ...Object.keys(state.byNode)])].filter((id) => previous.byNode[id] !== state.byNode[id]));
     }));
   }
 
@@ -385,6 +397,42 @@ export class Painter {
     };
   }
 
+  /**
+   * A node's key: its base key, its run mark, the hint its header shows and
+   * its own view state (useNodeUiState), the last two kept out of the base so
+   * they reach no node downstream.
+   */
+  private fullKey(node: WorkflowNode, base: string) {
+    const hint = HINTLESS_TYPES.has(node.type) ? "" : this.hints[node.id] ?? "";
+    const ui = useNodeUiStore.getState().byNode[node.id];
+    let key = withRunMark(base, runMark(node, this.runState));
+    if (hint) key += `|h:${hint}`;
+    if (ui) key += `|ui:${JSON.stringify(ui)}`;
+    return key;
+  }
+
+  /** Something outside a node's base key changed for these nodes: those whose key did are repainted. */
+  private rekey(ids: Iterable<string>) {
+    const { nodes } = useWorkflowStore.getState();
+    const now = performance.now();
+    for (const id of ids) {
+      const i = indexOfNode(nodes, id), base = this.baseKeys.get(id);
+      if (i < 0 || base == null) continue;
+      const key = this.fullKey(nodes[i], base);
+      if (this.keys.get(id) === key) continue;
+      this.keys.set(id, key);
+      this.stale(id, now);
+    }
+  }
+
+  /** The headers' readiness hints changed: the nodes whose hint did are repainted. */
+  hintsChanged(next: Record<string, string>) {
+    const previous = this.hints;
+    if (next === previous) return;
+    this.hints = next;
+    this.rekey([...new Set([...Object.keys(previous), ...Object.keys(next)])].filter((id) => previous[id] !== next[id]));
+  }
+
   private recomputeAllKeys() {
     const { nodes, context } = this.keyContext();
     const { isRunning, currentNodeIds } = useWorkflowStore.getState();
@@ -393,7 +441,7 @@ export class Painter {
     for (const node of nodes) {
       const base = keyOf(node.id)!;
       this.baseKeys.set(node.id, base);
-      this.keys.set(node.id, withRunMark(base, runMark(node, this.runState)));
+      this.keys.set(node.id, this.fullKey(node, base));
     }
   }
 
@@ -417,7 +465,7 @@ export class Painter {
     for (const id of ids) {
       const i = indexOfNode(nodes, id), base = this.baseKeys.get(id);
       if (i < 0 || base == null) continue;
-      const key = withRunMark(base, runMark(nodes[i], this.runState));
+      const key = this.fullKey(nodes[i], base);
       if (this.keys.get(id) === key) continue;
       this.keys.set(id, key);
       this.stale(id, now, !urgent.has(id));
@@ -459,7 +507,7 @@ export class Painter {
         if (i < 0) continue;
         const base = keyOf(id)!;
         this.baseKeys.set(id, base);
-        const key = withRunMark(base, runMark(nodes[i], this.runState));
+        const key = this.fullKey(nodes[i], base);
         if (this.keys.get(id) === key) continue;
         this.keys.set(id, key);
         if (changed.has(id)) this.downstream.delete(id);

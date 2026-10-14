@@ -24,7 +24,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
-import { useHoldLive, useUpdateNodeData } from "./paintMode";
+import { useHoldLive, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type EaseCurveNodeType = Node<EaseCurveNodeData, "easeCurve">;
 
@@ -66,7 +66,7 @@ export function EaseCurveNode({ id, data, selected }: NodeProps<EaseCurveNodeTyp
   const videoBlobUrl = useVideoBlobUrl(nodeData.outputVideo ?? null);
   const videoAutoplayRef = useVideoAutoplay(id);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useNodeUiState(id, "expanded", true);
   const [showPresets, setShowPresets] = useState(false);
   useHoldLive(showPresets);
   const presetsButtonRef = useRef<HTMLButtonElement>(null);

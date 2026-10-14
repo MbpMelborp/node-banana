@@ -116,6 +116,8 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
     if (!pending.length || performance.now() > until || cancelled()) break;
     await nextFrame();
   }
+  // What a node still fetches before it shows its fields (a model's settings) marks itself pending.
+  while (root.querySelector("[data-paint-pending]") && performance.now() < until && !cancelled()) await nextFrame();
   const started = performance.now();
   // An image's source can arrive or change after the first render (a
   // thumbnail swapped in, a reference resolved), and its card resizes once
@@ -151,6 +153,10 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
   for (const video of root.querySelectorAll("video")) {
     if (!videoLoading(video)) continue;
     const id = video.closest(".react-flow__node")?.getAttribute("data-id");
+    if (id) unloaded.add(id);
+  }
+  for (const mark of root.querySelectorAll("[data-paint-pending]")) {
+    const id = mark.closest(".react-flow__node")?.getAttribute("data-id");
     if (id) unloaded.add(id);
   }
   return { decodeMs, unloaded };

@@ -22,7 +22,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
-import { useUpdateNodeData } from "./paintMode";
+import { useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type VideoTrimNodeType = Node<VideoTrimNodeData, "videoTrim">;
 
@@ -48,8 +48,8 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
   const nodes = useWorkflowStore(selectNodeContent);
 
   // Track whether user wants to see source or output video
-  const [showOutput, setShowOutput] = useState(false);
-  const [expanded, setExpanded] = useState(true);
+  const [showOutput, setShowOutput] = useNodeUiState(id, "showOutput", false);
+  const [expanded, setExpanded] = useNodeUiState(id, "expanded", true);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Keep a ref to endTime so the metadata callback reads fresh state

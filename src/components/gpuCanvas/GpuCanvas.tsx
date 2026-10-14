@@ -12,6 +12,7 @@ import { frameLoadedGraph } from "@/utils/frameGraph";
 import { isPanningRef } from "@/components/WorkflowCanvas";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
+import { useNodeUiStore } from "@/store/nodeUiStore";
 import { APP_VERSION } from "@/lib/appVersion";
 import { SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
@@ -50,6 +51,10 @@ const LIVE_ZOOM = 1;
 const LIVE_EDGE_ZOOM = OVERVIEW_ZOOM_THRESHOLD;
 /** At most this many live connections besides the selected ones (the nearest the view's centre). */
 const MAX_LIVE_EDGES = 250;
+/** Added nodes on screen made live until painted (a large paste leaves the rest to the painter's queue). */
+const MAX_ADDED_LIVE = 8;
+/** How long an added node stays live at most, should its paint not land. */
+const ADDED_LIVE_TIMEOUT_MS = 3000;
 /** A view still this long has stopped moving: d3-zoom's wheel end delay, after which classic's onMoveEnd fires. */
 const MOVE_END_MS = 150;
 
@@ -313,9 +318,32 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       });
     }
 
+    // A node just added (dropped, pasted, from a menu or a key) is live until its painted image shows,
+    // as classic renders it whole at once: the scene would draw its stand-in card while it paints.
+    const added = new Set<string>();
+    let loadSeen = store.workflowLoadCount;
+    const showAdded = (ids: ReadonlySet<string>) => {
+      if (!painter) return;
+      const visible = new Set(scene.visible(0).map((i) => scene.graph.nodes[i].id));
+      const shown = [...ids].filter((id) => visible.has(id)).slice(0, MAX_ADDED_LIVE);
+      if (!shown.length) return;
+      for (const id of shown) {
+        added.add(id);
+        // A paint that never lands must not pin it live.
+        void Promise.race([painter.paintNow(id), new Promise((resolve) => setTimeout(resolve, ADDED_LIVE_TIMEOUT_MS))]).then(() => {
+          if (disposed || !added.delete(id)) return;
+          live.wantOnly("added", added);
+        });
+      }
+      live.wantOnly("added", added);
+    };
+
     // Store changes reach the graph, the scene, the painter and the live layer.
     const unsubscribeNodes = subscribeToWorkflowNodeChanges((changes) => {
       const state = useWorkflowStore.getState();
+      // An opened workflow's nodes are not added ones: it paints behind its loading screen.
+      const opened = state.workflowLoadCount !== loadSeen;
+      loadSeen = state.workflowLoadCount;
       for (const id of changes.removed) selectedIds.delete(id);
       for (const ids of [changes.updated, changes.added]) for (const id of ids) {
         const i = indexOfNode(state.nodes, id);
@@ -328,6 +356,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         scene.setGraph(scene.graph);
         painter?.graphRebuilt();
         live.graphRebuilt();
+        for (const id of changes.removed) added.delete(id);
+        if (!opened && changes.added.size) showAdded(changes.added);
+        // The view state of nodes that went (or of the workflow before an opened one) goes with them, as classic's unmount.
+        if (opened) useNodeUiStore.getState().forget();
+        else if (changes.removed.size) useNodeUiStore.getState().forget(changes.removed);
       } else {
         if (moved.length) {
           scene.nodesMoved(moved);
@@ -584,6 +617,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   useEffect(() => {
     engineRef.current?.scene.setGridDim(dimBackground ? 0.3 : 1);
   }, [dimBackground]);
+
+  // Painted headers show the readiness hints as they are now; the nodes whose hint changed are painted again.
+  useEffect(() => {
+    engineRef.current?.painter?.hintsChanged(headers.hints ?? {});
+  }, [headers.hints]);
 
   // A workflow opened (or the canvas mounted): the tab's view, else the graph framed as today's
   // canvas frames it; painting starts over from the view, behind the loading screen when large.

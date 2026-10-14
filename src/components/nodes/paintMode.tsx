@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useNodeId } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useNodeUiStore } from "@/store/nodeUiStore";
 import type { WorkflowNodeData } from "@/types";
 
 /**
@@ -83,4 +84,24 @@ export function useHoldLive(active: boolean, nodeId?: string | null) {
     if (!active || !hold || !id) return;
     return hold(id);
   }, [active, hold, id]);
+}
+
+type SetValue<T> = (value: T | ((previous: T) => T)) => void;
+
+/**
+ * useState for a node's view state: plain local state on the classic canvas,
+ * kept in useNodeUiStore under the node's id and `key` on the GPU canvas (its
+ * live layer and its painted copies), so a node looks the same whichever way
+ * it is drawn.
+ */
+export function useNodeUiState<T>(id: string, key: string, initial: T): [T, SetValue<T>] {
+  const live = useIsLiveLayerNode(), painted = useIsPaintedNode();
+  const [local, setLocal] = useState(initial);
+  const stored = useNodeUiStore((state) => state.byNode[id]?.[key]) as T | undefined;
+  const setStored = useCallback<SetValue<T>>((next) => {
+    const store = useNodeUiStore.getState(), current = store.byNode[id]?.[key] as T | undefined;
+    store.set(id, key, typeof next === "function" ? (next as (previous: T) => T)(current === undefined ? initial : current) : next);
+  }, [id, key, initial]);
+  if (!live && !painted) return [local, setLocal];
+  return [stored === undefined ? initial : stored, setStored];
 }

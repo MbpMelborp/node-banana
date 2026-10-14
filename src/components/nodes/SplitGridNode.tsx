@@ -18,7 +18,7 @@ import {
   MIN_SLICE_GAP,
 } from "@/store/utils/splitGridTemplate";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
-import { useHoldLive, useIsPaintedNode, useDerivedNodeData, useUpdateNodeData } from "./paintMode";
+import { useHoldLive, useIsPaintedNode, useDerivedNodeData, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type SplitGridNodeType = Node<SplitGridNodeData, "splitGrid">;
 
@@ -93,7 +93,7 @@ export function SplitGridNode({ id, data, selected }: NodeProps<SplitGridNodeTyp
   const edges = useWorkflowStore((state) => state.edges);
   const [showEditor, setShowEditor] = useState(false);
   useHoldLive(showEditor);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useNodeUiState(id, "expanded", true);
 
   const gridRows = clampGridDimension(nodeData.gridRows);
   const gridCols = clampGridDimension(nodeData.gridCols);

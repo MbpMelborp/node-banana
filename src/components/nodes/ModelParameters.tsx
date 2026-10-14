@@ -8,6 +8,7 @@ import { OpenAIImageSizeField } from "./OpenAIImageSizeField";
 import { useProviderApiKeys } from "@/store/workflowStore";
 import { deduplicatedFetch } from "@/utils/deduplicatedFetch";
 import { CheckboxField, FieldList, NumberField, SelectField, TextField } from "./ui/Field";
+import { useIsPaintedNode } from "./paintMode";
 
 // localStorage cache for model schemas (persists across dev server restarts)
 const SCHEMA_CACHE_KEY = "node-banana-schema-cache";
@@ -50,7 +51,20 @@ interface ModelParametersProps {
   parameters: Record<string, unknown>;
   onParametersChange: (parameters: Record<string, unknown>) => void;
   onExpandChange?: (expanded: boolean, parameterCount: number) => void;
-  onInputsLoaded?: (inputs: ModelInputDef[]) => void;
+  /** The model's inputs, once its schema is known; `model` is the model they belong to. */
+  onInputsLoaded?: (inputs: ModelInputDef[], model: SchemaModel) => void;
+  /**
+   * The schema defaults `parameters` lacks, to store (in place of
+   * onParametersChange, which gets `{ ...parameters, ...defaults }` when this
+   * is absent). A painted copy on the GPU canvas stores them through this.
+   */
+  onDefaults?: (defaults: Record<string, unknown>, model: SchemaModel) => void;
+}
+
+/** The model a schema was fetched for. */
+export interface SchemaModel {
+  modelId: string;
+  provider: ProviderType;
 }
 
 /**
@@ -65,7 +79,9 @@ function ModelParametersInner({
   onParametersChange,
   onExpandChange,
   onInputsLoaded,
+  onDefaults,
 }: ModelParametersProps) {
+  const painted = useIsPaintedNode();
   const [schema, setSchema] = useState<ModelParameter[]>([]);
   // Tracks which `${provider}:${modelId}` the current `schema` belongs to.
   // Prevents the defaults effect from writing a previous model's defaults into
@@ -84,7 +100,7 @@ function ModelParametersInner({
     if (!modelId) {
       setSchema([]);
       setSchemaKey("");
-      onInputsLoaded?.([]);
+      onInputsLoaded?.([], { modelId, provider });
       return;
     }
 
@@ -101,7 +117,7 @@ function ModelParametersInner({
         if (cancelled) return;
         setSchema(cached.parameters);
         setSchemaKey(currentKey);
-        onInputsLoaded?.(cached.inputs);
+        onInputsLoaded?.(cached.inputs, { modelId, provider });
         return;
       }
 
@@ -151,7 +167,7 @@ function ModelParametersInner({
 
         // Pass inputs to parent for dynamic handle rendering
         if (onInputsLoaded) {
-          onInputsLoaded(inputs);
+          onInputsLoaded(inputs, { modelId, provider });
         }
       } catch (err) {
         if (cancelled) return;
@@ -188,10 +204,10 @@ function ModelParametersInner({
         hasNewDefaults = true;
       }
     }
-    if (hasNewDefaults) {
-      onParametersChange({ ...parameters, ...defaults });
-    }
-  }, [schema, schemaKey, modelId, provider, parameters, onParametersChange]);
+    if (!hasNewDefaults) return;
+    if (onDefaults) onDefaults(defaults, { modelId, provider });
+    else onParametersChange({ ...parameters, ...defaults });
+  }, [schema, schemaKey, modelId, provider, parameters, onParametersChange, onDefaults]);
 
   // Notify parent to resize node when schema loads
   useEffect(() => {
@@ -237,13 +253,17 @@ function ModelParametersInner({
     return null;
   }
 
+  // A painted copy (GPU canvas) is not painted until the schema is in (settleNodes waits on this mark).
+  const pending = painted && schemaKey !== `${provider}:${modelId}` ? <div hidden data-paint-pending="" /> : null;
+
   // Don't render if no schema available and not loading
   if (!isLoading && schema.length === 0 && !error) {
-    return null;
+    return pending;
   }
 
   return (
     <div className="shrink-0">
+      {pending}
       {error ? (
         <span className="flex items-baseline gap-2 text-[9px] text-red-400">
           <span>{error}</span>
