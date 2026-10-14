@@ -478,6 +478,11 @@ export interface SceneCallbacks {
    */
   onHoverEnd?: (reason: "leave" | "gesture" | "wheel") => void;
   onContextMenu?: (event: MouseEvent) => void;
+  /**
+   * Whether a point (css px) is the pane's for a double-click: without it, no node (or its header band) is
+   * under it. A locked canvas's node bodies let the pointer through to the pane, as classic's.
+   */
+  paneAt?: (cssX: number, cssY: number) => boolean;
   /** A double-click on empty canvas, at a flow position (one on a node is the node's own, as on classic). */
   onPaneDoubleClick?: (x: number, y: number, screen: { x: number; y: number }) => void;
   onViewChange?: (view: View) => void;
@@ -1458,7 +1463,7 @@ export class Scene {
     const at = this.local(event);
     // A node (or its header band) is not empty canvas: on classic a double-click there is the node's
     // own (rename, title edit) and the view stays put; a painted node has none of its own.
-    if (this.nodeAt(at.x, at.y) < 0) {
+    if (this.callbacks.paneAt ? this.callbacks.paneAt(at.x, at.y) : this.nodeAt(at.x, at.y) < 0) {
       const p = this.toWorld(at.x, at.y);
       this.callbacks.onPaneDoubleClick?.(p.x, p.y, { x: event.clientX, y: event.clientY });
     }

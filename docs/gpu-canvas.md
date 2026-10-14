@@ -151,9 +151,10 @@ A node is live (a real component on the live layer) while it is hovered
 handles sit in the node's element), selected, holds focus, is opened, or is visible above 100% zoom. A node just
 added (dropped, pasted, from a menu or a key; up to 8 on screen) is live
 until its first picture shows ("added"), as classic renders it whole at once. A node a
-file is dragged over is live ("drop"), so the file lands on its own drop
-zone (an empty input loads it) rather than the canvas's, which adds a node:
-browsers send no pointer events during a drag. Its scene
+file, a node type from the action bar or a history image is dragged over
+is live ("drop"), so the drop lands on its own drop zone (an empty input
+loads a file and swallows the rest, as on classic) rather than the
+canvas's, which adds a node: browsers send no pointer events during a drag. Its scene
 image stays until the live component is measured and decoded, then is
 hidden, so the swap shows no gap; until then the live component and its
 floating header are laid out but invisible (`gpu-entering`), so nothing
@@ -334,7 +335,8 @@ The scene takes every press and asks the editor what it starts:
   the `move` cursor): a drag hides the connection and draws the line from
   its other end; a valid drop is WorkflowCanvas's `handleReconnect`, any
   other goes to `handleConnectEnd` and the connection stays. A press that
-  does not move is a click on the connection. Not on a locked canvas.
+  does not move is a click on the connection. A locked canvas still
+  reconnects, with no line drawn, as classic's anchors check no lock.
 - **A node**, its floating header included (the 30 flow units above it,
   painted or live): a click selects it (Shift adds or removes it), and
   leaves a selection it is already part of as it is; a click on a live
@@ -409,7 +411,7 @@ The scene takes every press and asks the editor what it starts:
 - On a locked canvas nodes take no pointer, as React Flow gives them
   `pointer-events: none`: a press on one is the pane's (a drag pans as the
   pan mode says, a click is a pane click), and live nodes' controls are
-  inert. Sockets still connect.
+  inert. Sockets still connect and connection ends still reconnect.
 - Every change in the selected nodes or connections, a press's or the
   store's own (paste, undo, the agent), reaches WorkflowCanvas's
   `handleSelectionChange` once it is through, as React Flow's

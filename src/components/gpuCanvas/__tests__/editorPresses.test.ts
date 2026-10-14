@@ -37,6 +37,12 @@ function drag(from: [number, number], to: [number, number], init: MouseEventInit
   gesture?.up(pointer(...to, init));
 }
 
+/** The fake scene's nodes with their 30-unit floating header bands, as the scene's own index finds them. */
+function withHeaderBands() {
+  const index = new GridIndex(editor["scene"].graph.nodes, 512, 30);
+  (editor["scene"] as unknown as Record<string, unknown>).nodeAt = (x: number, y: number, header = true) => index.at(x, y, header);
+}
+
 const selectedEdges = () => useWorkflowStore.getState().edges.filter((e) => e.selected).map((e) => e.id);
 const frame = () => host.querySelector<HTMLElement>("[data-gpu-canvas-selection-frame]")!;
 const selected = () => useWorkflowStore.getState().nodes.filter((n) => n.selected).map((n) => n.id);
@@ -390,6 +396,40 @@ describe("presses on the GPU canvas", () => {
     expect(settings.onPaneMenu).not.toHaveBeenCalled();
   });
 
+  it("on a locked canvas a right-click on a node's body is the pane's, but not on its header band or a painted handle", () => {
+    settings = { ...settings, locked: true };
+    withHeaderBands();
+    const body = new MouseEvent("contextmenu", { clientX: 100, clientY: 100, cancelable: true });
+    editor.contextMenu(body);
+    expect(body.defaultPrevented).toBe(true);
+    expect(settings.onPaneMenu).toHaveBeenCalledWith(100, 100);
+    const header = new MouseEvent("contextmenu", { clientX: 100, clientY: -10, cancelable: true });
+    editor.contextMenu(header);
+    expect(header.defaultPrevented).toBe(false);
+    editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 100 }]]);
+    const handle = new MouseEvent("contextmenu", { clientX: 1102, clientY: 100, cancelable: true });
+    editor.contextMenu(handle);
+    expect(handle.defaultPrevented).toBe(false);
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+    // Unlocked, the node's body is its own.
+    settings = { ...settings, locked: false };
+    const unlocked = new MouseEvent("contextmenu", { clientX: 100, clientY: 100, cancelable: true });
+    editor.contextMenu(unlocked);
+    expect(unlocked.defaultPrevented).toBe(false);
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("a double-click on a node's body is the pane's only on a locked canvas, and never on its header band", () => {
+    withHeaderBands();
+    expect(editor.nodeIsPane(100, 100)).toBe(false);
+    settings = { ...settings, locked: true };
+    expect(editor.nodeIsPane(100, 100)).toBe(true);
+    expect(editor.nodeIsPane(100, -10)).toBe(false);
+    expect(editor.nodeIsPane(2000, 2000)).toBe(true);
+    editor.paneDoubleClick(100, 100, { x: 1, y: 1 });
+    expect(settings.onPaneMenu).toHaveBeenCalledWith(1, 1);
+  });
+
   it("a double-click opens the add-node menu on empty canvas only, not on a connection", () => {
     edgeHit = 0;
     editor.paneDoubleClick(2000, 2000, { x: 1, y: 1 });
@@ -419,6 +459,16 @@ describe("connection ends on the GPU canvas", () => {
     drag([788, 100], [400, 100]);
     expect(settings.onReconnect).toHaveBeenCalledWith(expect.objectContaining({ id: "ac" }), { source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
     expect(held).toEqual([0, -1]);
+  });
+
+  it("on a locked canvas a connection's end still reconnects, drawing no line", () => {
+    settings = { ...settings, locked: true, onReconnect: vi.fn() };
+    const gesture = editor.press(pointer(788, 100))!;
+    gesture.move(pointer(500, 100));
+    expect(host.querySelector("path")).toBeNull();
+    gesture.move(pointer(400, 100));
+    gesture.up(pointer(400, 100));
+    expect(settings.onReconnect).toHaveBeenCalledWith(expect.objectContaining({ id: "ac" }), { source: "a", sourceHandle: "text", target: "b", targetHandle: "text" });
   });
 
   it("a click on a connection's end selects the connection; dropped on nothing it goes to handleConnectEnd from the other end", () => {

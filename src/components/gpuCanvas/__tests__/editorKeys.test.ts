@@ -94,6 +94,8 @@ describe("the GPU canvas's keys", () => {
   });
 
   it("moves the selection 5px with an arrow key and 20px with Shift, unless locked", () => {
+    // A click on the node focuses it, as classic's wrapper takes focus.
+    editor.clickNode("a", false);
     expect(press("ArrowRight").defaultPrevented).toBe(true);
     press("ArrowDown", { shiftKey: true });
     const moved = useWorkflowStore.getState().nodes;
@@ -102,6 +104,39 @@ describe("the GPU canvas's keys", () => {
     settings = { ...editing, locked: true };
     expect(press("ArrowLeft").defaultPrevented).toBe(false);
     expect(useWorkflowStore.getState().nodes[0].position).toEqual({ x: 5, y: 20 });
+  });
+
+  it("moves nothing with focus on nothing: a selection made in the store, or after a pane click", () => {
+    // Selected straight in the store (paste, select-all, the agent): classic's focus is on the page.
+    press("ArrowRight");
+    expect(useWorkflowStore.getState().nodes[0].position).toEqual({ x: 0, y: 0 });
+    // A click on the selected node focuses it: the arrows move it.
+    editor.clickNode("a", false);
+    expect(press("ArrowRight").defaultPrevented).toBe(true);
+    expect(useWorkflowStore.getState().nodes[0].position).toEqual({ x: 5, y: 0 });
+    // A pane click (on a locked-free canvas it clears the selection; reselect to keep one) leaves focus on nothing.
+    editor["paneClick"]();
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: true }]);
+    expect(press("ArrowRight").defaultPrevented).toBe(false);
+    expect(useWorkflowStore.getState().nodes[0].position).toEqual({ x: 5, y: 0 });
+  });
+
+  it("a focused node moves the selection only while it is selected, and focus elsewhere drops it", () => {
+    editor.clickNode("a", false);
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: true }]);
+    press("ArrowRight");
+    expect(useWorkflowStore.getState().nodes[1].position).toEqual({ x: 400, y: 0 });
+    // Selected again with b (select-all): the focused node carries the selection.
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: true }]);
+    press("ArrowRight");
+    expect(useWorkflowStore.getState().nodes.map((n) => n.position.x)).toEqual([5, 405]);
+    // Focus moved to a button and back to the page: no node holds it any more.
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+    button.blur();
+    press("ArrowRight");
+    expect(useWorkflowStore.getState().nodes.map((n) => n.position.x)).toEqual([5, 405]);
   });
 
   it("leaves arrow keys to a focused field", () => {

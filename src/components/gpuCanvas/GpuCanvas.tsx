@@ -33,6 +33,7 @@ import { watchPromptConnectedText } from "@/lib/gpuCanvas/promptConnectedText";
 import { watchVideoTrimDurations } from "@/lib/gpuCanvas/videoTrimDuration";
 import { watchGenerationErrors } from "@/lib/gpuCanvas/errorToasts";
 import { useToast } from "@/components/Toast";
+import { HISTORY_DRAG_TYPE } from "@/components/GlobalImageHistory";
 import { routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
 import { dimOpacities } from "@/lib/gpuCanvas/dimming";
 import type { HookPath } from "@/components/edges/EdgeHookSelection";
@@ -40,6 +41,8 @@ import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
 import { OVERVIEW_ZOOM_THRESHOLD } from "@/utils/canvasPerformance";
 import { boundedNodeTypes, HEADER, noop, PAD, PAD_X, type HeaderProps } from "./nodeSheets";
 
+/** The drags WorkflowCanvas's wrapper takes on drop (a file, a node type from the action bar, a history image). */
+const CANVAS_DRAG_TYPES = ["Files", "application/node-type", HISTORY_DRAG_TYPE];
 /** Workflows at least this large open behind the loading screen while they paint. */
 const LOADING_MIN_NODES = 150;
 /** The loading screen appears only if painting takes longer than this. */
@@ -221,6 +224,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onIdleMove: (event) => editor.idleMove(event),
         onHoverEnd: (reason) => editor.hoverEnd(reason),
         onContextMenu: (event) => editor.contextMenu(event),
+        paneAt: (x, y) => editor.nodeIsPane(x, y),
         onPaneDoubleClick: (x, y, screen) => editor.paneDoubleClick(x, y, screen),
         routeEdge: (e) => {
           const state = useWorkflowStore.getState();
@@ -459,8 +463,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     document.addEventListener("click", measureChrome, true);
     document.addEventListener("keydown", measureChrome, true);
 
-    // A file dragged over a painted node makes it live, so the drop lands on the node's own drop zone (an empty
-    // input loads it) rather than the canvas's, which adds a node: browsers send no pointer events during a drag.
+    // A drag the canvas takes (a file, a node type from the action bar, a history image) over a painted node makes
+    // it live, so the drop lands on the node's own drop zone (an empty input loads a file and swallows the rest, as
+    // every node is mounted on classic) rather than the canvas's, which adds a node: browsers send no pointer events
+    // during a drag. A node with no drop zone lets the drop through to the canvas, as on classic.
     let dropTarget: string | null = null;
     const showDropTarget = (id: string | null) => {
       if (id === dropTarget) return;
@@ -468,7 +474,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       live.wantOnly("drop", id ? [id] : []);
     };
     const fileDragOver = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes("Files")) return;
+      const types = event.dataTransfer?.types;
+      if (!types || !CANVAS_DRAG_TYPES.some((type) => types.includes(type))) return;
       const at = scene.local(event), i = scene.nodeAt(at.x, at.y, false);
       showDropTarget(i >= 0 ? scene.graph.nodes[i].id : null);
     };

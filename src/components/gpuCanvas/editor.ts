@@ -142,6 +142,12 @@ export class Editor {
   /** React Flow's NodesSelection: the dotted frame around the nodes a marquee selected, until a click or no node is selected. */
   private selectionFrame: HTMLDivElement;
   private selectionFrameActive = false;
+  /**
+   * Where classic's keyboard focus would be for the arrow keys while the document's focus is on the page or the
+   * scene canvas: a painted node pressed last (its wrapper takes focus on classic), or the selection frame a
+   * marquee left (React Flow's NodesSelection rect, focused as it shows). Null where classic's focus is on nothing.
+   */
+  private keyTarget: { kind: "node"; id: string } | { kind: "selection" } | null = null;
   private offs: (() => void)[] = [];
   /** Node and wire drags holding `canvas-interacting` (holdInteracting). */
   private interactingHolds = 0;
@@ -169,7 +175,13 @@ export class Editor {
     // The frame follows the view, the nodes' moves and sizes, and the selection.
     const placeFrame = () => { if (this.selectionFrameActive) this.placeSelectionFrame(); };
     this.offs.push(scene.onViewChanged(placeFrame), scene.onLayoutChanged(placeFrame));
-    this.offs.push(useWorkflowStore.subscribe((state, previous) => { if (state.nodes !== previous.nodes) placeFrame(); }));
+    this.offs.push(useWorkflowStore.subscribe((state, previous) => {
+      if (state.nodes === previous.nodes) return;
+      placeFrame();
+      // A removed node takes its focus with it, as its element's does.
+      const target = this.keyTarget;
+      if (target?.kind === "node" && !state.nodes.some((n) => n.id === target.id)) this.keyTarget = null;
+    }));
     const on = <K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void) => {
       window.addEventListener(type, listener);
       this.offs.push(() => window.removeEventListener(type, listener));
@@ -178,6 +190,12 @@ export class Editor {
       this.keyDown(event);
       this.modifierChanged(event);
     });
+    // Focus moving to an element (a field, a live node, a button) leaves wherever classic's focus stood.
+    const focusIn = (event: FocusEvent) => {
+      if (event.target !== document.body && event.target !== scene.canvas) this.keyTarget = null;
+    };
+    document.addEventListener("focusin", focusIn);
+    this.offs.push(() => document.removeEventListener("focusin", focusIn));
     on("keyup", (event) => {
       if (event.code === "Space") this.space = false;
       this.modifierChanged(event);
@@ -266,9 +284,9 @@ export class Editor {
     if (locked) return;
     const step = ARROW_STEPS[event.key];
     if (step) {
-      // A focused live node moves the selection only while it is part of it.
-      const focusedNode = this.focusedLiveNode();
-      if (focusedNode ? !useWorkflowStore.getState().nodes.find((n) => n.id === focusedNode)?.selected : !this.keyboardFocusOnCanvas()) return;
+      // Classic's arrows move the selection from a focused node that is selected and draggable (NodeWrapper's
+      // onKeyDown), or from the focused selection frame; with focus on nothing they do nothing.
+      if (!this.arrowsMove()) return;
       if (this.nudgeSelection(step.x * (event.shiftKey ? 4 : 1), step.y * (event.shiftKey ? 4 : 1))) event.preventDefault();
       return;
     }
@@ -278,6 +296,18 @@ export class Editor {
     if (!node || node.selectable === false) return;
     if ((event.key === "Enter" || event.key === " ") && !node.selected) this.selectNodes([focused], false);
     else if (event.key === "Escape" && node.selected) useWorkflowStore.getState().onNodesChange([{ type: "select", id: focused, selected: false }]);
+  }
+
+  /** Whether an arrow key moves the selection: a focused live node, or the canvas's keyTarget, takes it. */
+  private arrowsMove(): boolean {
+    const nodes = useWorkflowStore.getState().nodes;
+    const focusedNode = this.focusedLiveNode();
+    if (focusedNode) return !!nodes.find((n) => n.id === focusedNode)?.selected;
+    const target = this.keyTarget;
+    if (!this.keyboardFocusOnCanvas() || !target) return false;
+    if (target.kind === "selection") return nodes.some((n) => n.selected);
+    const node = nodes.find((n) => n.id === target.id);
+    return !!node?.selected && node.draggable !== false;
   }
 
   /** The live node holding keyboard focus (React Flow focuses a node when it is clicked). */
@@ -368,8 +398,9 @@ export class Editor {
     }
     // A locked canvas's nodes do not take the pointer (React Flow gives them pointer-events none): a press on one is the pane's.
     const node = editing.locked ? -1 : this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
-    // A connection's end, outside the handle it meets, moves that end (React Flow's reconnect anchors).
-    if (node < 0 && !editing.locked && !keyHeld) {
+    // A connection's end, outside the handle it meets, moves that end (React Flow's reconnect anchors). A locked
+    // canvas still reconnects, as classic's anchors check neither the lock nor nodesConnectable (no line is drawn).
+    if (node < 0 && !keyHeld) {
       const end = this.edgeEndAt(at.x, at.y);
       if (end) return this.connectGesture(event, edgeEndHandle(scene.graph, end.edge, end.end === "source" ? "target" : "source"), end.edge);
     }
@@ -564,6 +595,7 @@ export class Editor {
    */
   private paneClick() {
     this.hideSelectionFrame();
+    this.keyTarget = null;
     if (!this.editing().locked) this.clearSelection();
     this.editing().onPaneClick();
   }
@@ -603,6 +635,8 @@ export class Editor {
    */
   clickNode(id: string, additive: boolean) {
     this.hideSelectionFrame();
+    // Classic's click focuses the node's wrapper, whether or not the selection changes.
+    this.keyTarget = { kind: "node", id };
     const node = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     if (!node || (node.selected && !additive)) return;
     this.selectNodes([id], additive);
@@ -636,6 +670,8 @@ export class Editor {
 
   private nodeGesture(event: PointerEvent, i: number): Gesture {
     const id = this.scene.graph.nodes[i].id;
+    // The press focuses the node, as its wrapper takes focus on classic (a live node's own element takes it itself).
+    this.keyTarget = { kind: "node", id };
     // A still press on a live node's button or link selects through the node's own click (LiveFlow's nodeClick),
     // which the button's stopPropagation cancels, as classic's NodeWrapper click.
     const onButton = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]") && liveButtonPress(event.target);
@@ -877,6 +913,8 @@ export class Editor {
           // Nodes taken: React Flow frames them (nodesSelectionActive).
           this.selectionFrameActive = true;
           this.placeSelectionFrame();
+          // React Flow focuses its NodesSelection rect as it shows: the arrows move the selection from there.
+          if (this.selectionFrameActive) this.keyTarget = { kind: "selection" };
         } else if (firstEdge) {
           const p = scene.local(event), w = scene.toWorld(p.x, p.y);
           useWorkflowStore.setState({ edgeMenuAnchor: { edgeId: firstEdge.id, x: w.x, y: w.y } });
@@ -922,6 +960,7 @@ export class Editor {
   private hideSelectionFrame() {
     if (!this.selectionFrameActive) return;
     this.selectionFrameActive = false;
+    if (this.keyTarget?.kind === "selection") this.keyTarget = null;
     this.selectionFrame.style.display = "none";
   }
 
@@ -1165,7 +1204,7 @@ export class Editor {
     // On a locked canvas the pointer passes through nodes to the pane (and the connections under them).
     const node = handle || this.editing().locked ? -1 : scene.nodeAt(at.x, at.y);
     // A connection's end shows React Flow's move cursor where a press would reconnect it.
-    const end = handle || node >= 0 || this.editing().disabled || this.editing().locked ? null : this.edgeEndAt(at.x, at.y);
+    const end = handle || node >= 0 || this.editing().disabled ? null : this.edgeEndAt(at.x, at.y);
     const edge = handle || node >= 0 ? -1 : end?.edge ?? scene.edgeAt(at.x, at.y);
     // The connection holding keyboard focus looks hovered while the pointer is on no other.
     const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
@@ -1220,8 +1259,9 @@ export class Editor {
   contextMenu = (event: MouseEvent) => {
     const editing = this.editing();
     const scene = this.scene, at = scene.local(event);
-    // A node, its header band or a painted handle is not the pane: the browser's own menu shows.
-    if (scene.nodeAt(at.x, at.y) >= 0 || this.paintedHandleAt(at.x, at.y)) return;
+    // A node, its header band or a painted handle is not the pane: the browser's own menu shows. On a locked
+    // canvas a node's body is (React Flow gives it pointer-events none); its floating header still takes the pointer.
+    if (!this.nodeIsPane(at.x, at.y) || this.paintedHandleAt(at.x, at.y)) return;
     // A connection's reconnect anchors are part of it. Its menu opens in every pan mode, as classic's
     // onEdgeContextMenu does (React Flow's pane swallows only presses on the pane itself).
     const e = this.edgeEndAt(at.x, at.y)?.edge ?? scene.edgeAt(at.x, at.y);
@@ -1235,6 +1275,17 @@ export class Editor {
     event.preventDefault();
     if (editing.disabled || editing.tutorial || editing.navigation.panMode === "middleMouse") return;
     editing.onPaneMenu(event.clientX, event.clientY);
+  };
+
+  /**
+   * Whether a point (css px) is no node's, for a double-click or a context menu: off every node and its
+   * header band, or on a locked canvas off every header band (the bodies let the pointer through, as classic's).
+   */
+  nodeIsPane = (cssX: number, cssY: number): boolean => {
+    const scene = this.scene;
+    if (!this.editing().locked) return scene.nodeAt(cssX, cssY) < 0;
+    const i = scene.nodeAt(cssX, cssY);
+    return i < 0 || scene.toWorld(cssX, cssY).y >= scene.graph.nodes[i].y;
   };
 
   /** A double-click on empty canvas (at a flow point) opens the add-node menu; on a connection or a handle it does nothing. */
