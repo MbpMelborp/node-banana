@@ -34,11 +34,12 @@ import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
 // Flow sets a node's pointer-events inline (none, since this flow selects and drags nothing), hence !important.
 // Its sockets start no connection of their own (the editor draws them), so React Flow's connectionindicator
-// cursor is given back here.
+// cursor is given back here. On a locked canvas the nodes take no pointer, as classic's (presses go to the scene's pane).
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel { pointer-events: all !important; }
   [data-gpu-canvas-live] .react-flow__node-gpuGhost { visibility: hidden; pointer-events: none !important; }
+  [data-gpu-canvas-live][data-locked] .react-flow__node { pointer-events: none !important; }
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
   [data-gpu-canvas-live] .react-flow__handle.connectable { cursor: crosshair; }
 `;

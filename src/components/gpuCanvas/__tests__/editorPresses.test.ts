@@ -188,6 +188,34 @@ describe("presses on the GPU canvas", () => {
     expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));
   });
 
+  it("on a locked canvas a press on a node is the pane's: a click is a pane click, a drag pans", () => {
+    settings = { ...settings, locked: true, navigation: { ...defaultCanvasNavigationSettings, panMode: "always" } };
+    const moves: number[] = [];
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => ({ move: (e: PointerEvent) => moves.push(e.clientX), up: noop, cancel: noop });
+    click(850, 100);
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
+    expect(selected()).toEqual(["a", "b"]);
+    drag([850, 100], [852, 100]);
+    expect(moves).toEqual([852]);
+    expect(useWorkflowStore.getState().nodes.find((n) => n.id === "c")!.position).toEqual({ x: 800, y: 0 });
+  });
+
+  it("empty canvas shows the pointer while a drag there would draw a marquee, following the selection key", () => {
+    (editor["scene"] as unknown as Record<string, unknown>).setHoveredEdge = noop;
+    const canvas = editor["scene"].canvas;
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "always" };
+    editor.idleMove(pointer(2000, 2000) as PointerEvent);
+    expect(canvas.style.cursor).toBe("");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
+    expect(canvas.style.cursor).toBe("pointer");
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift" }));
+    expect(canvas.style.cursor).toBe("");
+    // Over a node the key leaves the node's cursor alone.
+    editor.idleMove(pointer(850, 100) as PointerEvent);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
+    expect(canvas.style.cursor).toBe("grab");
+  });
+
   it("with the selection key held a drag from a handle draws a marquee; without it, it starts a connection", () => {
     useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
     editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 200 }]]);

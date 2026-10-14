@@ -127,6 +127,8 @@ function keyInField(event: KeyboardEvent) {
 export class Editor {
   private space = false;
   private hoveredHandle: string | null = null;
+  /** The pointer's last idle move found empty canvas, whose cursor follows the selection key (paneCursor). */
+  private idleOnPane = false;
   private overlay: SVGSVGElement;
   private marquee: HTMLDivElement;
   /** React Flow's NodesSelection: the dotted frame around the nodes a marquee selected, until a click or no node is selected. */
@@ -164,11 +166,18 @@ export class Editor {
       window.addEventListener(type, listener);
       this.offs.push(() => window.removeEventListener(type, listener));
     };
-    on("keydown", (event) => this.keyDown(event));
+    on("keydown", (event) => {
+      this.keyDown(event);
+      this.modifierChanged(event);
+    });
     on("keyup", (event) => {
       if (event.code === "Space") this.space = false;
+      this.modifierChanged(event);
     });
-    on("blur", () => { this.space = false; });
+    on("blur", () => {
+      this.space = false;
+      if (this.idleOnPane && !scene.interacting) scene.canvas.style.cursor = this.paneCursor(false, false);
+    });
   }
 
   dispose() {
@@ -317,7 +326,8 @@ export class Editor {
       const handle = this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y);
       if (handle) return this.connectGesture(event, handle);
     }
-    const node = this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
+    // A locked canvas's nodes do not take the pointer (React Flow gives them pointer-events none): a press on one is the pane's.
+    const node = editing.locked ? -1 : this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
     // A connection's end, outside the handle it meets, moves that end (React Flow's reconnect anchors).
     if (node < 0 && !editing.locked && !keyHeld) {
       const end = this.edgeEndAt(at.x, at.y);
@@ -623,6 +633,8 @@ export class Editor {
     // A marquee replaces the selection: it starts from none (React Flow's resetSelectedElements as it starts).
     this.hideSelectionFrame();
     this.clearSelection();
+    // The pane's cursor while a selection is under way (React Flow's userSelectionActive), wherever it started.
+    scene.canvas.style.cursor = "pointer";
     // Live nodes are judged by their cards as they show now, as NodeMarqueeSelection measures the DOM as it starts.
     const cards = this.liveCards();
     const update = (at: { x: number; y: number }) => {
@@ -936,15 +948,36 @@ export class Editor {
       if (handle) store.setHoveredHandle({ nodeId: scene.graph.nodes[handle.node].id, handleId: handle.handleId || null, type: handle.type });
       else if (hadOne) store.setHoveredHandle(null);
     }
-    const node = handle ? -1 : scene.nodeAt(at.x, at.y);
+    // On a locked canvas the pointer passes through nodes to the pane (and the connections under them).
+    const node = handle || this.editing().locked ? -1 : scene.nodeAt(at.x, at.y);
     // A connection's end shows React Flow's move cursor where a press would reconnect it.
     const end = handle || node >= 0 || this.editing().disabled || this.editing().locked ? null : this.edgeEndAt(at.x, at.y);
     const edge = handle || node >= 0 ? -1 : end?.edge ?? scene.edgeAt(at.x, at.y);
     // The connection holding keyboard focus looks hovered while the pointer is on no other.
     const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
     scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
-    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : end ? "move" : edge >= 0 ? "pointer" : "";
+    this.idleOnPane = !handle && node < 0 && edge < 0;
+    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : end ? "move" : edge >= 0 ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
   };
+
+  /**
+   * Empty canvas's cursor: the pointer while a drag there would draw a marquee, as React Flow's pane with its
+   * `selection` class (the selection key held, or selectionOnDrag while panOnDrag is not on; Space in the
+   * "space" pan mode turns panOnDrag on). No class while a dialog is open.
+   */
+  private paneCursor(shiftKey: boolean, altKey: boolean): string {
+    const editing = this.editing();
+    if (editing.disabled) return "";
+    const modifiers = { button: 0, shiftKey, altKey, ctrlKey: false, space: this.space && !editing.tutorial };
+    return paneDragAction(editing.navigation, modifiers, isMac) === "select" ? "pointer" : "";
+  }
+
+  /** The selection key (or Space) went down or up: empty canvas under the pointer takes its cursor at once. */
+  private modifierChanged(event: KeyboardEvent) {
+    if (event.key !== "Shift" && event.key !== "Alt" && event.code !== "Space") return;
+    if (!this.idleOnPane || this.scene.interacting) return;
+    this.scene.canvas.style.cursor = this.paneCursor(event.shiftKey, event.altKey);
+  }
 
   /** The scene's onContextMenu: the add-node menu on empty canvas, the connection menu on a connection. */
   contextMenu = (event: MouseEvent) => {

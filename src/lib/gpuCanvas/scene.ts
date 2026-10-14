@@ -297,18 +297,26 @@ const GRID_FRAGMENT = /* glsl */ `
   uniform vec2 uViewport;
   uniform vec3 uView;
   uniform float uDpr;
+  uniform float uGridAlpha;
   out vec4 outColor;
   void main() {
     vec2 css = vec2(gl_FragCoord.x, uViewport.y * uDpr - gl_FragCoord.y) / uDpr;
-    vec2 world = (css - uView.xy) / uView.z;
+    float z = uView.z;
+    vec2 world = (css - uView.xy) / z;
+    // React Flow's <Background gap={20} size={1}>: a pattern shifted back by 1 + gap/2 css px, each dot a
+    // circle of radius size/2 flow units at its tile's corner, so the dots sit a little over half a cell off
+    // the multiples of 20 and grow and shrink with the zoom.
+    float origin = -10.0 - (1.0 - 0.5 * z) / z;
     float spacing = 20.0;
-    // Coarser dots when they would crowd under 8 css px apart.
-    for (int i = 0; i < 6; i++) if (spacing * uView.z < 8.0) spacing *= 4.0;
-    vec2 cell = mod(world + spacing * 0.5, spacing) - spacing * 0.5;
-    float d = length(cell) * uView.z;
-    float dot_ = 1.0 - smoothstep(0.5, 1.2, d);
-    // bg-neutral-900 with #404040 dots, as the canvas draws them.
-    outColor = vec4(mix(vec3(0.090, 0.090, 0.090), vec3(0.251), dot_), 1.0);
+    // Coarser dots when they would crowd under 8 css px apart (every fourth of the ones above).
+    for (int i = 0; i < 6; i++) if (spacing * z < 8.0) spacing *= 4.0;
+    vec2 cell = mod(world - origin + spacing * 0.5, spacing) - spacing * 0.5;
+    // In device pixels, antialiased over one; a dot under a pixel fades by its area, as the SVG's does.
+    float r = 0.5 * z * uDpr;
+    float d = length(cell) * z * uDpr;
+    float dot_ = (1.0 - smoothstep(r - 0.5, r + 0.5, d)) * min(1.0, 4.0 * r * r);
+    // bg-neutral-900 with #404040 dots, as the canvas draws them (at uGridAlpha: the tutorial dims them).
+    outColor = vec4(mix(vec3(0.090, 0.090, 0.090), vec3(0.251), dot_ * uGridAlpha), 1.0);
   }
 `;
 
@@ -391,6 +399,7 @@ export class Scene {
   private edgeAttr: THREE.InstancedInterleavedBuffer | null = null;
   private edgeGeometry: THREE.InstancedBufferGeometry | null = null;
   private edgeUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uGradient: { value: 0 }, uFaded: { value: 1 } };
+  private gridUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uGridAlpha: { value: 1 } };
   /** Each edge's route, and where its segments start in the instance buffer. */
   private routes: (EdgeRoute | null)[] = [];
   private routeOffset: number[] = [];
@@ -449,7 +458,7 @@ export class Scene {
 
     const grid = new THREE.BufferGeometry();
     grid.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
-    this.add(new THREE.Mesh(grid, material(GRID_VERTEX, GRID_FRAGMENT, this.uniforms, false)), 0);
+    this.add(new THREE.Mesh(grid, material(GRID_VERTEX, GRID_FRAGMENT, this.gridUniforms, false)), 0);
     this.buildGraphMeshes();
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -741,6 +750,13 @@ export class Scene {
     const previous = this.hoveredEdge;
     this.hoveredEdge = e;
     this.touchEdgeList([previous, e]);
+  }
+
+  /** The dot grid's strength: 0.3 while the tutorial locks the canvas (classic's Background at opacity-30). */
+  setGridDim(alpha: number) {
+    if (this.gridUniforms.uGridAlpha.value === alpha) return;
+    this.gridUniforms.uGridAlpha.value = alpha;
+    this.dirty = true;
   }
 
   /** The edge appearance settings: the gradient and the faded opacity. */

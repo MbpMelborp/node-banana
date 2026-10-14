@@ -67,6 +67,8 @@ export interface GpuCanvasProps {
   wheelRoot?: RefObject<HTMLElement | null>;
   /** WorkflowCanvas's editing settings and handlers (connect, menus, group drops). */
   editing: GpuEditing;
+  /** The dot grid at 30%, as classic's Background while the tutorial locks the canvas. */
+  dimBackground?: boolean;
   /** Drawn over the canvas (the performance overlay, the agent button). */
   children?: ReactNode;
   /** Drawn inside the page's React Flow, in its viewport's context (group controls, the navigator). */
@@ -122,7 +124,7 @@ interface Loading {
   total: number;
 }
 
-export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheel, wheelRoot, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
+export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheel, wheelRoot, editing, dimBackground = false, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<HTMLDivElement>(null);
@@ -137,9 +139,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
   // The latest props, read by the engine without rebuilding it.
-  const propsRef = useRef({ headers, wheel, wheelRoot, editing, onFailure, onContextLost });
+  const propsRef = useRef({ headers, wheel, wheelRoot, editing, dimBackground, onFailure, onContextLost });
   useLayoutEffect(() => {
-    propsRef.current = { headers, wheel, wheelRoot, editing, onFailure, onContextLost };
+    propsRef.current = { headers, wheel, wheelRoot, editing, dimBackground, onFailure, onContextLost };
   });
   const loadCount = useWorkflowStore((state) => state.workflowLoadCount);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
@@ -257,6 +259,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     connectLive({ nodeClick: (id, additive) => editor.clickNode(id, additive) });
     // The routes above read the store: compute them now that the scene exists.
     scene.setEdgeAppearance(store.edgeAppearance.gradient, store.edgeAppearance.fadedOpacity);
+    scene.setGridDim(propsRef.current.dimBackground ? 0.3 : 1);
     scene.rerouteAll();
     live.setView(scene.view);
 
@@ -502,6 +505,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // The engine is built once per mount; props it needs later are read through propsRef.
   }, [types, liveConnection, connectLive]);
 
+  useEffect(() => {
+    engineRef.current?.scene.setGridDim(dimBackground ? 0.3 : 1);
+  }, [dimBackground]);
+
   // A workflow opened (or the canvas mounted): the tab's view, else the graph framed as today's
   // canvas frames it; painting starts over from the view, behind the loading screen when large.
   useEffect(() => {
@@ -547,7 +554,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     <div ref={hostRef} className="absolute inset-0 overflow-hidden bg-neutral-900" data-gpu-canvas="">
       {/* select-none: as globals.css gives React Flow's pane (Chromium need not hit-test the canvas to extend a selection). */}
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none select-none" />
-      <div ref={liveRef} data-gpu-canvas-live="" className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div ref={liveRef} data-gpu-canvas-live="" data-locked={editing.locked ? "" : undefined} className="pointer-events-none absolute inset-0 overflow-hidden">
         <LiveFlow connect={connectLive} onViewChanged={liveViewChanged} initialView={initialView} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
           onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick} onMeasured={liveMeasured}>
           {flowChildren}

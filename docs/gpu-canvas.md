@@ -281,7 +281,14 @@ The scene takes every press and asks the editor what it starts:
   a bundle's shared stem counting for the connection that draws it. Nodes
   it took are framed (React Flow's dotted `NodesSelection`) until a click or
   until none is selected. Its start is held in flow coordinates, so a
-  wheel pan or pinch mid-marquee keeps it on the same canvas spot.
+  wheel pan or pinch mid-marquee keeps it on the same canvas spot. Empty
+  canvas shows the pointer cursor while a drag there would draw a marquee
+  (the selection key held, or the Mac default), changing as the key goes
+  down or up, as React Flow's pane with its `selection` class.
+- On a locked canvas nodes take no pointer, as React Flow gives them
+  `pointer-events: none`: a press on one is the pane's (a drag pans as the
+  pan mode says, a click is a pane click), and live nodes' controls are
+  inert. Sockets still connect.
 - Every change in the selected nodes or connections, a press's or the
   store's own (paste, undo, the agent), reaches WorkflowCanvas's
   `handleSelectionChange` once it is through, as React Flow's
@@ -325,7 +332,11 @@ The scene takes every press and asks the editor what it starts:
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
   the live flow's too). Fit view frames every node as React Flow's
   `fitView` (10% padding); a minimap click glides the view there over 250
-  ms. A move the page asks of the flow (`setCenter` or `fitView` with a
+  ms. The minimap pans from the first move and zooms by React Flow's
+  minimap step (line and pixel deltas, a Mac pinch ten times over).
+- The dot grid is React Flow's `<Background gap={20} size={1}>`: the same
+  offset, dots of half a flow unit's radius that grow and shrink with the
+  zoom, at 30% while the tutorial locks the canvas. A move the page asks of the flow (`setCenter` or `fitView` with a
   duration) runs to its end: the scene follows the flow's transition
   without handing the view back, which would interrupt it.
 - On empty canvas a drag that pans moves the view from the first pixel

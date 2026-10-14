@@ -2744,6 +2744,7 @@ export function WorkflowCanvas() {
           wheel={gpuWheel}
           wheelRoot={reactFlowWrapper}
           editing={gpuEditing}
+          dimBackground={tutorialActive && lockedFeatures}
           flowChildren={
             <>
               <GroupControlsOverlay />

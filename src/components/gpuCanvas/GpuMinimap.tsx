@@ -21,6 +21,8 @@ interface GpuMinimapProps {
 
 /** Flow units on either side of the nodes and view, as React Flow's MiniMap pads them. */
 const OFFSET_SCALE = 5;
+/** React Flow's isMacOs, which its minimap's pinch factor reads. */
+const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac");
 
 export function GpuMinimap({ width, height, className, bgColor, maskColor, maskStrokeColor }: GpuMinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -83,17 +85,18 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       const box = canvas.getBoundingClientRect();
       return { x: (event.clientX - box.left) / fit.scale + fit.x, y: (event.clientY - box.top) / fit.scale + fit.y };
     };
-    let drag: { x: number; y: number; moved: boolean } | null = null;
+    // The view follows from the first move, as React Flow's minimap pans; past 3px the release is no click.
+    let drag: { x: number; y: number; startX: number; startY: number; moved: boolean } | null = null;
     const down = (event: PointerEvent) => {
       if (event.button !== 0) return;
       canvas.setPointerCapture(event.pointerId);
-      drag = { x: event.clientX, y: event.clientY, moved: false };
+      drag = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false };
     };
     const move = (event: PointerEvent) => {
       if (!drag) return;
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-      if (!drag.moved && Math.hypot(dx, dy) < 3) return;
-      drag.moved = true;
+      if (!dx && !dy) return;
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= 3) drag.moved = true;
       drag.x = event.clientX;
       drag.y = event.clientY;
       const view = bridge.view();
@@ -110,7 +113,10 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
     const wheel = (event: WheelEvent) => {
       event.preventDefault();
       const view = bridge.view(), size = bridge.size();
-      const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * Math.exp(-event.deltaY * 0.002)));
+      // React Flow's minimap step: by line, page or pixel deltas, ten times a Mac pinch's (Ctrl) deltas.
+      const step = event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002;
+      const factor = event.ctrlKey && isMac ? 10 : 1;
+      const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * Math.pow(2, -event.deltaY * step * factor)));
       // Zoom about the middle of the view, as React Flow's minimap does.
       const cx = (size.width / 2 - view.x) / view.zoom, cy = (size.height / 2 - view.y) / view.zoom;
       bridge.setView({ zoom, x: size.width / 2 - cx * zoom, y: size.height / 2 - cy * zoom });
