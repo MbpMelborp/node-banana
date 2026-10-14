@@ -29,10 +29,11 @@ import { setGpuCanvasBridge } from "./bridge";
 import { LiveContent } from "./liveContent";
 import { watchOutputAutoRun } from "@/lib/gpuCanvas/outputAutoRun";
 import { routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
+import { dimOpacities } from "@/lib/gpuCanvas/dimming";
 import type { HookPath } from "@/components/edges/EdgeHookSelection";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
 import { OVERVIEW_ZOOM_THRESHOLD } from "@/utils/canvasPerformance";
-import { boundedNodeTypes, HEADER, noop, PAD, type HeaderProps } from "./nodeSheets";
+import { boundedNodeTypes, HEADER, noop, PAD, PAD_X, type HeaderProps } from "./nodeSheets";
 
 /** Workflows at least this large open behind the loading screen while they paint. */
 const LOADING_MIN_NODES = 150;
@@ -330,8 +331,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       } else {
         if (moved.length) {
           scene.nodesMoved(moved);
-          // Painted nodes that moved mask the live connections they now lie over (LiveLayer's EdgeMask).
-          if (live.hasEdges) live.refresh();
+          // Painted nodes that moved mask the live connections they now lie over (LiveLayer's EdgeMask), and a
+          // live node moved or resized from the store (its resize grips) takes its new box from the graph.
+          if (live.hasEdges || moved.some((i) => live.live.has(scene.graph.nodes[i].id))) live.refresh();
         }
         // What a node's connections show can follow its data (a run's loading pulse, a bundle's clamp).
         const edges = new Set<number>();
@@ -372,7 +374,16 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       live.setEdges(ids);
     };
     showLiveEdges();
+    // Nodes downstream of a disabled Switch output and skipped ones are dimmed, as classic's classes dim them.
+    const showDimming = (instant = false) => {
+      const { dimmedNodeIds, skippedNodeIds } = useWorkflowStore.getState();
+      const typeOf = (id: string) => scene.graph.nodes[scene.graph.indexOf.get(id) ?? -1]?.type;
+      scene.setNodeOpacity(dimOpacities(typeOf, dimmedNodeIds, skippedNodeIds), instant);
+    };
+    showDimming(true);
+
     const unsubscribeStore = useWorkflowStore.subscribe((state, previous) => {
+      if (state.dimmedNodeIds !== previous.dimmedNodeIds || state.skippedNodeIds !== previous.skippedNodeIds) showDimming();
       if (state.edgeAppearance !== previous.edgeAppearance) scene.setEdgeAppearance(state.edgeAppearance.gradient, state.edgeAppearance.fadedOpacity);
       if (state.edgeStyle !== previous.edgeStyle || state.edgeAppearance.thickness !== previous.edgeAppearance.thickness || state.edgeAppearance.loadingPulse !== previous.edgeAppearance.loadingPulse) {
         scene.rerouteAll();
@@ -485,8 +496,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       paintRect: (id) => {
         const i = scene.graph.indexOf.get(id);
         if (i == null) return null;
-        const n = scene.graph.nodes[i], a = scene.toScreen(n.x - PAD, n.y - HEADER), z = scene.view.zoom;
-        return { x: a.x, y: a.y, width: (n.w + PAD * 2) * z, height: (n.h + HEADER + PAD) * z };
+        const n = scene.graph.nodes[i], a = scene.toScreen(n.x - PAD_X, n.y - HEADER), z = scene.view.zoom;
+        return { x: a.x, y: a.y, width: (n.w + PAD_X * 2) * z, height: (n.h + HEADER + PAD) * z };
       },
       nodeAt: (x, y) => {
         const i = scene.nodeAt(x, y);

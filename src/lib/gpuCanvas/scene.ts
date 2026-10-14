@@ -19,8 +19,11 @@ import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 
-/** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the rect (4), unused (3). */
-const NODE_STRIDE = 20;
+/**
+ * Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the
+ * rect (4), opacity (1), unused (2), its media card's box within the rect (4).
+ */
+const NODE_STRIDE = 24;
 const FLAG_SELECTED = 1, FLAG_HOVERED = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG_PAINTED = 16, FLAG_RUNNING = 32;
 /**
  * Floats per edge instance, one cubic segment of a connection: the cubic (8),
@@ -49,6 +52,8 @@ function drawnPieces(route: EdgeRoute): Cubic[] {
 }
 /** The segment starts or ends its connection, and so takes a round cap there (joints inside a route take none, or they would overlap and darken). */
 export const EDGE_CAP_START = 64, EDGE_CAP_END = 128;
+/** How long a node's opacity takes to change (classic's .switch-dimmed / .node-skipped transition). */
+const FADE_MS = 250;
 /** How near (css px) past its stroke a press must be to a connection to take it, at least. */
 const EDGE_HIT_PX = 7;
 /** How near (flow units) a press must be to a connection's centre line: half React Flow's default interactionWidth (20). */
@@ -87,6 +92,9 @@ const COMMON = /* glsl */ `
   }
 `;
 
+/** --color-selection (#3b82f6). */
+const SELECTION_GLSL = "const vec3 SELECTION = vec3(0.231, 0.510, 0.965);";
+
 const NODE_VERTEX = /* glsl */ `
   precision highp float;
   ${COMMON}
@@ -98,6 +106,8 @@ const NODE_VERTEX = /* glsl */ `
   in float iFlags;
   in float iLayer;
   in vec4 iBox;
+  in float iAlpha;
+  in vec4 iCard;
   out vec2 vLocal;
   out vec2 vSize;
   out vec4 vUv;
@@ -105,9 +115,13 @@ const NODE_VERTEX = /* glsl */ `
   flat out int vFlags;
   flat out float vLayer;
   flat out vec4 vBox;
+  flat out float vAlpha;
+  flat out vec4 vCard;
   void main() {
     vFlags = int(iFlags);
     vBox = iBox;
+    vAlpha = iAlpha;
+    vCard = iCard;
     if ((vFlags & ${FLAG_HIDDEN}) != 0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     // Room for the outline and antialiasing (and the running halo, for its pass).
     float pad = uPad / uView.z;
@@ -133,8 +147,11 @@ const NODE_FRAGMENT = /* glsl */ `
   flat in int vFlags;
   flat in float vLayer;
   flat in vec4 vBox;
+  flat in float vAlpha;
+  flat in vec4 vCard;
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+  ${SELECTION_GLSL}
   void main() {
     float px = 1.0 / uView.z;   // flow units per css pixel
     if ((vFlags & ${FLAG_GROUP}) != 0) {
@@ -149,6 +166,8 @@ const NODE_FRAGMENT = /* glsl */ `
       // The image holds the node, its header and its margin; the outline is drawn by the live node's own frame when selected.
       if (any(lessThan(vLocal, vec2(0.0))) || any(greaterThan(vLocal, vSize))) discard;
       outColor = texture(uPainted, vec3(mix(vUv.xy, vUv.zw, vLocal / vSize), vLayer));
+      // A dimmed node fades as classic's node element does; its floating header, above it, does not.
+      if (vLocal.y >= vBox.y) outColor.a *= vAlpha;
       return;
     }
     // The stand-in card: the node's body in its type's colour stripe.
@@ -162,17 +181,20 @@ const NODE_FRAGMENT = /* glsl */ `
       if (line < 9.0 && vLocal.x > 14.0 && vLocal.x < vSize.x - 14.0 - mod(vLocal.y * 7.0, 60.0)) color = vec3(0.2);
     }
     float alpha = inside;
-    if ((vFlags & (${FLAG_SELECTED} | ${FLAG_HOVERED})) != 0) {
+    if ((vFlags & ${FLAG_SELECTED}) != 0) {
       float ring = clamp(1.0 - abs(d - 1.5 * px) / (1.5 * px), 0.0, 1.0);
-      vec3 ringColor = (vFlags & ${FLAG_SELECTED}) != 0 ? vec3(0.32, 0.6, 1.0) : vec3(0.5);
-      color = mix(color, ringColor, ring);
+      color = mix(color, SELECTION, ring);
       alpha = max(alpha, ring);
     }
-    outColor = vec4(color, alpha);
+    outColor = vec4(color, alpha * vAlpha);
   }
 `;
 
-/** Outlines over painted nodes (selection and hover), drawn after them. */
+/**
+ * A selected painted node's outline, drawn after the nodes (it shows only while the node is swapping in, as a
+ * selected node is live): classic's on the media card (NodeShell), a 1px border in the selection colour, a 2px
+ * ring at 40% and shadow-lg at 25% (0 10px 15px -3px and 0 4px 6px -4px), outside the card.
+ */
 const OUTLINE_FRAGMENT = /* glsl */ `
   precision highp float;
   uniform vec3 uView;
@@ -183,17 +205,28 @@ const OUTLINE_FRAGMENT = /* glsl */ `
   flat in int vFlags;
   flat in float vLayer;
   flat in vec4 vBox;
+  flat in float vAlpha;
+  flat in vec4 vCard;
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+  ${SELECTION_GLSL}
   void main() {
-    if ((vFlags & ${FLAG_PAINTED}) == 0 || (vFlags & (${FLAG_SELECTED} | ${FLAG_HOVERED})) == 0) discard;
+    if ((vFlags & ${FLAG_PAINTED}) == 0 || (vFlags & ${FLAG_SELECTED}) == 0) discard;
     float px = 1.0 / uView.z;
-    // The node's own rectangle within the painted quad.
-    vec2 half_ = vBox.zw * 0.5;
-    float d = box(vLocal - vBox.xy - half_, half_, 12.0);
-    float ring = clamp(1.0 - abs(d - 1.5 * px) / (1.5 * px), 0.0, 1.0);
-    vec3 ringColor = (vFlags & ${FLAG_SELECTED}) != 0 ? vec3(0.32, 0.6, 1.0) : vec3(0.5);
-    outColor = vec4(ringColor, ring);
+    // The media card's rectangle within the painted quad (flow units are the node's css px).
+    vec2 half_ = vCard.zw * 0.5;
+    vec2 p = vLocal - vCard.xy - half_;
+    float d = box(p, half_, 12.0);
+    float inside = clamp(0.5 - d / px, 0.0, 1.0);
+    float border = inside * clamp(0.5 + (d + 1.0) / px, 0.0, 1.0);
+    float ring = (1.0 - inside) * clamp(0.5 - (d - 2.0) / px, 0.0, 1.0) * 0.4;
+    // Each shadow is its shape (offset, shrunk by its spread) blurred over its blur radius.
+    float lg = 1.0 - smoothstep(-15.0, 15.0, box(p - vec2(0.0, 10.0), max(half_ - 3.0, 0.0), 9.0));
+    float sm = 1.0 - smoothstep(-6.0, 6.0, box(p - vec2(0.0, 4.0), max(half_ - 4.0, 0.0), 8.0));
+    float shadow = (1.0 - inside) * (1.0 - (1.0 - lg * 0.25) * (1.0 - sm * 0.25));
+    float alpha = max(border, 1.0 - (1.0 - shadow) * (1.0 - ring)) * vAlpha;
+    if (alpha <= 0.0) discard;
+    outColor = vec4(SELECTION, alpha);
   }
 `;
 
@@ -214,6 +247,8 @@ const HALO_FRAGMENT = /* glsl */ `
   flat in int vFlags;
   flat in float vLayer;
   flat in vec4 vBox;
+  flat in float vAlpha;
+  flat in vec4 vCard;
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
   void main() {
@@ -441,10 +476,14 @@ export class Scene {
   private nodeData = new Float32Array(0);
   private nodeAttr: THREE.InstancedInterleavedBuffer | null = null;
   private nodeUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPainted: { value: EMPTY_ARRAY }, uPad: { value: 3 } };
+  /** Room past a painted node's quad for its selection shadow below the card. */
+  private outlineUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPad: { value: 24 } };
   private haloUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPad: { value: 16 }, uTime: { value: 0 }, uMotion: { value: 1 } };
   private haloMesh: THREE.Mesh | null = null;
   /** Nodes a run is on, by id (they keep it across graph rebuilds). */
   private running = new Set<string>();
+  /** Nodes not at full opacity, or fading to or from it, by id: they keep it across graph rebuilds. */
+  private fades = new Map<string, { from: number; to: number; start: number }>();
   private reducedMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
   private edgeData = new Float32Array(0);
   private edgeAttr: THREE.InstancedInterleavedBuffer | null = null;
@@ -551,7 +590,7 @@ export class Scene {
 
     if (graph.groups.length) {
       const data = new Float32Array(graph.groups.length * NODE_STRIDE);
-      graph.groups.forEach((g, i) => data.set([g.x, g.y, g.w, g.h, 0, 0, 0, 0, ...g.color, FLAG_GROUP, 0, 0, 0, g.w, g.h], i * NODE_STRIDE));
+      graph.groups.forEach((g, i) => data.set([g.x, g.y, g.w, g.h, 0, 0, 0, 0, ...g.color, FLAG_GROUP, 0, 0, 0, g.w, g.h, 1], i * NODE_STRIDE));
       const { geometry } = this.nodeGeometry(data, graph.groups.length);
       this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, this.nodeUniforms)), 1);
     }
@@ -565,7 +604,7 @@ export class Scene {
     this.nodeAttr = attr;
     this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, this.nodeUniforms)), 3);
     // The same instances again, drawing only outlines over painted nodes.
-    this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, OUTLINE_FRAGMENT, this.nodeUniforms)), 4);
+    this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, OUTLINE_FRAGMENT, this.outlineUniforms)), 4);
     // And again for running nodes' halos, shown only zoomed out.
     this.haloMesh = new THREE.Mesh(geometry, material(NODE_VERTEX, HALO_FRAGMENT, this.haloUniforms));
     this.addGraphMesh(this.haloMesh, 5);
@@ -589,6 +628,8 @@ export class Scene {
     geometry.setAttribute("iFlags", new THREE.InterleavedBufferAttribute(attr, 1, 11));
     geometry.setAttribute("iLayer", new THREE.InterleavedBufferAttribute(attr, 1, 12));
     geometry.setAttribute("iBox", new THREE.InterleavedBufferAttribute(attr, 4, 13));
+    geometry.setAttribute("iAlpha", new THREE.InterleavedBufferAttribute(attr, 1, 17));
+    geometry.setAttribute("iCard", new THREE.InterleavedBufferAttribute(attr, 4, 20));
     geometry.instanceCount = count;
     return { geometry, attr };
   }
@@ -599,13 +640,17 @@ export class Scene {
     if (this.selected.has(i)) flags |= FLAG_SELECTED;
     if (this.hovered === i) flags |= FLAG_HOVERED;
     if (this.running.has(node.id)) flags |= FLAG_RUNNING;
-    const painted = this.painted.get(i);
+    const painted = this.painted.get(i), alpha = this.opacityOf(node.id, performance.now());
+    // The media card's box, once measured (the node's own box until then).
+    const card = node.card ?? { x: 0, y: 0, w: node.w, h: node.h };
     if (painted) {
       this.nodeData.set([node.x + painted.x, node.y + painted.y, painted.w, painted.h, painted.u0, painted.v0, painted.u1, painted.v1,
-        ...node.color, flags | FLAG_PAINTED, painted.layer, -painted.x, -painted.y, node.w, node.h], i * NODE_STRIDE);
+        ...node.color, flags | FLAG_PAINTED, painted.layer, -painted.x, -painted.y, node.w, node.h, alpha, 0, 0,
+        card.x - painted.x, card.y - painted.y, card.w, card.h], i * NODE_STRIDE);
       return;
     }
-    this.nodeData.set([node.x, node.y, node.w, node.h, 0, 0, 0, 0, ...node.color, flags, 0, 0, 0, node.w, node.h], i * NODE_STRIDE);
+    this.nodeData.set([node.x, node.y, node.w, node.h, 0, 0, 0, 0, ...node.color, flags, 0, 0, 0, node.w, node.h, alpha, 0, 0,
+      card.x, card.y, card.w, card.h], i * NODE_STRIDE);
   }
 
   private touchNode(i: number) {
@@ -967,6 +1012,44 @@ export class Scene {
     for (const id of changed) {
       const i = this.graph.indexOf.get(id);
       if (i != null) this.touchNode(i);
+    }
+  }
+
+  /**
+   * Each node's opacity (absent: 1), as classic dims nodes downstream of a disabled Switch output and
+   * skipped ones. A change fades over 250 ms, as their CSS transition does; `instant` sets it at once
+   * (a workflow opened dimmed shows so from its first frame, as a node mounted with the class does).
+   */
+  setNodeOpacity(targets: ReadonlyMap<string, number>, instant = false) {
+    const now = performance.now();
+    for (const id of new Set([...this.fades.keys(), ...targets.keys()])) {
+      const to = targets.get(id) ?? 1, fade = this.fades.get(id);
+      if ((fade?.to ?? 1) === to && !instant) continue;
+      if (instant && to === 1) this.fades.delete(id);
+      else this.fades.set(id, { from: instant ? to : this.opacityOf(id, now), to, start: now });
+      const i = this.graph.indexOf.get(id);
+      if (i != null) this.touchNode(i);
+    }
+  }
+
+  /** A node's opacity at a time, along its fade. */
+  private opacityOf(id: string, now: number): number {
+    const fade = this.fades.get(id);
+    if (!fade) return 1;
+    const t = Math.min(1, Math.max(0, (now - fade.start) / FADE_MS));
+    return fade.from + (fade.to - fade.from) * easeCubicInOut(t);
+  }
+
+  /** Redraws the nodes still fading; forgets those back at full opacity. */
+  private stepFades(now: number) {
+    for (const [id, fade] of this.fades) {
+      if (fade.from === fade.to) continue;
+      const i = this.graph.indexOf.get(id);
+      if (i != null) this.touchNode(i);
+      if (now - fade.start >= FADE_MS) {
+        if (fade.to === 1) this.fades.delete(id);
+        else fade.from = fade.to;
+      }
     }
   }
 
@@ -1346,6 +1429,7 @@ export class Scene {
     if (this.disposed) return;
     this.frameHandle = requestAnimationFrame(this.tick);
     if (this.hoverStale) this.updateHover();
+    if (this.fades.size) this.stepFades(performance.now());
     let jsMs = 0;
     const halo = this.haloShown();
     if (this.haloMesh) this.haloMesh.visible = halo;

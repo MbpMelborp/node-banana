@@ -49,7 +49,7 @@ out.
 | Part | File | What it does |
 |------|------|--------------|
 | Scene graph | `src/lib/gpuCanvas/graph.ts` | Nodes, edges and groups as flat arrays plus a grid index, kept in step with the store; positions move in place, an add or remove rebuilds |
-| Scene | `src/lib/gpuCanvas/scene.ts` | WebGL2: dot grid, groups, instanced node quads reading the atlas, instanced edge segments, selection and hover outlines. Owns pan, zoom and the pointer, handing presses to the editor |
+| Scene | `src/lib/gpuCanvas/scene.ts` | WebGL2: dot grid, groups, instanced node quads reading the atlas, instanced edge segments, the selection outline of a node still swapping in (classic's card border, ring and shadow). Owns pan, zoom and the pointer, handing presses to the editor |
 | Edge routes | `src/lib/edges/route.ts`, `src/lib/gpuCanvas/edgeRoutes.ts` | The route today's edges draw (curved, angular, straight, hooks, loops), shared with `EditableEdge`, read into cubic segments for the scene, with bundles' stems, reference dashes and loading state |
 | Editor | `src/components/gpuCanvas/editor.ts`, `src/lib/gpuCanvas/gestures.ts` | Drag, connect, the marquee, edge clicks, Delete and the context menus, against painted handles and media cards; what a drag on the pane does follows the navigation settings as WorkflowCanvas's React Flow props do |
 | Paint keys | `src/lib/gpuCanvas/paintKey.ts` | A hash of what a node's picture shows: type, width, data, socket connections and the keys of what feeds it, so a change anywhere upstream reaches it. Position and selection are not in it |
@@ -152,6 +152,17 @@ measures of a live node (its height, its handles) also goes to the scene, so
 presses, the marquee and its connections follow a node that grew or shrank
 since it was painted; once it is painted again the scene takes the painted
 measure back.
+
+Neither flow holds every connection (the sheet holds none, the live layer
+only those it decorates), so sockets read whether they are connected from the
+store's edges (`StoreSocketConnections`) rather than React Flow's lookup. A
+painted image takes in the node's sockets' full swell and ring at its sides
+(`PAD_X`). A selected node's width grips work as classic's: React Flow's
+resize and NodeShell's widths for the other selected nodes (and the
+double-click reset) reach the store (`resizeChanges`). Nodes classic dims
+(downstream of a disabled Switch output, skipped) take its classes when live
+and fade to the same opacity in the scene, over the same 250 ms, their
+floating header left as it is.
 
 Live nodes take the pointer: React Flow sets `pointer-events: none` inline
 on nodes it cannot select or drag, which is every node of the live flow, so

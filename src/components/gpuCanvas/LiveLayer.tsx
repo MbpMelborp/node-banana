@@ -21,14 +21,17 @@ import { flushSync } from "react-dom";
 import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
+import { StoreSocketConnections } from "@/components/nodes/ui/socketConnections";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import type { HandleAnchor, SceneNode } from "@/lib/gpuCanvas/graph";
 import { paintedCover } from "@/lib/gpuCanvas/edgeRoutes";
+import { dimClassName } from "@/lib/gpuCanvas/dimming";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
+import type { WorkflowNode } from "@/types";
 import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
@@ -179,8 +182,13 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const store = useWorkflowStore.getState();
     for (const change of changes) if (change.type === "dimensions" && change.dimensions && realIds.has(change.id)) onMeasured(change.id);
+    // A selected node's width grips (NodeShell's NodeResizeControl): as on classic, React Flow's resize (its width,
+    // and its position from the left grip) and NodeShell's setNodes for the other selected nodes and a
+    // double-click reset reach the store; the layer re-renders the nodes at the widths the store then holds.
+    const resized = resizeChanges(changes, realIds, store.nodes);
+    if (resized.length) store.onNodesChange(resized);
     const measured = changes.filter((change): change is NodeDimensionChange => {
-      if (change.type !== "dimensions" || !change.dimensions || !realIds.has(change.id)) return false;
+      if (change.type !== "dimensions" || change.resizing !== undefined || !change.dimensions || !realIds.has(change.id)) return false;
       const k = indexOfNode(store.nodes, change.id);
       const known = k < 0 ? undefined : store.nodes[k].measured;
       return k >= 0 && !(known?.width != null && known.height != null && Math.abs(known.width - change.dimensions.width) <= 0.5 && Math.abs(known.height - change.dimensions.height) <= 0.5);
@@ -194,17 +202,20 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   }, [onNodeClick]);
   return (
     <HoldLiveProvider hold={hold}>
-      <style>{LIVE_STYLE}</style>
-      <EdgeMask cover={state.cover} />
-      <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
-        defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
-        nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
-        zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
-        panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
-        <ViewSync connect={connect} onViewChanged={onViewChanged} />
-        <FloatingNodeHeaders nodes={real} {...headers} />
-        {children}
-      </ReactFlow>
+      {/* The flow holds only the connections it decorates: sockets show the store's. */}
+      <StoreSocketConnections>
+        <style>{LIVE_STYLE}</style>
+        <EdgeMask cover={state.cover} />
+        <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
+          defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
+          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
+          zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
+          panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
+          <ViewSync connect={connect} onViewChanged={onViewChanged} />
+          <FloatingNodeHeaders nodes={real} {...headers} />
+          {children}
+        </ReactFlow>
+      </StoreSocketConnections>
     </HoldLiveProvider>
   );
 }
@@ -292,8 +303,12 @@ export class LiveLayer {
         this.followingFlow = false;
       }
     };
+    // Live nodes are dimmed as classic's are (its .switch-dimmed / .node-skipped).
+    const unsubscribeDim = useWorkflowStore.subscribe((state, previous) => {
+      if ((state.dimmedNodeIds !== previous.dimmedNodeIds || state.skippedNodeIds !== previous.skippedNodeIds) && (this.live.size || this.wanted.size || this.leaving.size)) void this.render();
+    });
     // Live nodes show the store's data as it changes.
-    this.unsubscribe = subscribeToWorkflowNodeChanges((changes) => {
+    const unsubscribeNodes = subscribeToWorkflowNodeChanges((changes) => {
       for (const id of changes.updated) if (this.live.has(id) || this.wanted.has(id) || this.leaving.has(id)) {
         void this.render();
         return;
@@ -304,6 +319,10 @@ export class LiveLayer {
         return;
       }
     });
+    this.unsubscribe = () => {
+      unsubscribeDim();
+      unsubscribeNodes();
+    };
   }
 
   private setNodes(next: FlowState, sync = false) {
@@ -415,7 +434,7 @@ export class LiveLayer {
 
   /** The nodes the layer renders (wanted ones and those still leaving), and the live connections with stand-ins for their painted ends. */
   private render(sync = false): Promise<void> {
-    const { nodes } = useWorkflowStore.getState();
+    const { nodes, dimmedNodeIds, skippedNodeIds } = useWorkflowStore.getState();
     const graph = this.scene.graph;
     const flowNodes: Node[] = [];
     const present = new Set<string>();
@@ -427,7 +446,7 @@ export class LiveLayer {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
-      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected);
+      const node = flowNode(nodes[i], n.x, n.y, n.w, !!nodes[i].selected, dimClassName(id, nodes[i].type, dimmedNodeIds, skippedNodeIds));
       const measured = lookup?.get(id)?.measured;
       if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
       flowNodes.push(node);
@@ -557,6 +576,32 @@ export function pressGoesToScene(target: Element): boolean {
   if (target.closest(".react-flow__handle")) return true;
   const kept = target.closest(".react-flow__node") ? "input, textarea, select, [contenteditable='true'], .nodrag" : "input, textarea, select, button, a, [contenteditable='true'], .nodrag";
   return !target.closest(kept);
+}
+
+/**
+ * What of a live flow's node changes is a resize, as store changes: React Flow's own resize ("dimensions"
+ * changes that carry `resizing`, and the position changes sent with them), and widths NodeShell sets through
+ * setNodes ("replace" changes, as the store's node at that width). Anything else a replace carries (the layer's
+ * position, selection, its own copy of the data) is the layer's, not the store's, and is left out.
+ */
+export function resizeChanges(changes: readonly NodeChange[], realIds: ReadonlySet<string>, storeNodes: readonly WorkflowNode[]): NodeChange<WorkflowNode>[] {
+  const resizing = changes.some((change) => change.type === "dimensions" && change.resizing !== undefined && realIds.has(change.id));
+  const out: NodeChange<WorkflowNode>[] = [];
+  for (const change of changes) {
+    if (change.type === "remove" || change.type === "add" || !realIds.has(change.id)) continue;
+    if (change.type === "dimensions" && change.resizing !== undefined) out.push(change);
+    else if (change.type === "position" && resizing && change.position && !change.dragging) out.push(change);
+    else if (change.type === "replace") {
+      const k = indexOfNode(storeNodes, change.id);
+      const item = change.item as Node, style = item.style?.width;
+      const width = item.width ?? (typeof style === "number" ? style : undefined);
+      if (k < 0 || width == null) continue;
+      const node = storeNodes[k];
+      if (node.width === width && node.style?.width === width) continue;
+      out.push({ type: "replace", id: node.id, item: { ...node, width, style: { ...node.style, width } } });
+    }
+  }
+  return out;
 }
 
 /** The live node (not a stand-in) an element belongs to. */

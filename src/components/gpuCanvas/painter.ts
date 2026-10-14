@@ -42,7 +42,7 @@ import { BACKGROUND, EIGHTH, PREFETCH, PaintQueue, URGENT, VIEW, packSheet, tier
 import { cachedHandle, cacheKey, deflate, handleFromCache, inflate, PAINT_CACHE_BYTES, PAINT_CACHE_FORMAT, type CachedHandle, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { PainterSheet } from "./PainterSheet";
-import { flowNode, HEADER, nextFrame, noop, PAD, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
+import { flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
 
 /** A sheet's size in device pixels while the canvas is in use: one upload is about 12 MB. */
 const SHEET_TEXELS = { w: 2048, h: 1536 };
@@ -573,7 +573,7 @@ export class Painter {
     const i = this.scene.graph.indexOf.get(id);
     const n = i == null ? undefined : this.scene.graph.nodes[i];
     const height = this.paints.get(id)?.height ?? (n ? n.h : 300);
-    return { w: (n?.w ?? 300) + PAD * 2, h: height + HEADER + PAD };
+    return { w: (n?.w ?? 300) + PAD_X * 2, h: height + HEADER + PAD };
   }
 
   private sheetFlowSize(zoom: number) {
@@ -620,7 +620,7 @@ export class Painter {
       packSheet(list.map((r) => ({ key: r.id, w: this.boxOf(r.id).w, h: heights(r.id) + HEADER + PAD })), sheet.width, sheet.height, sheet.gap);
     const sheetNodes = (list: PaintRequest[], placed: Map<string, { x: number; y: number }>) => list.flatMap((r) => {
       const node = sourceOf(r.id), at = placed.get(r.id), n = this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id)!];
-      return node && at && n ? [flowNode(node, at.x + PAD, at.y + HEADER, n.w)] : [];
+      return node && at && n ? [flowNode(node, at.x + PAD_X, at.y + HEADER, n.w)] : [];
     });
 
     // First pass at estimated heights, to measure.
@@ -656,7 +656,7 @@ export class Painter {
     if (moved || fits.length !== misses.length) await this.sheet.render(sheetNodes(fits, placed), zoom);
     const nodePositions = new Map(fits.map((r) => {
       const p = placed.get(r.id)!;
-      return [r.id, { x: p.x + PAD, y: p.y + HEADER }];
+      return [r.id, { x: p.x + PAD_X, y: p.y + HEADER }];
     }));
     const inPlace = await this.sheet.positioned(nodePositions, 2000, () => this.disposed || yielded());
     if (this.disposed) return;
@@ -906,7 +906,7 @@ export class Painter {
       this.scene.setPainted(i, null);
       return;
     }
-    this.scene.setPainted(i, { x: -PAD, y: -HEADER, w: best.w, h: best.h, layer: best.slot.layer, ...this.atlas.layout.uv(best.slot) });
+    this.scene.setPainted(i, { x: -PAD_X, y: -HEADER, w: best.w, h: best.h, layer: best.slot.layer, ...this.atlas.layout.uv(best.slot) });
   }
 
   // ---- the disk cache ----

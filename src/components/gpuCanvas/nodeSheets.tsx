@@ -12,11 +12,18 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeaderActions } from "@/components/nodes/FloatingNodeHeaders";
 import type { WorkflowNode } from "@/types";
 import { NODE_HEADER, type HandleAnchor } from "@/lib/gpuCanvas/graph";
+import { SOCKET_W } from "@/components/nodes/ui/tokens";
 
 /** Flow units above a node that its painted image takes in, for the floating header. */
 export const HEADER = NODE_HEADER;
-/** Margin on the other sides, for the node's shadow. */
+/** Margin below the node, for its shadow. */
 export const PAD = 8;
+/**
+ * Margin left and right: a socket's swell bulges past the card's border (its
+ * box sits SOCKET_W - 3 outside), and a selected or running socket's ring
+ * strokes up to 2.5 beyond that.
+ */
+export const PAD_X = SOCKET_W - 3 + 5;
 
 export const noop = () => {};
 
@@ -38,9 +45,9 @@ export function boundedNodeTypes(raw: NodeTypes): NodeTypes {
   ) as NodeTypes;
 }
 
-/** A store node as the sheet or live layer's React Flow takes it, at a position. */
-export function flowNode(node: WorkflowNode, x: number, y: number, width: number, selected = false): Node {
-  return { id: node.id, type: node.type, position: { x, y }, data: node.data as Record<string, unknown>, style: { width }, width, selected } as Node;
+/** A store node as the sheet or live layer's React Flow takes it, at a position (with the classes classic gives it, if any). */
+export function flowNode(node: WorkflowNode, x: number, y: number, width: number, selected = false, className?: string): Node {
+  return { id: node.id, type: node.type, position: { x, y }, data: node.data as Record<string, unknown>, style: { width }, width, selected, ...(className ? { className } : {}) } as Node;
 }
 
 export type HeaderProps = HeaderActions & { hints?: Record<string, string> };

@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { ReactFlow, ReactFlowProvider, useStoreApi, type Node, type NodeTypes, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { PaintedNodes } from "@/components/nodes/paintMode";
+import { StoreSocketConnections } from "@/components/nodes/ui/socketConnections";
 import { nextFrame, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // Transitions and animations would be painted mid-way; the pane is transparent so the margins are.
@@ -46,17 +47,20 @@ function Sheet({ connect, nodeTypes, headers }: { connect: (connection: SheetCon
   useLayoutEffect(() => state.done(), [state]);
   return (
     <PaintedNodes>
-      <ReactFlowProvider>
-        <style>{SHEET_STYLE}</style>
-        <ReactFlow nodes={state.nodes} edges={[]} nodeTypes={nodeTypes} viewport={{ x: 0, y: 0, zoom: state.zoom }} minZoom={0.01} maxZoom={4}
-          nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false}
-          zoomOnDoubleClick={false} preventScrolling={false} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}
-          // Its keys would be the page's: React Flow's default Backspace and Space handlers preventDefault them on the document.
-          deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panActivationKeyCode={null} zoomActivationKeyCode={null}>
-          <FlowStoreProbe connect={connect} />
-          <FloatingNodeHeaders nodes={state.nodes} {...headers} />
-        </ReactFlow>
-      </ReactFlowProvider>
+      {/* Its flow holds no edges: connected sockets come from the store, as the paint key does. */}
+      <StoreSocketConnections>
+        <ReactFlowProvider>
+          <style>{SHEET_STYLE}</style>
+          <ReactFlow nodes={state.nodes} edges={[]} nodeTypes={nodeTypes} viewport={{ x: 0, y: 0, zoom: state.zoom }} minZoom={0.01} maxZoom={4}
+            nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false}
+            zoomOnDoubleClick={false} preventScrolling={false} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}
+            // Its keys would be the page's: React Flow's default Backspace and Space handlers preventDefault them on the document.
+            deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panActivationKeyCode={null} zoomActivationKeyCode={null}>
+            <FlowStoreProbe connect={connect} />
+            <FloatingNodeHeaders nodes={state.nodes} {...headers} />
+          </ReactFlow>
+        </ReactFlowProvider>
+      </StoreSocketConnections>
     </PaintedNodes>
   );
 }
