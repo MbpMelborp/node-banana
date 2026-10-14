@@ -393,8 +393,11 @@ bundle's split point, not the handle behind its stem), as classic's
 `objectBoundingBox` gradient. A stroke thinner than a css pixel is drawn a
 pixel wide and as faint as its share of it, as the SVG antialiases a hairline,
 and a long curve is cut into pieces of at most 96 flow units so it stays smooth
-at 400%. Only a route's two ends take round caps, so a
-faded connection's bends are not darker where its segments meet. Where hit
+at 400%. Strokes are antialiased over a device pixel, as the browser
+rasterises an SVG stroke, so they stay crisp on HiDPI screens. Only a route's
+two ends take round caps (antialiased, on their own rows of the instance
+strip so the distance past the end is exact), so a faded connection's bends
+are not darker where its segments meet. Where hit
 bands overlap, the later connection (drawn on top) takes the press, as the
 browser gives classic's topmost interaction path. A connection whose measured
 end has no such handle (a removed input, a stale id) is not drawn or taken, as

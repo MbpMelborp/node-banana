@@ -374,7 +374,11 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     showLiveEdges();
     const unsubscribeStore = useWorkflowStore.subscribe((state, previous) => {
       if (state.edgeAppearance !== previous.edgeAppearance) scene.setEdgeAppearance(state.edgeAppearance.gradient, state.edgeAppearance.fadedOpacity);
-      if (state.edgeStyle !== previous.edgeStyle || state.edgeAppearance.thickness !== previous.edgeAppearance.thickness || state.edgeAppearance.loadingPulse !== previous.edgeAppearance.loadingPulse) scene.rerouteAll();
+      if (state.edgeStyle !== previous.edgeStyle || state.edgeAppearance.thickness !== previous.edgeAppearance.thickness || state.edgeAppearance.loadingPulse !== previous.edgeAppearance.loadingPulse) {
+        scene.rerouteAll();
+        // Which connections show more than a line (a running one's comet) follows the routes.
+        showLiveEdges();
+      }
       // A hook sweep carries the connections it caught on the fork, and lets go of them as it ends.
       if (state.hookDrag !== previous.hookDrag) {
         const swept = new Set([...(previous.hookDrag?.edgeIds ?? []), ...(state.hookDrag?.edgeIds ?? [])]);

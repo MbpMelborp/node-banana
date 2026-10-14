@@ -235,7 +235,7 @@ const HALO_FRAGMENT = /* glsl */ `
 const EDGE_VERTEX = /* glsl */ `
   precision highp float;
   ${COMMON}
-  in vec2 position;         // x: t along the segment, y: side (-1, 1)
+  in vec3 position;         // x: t along the segment, y: side (-1, 1), z: -1/1 on the rows past its start/end
   in vec4 iA;               // start, first control
   in vec4 iB;               // second control, end
   in vec3 iColor;
@@ -243,7 +243,9 @@ const EDGE_VERTEX = /* glsl */ `
   in float iWidth;
   in vec2 iLength;          // where the segment starts along its edge, its length
   in vec2 iRange;           // the edge's x range
+  uniform float uDpr;
   out float vSide;
+  out float vCap;
   out vec3 vColor;
   out float vAlong;
   out float vX;
@@ -264,23 +266,27 @@ const EDGE_VERTEX = /* glsl */ `
     if (dot(dir, dir) < 1e-8) dir = bezier(a, b, c, d, clamp(t + (t < 0.5 ? 0.01 : -0.01), 0.0, 1.0)) - p;
     if (t >= 0.5 && dot(dir, dir) < 1e-8) dir = p - bezier(a, b, c, d, t - 0.01);
     dir = normalize(dir + 1e-6);
-    // As wide as the SVG stroke (flow units), never under a css pixel; a pixel more for the edge's antialiasing.
-    float px = 1.0 / uView.z;
-    float half_ = max(iWidth, px) * 0.5;
-    vHalf = half_ / px;
+    // As wide as the SVG stroke (flow units), never under a css pixel; a device pixel more for the edge's
+    // antialiasing, which is measured in device pixels as the browser rasterises an SVG stroke.
+    float css = 1.0 / uView.z;
+    float dev = css / uDpr;
+    float half_ = max(iWidth, css) * 0.5;
+    vHalf = half_ / dev;
     // A stroke under a css pixel is drawn a pixel wide but as faint as its share of it (an SVG hairline).
     vThin = clamp(iWidth * uView.z, 0.0, 1.0);
-    float reach = half_ + px;
-    vSide = position.y * (half_ + px) / px;
+    float reach = half_ + dev;
+    vSide = position.y * reach / dev;
     vColor = iColor;
     vAlong = iLength.x + iLength.y * t;
     vX = p.x;
     vRange = iRange;
-    // Round caps: the connection's ends reach past it by half the width (its inner joints meet edge to edge).
-    float capped = (t == 0.0 && (vFlags & ${EDGE_CAP_START}) != 0) ? -1.0 : (t == 1.0 && (vFlags & ${EDGE_CAP_END}) != 0) ? 1.0 : 0.0;
-    vec2 cap = dir * capped * half_;
-    vAlong += capped * half_;
-    gl_Position = toClip(p + cap + vec2(-dir.y, dir.x) * position.y * reach);
+    // Round caps: the connection's ends reach past it by half the width and the antialiasing pixel, on rows of
+    // their own so the distance past the end interpolates exactly (its inner joints meet edge to edge).
+    float capped = position.z < 0.0 ? ((vFlags & ${EDGE_CAP_START}) != 0 ? -1.0 : 0.0)
+      : position.z > 0.0 ? ((vFlags & ${EDGE_CAP_END}) != 0 ? 1.0 : 0.0) : 0.0;
+    vCap = abs(capped) * reach / dev;
+    vAlong += capped * reach;
+    gl_Position = toClip(p + dir * capped * reach + vec2(-dir.y, dir.x) * position.y * reach);
   }
 `;
 
@@ -289,7 +295,9 @@ const EDGE_FRAGMENT = /* glsl */ `
   uniform float uGradient;
   uniform float uFaded;
   uniform vec3 uView;
+  uniform float uDpr;
   in float vSide;
+  in float vCap;
   in vec3 vColor;
   in float vAlong;
   in float vX;
@@ -299,15 +307,16 @@ const EDGE_FRAGMENT = /* glsl */ `
   flat in vec2 vRange;
   out vec4 outColor;
   void main() {
-    float coverage;
+    // Device pixels past the stroke's end along it (a round cap: coverage falls with the distance from the end).
+    float outside = vCap;
     if ((vFlags & ${EDGE_DASHED}) != 0) {
       // Dashes of 6 and gaps of 4 flow units with round caps (reference links' "6 4" and round linecap):
       // each dash a capsule, its ends reaching half the width into the gaps.
       float d = mod(vAlong, 10.0);
-      float outside = d > 6.0 ? min(d - 6.0, 10.0 - d) : 0.0;
-      coverage = clamp(vHalf + 0.5 - length(vec2(outside * uView.z, vSide)), 0.0, 1.0);
-      if (coverage <= 0.0) discard;
-    } else coverage = clamp(vHalf + 0.5 - abs(vSide), 0.0, 1.0);
+      outside = max(outside, (d > 6.0 ? min(d - 6.0, 10.0 - d) : 0.0) * uView.z * uDpr);
+    }
+    float coverage = clamp(vHalf + 0.5 - length(vec2(outside, vSide)), 0.0, 1.0);
+    if (coverage <= 0.0) discard;
     bool isActive = (vFlags & ${EDGE_ACTIVE}) != 0;
     bool highlight = (vFlags & (${EDGE_SELECTED} | ${EDGE_HOVERED})) != 0;
     float alpha;
@@ -613,13 +622,16 @@ export class Scene {
   private buildEdges() {
     const { graph } = this;
     if (!this.edgeGeometry) {
+      // Rows of (t, side, cap): a cap row before t = 0 and after t = 1, which the vertex shader pushes out
+      // past a capped end and folds onto the end otherwise.
       const strip: number[] = [], indices: number[] = [];
-      for (let i = 0; i <= EDGE_SEGMENTS; i++) {
-        strip.push(i / EDGE_SEGMENTS, -1, i / EDGE_SEGMENTS, 1);
-        if (i < EDGE_SEGMENTS) indices.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
-      }
+      const rows = [[0, -1], ...Array.from({ length: EDGE_SEGMENTS + 1 }, (_, i) => [i / EDGE_SEGMENTS, 0]), [1, 1]];
+      rows.forEach(([t, cap], i) => {
+        strip.push(t, -1, cap, t, 1, cap);
+        if (i < rows.length - 1) indices.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+      });
       this.edgeGeometry = new THREE.InstancedBufferGeometry();
-      this.edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(strip, 2));
+      this.edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(strip, 3));
       this.edgeGeometry.setIndex(indices);
     }
     const geometry = this.edgeGeometry;
