@@ -222,7 +222,10 @@ floating header left as it is.
 
 Live nodes take the pointer: React Flow sets `pointer-events: none` inline
 on nodes it cannot select or drag, which is every node of the live flow, so
-the live layer's style overrides it, and gives back classic's draggable
+the live layer's style overrides it. Its connectable sockets take the
+pointer again (React Flow's `connectionindicator`, lost to
+`isConnectableStart={false}`), for their tooltip, crosshair and hover. It
+also gives back classic's draggable
 cursors (grab, grabbing while dragged, the arrow when locked or under a
 dialog) and its selectable nodes' missing focus ring. Hover follows the live
 node the pointer is on (its floating header included) as well as the scene's
@@ -366,7 +369,7 @@ The scene takes every press and asks the editor what it starts:
   connects, as they are React Flow's `nopan`. A connection is `nopan` too:
   a left drag from it moves nothing in any pan mode, and a release still on
   it clicks it, however far the pointer went. A press on a floating header
-  is FloatingNodeHeader's drag whatever the keys and the pan mode: it makes
+  is FloatingNodeHeader's drag whatever the keys, the pan mode and the lock: it makes
   an unselected node the only selection at once, moves past 5 px on either
   axis (the selection too only if the node was already selected, following
   the pointer from the press) and regroups every moved node on release.
@@ -394,7 +397,9 @@ The scene takes every press and asks the editor what it starts:
 - With the selection key held (Shift, or Alt in "altDrag"), a press on a
   handle, node or connection is a click that toggles the node or
   connection, and any movement turns it into a marquee: no connection
-  starts, as React Flow's pane takes the press first.
+  starts, as React Flow's pane takes the press first. A socket, its half
+  outside the node's box too, counts as its node, as the click bubbles from
+  the handle to the node's wrapper.
 - **The pane**: a click clears the selection (not on a locked canvas) and
   is WorkflowCanvas's pane click, whatever a drag would do; a drag pans or draws the marquee as the
   navigation settings say (`paneDragAction`); drawing on drag (the Mac
@@ -419,7 +424,8 @@ The scene takes every press and asks the editor what it starts:
 - On a locked canvas nodes take no pointer, as React Flow gives them
   `pointer-events: none`: a press on one is the pane's (a drag pans as the
   pan mode says, a click is a pane click), and live nodes' controls are
-  inert. Sockets still connect and connection ends still reconnect.
+  inert. Sockets still connect and connection ends still reconnect, and a
+  floating header still selects and drags its node.
 - Every change in the selected nodes or connections, a press's or the
   store's own (paste, undo, the agent), reaches WorkflowCanvas's
   `handleSelectionChange` once it is through, as React Flow's

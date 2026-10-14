@@ -6,7 +6,7 @@ import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
 import type { Scene } from "@/lib/gpuCanvas/scene";
 import { Editor, type GpuEditing } from "../editor";
-import { liveButtonPress, pressGoesToScene, type LiveLayer } from "../LiveLayer";
+import { LIVE_STYLE, liveButtonPress, pressGoesToScene, type LiveLayer } from "../LiveLayer";
 
 function node(id: string, x: number, y: number, selected = false): WorkflowNode {
   return { id, type: "prompt", position: { x, y }, data: { prompt: "" }, width: 300, height: 200, selected } as unknown as WorkflowNode;
@@ -344,6 +344,24 @@ describe("presses on the GPU canvas", () => {
     document.elementsFromPoint ??= () => [];
     drag([1100, 200], [1300, 300]);
     expect(settings.onConnectEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("with the selection key held a click on a socket's half outside its node's box is a click on that node", () => {
+    editor["scene"].graph.nodes[2].handles = new Map([["target:text", { x: 0, y: 100, position: "left" }]]);
+    // Shift adds node c to a and b; no connection is selected and the pane is not clicked.
+    click(796, 100, { shiftKey: true });
+    expect(selected()).toEqual(["a", "b", "c"]);
+    expect(selectedEdges()).toEqual([]);
+    expect(settings.onPaneClick).not.toHaveBeenCalled();
+    // The same with a connection ending there: the socket's node, not the connection.
+    edgeHit = 0;
+    click(796, 100, { shiftKey: true });
+    expect(selected()).toEqual(["a", "b"]);
+    expect(selectedEdges()).toEqual([]);
+  });
+
+  it("a live socket takes the pointer again (React Flow's connectionindicator), hidden ones still do not", () => {
+    expect(LIVE_STYLE).toMatch(/\.react-flow__handle\.connectable \{ pointer-events: all;/);
   });
 
   it("a marquee's start stays on the same canvas spot when the view pans under it", () => {
@@ -720,6 +738,27 @@ describe("a floating header's drag on the GPU canvas", () => {
     gesture.up(pointer(930, -10));
     expect([position("a").x, position("b").x, position("c").x]).toEqual([30, 430, 830]);
     expect(stops.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("on a locked canvas the header still selects and moves its node, while a press on the body is the pane's", () => {
+    settings.locked = true;
+    const stops: string[] = [];
+    settings.onNodeDragStop = (_event, node) => stops.push(node.id);
+    const gesture = editor.press(pointer(900, -10))!;
+    expect(selected()).toEqual(["c"]);
+    gesture.move(pointer(920, -10));
+    gesture.up(pointer(920, -10));
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([0, 400, 820]);
+    expect(stops).toEqual(["c"]);
+    // Already selected, with the others: the header carries the selection.
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: true }]);
+    const again = editor.press(pointer(900, -10))!;
+    again.move(pointer(910, -10));
+    again.up(pointer(910, -10));
+    expect([position("a").x, position("c").x]).toEqual([10, 830]);
+    click(900, 100);
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
+    expect(selected()).toEqual(["a", "c"]);
   });
 
   it("a click changes nothing past the press's selection", () => {

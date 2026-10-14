@@ -1109,11 +1109,14 @@ export class Painter {
       gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texture, 0, slot.layer);
       gl.readPixels(slot.x, slot.y, slot.w, slot.h, gl.RGBA, gl.UNSIGNED_BYTE, offset);
       const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
+      // The card and overhang this paint measured: a live node's reach the scene only once it goes back to its
+      // painted image (restoreMeasured), after this readback, so the scene's would be the previous (or none).
+      const paint = this.paints.get(r.id), sceneNode = this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1];
       entries.push({
-        key: cacheKey(image.key, r.tier), offset, width: slot.w, height: slot.h, nodeHeight: this.paints.get(r.id)?.height ?? 0,
+        key: cacheKey(image.key, r.tier), offset, width: slot.w, height: slot.h, nodeHeight: paint?.height ?? 0,
         handles: handles ? [...handles].map(([k, a]) => cachedHandle(k, a)) : [],
-        card: cardTuple(this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1]?.card),
-        overhang: cardTuple(this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1]?.overhang),
+        card: cardTuple(paint?.card !== undefined ? paint.card : sceneNode?.card),
+        overhang: cardTuple(paint?.overhang !== undefined ? paint.overhang : sceneNode?.overhang),
       });
       offset += slot.w * slot.h * 4;
     }

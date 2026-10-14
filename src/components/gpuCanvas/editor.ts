@@ -397,7 +397,10 @@ export class Editor {
       if (handle) return this.connectGesture(event, handle);
     }
     // A locked canvas's nodes do not take the pointer (React Flow gives them pointer-events none): a press on one is the pane's.
-    const node = editing.locked ? -1 : this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
+    let node = editing.locked ? -1 : this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y);
+    // With the selection key held, a socket (its half outside the node's box too) is its node's: React Flow's pane
+    // takes the press and the click bubbles from the handle to its node's wrapper (Shift toggles it, Alt selects it).
+    if (node < 0 && keyHeld && !editing.locked) node = (this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y))?.node ?? -1;
     // A connection's end, outside the handle it meets, moves that end (React Flow's reconnect anchors). A locked
     // canvas still reconnects, as classic's anchors check neither the lock nor nodesConnectable (no line is drawn).
     if (node < 0 && !keyHeld) {
@@ -435,10 +438,9 @@ export class Editor {
 
   /**
    * The node whose floating header a press landed on: the live header's element, or a painted node's header band
-   * (above its box). None on a locked canvas, whose nodes and headers are the pane's.
+   * (above its box). A locked canvas's headers take the pointer too, as classic's (only its node bodies are the pane's).
    */
   private headerFromEvent(event: PointerEvent, at: { x: number; y: number }): number {
-    if (this.editing().locked) return -1;
     const target = event.target instanceof Element ? event.target : null;
     const graph = this.scene.graph;
     if (target?.closest("[data-gpu-canvas-live]")) {
@@ -611,8 +613,8 @@ export class Editor {
   }
 
   /** Selects nodes as a click does: only these, or (additive) toggling them in the selection. */
-  selectNodes(ids: string[], additive: boolean) {
-    if (this.editing().locked) return;
+  selectNodes(ids: string[], additive: boolean, evenLocked = false) {
+    if (this.editing().locked && !evenLocked) return;
     const store = useWorkflowStore.getState();
     const next = new Set(additive ? store.nodes.filter((n) => n.selected).map((n) => n.id) : []);
     for (const id of ids) {
@@ -697,14 +699,15 @@ export class Editor {
   /**
    * A press on a node's floating header, as FloatingNodeHeader's drag: the press makes an unselected node the only
    * selection, whatever the keys; past 5px on either axis the node moves, with the selection only if it was already
-   * selected; on release every moved node is regrouped. A release before that changes nothing more.
+   * selected; on release every moved node is regrouped. A release before that changes nothing more. The lock
+   * changes none of it, as the header's own setNodes ignores nodesDraggable and elementsSelectable.
    */
   private headerGesture(event: PointerEvent, i: number): Gesture {
     const id = this.scene.graph.nodes[i].id;
     const wasSelected = !!useWorkflowStore.getState().nodes.find((n) => n.id === id)?.selected;
     if (!wasSelected) {
       this.hideSelectionFrame();
-      this.selectNodes([id], false);
+      this.selectNodes([id], false, true);
     }
     const startX = event.clientX, startY = event.clientY;
     const fromLive = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]");
@@ -744,13 +747,14 @@ export class Editor {
     const scene = this.scene, graph = scene.graph;
     const store = useWorkflowStore.getState();
     const pressedNode = store.nodes.find((n) => n.id === pressedId);
-    if (!pressedNode || pressedNode.draggable === false) return null;
+    // The header's drag moves the node whatever its draggable flag says, as its own setNodes does.
+    if (!pressedNode || (!header && pressedNode.draggable === false)) return null;
     // React Flow's XYDrag with selectNodesOnDrag off: a selected node carries the selection; an unselected one
     // clears it and moves alone, unless Shift (multiSelectionKeyCode) is held, when it moves with the selection.
     if (!header && !pressedNode.selected && !down.shiftKey) this.clearSelection();
     const carries = header ? header.carry : pressedNode.selected || down.shiftKey;
     const carried = carries
-      ? useWorkflowStore.getState().nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id)
+      ? useWorkflowStore.getState().nodes.filter((n) => n.selected && (header || n.draggable !== false)).map((n) => n.id)
       : [];
     const ids = [...new Set([...carried, pressedId])].filter((id) => graph.indexOf.has(id));
     const start = new Map(ids.map((id) => {
@@ -1156,7 +1160,7 @@ export class Editor {
         // Classic finds the node by its element: its floating header is not part of it, its sockets are.
         const at = scene.local(event);
         let node = scene.nodeAt(at.x, at.y, false);
-        if (node < 0) node = (this.liveHandleAt(event) ?? this.paintedHandleAt(at.x, at.y))?.node ?? -1;
+        if (node < 0) node = (this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y))?.node ?? -1;
         editing.onConnectEnd(event, { isValid: false, fromNode, fromHandle: { id: handleId, type: from.type } }, node >= 0 ? scene.graph.nodes[node].id : null);
       },
       cancel: end,
@@ -1201,8 +1205,9 @@ export class Editor {
       if (handle) store.setHoveredHandle({ nodeId: scene.graph.nodes[handle.node].id, handleId: handle.handleId || null, type: handle.type });
       else if (hadOne) store.setHoveredHandle(null);
     }
-    // On a locked canvas the pointer passes through nodes to the pane (and the connections under them).
-    const node = handle || this.editing().locked ? -1 : scene.nodeAt(at.x, at.y);
+    // On a locked canvas the pointer passes through node bodies to the pane (and the connections under them);
+    // a header band still takes it (its grab cursor), as classic's floating header.
+    const node = handle || this.nodeIsPane(at.x, at.y) ? -1 : scene.nodeAt(at.x, at.y);
     // A connection's end shows React Flow's move cursor where a press would reconnect it.
     const end = handle || node >= 0 || this.editing().disabled ? null : this.edgeEndAt(at.x, at.y);
     const edge = handle || node >= 0 ? -1 : end?.edge ?? scene.edgeAt(at.x, at.y);

@@ -39,7 +39,8 @@ import { controlsOverhangBox, flowNode, handleAnchors, noop, settleNodes, type H
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
 // Flow sets a node's pointer-events inline (none, since this flow selects and drags nothing), hence !important.
 // Its sockets start no connection of their own (the editor draws them), so React Flow's connectionindicator
-// cursor is given back here. On a locked canvas the nodes take no pointer, as classic's (presses go to the scene's pane).
+// pointer and cursor are given back here: a socket takes the pointer (its tooltip, its crosshair, the hover that
+// ghosts its hidden connections) whether or not the canvas is locked, as classic's stay connectable. On a locked canvas the nodes take no pointer, as classic's (presses go to the scene's pane).
 // A panel that opts out (the navigator in the locked tutorial) stays inert, as classic's.
 // A selected angular connection's segment handle drags its middle segment (EditableEdge's own drag), so it takes the pointer.
 // The scene drags the nodes, so React Flow's draggable cursors are given here: grab, grabbing while a drag moves them (the
@@ -47,13 +48,13 @@ import { controlsOverhangBox, flowNode, handleAnchors, noop, settleNodes, type H
 // selectable nodes (React Flow's .selectable:focus outline none; the wrappers stay focusable, as classic's).
 // A node swapping in is laid out (measured, its images decoding) but not shown until its painted copy goes.
 const ENTERING = "gpu-entering";
-const LIVE_STYLE = `
+export const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel:not(.pointer-events-none) { pointer-events: all !important; }
   [data-gpu-canvas-live] .react-flow__node-gpuGhost { visibility: hidden; pointer-events: none !important; }
   [data-gpu-canvas-live][data-locked] .react-flow__node { pointer-events: none !important; }
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
-  [data-gpu-canvas-live] .react-flow__handle.connectable { cursor: crosshair; }
+  [data-gpu-canvas-live] .react-flow__handle.connectable { pointer-events: all; cursor: crosshair; }
   [data-gpu-canvas-live] .edge-segment-handle { pointer-events: all !important; }
   [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grab; }
   [data-gpu-canvas-live][data-gpu-dragging]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grabbing; }
