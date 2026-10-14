@@ -155,8 +155,29 @@ const NODE_FRAGMENT = /* glsl */ `
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
   ${SELECTION_GLSL}
+  // A painted image is drawn at the smallest tier at least as sharp as the view, so up to two
+  // texels fall on a pixel. One bilinear tap there skips thin borders and text stems by phase,
+  // and they shimmer while zooming; four taps spread over the pixel's footprint (a box of up to
+  // 4×4 texels) keep them as the browser's own rasterisation does. At the tier's own scale a
+  // pixel is one texel and the single, pixel-snapped tap stays. Taps are kept inside the slot.
+  vec4 paintedColor(vec2 uv, vec2 uvPerPx) {
+    vec2 texSize = vec2(textureSize(uPainted, 0).xy);
+    vec2 fp = uvPerPx * texSize;   // texels per device pixel
+    if (max(fp.x, fp.y) <= 1.001) return texture(uPainted, vec3(uv, vLayer));
+    vec2 halfTexel = 0.5 / texSize;
+    vec2 lo = min(vUv.xy, vUv.zw) + halfTexel, hi = max(lo, max(vUv.xy, vUv.zw) - halfTexel);
+    vec2 o = 0.25 * max(fp, 1.0) / texSize;
+    return 0.25 * (
+      texture(uPainted, vec3(clamp(uv + vec2(-o.x, -o.y), lo, hi), vLayer)) +
+      texture(uPainted, vec3(clamp(uv + vec2(o.x, -o.y), lo, hi), vLayer)) +
+      texture(uPainted, vec3(clamp(uv + vec2(-o.x, o.y), lo, hi), vLayer)) +
+      texture(uPainted, vec3(clamp(uv + vec2(o.x, o.y), lo, hi), vLayer)));
+  }
   void main() {
     float px = 1.0 / uView.z;   // flow units per css pixel
+    // The image's texture coordinates per device pixel, taken here, before any branch or discard, so the derivatives are defined.
+    vec2 uvLocal = mix(vUv.xy, vUv.zw, vLocal / vSize);
+    vec2 uvPerPx = max(abs(dFdx(uvLocal)), abs(dFdy(uvLocal)));
     if ((vFlags & ${FLAG_GROUP}) != 0) {
       vec2 half_ = vSize * 0.5;
       float d = box(vLocal - half_, half_, 12.0);
@@ -173,7 +194,7 @@ const NODE_FRAGMENT = /* glsl */ `
       // The body pass leaves the header (above the node's box) to the header pass.
       if (header && uHeaderPass < 0.5) discard;
       if (any(lessThan(vLocal, vec2(0.0))) || any(greaterThan(vLocal, vSize))) discard;
-      outColor = texture(uPainted, vec3(mix(vUv.xy, vUv.zw, vLocal / vSize), vLayer));
+      outColor = paintedColor(uvLocal, uvPerPx);
       // A dimmed node fades as classic's node element does; its floating header, above it, does not.
       if (!header) outColor.a *= vAlpha;
       return;

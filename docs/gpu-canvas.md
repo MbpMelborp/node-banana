@@ -72,6 +72,12 @@ a zoomed-out view never falls back to stand-in cards. Larger tiers are painted f
 evicted, longest unseen first, when the atlas needs room; the view's own
 tier near the view is never evicted.
 
+A shown tier sharper than the view is minified by up to 2×, so the node
+shader samples it with four bilinear taps spread over each pixel's footprint
+(kept inside the node's atlas slot) rather than one, which would skip 1 px
+borders and text stems by sub-pixel phase and shimmer while zooming. At the
+tier's own scale it is one pixel-snapped tap.
+
 After the 1/8 pass, every node is also painted at the tier a 25% view needs
 (1/4 on a standard display, 1/2 on a Retina one), in batches of 8 below
 everything else. Those images go to the disk cache and stay in the atlas
