@@ -158,6 +158,61 @@ describe("presses on the GPU canvas", () => {
     expect(panGesture).toHaveBeenCalledTimes(2);
   });
 
+  it("in the middleMouse mode a still right press on empty canvas opens the add-node menu at the release; a moved one pans only", () => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    let gesture = editor.press(pointer(2000, 2000, { button: 2 }))!;
+    gesture.move(pointer(2000, 2000, { button: 2 }));
+    gesture.up(pointer(2000, 2000, { button: 2 }));
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+    expect(settings.onPaneMenu).toHaveBeenCalledWith(2000, 2000);
+    gesture = editor.press(pointer(2000, 2000, { button: 2 }))!;
+    gesture.move(pointer(2001, 2000, { button: 2 }));
+    gesture.up(pointer(2001, 2000, { button: 2 }));
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+    gesture = editor.press(pointer(2000, 2000, { button: 2 }))!;
+    gesture.cancel();
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+    // The browser's own contextmenu event opens nothing in this mode (the release did).
+    const menu = new MouseEvent("contextmenu", { clientX: 2000, clientY: 2000, cancelable: true });
+    editor.contextMenu(menu);
+    expect(menu.defaultPrevented).toBe(true);
+    expect(settings.onPaneMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("a middle press on a floating header, or on a locked canvas's node, pans only where the pan mode does", () => {
+    const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
+    withHeaderBands();
+    const live = editor["live"].element;
+    live.setAttribute("data-gpu-canvas-live", "");
+    document.body.appendChild(live);
+    const header = document.createElement("div");
+    header.setAttribute("data-node-header", "c");
+    live.appendChild(header);
+    const onHeader = () => {
+      const event = pointer(900, -10, { button: 1 });
+      Object.defineProperty(event, "target", { value: header });
+      return event;
+    };
+    for (const panMode of ["middleMouse", defaultCanvasNavigationSettings.panMode] as const) {
+      settings.navigation = { ...defaultCanvasNavigationSettings, panMode };
+      const pans = panMode !== "middleMouse" && editor.press(pointer(2000, 2000, { button: 1 })) != null;
+      panGesture.mockClear();
+      expect(editor.press(onHeader()) != null).toBe(pans);
+      expect(editor.press(pointer(900, -10, { button: 1 })) != null).toBe(pans);
+      settings.locked = true;
+      expect(editor.press(pointer(900, 100, { button: 1 })) != null).toBe(pans);
+      settings.locked = false;
+      // An unlocked node's body pans in every mode.
+      expect(editor.press(pointer(900, 100, { button: 1 }))).not.toBeNull();
+    }
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    panGesture.mockClear();
+    editor.press(onHeader());
+    expect(panGesture).not.toHaveBeenCalled();
+    live.remove();
+  });
+
   it("a pressed node stays live until the press ends, clicked, dragged or cancelled", () => {
     let gesture = editor.press(pointer(900, 100))!;
     expect(pressed).toEqual(["c"]);
@@ -950,6 +1005,25 @@ describe("a still press on a live node's button", () => {
     gesture = editor.press(pressOn(body, 900, 100))!;
     gesture.up(pointer(900, 100));
     expect(selected()).toEqual(["c"]);
+    live.remove();
+  });
+
+  it("with Shift held leaves the toggle to the node's own click, so it toggles once", () => {
+    const button = document.createElement("button");
+    const live = liveNodeWith(button);
+    const clickNode = vi.spyOn(editor as unknown as { clickNode: (id: string, additive: boolean) => void }, "clickNode");
+    const event = pressOn(button, 900, 100);
+    Object.defineProperty(event, "shiftKey", { value: true });
+    const gesture = editor.press(event)!;
+    gesture.up(pointer(900, 100, { shiftKey: true }));
+    expect(clickNode).not.toHaveBeenCalled();
+    expect(selected()).toEqual(["a", "b"]);
+    // Its body still toggles from the scene.
+    const body = button.parentElement!;
+    const onBody = pressOn(body, 900, 100);
+    Object.defineProperty(onBody, "shiftKey", { value: true });
+    editor.press(onBody)!.up(pointer(900, 100, { shiftKey: true }));
+    expect(clickNode).toHaveBeenCalledTimes(1);
     live.remove();
   });
 

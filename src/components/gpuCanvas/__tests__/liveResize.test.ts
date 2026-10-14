@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { NodeChange } from "@xyflow/react";
+import type { NodeChange, Position } from "@xyflow/react";
 import type { WorkflowNode } from "@/types";
-import { resizeChanges } from "../LiveLayer";
+import { resizeChanges, sameHandleBounds } from "../LiveLayer";
 
 const store = [
   { id: "a", type: "prompt", position: { x: 0, y: 0 }, data: {}, width: 300, style: { width: 300 } },
@@ -29,5 +29,18 @@ describe("resizeChanges", () => {
     expect(resizeChanges(changes, real, store)).toEqual([
       { id: "b", type: "replace", item: { ...store[1], width: 360, style: { width: 360 } } },
     ]);
+  });
+});
+
+describe("sameHandleBounds", () => {
+  const handle = (id: string, y: number) => ({ id, nodeId: "n", type: "source" as const, position: "right" as Position, x: 290, y, width: 20, height: 20 });
+  it("sees reordered or renamed sockets at the same size, not a fresh copy of the same ones", () => {
+    const a = { source: [handle("r1", 40), handle("r2", 80)], target: null };
+    expect(sameHandleBounds(a, { source: [handle("r1", 40), handle("r2", 80)], target: null })).toBe(true);
+    expect(sameHandleBounds(a, { source: [handle("r1", 80), handle("r2", 40)], target: null })).toBe(false);
+    expect(sameHandleBounds(a, { source: [handle("r1", 40), handle("r3", 80)], target: null })).toBe(false);
+    expect(sameHandleBounds(a, { source: [handle("r1", 40)], target: null })).toBe(false);
+    expect(sameHandleBounds(a, { source: [handle("r1", 40), handle("r2", 80)], target: [] })).toBe(false);
+    expect(sameHandleBounds(undefined, a)).toBe(false);
   });
 });

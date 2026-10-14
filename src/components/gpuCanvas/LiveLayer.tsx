@@ -19,7 +19,7 @@
  */
 import { useCallback, useLayoutEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
+import { ReactFlow, useReactFlow, useStoreApi, type DefaultEdgeOptions, type Edge, type EdgeTypes, type InternalNode, type Node, type NodeChange, type NodeDimensionChange, type NodeTypes, type OnEdgesChange, type ReactFlowState } from "@xyflow/react";
 import { FloatingNodeHeaders } from "@/components/nodes/FloatingNodeHeaders";
 import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
 import { StoreSocketConnections } from "@/components/nodes/ui/socketConnections";
@@ -165,6 +165,49 @@ function ViewSync({ connect, onViewChanged }: { connect: (part: LiveConnection) 
   return null;
 }
 
+type HandleBounds = NonNullable<InternalNode["internals"]["handleBounds"]>;
+
+/** Whether two measured handle lists place every handle (id, side, box) alike. */
+export function sameHandleBounds(a: HandleBounds | undefined, b: HandleBounds | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const same = (x: HandleBounds["source"], y: HandleBounds["source"]) => {
+    if (!x || !y) return !x === !y;
+    return x.length === y.length && x.every((h, k) => {
+      const o = y[k];
+      return h.id === o.id && h.position === o.position && h.x === o.x && h.y === o.y && h.width === o.width && h.height === o.height;
+    });
+  };
+  return same(a.source, b.source) && same(a.target, b.target);
+}
+
+/**
+ * A live node's handles React Flow measured again at the same size (updateNodeInternals emits no dimensions change
+ * then: reordered or renamed sockets) reach the scene, as classic's edges follow handleBounds at once.
+ */
+function HandleSync({ ids, onMeasured }: { ids: ReadonlySet<string>; onMeasured: (id: string) => void }) {
+  const store = useStoreApi();
+  // The last handles seen per live node; a node that leaves the layer is forgotten, so it applies again when back.
+  const [seen] = useState(() => new Map<string, HandleBounds>());
+  useLayoutEffect(() => {
+    const check = (state: ReactFlowState) => {
+      for (const id of seen.keys()) if (!ids.has(id)) seen.delete(id);
+      for (const id of ids) {
+        const bounds = state.nodeLookup.get(id)?.internals.handleBounds;
+        if (!bounds) continue;
+        const last = seen.get(id);
+        if (last === bounds) continue;
+        seen.set(id, bounds);
+        // Idempotent (LiveLayer.applyLiveSize), and a no-op until the node shows.
+        if (!sameHandleBounds(last, bounds)) onMeasured(id);
+      }
+    };
+    check(store.getState());
+    return store.subscribe(check);
+  }, [store, ids, onMeasured, seen]);
+  return null;
+}
+
 interface LiveFlowProps {
   /** Hands the owner what the flow offers (LiveConnection), as it mounts. */
   connect: (part: LiveConnection) => void;
@@ -240,6 +283,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
           zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
           panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
           <ViewSync connect={connect} onViewChanged={onViewChanged} />
+          <HandleSync ids={realIds} onMeasured={onMeasured} />
           <FloatingNodeHeaders nodes={headerNodes} {...headers} />
           {children}
         </ReactFlow>

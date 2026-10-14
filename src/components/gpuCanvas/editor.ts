@@ -115,6 +115,12 @@ export function releasedInside(box: { left: number; top: number; right: number; 
 }
 
 /** Stops the click the browser sends after a drag's release (removed a task later, if no click came). */
+/** Whether a press landed on a live node's button or link (liveButtonPress): its node selects through its own click. */
+function onLiveButton(event: PointerEvent): boolean {
+  const target = event.target;
+  return target instanceof Element && !!target.closest("[data-gpu-canvas-live]") && liveButtonPress(target);
+}
+
 function swallowNextClick() {
   const swallow = (event: MouseEvent) => {
     event.preventDefault();
@@ -361,8 +367,10 @@ export class Editor {
     const scene = this.scene;
     const at = scene.local(event);
     // A middle press on a node or connection pans whatever the pan mode, the tutorial or a dialog say:
-    // the first rule of React Flow's zoom filter, ahead of its panOnDrag checks.
-    if (event.button === 1 && (this.nodeFromEvent(event) != null || scene.nodeAt(at.x, at.y) >= 0 || scene.edgeAt(at.x, at.y) >= 0)) {
+    // the first rule of React Flow's zoom filter, ahead of its panOnDrag checks. Only a node's body counts
+    // (classic's floating header is outside .react-flow__node), and not on a locked canvas (its nodes let the
+    // pointer through to the pane): those presses fall to the pan mode below.
+    if (event.button === 1 && (this.middlePanOnNode(event, at) || scene.edgeAt(at.x, at.y) >= 0)) {
       return this.pan(event);
     }
     if (editing.disabled) return null;
@@ -386,7 +394,7 @@ export class Editor {
       if (event.button === 1) return this.pan(event);
       const onNode = !editing.locked && (this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y)) >= 0;
       if (onNode || this.handleFromEvent(event) || this.paintedHandleAt(at.x, at.y) || scene.edgeAt(at.x, at.y) >= 0) return null;
-      return this.pan(event);
+      return this.rightPan(event);
     }
     if (event.button !== 0) return null;
     const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
@@ -413,7 +421,11 @@ export class Editor {
     if ((node >= 0 || edge >= 0) && keyHeld && !editing.locked) {
       // Held by id from the press: a graph rebuilt before the release renumbers the nodes and connections.
       const nodeId = node >= 0 ? scene.graph.nodes[node].id : null, edgeId = edge >= 0 ? scene.graph.edges[edge].id : "";
-      const click = nodeId != null ? () => this.clickNode(nodeId, event.shiftKey) : () => this.clickEdge(event, edgeId);
+      // A live node's button or link selects through LiveFlow's nodeClick (once, or not when the button stops its
+      // click), as classic's NodeWrapper click: toggling here as well would undo it.
+      const click = nodeId != null
+        ? (onLiveButton(event) ? () => {} : () => this.clickNode(nodeId, event.shiftKey))
+        : () => this.clickEdge(event, edgeId);
       return this.clickGesture(event, click, () => this.marqueeGesture(event), 0);
     }
     // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
@@ -427,6 +439,20 @@ export class Editor {
     }
     return this.paneGesture(event, null);
   };
+
+  /**
+   * Whether a middle press is on a node's body, as React Flow's zoom filter sees it: the live node's element (not
+   * its floating header) or a painted node's box (not its header band). A locked canvas's nodes are the pane's.
+   */
+  private middlePanOnNode(event: PointerEvent, at: { x: number; y: number }): boolean {
+    if (this.editing().locked) return false;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("[data-gpu-canvas-live]")) {
+      if (target.closest("[data-node-header]")) return false;
+      if (target.closest(".react-flow__node:not(.react-flow__node-gpuGhost)")) return true;
+    }
+    return this.scene.nodeAt(at.x, at.y, false) >= 0;
+  }
 
   /** The live node (or its floating header) a press from the live layer landed on. */
   private nodeFromEvent(event: PointerEvent): number | null {
@@ -570,6 +596,27 @@ export class Editor {
     return this.withCursor(this.scene.panGesture(event), this.panCursor(event));
   }
 
+  /**
+   * The right button's pan ("middleMouse" mode). A release that never moved opens the add-node menu there, as
+   * React Flow's d3-zoom end calls onPaneContextMenu when the right press fired no zoom (any mousemove fires one).
+   */
+  private rightPan(event: PointerEvent): Gesture {
+    const pan = this.scene.panGesture(event);
+    let moved = false;
+    return this.withCursor({
+      move: (move) => {
+        if (move.clientX !== event.clientX || move.clientY !== event.clientY) moved = true;
+        pan.move(move);
+      },
+      up: (up) => {
+        pan.up(up);
+        const editing = this.editing();
+        if (!moved && !editing.disabled && !editing.tutorial) editing.onPaneMenu(up.clientX, up.clientY);
+      },
+      cancel: () => pan.cancel(),
+    }, this.panCursor(event));
+  }
+
   /** The pane's cursor while it pans: its `dragging` class's grabbing, unless its `selection` class (paneCursor) wins. */
   private panCursor(event: PointerEvent) {
     return this.paneCursor(event.shiftKey, event.altKey) === "pointer" ? "pointer" : "grabbing";
@@ -676,8 +723,7 @@ export class Editor {
     this.keyTarget = { kind: "node", id };
     // A still press on a live node's button or link selects through the node's own click (LiveFlow's nodeClick),
     // which the button's stopPropagation cancels, as classic's NodeWrapper click.
-    const onButton = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]") && liveButtonPress(event.target);
-    const click = onButton ? () => {} : () => this.clickNode(id, event.shiftKey);
+    const click = onLiveButton(event) ? () => {} : () => this.clickNode(id, event.shiftKey);
     const gesture = this.clickGesture(event, click, (move) => this.editing().locked ? null : this.dragGesture(event, move, id));
     // Classic keeps a node mounted through a press: the pressed node stays live until the gesture ends (once the
     // click has selected it or the drag let go), though the press took its hover away (a capture, a jittery click).
@@ -1279,8 +1325,9 @@ export class Editor {
       editing.onEdgeContextMenu(event, edge);
       return;
     }
-    // The pane never shows the browser's menu. The right button pans in "middleMouse" mode (React Flow's
-    // panOnDrag [2] swallows the menu); with a modal or the tutorial open there is no pan, and no add-node menu.
+    // The pane never shows the browser's menu. In "middleMouse" mode the right button pans, and React Flow opens
+    // the pane menu from d3-zoom's end when the right press did not move (Editor.rightPan), not from this event;
+    // with a modal or the tutorial open there is no pan, and no add-node menu.
     event.preventDefault();
     if (editing.disabled || editing.tutorial || editing.navigation.panMode === "middleMouse") return;
     editing.onPaneMenu(event.clientX, event.clientY);

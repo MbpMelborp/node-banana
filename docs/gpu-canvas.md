@@ -176,7 +176,9 @@ size React Flow measured: without it React Flow hides the node until it
 measures it again, which blurs a field being typed in. What React Flow
 measures of a live node (its height, its handles) also goes to the scene, so
 presses, the marquee and its connections follow a node that grew or shrank
-since it was painted. A paint of a live node (its painted copy hidden) is
+since it was painted, and sockets that moved or were renamed at the same
+size (React Flow re-measures them with no "dimensions" change then, so
+`LiveFlow` watches each live node's `handleBounds` itself). A paint of a live node (its painted copy hidden) is
 only held by the painter: it changes neither the scene's box nor the store's
 measured size, which stay React Flow's, and a rebuilt graph takes the live
 sizes again. Once the node leaves the layer the scene and the store take
@@ -451,8 +453,10 @@ The scene takes every press and asks the editor what it starts:
   Right-click opens the pane or connection menu (on a node, its header or a
   handle the browser's own, as on classic). The connection menu opens in
   every pan mode; on the pane the browser's menu never shows, and the
-  add-node menu does not open in the "middleMouse" mode, under a dialog or
-  in the tutorial. A double-click on the pane
+  add-node menu does not open under a dialog or in the tutorial. In the
+  "middleMouse" mode the right button pans, and a right press that did not
+  move opens the add-node menu at its release, as React Flow's d3-zoom end
+  does (`Editor.rightPan`); a right drag pans with no menu. A double-click on the pane
   opens the add-node menu (not on a connection or a handle), and one on a
   node is the node's own: the view stays put.
 - The wheel is decided as classic's two handlers decide it (`wheel.ts`):
@@ -474,8 +478,10 @@ The scene takes every press and asks the editor what it starts:
   zoom (off in the tutorial and under a dialog); the second finger drops what
   the first began, one left pans, and a gesture follows only the pointer that
   started it.
-- A middle press on a node or connection pans in any pan mode, as React
-  Flow's zoom filter allows; a right press (the "middleMouse" mode) pans only
+- A middle press on a node's body or a connection pans in any pan mode, as
+  React Flow's zoom filter allows (not on a floating header, which sits
+  outside the node, nor on a locked canvas, whose nodes let the pointer
+  through: those follow the pan mode); a right press (the "middleMouse" mode) pans only
   from empty canvas, as nodes, handles and connections are React Flow's
   `nopan` (a left drag from a connection pans in no mode). No drag pans with Control or the selection key held.
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
