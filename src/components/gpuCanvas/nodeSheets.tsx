@@ -149,19 +149,34 @@ export async function settleNodes(root: HTMLElement, ids: readonly string[], unt
   return { decodeMs, unloaded };
 }
 
-/** Each handle's anchor (where an edge meets it), relative to its node, as React Flow measured it. */
-export function handleAnchors(state: ReactFlowState, id: string): Map<string, HandleAnchor> | undefined {
+/**
+ * Each handle's anchor (where an edge meets it) and box, relative to its node, as React Flow measured them.
+ * With the element the node renders in, also whether a connection may start or end on each (a hidden
+ * legacy socket takes neither), read from the handle's classes as React Flow's own checks read them.
+ */
+export function handleAnchors(state: ReactFlowState, id: string, root?: ParentNode): Map<string, HandleAnchor> | undefined {
   const bounds = state.nodeLookup.get(id)?.internals.handleBounds;
   if (!bounds) return undefined;
+  const elements = new Map<string, Element>();
+  for (const element of root?.querySelectorAll(`.react-flow__handle[data-nodeid="${CSS.escape(id)}"]`) ?? []) {
+    elements.set(`${element.classList.contains("source") ? "source" : "target"}:${element.getAttribute("data-handleid") ?? ""}`, element);
+  }
   const anchors = new Map<string, HandleAnchor>();
   for (const kind of ["source", "target"] as const) {
     for (const handle of bounds[kind] ?? []) {
       const { x, y, width, height, position } = handle;
-      const anchor = position === "right" ? { x: x + width, y: y + height / 2, position }
+      const key = `${kind}:${handle.id ?? ""}`;
+      const anchor: HandleAnchor = position === "right" ? { x: x + width, y: y + height / 2, position }
         : position === "left" ? { x, y: y + height / 2, position }
         : position === "top" ? { x: x + width / 2, y, position }
         : { x: x + width / 2, y: y + height, position };
-      anchors.set(`${kind}:${handle.id ?? ""}`, anchor);
+      anchor.box = { x, y, w: width, h: height };
+      const classes = elements.get(key)?.classList;
+      if (classes) {
+        anchor.connectableStart = classes.contains("connectable") && classes.contains("connectablestart");
+        anchor.connectableEnd = classes.contains("connectable") && classes.contains("connectableend");
+      }
+      anchors.set(key, anchor);
     }
   }
   return anchors;

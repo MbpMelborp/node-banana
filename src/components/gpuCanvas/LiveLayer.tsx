@@ -56,14 +56,14 @@ const RENDER_TIMEOUT_MS = 2000;
 
 /**
  * Why a node is live. Besides being worked in (hover, selection, focus, a
- * drag, zoomed in): "held" while it shows something of its own (a dialog,
+ * drag, zoomed in, a connection being drawn to or over it): "held" while it shows something of its own (a dialog,
  * a lightbox), "playing" while its video plays, "resident" for types that
  * stay live as they stay mounted on today's canvas (the 3D viewer), and
  * "pending" while it has work to pick up only a mounted node can (a
  * ComfyUI workflow to import, a run streaming previews), and "running"
  * while it works on its output (its spinner turns).
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "test" | "held" | "playing" | "resident" | "pending" | "running";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {
@@ -450,7 +450,7 @@ export class LiveLayer {
     const height = state?.nodeLookup.get(id)?.measured.height;
     if (!this.live.has(id) || i == null || !state || !height) return;
     if (Math.abs(this.scene.graph.nodes[i].h - height) > 0.5) this.scene.setNodeHeight(i, height);
-    const handles = handleAnchors(state, id);
+    const handles = handleAnchors(state, id, this.element);
     if (handles) this.scene.setHandles(i, handles);
   }
 

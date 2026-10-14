@@ -39,7 +39,7 @@ import type { AtlasBudget } from "@/lib/gpuCanvas/budget";
 import { enableLayoutSubtree, paintElement } from "@/lib/gpuCanvas/htmlInCanvas";
 import { edgesByNode, READS_RUN_IN_PROGRESS, runMark, upstreamPaintKeys, withRunMark, type RunState } from "@/lib/gpuCanvas/paintKey";
 import { BACKGROUND, EIGHTH, PREFETCH, PaintQueue, URGENT, VIEW, packSheet, tierToShow, tiersFor, wantedTier, type PaintRequest } from "@/lib/gpuCanvas/paintQueue";
-import { cacheKey, deflate, inflate, PAINT_CACHE_BYTES, type PaintStore } from "@/lib/gpuCanvas/paintCache";
+import { cachedHandle, cacheKey, deflate, handleFromCache, inflate, PAINT_CACHE_BYTES, PAINT_CACHE_FORMAT, type CachedHandle, type PaintStore } from "@/lib/gpuCanvas/paintCache";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
 import { PainterSheet } from "./PainterSheet";
 import { flowNode, HEADER, nextFrame, noop, PAD, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
@@ -96,7 +96,7 @@ interface NodePaint {
 interface Readback {
   buffer: WebGLBuffer;
   sync: WebGLSync;
-  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: [string, number, number, string?][]; card: [number, number, number, number] | null }[];
+  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: CachedHandle[]; card: [number, number, number, number] | null }[];
   bytes: number;
 }
 
@@ -380,7 +380,7 @@ export class Painter {
           return i >= 0 ? nodes[i] : undefined;
         },
         edgesOf: (id: string) => byNode.get(id) ?? [],
-        salt: `${this.options.salt}|${this.scene.scale}`,
+        salt: `${this.options.salt}|${this.scene.scale}|${PAINT_CACHE_FORMAT}`,
       },
     };
   }
@@ -715,7 +715,7 @@ export class Painter {
       const slot = this.slotFor(r.id, tier, Math.ceil(box.w * tier), Math.ceil(box.h * tier), r.priority !== PREFETCH);
       if (!slot) continue;
       paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h });
-      const handles = flow ? handleAnchors(flow, r.id) : undefined;
+      const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
       this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id));
       items.push({ src, dst: slot });
       done.push(r);
@@ -963,7 +963,7 @@ export class Painter {
       const box = { w: this.boxOf(r.id).w, h: entry.nodeHeight + HEADER + PAD };
       paint.images.set(r.tier, { slot, key, w: box.w, h: box.h });
       const card = entry.card ? { x: entry.card[0], y: entry.card[1], w: entry.card[2], h: entry.card[3] } : entry.card;
-      this.applyMeasured(r.id, entry.nodeHeight, new Map(entry.handles.map(([k, x, y, position]) => [k, { x, y, position }])), card);
+      this.applyMeasured(r.id, entry.nodeHeight, new Map(entry.handles.map(handleFromCache)), card);
       this.show(r.id, true);
       hits.push(entry.key);
       this.status.cacheHits++;
@@ -1003,10 +1003,10 @@ export class Painter {
       const { slot } = image;
       gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texture, 0, slot.layer);
       gl.readPixels(slot.x, slot.y, slot.w, slot.h, gl.RGBA, gl.UNSIGNED_BYTE, offset);
-      const handles = flow ? handleAnchors(flow, r.id) : undefined;
+      const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
       entries.push({
         key: cacheKey(image.key, r.tier), offset, width: slot.w, height: slot.h, nodeHeight: this.paints.get(r.id)?.height ?? 0,
-        handles: handles ? [...handles].map(([k, a]): [string, number, number, string?] => [k, a.x, a.y, a.position]) : [],
+        handles: handles ? [...handles].map(([k, a]) => cachedHandle(k, a)) : [],
         card: cardTuple(this.scene.graph.nodes[this.scene.graph.indexOf.get(r.id) ?? -1]?.card),
       });
       offset += slot.w * slot.h * 4;

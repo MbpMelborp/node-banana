@@ -120,7 +120,8 @@ stays until the view is sharp and every node has its 1/8 image. Behind it
 the sheets are 4096×3072 and nothing waits for quiet, since nobody can pan.
 
 Reopening reads the disk cache: each entry is the image's raw RGBA,
-deflated, with the node's height and handle anchors. Images are read back
+deflated, with the node's height and handle anchors (with each handle's
+box and whether a connection may start or end on it). Images are read back
 from the GPU without stalling (a pixel buffer and a fence) and stored once
 the GPU is done; the cache is trimmed to 512 MB, least recently used first.
 The key includes the app version and display scale, so an update or a
@@ -194,9 +195,17 @@ their component. Annotation opens its editor from the live node, as today.
 
 The scene takes every press and asks the editor what it starts:
 
-- **A handle** (a live node's, or a painted one within 9 px): a click selects
-  its node as a node click does and opens the handle menu; a drag draws the connection line and snaps to an
-  opposite handle within 20 px. A valid drop connects; anything else goes to
+- **A handle** (a live node's, or a painted one where its socket reaches:
+  its box and the 30×34 ellipse round it, or 9 px from its centre at small
+  zooms; never a hidden legacy socket, which takes no pointer): a click
+  selects its node as a node click does and opens the handle menu at the
+  socket; a drag draws React Flow's default connection line (1 px of
+  `#b1b1b7` in flow units) and finds a handle as React Flow does: the one
+  under the pointer, else the nearest centre within 20 flow units. The line
+  ends on it only if the connection would be made. While it is drawn, the
+  connectDragStore tells nodes so: the node it starts from, the node under
+  the pointer and a valid target turn live, show their socket labels, and
+  the target's socket fills. A valid drop connects; anything else goes to
   `handleConnectEnd` with the node under the pointer, which opens the
   connection drop menu as today.
 - **A node**, its floating header included (the 30 flow units above it,
@@ -271,6 +280,8 @@ handles. That happens on screen at 30% zoom and above, for up to 250.
 - Sweeping connections with the hook key (H), and dragging a connection's
   end to reconnect it.
 - Hidden connections' stubs below 30% zoom.
+- While a connection is drawn, painted nodes away from the pointer keep
+  their pictures without socket labels (classic shows every node's).
 - A live connection's decorations draw over painted nodes they pass under.
 - A node whose look depends on state outside its data and its inputs (a
   file loading elsewhere, a timer) may paint stale until its key changes.

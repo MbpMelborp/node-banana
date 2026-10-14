@@ -6,6 +6,8 @@ import type { HandleType } from "@/types";
 import { cn } from "./cn";
 import { SOCKET_H, SOCKET_HOLE_R, SOCKET_RING_W, SOCKET_W, socketCenter } from "./tokens";
 import { HandleLabel } from "../HandleLabel";
+import { useConnectDragStore } from "@/store/connectDragStore";
+import { useIsPaintedNode } from "../paintMode";
 
 export type SocketType = HandleType | "reference";
 
@@ -148,6 +150,10 @@ export function Socket({ nodeId, side, row, spec, showLabel = false, outline = "
   // compares connection maps and copies them into an array every time.
   const connectionKey = spec.id ? `${nodeId}-${handleType}-${spec.id}` : `${nodeId}-${handleType}`;
   const connected = useStore(useCallback((s: ReactFlowState) => (s.connectionLookup.get(connectionKey)?.size ?? 0) > 0, [connectionKey]));
+  // The GPU canvas's connection drag on a live node (React Flow sets these classes for its own).
+  const painted = useIsPaintedNode();
+  const dragTarget = useConnectDragStore((s) => !!s.target && s.target.nodeId === nodeId && s.target.type === handleType && (s.target.handleId ?? "") === spec.id);
+  const gpuTarget = dragTarget && !painted;
   const color = socketColor(spec.type);
   const position = side === "left" ? Position.Left : Position.Right;
 
@@ -176,7 +182,7 @@ export function Socket({ nodeId, side, row, spec, showLabel = false, outline = "
         data-connected={connected ? "true" : undefined}
         title={spec.title}
         isConnectable={spec.isConnectable ?? true}
-        className={cn("socket", spec.placeholder && "socket-placeholder")}
+        className={cn("socket", spec.placeholder && "socket-placeholder", gpuTarget && "connectingto valid")}
         style={{
           ...socketBoxStyle(side, row),
           color,

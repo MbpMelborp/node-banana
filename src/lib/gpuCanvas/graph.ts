@@ -21,6 +21,11 @@ export interface HandleAnchor {
   y: number;
   /** The side the handle is on ("left", "right", "top", "bottom"); edges leave it that way. */
   position?: string;
+  /** The handle's own box, relative to the node: presses land on it, and React Flow measures a connection's reach from its centre. */
+  box?: { x: number; y: number; w: number; h: number };
+  /** Whether a connection may start or end on it (React Flow's connectable classes); absent is yes. A hidden legacy socket takes neither. */
+  connectableStart?: boolean;
+  connectableEnd?: boolean;
 }
 
 export interface SceneNode {

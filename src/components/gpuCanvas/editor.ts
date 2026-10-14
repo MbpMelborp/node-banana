@@ -24,15 +24,15 @@
  */
 import type { Connection, EdgeChange, NodeChange } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { setConnectDrag } from "@/store/connectDragStore";
 import { useAssetStore } from "@/store/assetStore";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import type { CanvasNavigationSettings } from "@/types/canvas";
 import type { HandleMenuTarget } from "@/components/HandleMenu";
-import { EDGE_COLORS, edgeColorForHandles } from "@/lib/edges/colors";
 import { routeEdge } from "@/lib/edges/route";
 import { Position } from "@xyflow/react";
 import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
-import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
+import { closestHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import type { LiveLayer } from "./LiveLayer";
@@ -45,10 +45,12 @@ const CLICK_DISTANCE = 5;
 const PANE_CLICK_DISTANCE = 1;
 /** Under this a press on a handle is a click that opens its menu. */
 const HANDLE_CLICK_SLOP = 4;
-/** How near (css px) a press must be to a painted handle to take it. */
+/** How near (css px) to a painted handle's centre a press takes it, however small the zoom makes its socket. */
 const HANDLE_HIT_PX = 9;
-/** How near (css px) a dragged connection snaps to a handle (React Flow's connectionRadius). */
-const CONNECTION_RADIUS_PX = 20;
+/** How near (flow units) to a handle's centre a dragged connection finds it (React Flow's connectionRadius). */
+const CONNECTION_RADIUS = 20;
+/** React Flow's default connection line (its style.css): 1px of #b1b1b7 in flow units. */
+const CONNECTION_LINE_STROKE = "#b1b1b7";
 
 /** What dropping a connection that found no handle hands WorkflowCanvas (React Flow's onConnectEnd state, as it reads it). */
 export interface ConnectEndState {
@@ -290,31 +292,20 @@ export class Editor {
     if (!element || i == null) return null;
     const rect = element.getBoundingClientRect(), box = this.scene.canvas.getBoundingClientRect();
     const p = this.scene.toWorld(rect.left + rect.width / 2 - box.left, rect.top + rect.height / 2 - box.top);
-    return { node: i, handleId: element.dataset.handleid ?? "", type: element.classList.contains("source") ? "source" : "target", x: p.x, y: p.y };
+    const handleId = element.dataset.handleid ?? "", type = element.classList.contains("source") ? "source" : "target";
+    const n = this.scene.graph.nodes[i], anchor = n.handles?.get(`${type}:${handleId}`);
+    const classes = element.classList;
+    return {
+      node: i, handleId, type, x: anchor ? n.x + anchor.x : p.x, y: anchor ? n.y + anchor.y : p.y, cx: p.x, cy: p.y,
+      connectableEnd: classes.contains("connectable") && classes.contains("connectableend"),
+    };
   }
 
-  /** The painted handle nearest a point (css px) within `reachPx`; only of `type` when given. */
-  private paintedHandleAt(cssX: number, cssY: number, reachPx = HANDLE_HIT_PX, type?: "source" | "target"): HandleHit | null {
-    const scene = this.scene, p = scene.toWorld(cssX, cssY), reach = reachPx / scene.view.zoom;
+  /** The painted handle under a point (css px): on its socket, or within HANDLE_HIT_PX of its centre. */
+  private paintedHandleAt(cssX: number, cssY: number): HandleHit | null {
+    const scene = this.scene, p = scene.toWorld(cssX, cssY), floor = HANDLE_HIT_PX / scene.view.zoom;
     // Handles sit on a node's sides, a little outside it.
-    const near = this.nodesNear(p.x, p.y, reach + 24);
-    return type ? this.nearestOfType(near, p.x, p.y, reach, type) : handleAt(scene.graph, near, p.x, p.y, reach);
-  }
-
-  private nearestOfType(nodes: number[], x: number, y: number, reach: number, type: "source" | "target"): HandleHit | null {
-    let best: HandleHit | null = null, bestDistance = reach;
-    for (const i of nodes) {
-      const n = this.scene.graph.nodes[i];
-      for (const [key, anchor] of n.handles ?? []) {
-        if (!key.startsWith(`${type}:`)) continue;
-        const d = Math.hypot(n.x + anchor.x - x, n.y + anchor.y - y);
-        if (d <= bestDistance) {
-          bestDistance = d;
-          best = { node: i, handleId: key.slice(type.length + 1), type, x: n.x + anchor.x, y: n.y + anchor.y };
-        }
-      }
-    }
-    return best;
+    return handleAt(scene.graph, this.nodesNear(p.x, p.y, Math.max(floor, 24) + 24), p.x, p.y, floor);
   }
 
   private nodesNear(x: number, y: number, reach: number): number[] {
@@ -626,15 +617,24 @@ export class Editor {
     let dragging = false;
     let target: HandleHit | null = null;
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     const wanted = from.type === "source" ? "target" : "source";
     const draw = (event: PointerEvent) => {
       const at = scene.local(event), p = scene.toWorld(at.x, at.y);
-      // Snap to the nearest handle of the other kind within the connection radius.
-      const snap = this.paintedHandleAt(at.x, at.y, CONNECTION_RADIUS_PX, wanted) ?? this.liveHandleAt(event, wanted);
-      target = snap && snap.node !== from.node ? snap : null;
-      const end = target ? { x: target.x, y: target.y } : p;
-      const a = scene.toScreen(from.x, from.y), b = scene.toScreen(end.x, end.y);
+      // As React Flow finds it: the handle under the pointer, else the one whose centre is nearest within the
+      // connection radius, of either kind. The line ends on it only if the connection would be made.
+      const candidate = this.liveHandleAt(event) ?? this.paintedHandleAt(at.x, at.y)
+        ?? closestHandle(scene.graph, this.nodesNear(p.x, p.y, CONNECTION_RADIUS + 24), p.x, p.y, CONNECTION_RADIUS, wanted, from);
+      const valid = !!candidate && candidate.type === wanted && candidate.connectableEnd
+        && !(candidate.node === from.node && candidate.handleId === from.handleId && candidate.type === from.type)
+        && this.editing().isValidConnection(this.connection(from, candidate));
+      target = valid ? candidate : null;
+      // The nodes React Flow would show sockets for: their labels show, and a valid target's socket fills.
+      setConnectDrag(true, target ? { nodeId: scene.graph.nodes[target.node].id, handleId: target.handleId || null, type: target.type } : null);
+      const under = scene.nodeAt(at.x, at.y);
+      this.live.wantOnly("connect", [fromId, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [scene.graph.nodes[target.node].id] : [])]);
+      // React Flow's line runs between the handles' centres.
+      const end = target ? { x: target.cx, y: target.cy } : p;
+      const a = scene.toScreen(from.cx, from.cy), b = scene.toScreen(end.x, end.y);
       const fromSource = from.type === "source";
       const [d] = routeEdge({
         style: "curved",
@@ -642,31 +642,21 @@ export class Editor {
         targetX: fromSource ? b.x : a.x, targetY: fromSource ? b.y : a.y, targetPosition: Position.Left,
       });
       path.setAttribute("d", d);
-      const valid = target ? this.editing().isValidConnection(this.connection(from, target)) : true;
-      path.setAttribute("stroke", valid ? edgeColorForHandles(from.type === "source" ? handleId : null, from.type === "target" ? handleId : null) : EDGE_COLORS.default);
-      ring.style.display = target ? "" : "none";
-      if (target) {
-        ring.setAttribute("cx", String(b.x));
-        ring.setAttribute("cy", String(b.y));
-        ring.setAttribute("stroke", valid ? "#ffffff" : "#ef4444");
-      }
+      path.setAttribute("stroke-width", String(scene.view.zoom));
     };
     const start = (event: PointerEvent) => {
       dragging = true;
       scene.capture();
       path.setAttribute("fill", "none");
-      path.setAttribute("stroke-width", "3");
-      path.setAttribute("stroke-linecap", "round");
-      ring.setAttribute("r", "8");
-      ring.setAttribute("fill", "none");
-      ring.setAttribute("stroke-width", "2");
-      this.overlay.append(path, ring);
+      path.setAttribute("stroke", CONNECTION_LINE_STROKE);
+      this.overlay.append(path);
       document.documentElement.classList.add("canvas-interacting");
       draw(event);
     };
     const end = () => {
       path.remove();
-      ring.remove();
+      setConnectDrag(false);
+      this.live.wantOnly("connect", []);
       document.documentElement.classList.remove("canvas-interacting");
     };
     return {
@@ -683,20 +673,17 @@ export class Editor {
         if (!dragging) {
           // The click reaches the node as well: it selects it, as React Flow's node click (connectOnClick is off).
           this.clickNode(fromId, event.shiftKey);
-          // A click on the handle opens its menu (a live node's handle opens it through WorkflowCanvas's own listener).
+          // A click on the handle opens its menu at its centre (a live node's handle opens it through WorkflowCanvas's own listener).
           if (fromLive) return;
-          const p = scene.toScreen(from.x, from.y), box = scene.canvas.getBoundingClientRect();
+          const p = scene.toScreen(from.cx, from.cy), box = scene.canvas.getBoundingClientRect();
           this.editing().onHandleClick({ nodeId: fromId, handleId, type: from.type, position: { x: box.left + p.x, y: box.top + p.y } });
           return;
         }
         end();
         const editing = this.editing();
         if (target) {
-          const connection = this.connection(from, target);
-          if (editing.isValidConnection(connection)) {
-            editing.onConnect(connection);
-            return;
-          }
+          editing.onConnect(this.connection(from, target));
+          return;
         }
         // No handle: WorkflowCanvas connects to a compatible handle of the node under the pointer, or offers the add-node menu.
         const fromNode = useWorkflowStore.getState().nodes.find((n) => n.id === fromId);
@@ -709,12 +696,12 @@ export class Editor {
     };
   }
 
-  /** The handle of a live node under the pointer, for a connection being dropped on it. */
-  private liveHandleAt(event: PointerEvent, type: "source" | "target"): HandleHit | null {
+  /** The handle of a live node under the pointer, for a connection being drawn over it. */
+  private liveHandleAt(event: PointerEvent): HandleHit | null {
     for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
       if (!(element instanceof HTMLElement) || !element.classList.contains("react-flow__handle") || !element.closest("[data-gpu-canvas-live]")) continue;
       const hit = this.handleFromEvent({ target: element } as unknown as PointerEvent);
-      if (hit && hit.type === type) return hit;
+      if (hit) return hit;
     }
     return null;
   }

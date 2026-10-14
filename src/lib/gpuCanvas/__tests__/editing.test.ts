@@ -5,7 +5,8 @@ import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "
 import { defaultEdgeAppearance } from "@/types";
 import { measuredChanges, SceneGraph } from "../graph";
 import { cubicAt, distanceToCubic, pathToCubics, routeSceneEdge, type RouteContext } from "../edgeRoutes";
-import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
+import { closestHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
+import { cachedHandle, handleFromCache } from "../paintCache";
 
 function node(id: string, x: number, y: number, data: Record<string, unknown> = {}, type = "prompt"): WorkflowNode {
   return { id, type, position: { x, y }, data, width: 300 } as unknown as WorkflowNode;
@@ -153,6 +154,53 @@ describe("hit tests", () => {
     graph.nodes[0].handles = new Map([["source:image", { x: 300, y: 50 }], ["target:text", { x: 0, y: 50 }]]);
     expect(handleAt(graph, [0], 402, 151, 10)).toMatchObject({ node: 0, handleId: "image", type: "source", x: 400, y: 150 });
     expect(handleAt(graph, [0], 250, 150, 10)).toBeNull();
+  });
+
+  // A schema node's Prompt row as React Flow measures it: the socket's 18×28 box 15 px out from the card,
+  // and the legacy `text` socket hidden at the card's edge on the same row.
+  function socketGraph() {
+    const graph = new SceneGraph([node("a", 100, 100), node("b", 600, 100)], [], {});
+    graph.nodes[0].handles = new Map([
+      ["target:text-0", { x: -15, y: 50, position: "left", box: { x: -15, y: 36, w: 18, h: 28 }, connectableStart: true, connectableEnd: true }],
+      ["target:text", { x: 0, y: 50, position: "left", box: { x: 0, y: 50, w: 0, h: 0 }, connectableStart: false, connectableEnd: false }],
+    ]);
+    graph.nodes[1].handles = new Map([
+      ["source:text", { x: 315, y: 50, position: "right", box: { x: 297, y: 36, w: 18, h: 28 }, connectableStart: true, connectableEnd: true }],
+    ]);
+    return graph;
+  }
+
+  it("takes a socket where its ellipse reaches, never a hidden one", () => {
+    const graph = socketGraph();
+    // The hole (5.5 px out), a little inside the card, and the ellipse's far edge.
+    for (const [x, y] of [[94.5, 150], [105, 150], [80, 150], [94, 166]]) {
+      expect(handleAt(graph, [0], x, y, 9)).toMatchObject({ node: 0, handleId: "text-0", type: "target", x: 85, y: 150, cx: 94, cy: 150 });
+    }
+    expect(handleAt(graph, [0], 94, 170, 9)).toBeNull();
+    expect(handleAt(graph, [0], 120, 150, 9)).toBeNull();
+    // A small zoom keeps a floor round the centre.
+    expect(handleAt(graph, [0], 94, 175, 30)).toMatchObject({ handleId: "text-0" });
+  });
+
+  it("finds the nearest connectable handle centre for a connection, as React Flow", () => {
+    const graph = socketGraph();
+    const from = handleAt(graph, [1], 909, 150, 9)!;
+    expect(from).toMatchObject({ handleId: "text", type: "source", cx: 906 });
+    expect(closestHandle(graph, [0, 1], 99, 150, 20, "target", from)).toMatchObject({ node: 0, handleId: "text-0" });
+    expect(closestHandle(graph, [0, 1], 120, 150, 20, "target", from)).toBeNull();
+    // The handle it starts from is left out.
+    expect(closestHandle(graph, [1], 906, 150, 20, "target", from)).toBeNull();
+    // On a tie the opposite kind wins.
+    graph.nodes[0].handles!.set("source:out", { x: 0, y: 0, box: { x: -9, y: -14, w: 18, h: 28 } });
+    graph.nodes[0].handles!.set("target:in", { x: 0, y: 0, box: { x: -9, y: -14, w: 18, h: 28 } });
+    expect(closestHandle(graph, [0], 100, 105, 20, "target")).toMatchObject({ handleId: "in", type: "target" });
+    expect(closestHandle(graph, [0], 100, 105, 20, "source")).toMatchObject({ handleId: "out", type: "source" });
+  });
+
+  it("keeps a handle's box and connectability in the disk cache", () => {
+    const graph = socketGraph();
+    for (const [key, anchor] of graph.nodes[0].handles!) expect(handleFromCache(cachedHandle(key, anchor))).toEqual([key, anchor]);
+    expect(handleFromCache(["source:image", 1, 2, "right"])).toEqual(["source:image", { x: 1, y: 2, position: "right" }]);
   });
 
   it("takes a node only when the marquee holds its media card, or the whole node without one", () => {
