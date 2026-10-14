@@ -47,7 +47,7 @@ beforeEach(() => {
   useAssetStore.setState({ appView: "canvas" });
   const graph = new SceneGraph(nodes, [], {});
   const canvas = document.createElement("canvas");
-  const scene = { graph, canvas, nodesMoved: noop } as unknown as Scene;
+  const scene = { graph, canvas, nodesMoved: noop, onViewChanged: () => noop, onLayoutChanged: () => noop } as unknown as Scene;
   const live = { refresh: noop } as unknown as LiveLayer;
   host = document.createElement("div");
   document.body.appendChild(host);

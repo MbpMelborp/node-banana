@@ -118,6 +118,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const liveViewChanged = useCallback((view: View) => liveConnection.viewChanged?.(view), [liveConnection]);
   const holdLive = useCallback((id: string) => liveConnection.hold?.(id) ?? noop, [liveConnection]);
   const liveNodeClick = useCallback((id: string, additive: boolean) => liveConnection.nodeClick?.(id, additive), [liveConnection]);
+  const liveMeasured = useCallback((id: string) => liveConnection.measured?.(id), [liveConnection]);
   const [initialView] = useState(() => useWorkflowStore.getState().canvasViewport ?? { x: 0, y: 0, zoom: 1 });
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
@@ -500,7 +501,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
       <div ref={liveRef} data-gpu-canvas-live="" className="pointer-events-none absolute inset-0 overflow-hidden">
         <LiveFlow connect={connectLive} onViewChanged={liveViewChanged} initialView={initialView} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
-          onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick}>
+          onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick} onMeasured={liveMeasured}>
           {flowChildren}
         </LiveFlow>
       </div>

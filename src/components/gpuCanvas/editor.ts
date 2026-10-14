@@ -107,6 +107,9 @@ export class Editor {
   private hoveredHandle: string | null = null;
   private overlay: SVGSVGElement;
   private marquee: HTMLDivElement;
+  /** React Flow's NodesSelection: the dotted frame around the nodes a marquee selected, until a click or no node is selected. */
+  private selectionFrame: HTMLDivElement;
+  private selectionFrameActive = false;
   private offs: (() => void)[] = [];
   /** Tab through the nodes and connections (keyboardFocus.ts). */
   readonly keyboard: KeyboardFocus;
@@ -123,6 +126,15 @@ export class Editor {
     // React Flow's user selection look (globals.css styles .react-flow__selection the same way).
     this.marquee.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:4;background:rgba(0,89,220,0.08);border:1px dotted rgba(0,89,220,0.8);";
     host.appendChild(this.marquee);
+    this.selectionFrame = document.createElement("div");
+    this.selectionFrame.dataset.gpuCanvasSelectionFrame = "";
+    // .react-flow__nodesselection-rect's look (React Flow's selection colours), under the marquee.
+    this.selectionFrame.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:3;background:rgba(0,89,220,0.08);border:1px dotted rgba(0,89,220,0.8);";
+    host.appendChild(this.selectionFrame);
+    // The frame follows the view, the nodes' moves and sizes, and the selection.
+    const placeFrame = () => { if (this.selectionFrameActive) this.placeSelectionFrame(); };
+    this.offs.push(scene.onViewChanged(placeFrame), scene.onLayoutChanged(placeFrame));
+    this.offs.push(useWorkflowStore.subscribe((state, previous) => { if (state.nodes !== previous.nodes) placeFrame(); }));
     const on = <K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void) => {
       window.addEventListener(type, listener);
       this.offs.push(() => window.removeEventListener(type, listener));
@@ -139,6 +151,7 @@ export class Editor {
     this.keyboard.dispose();
     this.overlay.remove();
     this.marquee.remove();
+    this.selectionFrame.remove();
   }
 
   // ── Keys ──────────────────────────────────────────────────────────────
@@ -335,6 +348,7 @@ export class Editor {
 
   /** A click on empty canvas: clears the selection, and WorkflowCanvas's onPaneClick (it collapses the stub group). */
   private paneClick() {
+    this.hideSelectionFrame();
     this.clearSelection();
     this.editing().onPaneClick();
   }
@@ -373,6 +387,7 @@ export class Editor {
    * adds it); a selected one leaves it with Shift, and otherwise the selection stays as it is.
    */
   clickNode(id: string, additive: boolean) {
+    this.hideSelectionFrame();
     const node = useWorkflowStore.getState().nodes.find((n) => n.id === id);
     if (!node || (node.selected && !additive)) return;
     this.selectNodes([id], additive);
@@ -384,6 +399,9 @@ export class Editor {
     const store = useWorkflowStore.getState();
     const edge = store.edges.find((candidate) => candidate.id === this.scene.graph.edges[e]?.id);
     if (!edge || edge.selectable === false) return;
+    // Shift adds the connection, and selected nodes drop it again at once (WorkflowCanvas's handleSelectionChange,
+    // which closes its toolbar too): nothing changes.
+    if (event.shiftKey && store.nodes.some((n) => n.selected)) return;
     // React Flow's edge click: only this connection, or added to the selection with Shift.
     const additive = event.shiftKey;
     const nodes = additive ? [] : store.nodes.filter((n) => n.selected).map((n): NodeChange<WorkflowNode> => ({ type: "select", id: n.id, selected: false }));
@@ -473,6 +491,7 @@ export class Editor {
     const start = scene.local(down);
     let previousNodes = "", previousEdges = "";
     // A marquee replaces the selection: it starts from none (React Flow's resetSelectedElements as it starts).
+    this.hideSelectionFrame();
     this.clearSelection();
     const update = (event: PointerEvent) => {
       const at = scene.local(event);
@@ -489,8 +508,8 @@ export class Editor {
         const changes = state.nodes.filter((n) => !!n.selected !== next.has(n.id) && n.selectable !== false).map((n): NodeChange<WorkflowNode> => ({ type: "select", id: n.id, selected: next.has(n.id) }));
         if (changes.length) state.onNodesChange(changes);
       }
-      // With no node taken, the connections the marquee crosses (EdgeMarqueeSelection).
-      const edgeIds = taken.length ? [] : this.edgesCrossing(box);
+      // With no node selected, the connections the marquee crosses (EdgeMarqueeSelection).
+      const edgeIds = useWorkflowStore.getState().nodes.some((n) => n.selected) ? [] : this.edgesCrossing(box);
       const edgeKey = edgeIds.join("\n");
       if (edgeKey !== previousEdges) {
         previousEdges = edgeKey;
@@ -508,13 +527,44 @@ export class Editor {
         // A marquee that took only connections opens the toolbar at the release (handleSelectionEnd).
         const now = useWorkflowStore.getState();
         const firstEdge = now.edges.find((e) => e.selected);
-        if (firstEdge && !now.nodes.some((n) => n.selected)) {
+        if (now.nodes.some((n) => n.selected)) {
+          // Nodes taken: React Flow frames them (nodesSelectionActive).
+          this.selectionFrameActive = true;
+          this.placeSelectionFrame();
+        } else if (firstEdge) {
           const p = scene.local(event), w = scene.toWorld(p.x, p.y);
           useWorkflowStore.setState({ edgeMenuAnchor: { edgeId: firstEdge.id, x: w.x, y: w.y } });
         }
       },
       cancel: end,
     };
+  }
+
+  /** Frames the selected nodes (the union of their boxes, in css px), or hides the frame when none is selected. */
+  private placeSelectionFrame() {
+    const scene = this.scene, graph = scene.graph;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const node of useWorkflowStore.getState().nodes) {
+      const i = node.selected ? graph.indexOf.get(node.id) : undefined;
+      if (i == null) continue;
+      const n = graph.nodes[i];
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.w);
+      maxY = Math.max(maxY, n.y + n.h);
+    }
+    if (minX > maxX) {
+      this.hideSelectionFrame();
+      return;
+    }
+    const a = scene.toScreen(minX, minY), b = scene.toScreen(maxX, maxY);
+    Object.assign(this.selectionFrame.style, { display: "block", left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px` });
+  }
+
+  private hideSelectionFrame() {
+    if (!this.selectionFrameActive) return;
+    this.selectionFrameActive = false;
+    this.selectionFrame.style.display = "none";
   }
 
   private edgesCrossing(box: { left: number; top: number; right: number; bottom: number }): string[] {
@@ -595,6 +645,8 @@ export class Editor {
       },
       up: (event) => {
         if (!dragging) {
+          // The click reaches the node as well: it selects it, as React Flow's node click (connectOnClick is off).
+          this.clickNode(fromId, event.shiftKey);
           // A click on the handle opens its menu (a live node's handle opens it through WorkflowCanvas's own listener).
           if (fromLive) return;
           const p = scene.toScreen(from.x, from.y), box = scene.canvas.getBoundingClientRect();

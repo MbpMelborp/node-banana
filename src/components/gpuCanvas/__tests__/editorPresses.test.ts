@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
-import type { WorkflowNode } from "@/types";
+import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
 import type { Scene } from "@/lib/gpuCanvas/scene";
@@ -33,12 +33,16 @@ function drag(from: [number, number], to: [number, number], init: MouseEventInit
   gesture?.up(pointer(...to, init));
 }
 
+const selectedEdges = () => useWorkflowStore.getState().edges.filter((e) => e.selected).map((e) => e.id);
+const frame = () => host.querySelector<HTMLElement>("[data-gpu-canvas-selection-frame]")!;
 const selected = () => useWorkflowStore.getState().nodes.filter((n) => n.selected).map((n) => n.id);
 
 beforeEach(() => {
   const nodes = [node("a", 0, 0, true), node("b", 400, 0, true), node("c", 800, 0)];
-  useWorkflowStore.setState({ nodes, edges: [] });
-  const graph = new SceneGraph(nodes, [], {});
+  // A connection whose route runs along y = 1000, below the nodes.
+  const edges = [{ id: "ac", source: "a", target: "c", sourceHandle: "text", targetHandle: "text" } as WorkflowEdge];
+  useWorkflowStore.setState({ nodes, edges, edgeMenuAnchor: null });
+  const graph = new SceneGraph(nodes, edges, {});
   const index = new GridIndex(graph.nodes);
   edgeHit = -1;
   const scene = {
@@ -49,8 +53,10 @@ beforeEach(() => {
     nodeAt: (x: number, y: number) => index.at(x, y),
     nodesWithin: (x0: number, y0: number, x1: number, y1: number) => index.within(x0, y0, x1, y1),
     edgeAt: () => edgeHit,
-    edgesWithin: () => [],
+    edgesWithin: () => [0],
+    edgeRoute: () => ({ segments: [[0, 1000, 400, 1000, 800, 1000, 1200, 1000]] }),
     capture: noop, input: noop, nodesMoved: noop,
+    onViewChanged: () => noop, onLayoutChanged: () => noop,
   } as unknown as Scene;
   const live = { refresh: noop, wantOnly: noop } as unknown as LiveLayer;
   host = document.createElement("div");
@@ -90,6 +96,52 @@ describe("presses on the GPU canvas", () => {
     expect(selected()).toEqual(["a", "c"]);
     editor.clickNode("a", true);
     expect(selected()).toEqual(["c"]);
+  });
+
+  it("a marquee replaces the selection: over empty canvas it leaves none, across a connection it takes that one", () => {
+    drag([2000, 2000], [2100, 2100], { shiftKey: true });
+    expect(selected()).toEqual([]);
+    expect(selectedEdges()).toEqual([]);
+    editor.selectNodes(["a", "b"], false);
+    drag([500, 950], [600, 1050], { shiftKey: true });
+    expect(selected()).toEqual([]);
+    expect(selectedEdges()).toEqual(["ac"]);
+    expect(useWorkflowStore.getState().edgeMenuAnchor?.edgeId).toBe("ac");
+  });
+
+  it("Shift+click on a connection while nodes are selected changes nothing", () => {
+    settings.onEdgeClick = vi.fn();
+    edgeHit = 0;
+    click(500, 1000, { shiftKey: true });
+    expect(selected()).toEqual(["a", "b"]);
+    expect(selectedEdges()).toEqual([]);
+    expect(settings.onEdgeClick).not.toHaveBeenCalled();
+  });
+
+  it("a click on a handle selects its node and opens the handle menu", () => {
+    settings.onHandleClick = vi.fn();
+    useWorkflowStore.getState().onEdgesChange([{ type: "select", id: "ac", selected: true }]);
+    editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 100 }]]);
+    click(1100, 100);
+    expect(selected()).toEqual(["c"]);
+    expect(selectedEdges()).toEqual([]);
+    expect(settings.onHandleClick).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "c", handleId: "text", type: "source" }));
+  });
+
+  it("a marquee that takes nodes frames them until a click", () => {
+    drag([-20, -20], [750, 250], { shiftKey: true });
+    expect(selected()).toEqual(["a", "b"]);
+    expect(frame().style.display).toBe("block");
+    expect([frame().style.left, frame().style.top, frame().style.width, frame().style.height]).toEqual(["0px", "0px", "700px", "200px"]);
+    // Taking a node out of the selection reframes the rest.
+    editor.selectNodes(["b"], true);
+    expect(frame().style.display).toBe("block");
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }]);
+    expect(frame().style.display).toBe("none");
+    drag([-20, -20], [750, 250], { shiftKey: true });
+    expect(frame().style.display).toBe("block");
+    click(2000, 2000, { shiftKey: true });
+    expect(frame().style.display).toBe("none");
   });
 
   it("a double-click opens the add-node menu on empty canvas only, not on a connection", () => {

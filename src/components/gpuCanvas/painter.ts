@@ -87,6 +87,8 @@ interface NodePaint {
   images: Map<number, HeldImage>;
   /** The node's measured height, in flow units. */
   height?: number;
+  /** Its handles' anchors as painting measured them. */
+  handles?: Map<string, HandleAnchor>;
   shown?: HeldImage;
   lastSeen: number;
 }
@@ -294,6 +296,12 @@ export class Painter {
   }
 
   /** Paints a node at the view's tier now (ahead of the queue) and resolves once the scene shows it. */
+  /** The node's height and handles as its painted image has them. */
+  measured(id: string): { height: number; handles?: Map<string, HandleAnchor> } | undefined {
+    const paint = this.paints.get(id);
+    return paint?.height == null ? undefined : { height: paint.height, handles: paint.handles };
+  }
+
   paintNow(id: string): Promise<void> {
     if (!this.startedAt) this.startedAt = performance.now();
     const tier = this.wanted();
@@ -751,7 +759,10 @@ export class Painter {
     if (i == null) return;
     if (card !== undefined) this.scene.graph.nodes[i].card = card;
     this.scene.setNodeHeight(i, height);
-    if (handles) this.scene.setHandles(i, handles);
+    if (handles) {
+      this.scene.setHandles(i, handles);
+      this.paint(id).handles = handles;
+    }
     if (!this.measuredIds.size) queueMicrotask(() => this.reportMeasured());
     this.measuredIds.add(id);
   }

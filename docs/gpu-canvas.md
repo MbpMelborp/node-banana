@@ -139,7 +139,11 @@ before the scene shows it again.
 
 The layer hands React Flow new node objects on each render, carrying the
 size React Flow measured: without it React Flow hides the node until it
-measures it again, which blurs a field being typed in.
+measures it again, which blurs a field being typed in. What React Flow
+measures of a live node (its height, its handles) also goes to the scene, so
+presses, the marquee and its connections follow a node that grew or shrank
+since it was painted; once it is painted again the scene takes the painted
+measure back.
 
 Live nodes take the pointer: React Flow sets `pointer-events: none` inline
 on nodes it cannot select or drag, which is every node of the live flow, so
@@ -190,8 +194,8 @@ their component. Annotation opens its editor from the live node, as today.
 
 The scene takes every press and asks the editor what it starts:
 
-- **A handle** (a live node's, or a painted one within 9 px): a click opens
-  the handle menu; a drag draws the connection line and snaps to an
+- **A handle** (a live node's, or a painted one within 9 px): a click selects
+  its node as a node click does and opens the handle menu; a drag draws the connection line and snaps to an
   opposite handle within 20 px. A valid drop connects; anything else goes to
   `handleConnectEnd` with the node under the pointer, which opens the
   connection drop menu as today.
@@ -206,7 +210,9 @@ The scene takes every press and asks the editor what it starts:
   to the store and to `onNodeDragStop` (group membership). A press on a
   live node takes the pointer only once it becomes a drag, so a click still
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
-- **A connection** (within 7 px): selects it, as React Flow would.
+- **A connection** (within 7 px): selects it, as React Flow would; Shift
+  adds it, unless nodes are selected (WorkflowCanvas drops connections from
+  a selection with nodes in it).
 - With the selection key held (Shift, or Alt in "altDrag"), a press on a
   node or connection is a click that toggles it, and any movement turns it
   into a marquee.
@@ -216,7 +222,9 @@ The scene takes every press and asks the editor what it starts:
   default) starts only from empty canvas, once the press moves (at once with
   the selection key), and clears the selection as it starts. The marquee
   takes a node only when it holds its media card, or the whole node without
-  one; with no nodes taken it selects the connections it crosses.
+  one; with no nodes taken it selects the connections it crosses. Nodes it
+  took are framed (React Flow's dotted `NodesSelection`) until a click or
+  until none is selected.
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
   dialog open) removes the selected connections, then nodes. The arrow keys
   move the selection 5 px (20 px with Shift) while focus is on nothing or on

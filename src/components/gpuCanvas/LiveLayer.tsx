@@ -23,10 +23,10 @@ import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
-import type { SceneNode } from "@/lib/gpuCanvas/graph";
+import type { HandleAnchor, SceneNode } from "@/lib/gpuCanvas/graph";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
-import { flowNode, noop, settleNodes, type HeaderProps } from "./nodeSheets";
+import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./nodeSheets";
 
 // The pane must not take the pointer: pans and clicks on empty space go to the scene.
 // Pointer events are inherited, so what sits on the flow and takes clicks opts back in. React
@@ -77,6 +77,8 @@ export interface LiveConnection {
   hold?: HoldLive;
   /** Set by the canvas: a click in a live node that its fields kept from the scene selects the node (Editor.clickNode). */
   nodeClick?: (id: string, additive: boolean) => void;
+  /** Set by the layer: React Flow measured a live node again. */
+  measured?: (id: string) => void;
 }
 
 function ViewSync({ connect, onViewChanged }: { connect: (part: LiveConnection) => void; onViewChanged: (view: View) => void }) {
@@ -110,6 +112,8 @@ interface LiveFlowProps {
   hold: HoldLive;
   /** A click in a live node that did not go to the scene (on a field or button): it selects the node, as React Flow's node click. */
   onNodeClick: (id: string, additive: boolean) => void;
+  /** React Flow measured a live node (its size or handles changed). */
+  onMeasured: (id: string) => void;
   /** Drawn inside the flow, in its viewport's context (group controls, the navigator). */
   children?: ReactNode;
 }
@@ -121,7 +125,7 @@ interface LiveFlowProps {
  * portal, the selection's positions) answers for the GPU canvas, its
  * viewport kept equal to the scene's.
  */
-export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, hold, onNodeClick, children }: LiveFlowProps) {
+export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeTypes, defaultEdgeOptions, onEdgesChange, headers, hold, onNodeClick, onMeasured, children }: LiveFlowProps) {
   const [state, setState] = useState<FlowState>({ nodes: [], edges: [], committed: noop });
   const { nodes, edges } = state;
   const types = useMemo(() => ({ ...nodeTypes, gpuGhost: GhostNode }), [nodeTypes]);
@@ -133,6 +137,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   const realIds = useMemo(() => new Set(real.map((n) => n.id)), [real]);
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const store = useWorkflowStore.getState();
+    for (const change of changes) if (change.type === "dimensions" && change.dimensions && realIds.has(change.id)) onMeasured(change.id);
     const measured = changes.filter((change): change is NodeDimensionChange => {
       if (change.type !== "dimensions" || !change.dimensions || !realIds.has(change.id)) return false;
       const k = indexOfNode(store.nodes, change.id);
@@ -140,7 +145,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
       return k >= 0 && !(known?.width != null && known.height != null && Math.abs(known.width - change.dimensions.width) <= 0.5 && Math.abs(known.height - change.dimensions.height) <= 0.5);
     });
     if (measured.length) store.onNodesChange(measured.map((change) => ({ ...change, setAttributes: false })));
-  }, [realIds]);
+  }, [realIds, onMeasured]);
   // Presses the scene took have selected already; a stopped click (OutputNode, the curve editor) never arrives.
   const nodeClick = useCallback((event: ReactMouseEvent, node: Node) => {
     if (node.type === "gpuGhost" || !(event.target instanceof Element) || pressGoesToScene(event.target)) return;
@@ -165,6 +170,8 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
 export interface LivePainter {
   /** Resolves once the node's painted image is current. */
   paintNow(id: string): Promise<void>;
+  /** The node's height and handles as its painted image has them. */
+  measured(id: string): { height: number; handles?: Map<string, HandleAnchor> } | undefined;
 }
 
 export class LiveLayer {
@@ -231,6 +238,7 @@ export class LiveLayer {
       this.wantOnly("focus", next ? [next] : []);
     });
     connection.hold = (id) => this.hold(id);
+    connection.measured = (id) => this.applyLiveSize(id);
     // Someone else moved the flow's viewport (setCenter, fitView, a tab restored): the scene follows.
     connection.viewChanged = (view) => {
       const current = scene.view;
@@ -407,6 +415,7 @@ export class LiveLayer {
       if (i == null) continue;
       this.live.add(id);
       this.scene.setHidden(i, true);
+      this.applyLiveSize(id);
     }
     this.stats.record("live.swapMs", performance.now() - started);
   }
@@ -417,11 +426,32 @@ export class LiveLayer {
     if (this.wanted.has(id) || !this.leaving.has(id)) return;
     this.leaving.delete(id);
     const i = this.scene.graph.indexOf.get(id);
-    if (i != null) this.scene.setHidden(i, false);
+    if (i != null) {
+      this.scene.setHidden(i, false);
+      // The scene's box is the painted image's again.
+      const painted = this.painter?.measured(id);
+      if (painted) {
+        this.scene.setNodeHeight(i, painted.height);
+        if (painted.handles) this.scene.setHandles(i, painted.handles);
+      }
+    }
     // Off the layer a frame later, once the scene has drawn its image.
     requestAnimationFrame(() => {
       if (!this.wanted.has(id) && !this.leaving.has(id)) void this.render();
     });
+  }
+
+  /**
+   * A live node's box and handles as React Flow measures them: presses, the marquee and its connections
+   * follow the node as it shows, though it grew or shrank since it was painted (an opened section, more text).
+   */
+  private applyLiveSize(id: string) {
+    const state = this.flowState(), i = this.scene.graph.indexOf.get(id);
+    const height = state?.nodeLookup.get(id)?.measured.height;
+    if (!this.live.has(id) || i == null || !state || !height) return;
+    if (Math.abs(this.scene.graph.nodes[i].h - height) > 0.5) this.scene.setNodeHeight(i, height);
+    const handles = handleAnchors(state, id);
+    if (handles) this.scene.setHandles(i, handles);
   }
 
   /** The graph was rebuilt: the scene forgot which nodes it hid. */
@@ -444,6 +474,7 @@ export class LiveLayer {
     for (const off of this.listeners) off();
     this.connection.viewChanged = undefined;
     this.connection.hold = undefined;
+    this.connection.measured = undefined;
     this.generation++;
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
