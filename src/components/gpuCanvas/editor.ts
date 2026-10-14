@@ -15,7 +15,8 @@
  *   settings say;
  * - Delete and Backspace remove the selected nodes and connections; the
  *   arrow keys move the selection, and Enter, Space and Escape select and
- *   unselect a focused live node, as React Flow's keyboard handling does.
+ *   unselect a focused live node, as React Flow's keyboard handling does;
+ *   Tab steps through the connections and nodes (keyboardFocus.ts).
  *
  * Painted nodes are pictures, so their handles and media cards are the ones
  * painting measured (SceneNode.handles, SceneNode.card). Live nodes are real
@@ -35,6 +36,7 @@ import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type HandleHi
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import type { LiveLayer } from "./LiveLayer";
+import { KeyboardFocus } from "./keyboardFocus";
 
 /** Pointer travel (css px) under which a press is a click (React Flow's nodeClickDistance and nodeDragThreshold). */
 const CLICK_DISTANCE = 5;
@@ -104,8 +106,11 @@ export class Editor {
   private overlay: SVGSVGElement;
   private marquee: HTMLDivElement;
   private offs: (() => void)[] = [];
+  /** Tab through the nodes and connections (keyboardFocus.ts). */
+  readonly keyboard: KeyboardFocus;
 
   constructor(private scene: Scene, private live: LiveLayer, host: HTMLElement, private editing: () => GpuEditing) {
+    this.keyboard = new KeyboardFocus(scene, live, host, () => this.editing().locked);
     this.overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.overlay.setAttribute("class", "pointer-events-none absolute inset-0 h-full w-full");
     this.overlay.style.zIndex = "4";
@@ -129,6 +134,7 @@ export class Editor {
 
   dispose() {
     for (const off of this.offs) off();
+    this.keyboard.dispose();
     this.overlay.remove();
     this.marquee.remove();
   }
@@ -631,7 +637,9 @@ export class Editor {
     }
     const node = handle ? -1 : scene.nodeAt(at.x, at.y);
     const edge = handle || node >= 0 ? -1 : scene.edgeAt(at.x, at.y);
-    scene.setHoveredEdge(edge);
+    // The connection holding keyboard focus looks hovered while the pointer is on no other.
+    const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
+    scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
     scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : edge >= 0 ? "pointer" : "";
   };
 

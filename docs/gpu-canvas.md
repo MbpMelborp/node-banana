@@ -216,6 +216,13 @@ The scene takes every press and asks the editor what it starts:
   move the selection 5 px (20 px with Shift) while focus is on nothing or on
   a selected live node; Enter or Space selects a focused live node and Escape
   unselects it. Escape leaves a gesture going, as React Flow does.
+- **Tab / Shift+Tab** step through the connections, then the nodes, in the
+  store's order as on classic (`keyboardFocus.ts`): a node is made live,
+  centred at the same zoom when off screen (React Flow's
+  `autoPanOnNodeFocus`) and focused, its own fields in turn; a connection's
+  focus is held by a sentry at the head of the canvas named after it, the
+  scene draws it hovered, and Enter or Space selects it, Escape unselects
+  it. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu; a double-click on the pane
   opens the add-node menu.
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
@@ -238,8 +245,6 @@ handles. That happens on screen at 30% zoom and above, for up to 250.
 
 - Sweeping connections with the hook key (H), and dragging a connection's
   end to reconnect it.
-- Painted nodes and connections take no keyboard focus, so Tab does not step
-  through them and a connection has no Enter/Escape of its own.
 - Hidden connections' stubs below 30% zoom.
 - A live connection's decorations draw over painted nodes they pass under.
 - A node whose look depends on state outside its data and its inputs (a
