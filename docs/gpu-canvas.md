@@ -115,7 +115,10 @@ Batches are 48 nodes, 96 at the 1/4 tier.
 
 A workflow opened from a file is framed as today's canvas frames it
 (`frameLoadedGraph`), or the tab's saved view is restored. Painting starts
-over from that view. A workflow of 150 nodes or more that is not painted
+over from that view. The first frame uses the default node heights; once
+every node has its painted height (or after 2 s, on what is known then) it
+is framed again on those, as classic frames on measured sizes, unless the
+view has moved since. A workflow of 150 nodes or more that is not painted
 within 300 ms shows the loading screen ("Opening workflow", N of M), which
 stays until the view is sharp and every node has its 1/8 image. Behind it
 the sheets are 4096×3072 and nothing waits for quiet, since nobody can pan.
@@ -322,18 +325,23 @@ The scene takes every press and asks the editor what it starts:
   through a listener on the wrapper (`wheelRoot`). A wheel on the canvas
   hovers the node under the pointer, and hover is tested again as the view
   moves under a still pointer, so a node brought under it turns live and its
-  inner areas take the wheels that follow.
+  inner areas take the wheels that follow. As classic's `onMoveStart`, a
+  moving view clears the store's hovered node (header controls, video hover
+  previews) and sets `isPanningRef` until it has been still 150 ms.
 - Two fingers pinch about their midpoint and pan with it, as d3-zoom's touch
   zoom (off in the tutorial and under a dialog); the second finger drops what
   the first began, one left pans, and a gesture follows only the pointer that
   started it.
 - A middle press on a node or connection pans in any pan mode, as React
-  Flow's zoom filter allows; no drag pans with Control held.
+  Flow's zoom filter allows; a right press (the "middleMouse" mode) pans only
+  from empty canvas, as nodes, handles and connections are React Flow's
+  `nopan`. No drag pans with Control or the selection key held.
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
   the live flow's too). Fit view frames every node as React Flow's
   `fitView` (10% padding); a minimap click glides the view there over 250
   ms. The minimap pans from the first move and zooms by React Flow's
-  minimap step (line and pixel deltas, a Mac pinch ten times over).
+  minimap step (line and pixel deltas, a Mac pinch ten times over). While
+  the tutorial locks the navigator it takes no gestures, as classic's.
 - The dot grid is React Flow's `<Background gap={20} size={1}>`: the same
   offset, dots of half a flow unit's radius that grow and shrink with the
   zoom, at 30% while the tutorial locks the canvas. A move the page asks of the flow (`setCenter` or `fitView` with a

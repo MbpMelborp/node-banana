@@ -147,6 +147,14 @@ describe("paneDragAction", () => {
     expect(paneDragAction(settings({}), press({ ctrlKey: true }), true)).toBe("select");
   });
 
+  it("starts no pan with the selection key held, whatever the button", () => {
+    expect(paneDragAction(settings({}), press({ shiftKey: true, button: 1 }), false)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "middleMouse" }), press({ shiftKey: true, button: 2 }), true)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "space" }), press({ shiftKey: true, space: true, button: 1 }), true)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "always", selectionMode: "altDrag" }), press({ altKey: true, button: 1 }), true)).toBe(null);
+    expect(paneDragAction(settings({ panMode: "always", selectionMode: "altDrag" }), press({ shiftKey: true, button: 1 }), true)).toBe("pan");
+  });
+
   it("tells the selection key, which selects over nodes too, from selecting on drag, which starts only on the pane", () => {
     const defaults = settings({});
     expect(selectionKeyHeld(defaults, press())).toBe(false);

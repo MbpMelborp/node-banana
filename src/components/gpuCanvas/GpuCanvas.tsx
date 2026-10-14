@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { DefaultEdgeOptions, EdgeTypes, NodeTypes } from "@xyflow/react";
 import { frameLoadedGraph } from "@/utils/frameGraph";
+import { isPanningRef } from "@/components/WorkflowCanvas";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import { APP_VERSION } from "@/lib/appVersion";
@@ -35,12 +36,17 @@ import { boundedNodeTypes, HEADER, noop, PAD, type HeaderProps } from "./nodeShe
 const LOADING_MIN_NODES = 150;
 /** The loading screen appears only if painting takes longer than this. */
 const LOADING_DELAY_MS = 300;
+/** An opened workflow framed on default node heights is framed again on painted ones, waiting at most this long. */
+const REFRAME_WAIT_MS = 2000;
 /** Above this zoom every visible node is live. */
 const LIVE_ZOOM = 1;
 /** From this zoom, connections that show more than a line (labels, stubs, clamps) are live while on screen; those showing a run's comet at any zoom. */
 const LIVE_EDGE_ZOOM = 0.3;
 /** At most this many live connections besides the selected ones. */
 const MAX_LIVE_EDGES = 250;
+/** A view still this long has stopped moving: d3-zoom's wheel end delay, after which classic's onMoveEnd fires. */
+const MOVE_END_MS = 150;
+
 /** After the GPU resets, the canvas is rebuilt once WebGL is back, or after this long at the latest. */
 const CONTEXT_RESTORE_WAIT_MS = 3000;
 
@@ -382,9 +388,22 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       selectionChanged();
     });
 
-    // Above 100% every visible node is live, once the view settles; the view is kept for the tab.
-    let settleTimer = 0;
+    // As classic's onMoveStart: a moving view drops the hovered node's header controls and video preview,
+    // and live nodes take no hover (NodeShell reads isPanningRef) until it has been still a moment (onMoveEnd).
+    // The scene still hovers what comes under the pointer, so a node turning live there takes the next wheels.
+    let settleTimer = 0, moveEndTimer = 0, lastView = { ...scene.view };
     const unsubscribeView = scene.onViewChanged(() => {
+      const { x, y, zoom } = scene.view;
+      if (x !== lastView.x || y !== lastView.y || zoom !== lastView.zoom) {
+        lastView = { x, y, zoom };
+        if (!isPanningRef.current) {
+          isPanningRef.current = true;
+          useWorkflowStore.getState().setHoveredNodeId(null);
+        }
+        clearTimeout(moveEndTimer);
+        moveEndTimer = window.setTimeout(() => { isPanningRef.current = false; }, MOVE_END_MS);
+      }
+      // Above 100% every visible node is live, once the view settles; the view is kept for the tab.
       clearTimeout(settleTimer);
       settleTimer = window.setTimeout(() => {
         const visible = scene.view.zoom > LIVE_ZOOM ? scene.visible(0).map((i) => scene.graph.nodes[i].id) : [];
@@ -484,6 +503,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       clearTimeout(lostTimer);
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
+      clearTimeout(moveEndTimer);
+      isPanningRef.current = false;
       clearTimeout(hoverTimer);
       disposed = true;
       unsubscribeNodes();
@@ -516,25 +537,43 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     if (!engine) return;
     const { scene, painter } = engine;
     const saved = useWorkflowStore.getState().canvasViewport;
+    const frame = () => frameLoadedGraph(scene.graph.nodes.map((n) => ({ x: n.x, y: n.y, width: n.w, height: n.h })), scene.canvas.clientWidth, scene.canvas.clientHeight);
+    // Framed on the default heights until the nodes have painted theirs: classic frames on measured ones.
+    let provisional: View | null = null;
     if (saved && saved.zoom > 0) scene.setView(saved);
     else {
-      const framed = frameLoadedGraph(scene.graph.nodes.map((n) => ({ x: n.x, y: n.y, width: n.w, height: n.h })), scene.canvas.clientWidth, scene.canvas.clientHeight);
+      const framed = frame();
       if (framed) {
         scene.setView(framed);
         useWorkflowStore.getState().setCanvasViewport(framed);
+        provisional = { ...scene.view };
       }
     }
     painter?.start();
-    if (!painter || painter.status.total < LOADING_MIN_NODES) return;
+    if (!painter) return;
+    // Framed again once every node has its painted height (or the wait is over, on what is known by
+    // then), unless the view moved in the meantime.
+    const reframe = (force: boolean) => {
+      if (!provisional || (!force && painter.status.painted < painter.status.total)) return;
+      const view = scene.view, moved = Math.abs(view.x - provisional.x) > 0.5 || Math.abs(view.y - provisional.y) > 0.5 || Math.abs(view.zoom - provisional.zoom) > 1e-6;
+      provisional = null;
+      const framed = moved ? null : frame();
+      if (!framed) return;
+      scene.setView(framed);
+      useWorkflowStore.getState().setCanvasViewport(framed);
+    };
+    const reframeTimer = window.setTimeout(() => reframe(true), REFRAME_WAIT_MS);
+    const large = painter.status.total >= LOADING_MIN_NODES;
     const done = () => painter.status.screenfulDone && painter.status.painted >= painter.status.total;
     let shown = false;
     const timer = window.setTimeout(() => {
-      if (done()) return;
+      if (!large || done()) return;
       shown = true;
       painter.setLoading(true);
       setLoading({ painted: painter.status.painted, total: painter.status.total });
     }, LOADING_DELAY_MS);
     painter.setStatusListener(() => {
+      reframe(false);
       if (!shown) return;
       if (done()) {
         shown = false;
@@ -542,8 +581,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         setLoading(null);
       } else setLoading({ painted: painter.status.painted, total: painter.status.total });
     });
+    reframe(false);
     return () => {
       clearTimeout(timer);
+      clearTimeout(reframeTimer);
       painter.setStatusListener(() => {});
       if (shown) painter.setLoading(false);
       setLoading(null);

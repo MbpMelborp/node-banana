@@ -315,9 +315,15 @@ export class Editor {
     const panning = paneDragAction(editing.navigation, modifiers, isMac);
     // The tutorial turns panning off: such a press selects, drags and connects as a plain one.
     const action = editing.tutorial && panning === "pan" ? null : panning;
-    // The pan button pans wherever the press lands (React Flow lets the middle button pan from a node too).
-    // A left press, Space held or not, still takes a handle or a node first: they are React Flow's nopan.
-    if (action === "pan" && event.button !== 0) return scene.panGesture(event);
+    // The middle button pans from anywhere (a press on a node or connection is handled above). The right
+    // button (the "middleMouse" mode's) does not from a handle, a draggable node or a connection: React Flow's nopan.
+    // A left press, Space held or not, still takes a handle or a node first, for the same reason.
+    if (action === "pan" && event.button !== 0) {
+      if (event.button === 1) return scene.panGesture(event);
+      const onNode = !editing.locked && (this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y)) >= 0;
+      if (onNode || this.handleFromEvent(event) || this.paintedHandleAt(at.x, at.y) || scene.edgeAt(at.x, at.y) >= 0) return null;
+      return scene.panGesture(event);
+    }
     if (event.button !== 0) return null;
     const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
     // With the selection key held, React Flow's pane takes the press before a handle can: no connection starts.

@@ -17,6 +17,8 @@ interface GpuMinimapProps {
   bgColor: string;
   maskColor: string;
   maskStrokeColor: string;
+  /** Takes no gestures (the locked tutorial), as classic's inert navigator. */
+  disabled?: boolean;
 }
 
 /** Flow units on either side of the nodes and view, as React Flow's MiniMap pads them. */
@@ -24,8 +26,12 @@ const OFFSET_SCALE = 5;
 /** React Flow's isMacOs, which its minimap's pinch factor reads. */
 const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac");
 
-export function GpuMinimap({ width, height, className, bgColor, maskColor, maskStrokeColor }: GpuMinimapProps) {
+export function GpuMinimap({ width, height, className, bgColor, maskColor, maskStrokeColor, disabled = false }: GpuMinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const disabledRef = useRef(disabled);
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
   const bridge = useGpuCanvasBridge();
 
   useEffect(() => {
@@ -88,11 +94,12 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
     // The view follows from the first move, as React Flow's minimap pans; past 3px the release is no click.
     let drag: { x: number; y: number; startX: number; startY: number; moved: boolean } | null = null;
     const down = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || disabledRef.current) return;
       canvas.setPointerCapture(event.pointerId);
       drag = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false };
     };
     const move = (event: PointerEvent) => {
+      if (disabledRef.current) drag = null;
       if (!drag) return;
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!dx && !dy) return;
@@ -103,7 +110,7 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       bridge.setView({ x: view.x - (dx / fit.scale) * view.zoom, y: view.y - (dy / fit.scale) * view.zoom });
     };
     const up = (event: PointerEvent) => {
-      const wasClick = drag && !drag.moved;
+      const wasClick = drag && !drag.moved && !disabledRef.current;
       drag = null;
       if (!wasClick) return;
       const p = toFlow(event), view = bridge.view(), size = bridge.size();
@@ -111,6 +118,7 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       bridge.animateView({ zoom: view.zoom, x: size.width / 2 - p.x * view.zoom, y: size.height / 2 - p.y * view.zoom }, 250);
     };
     const wheel = (event: WheelEvent) => {
+      if (disabledRef.current) return;
       event.preventDefault();
       const view = bridge.view(), size = bridge.size();
       // React Flow's minimap step: by line, page or pixel deltas, ten times a Mac pinch's (Ctrl) deltas.

@@ -106,6 +106,21 @@ describe("presses on the GPU canvas", () => {
     expect(editor.press(pointer(2000, 2000, { button: 1 }))).toBeNull();
   });
 
+  it("in the middleMouse mode a right drag pans only from empty canvas, and not with the selection key held", () => {
+    const pan = { move: noop, up: noop, cancel: noop };
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => pan;
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    expect(editor.press(pointer(2000, 2000, { button: 2 }))).toBe(pan);
+    expect(editor.press(pointer(2000, 2000, { button: 2, shiftKey: true }))).toBeNull();
+    expect(editor.press(pointer(100, 100, { button: 2 }))).toBeNull();
+    edgeHit = 0;
+    expect(editor.press(pointer(500, 1000, { button: 2 }))).toBeNull();
+    edgeHit = -1;
+    // A locked canvas's nodes are not draggable, so not nopan: a right drag pans from them.
+    settings.locked = true;
+    expect(editor.press(pointer(100, 100, { button: 2 }))).toBe(pan);
+  });
+
   it("a drag on empty canvas in select mode still selects by marquee", () => {
     drag([780, -20], [1200, 400], { shiftKey: true });
     expect(selected()).toEqual(["c"]);

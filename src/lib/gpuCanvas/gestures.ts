@@ -28,11 +28,12 @@ export interface PaneModifiers {
  * `panOnDrag` (left and middle when "always", or by default off the Mac; the
  * right button in "middleMouse" mode) pans, and `selectionOnDrag` (on the
  * Mac, unless a drag mode or "always" is set) draws a marquee. A pan never
- * starts with Control held (d3-zoom's default filter, which React Flow keeps).
+ * starts with Control held (d3-zoom's default filter, which React Flow keeps),
+ * nor with the selection key held (React Flow's `!selectionKeyPressed && panOnDrag`).
  */
 export function paneDragAction(settings: CanvasNavigationSettings, modifiers: PaneModifiers, isMac: boolean): PaneAction {
   const { button } = modifiers;
-  if (selectionKeyHeld(settings, modifiers)) return "select";
+  if (settings.selectionMode === "altDrag" ? modifiers.altKey : modifiers.shiftKey) return button === 0 ? "select" : null;
   if (settings.panMode === "space" && modifiers.space && (button === 0 || button === 1)) return modifiers.ctrlKey ? null : "pan";
   const panButtons = settings.panMode === "always" ? [0, 1] : settings.panMode === "middleMouse" ? [2] : isMac ? [] : [0, 1];
   if (panButtons.includes(button)) return modifiers.ctrlKey ? null : "pan";
