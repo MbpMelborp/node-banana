@@ -215,8 +215,9 @@ The scene takes every press and asks the editor what it starts:
   a selection with nodes in it). On a locked canvas it selects nothing but
   still moves the connection toolbar there.
 - With the selection key held (Shift, or Alt in "altDrag"), a press on a
-  node or connection is a click that toggles it, and any movement turns it
-  into a marquee.
+  handle, node or connection is a click that toggles the node or
+  connection, and any movement turns it into a marquee: no connection
+  starts, as React Flow's pane takes the press first.
 - **The pane**: a click clears the selection (not on a locked canvas) and
   is WorkflowCanvas's pane click, whatever a drag would do; a drag pans or draws the marquee as the
   navigation settings say (`paneDragAction`); drawing on drag (the Mac
@@ -227,7 +228,8 @@ The scene takes every press and asks the editor what it starts:
   without one; with no nodes taken it selects the connections it crosses,
   a bundle's shared stem counting for the connection that draws it. Nodes
   it took are framed (React Flow's dotted `NodesSelection`) until a click or
-  until none is selected.
+  until none is selected. Its start is held in flow coordinates, so a
+  wheel pan or pinch mid-marquee keeps it on the same canvas spot.
 - Every change in the selected nodes or connections, a press's or the
   store's own (paste, undo, the agent), reaches WorkflowCanvas's
   `handleSelectionChange` once it is through, as React Flow's

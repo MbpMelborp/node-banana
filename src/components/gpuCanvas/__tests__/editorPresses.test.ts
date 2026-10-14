@@ -165,6 +165,42 @@ describe("presses on the GPU canvas", () => {
     expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));
   });
 
+  it("with the selection key held a drag from a handle draws a marquee; without it, it starts a connection", () => {
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
+    editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 200 }]]);
+    settings.onConnectEnd = vi.fn();
+    // From the handle at the card's corner back across the card.
+    drag([1100, 200], [780, -20], { shiftKey: true });
+    expect(settings.onConnectEnd).not.toHaveBeenCalled();
+    expect(selected()).toEqual(["c"]);
+    // jsdom has no hit testing: nothing under the dropped wire.
+    document.elementsFromPoint ??= () => [];
+    drag([1100, 200], [1300, 300]);
+    expect(settings.onConnectEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("a marquee's start stays on the same canvas spot when the view pans under it", () => {
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
+    const scene = editor["scene"] as unknown as Record<string, unknown>;
+    let panX = 0;
+    const listeners = new Set<() => void>();
+    Object.assign(scene, {
+      toWorld: (x: number, y: number) => ({ x: x - panX, y }),
+      toScreen: (x: number, y: number) => ({ x: x + panX, y }),
+      onViewChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+    });
+    // Around "a" only.
+    const gesture = editor.press(pointer(-20, -20, { shiftKey: true }))!;
+    gesture.move(pointer(320, 250, { shiftKey: true }));
+    expect(selected()).toEqual(["a"]);
+    // The view pans 500px left: the box now reaches past "b", its start still left of "a".
+    panX = -500;
+    for (const listener of listeners) listener();
+    expect(selected()).toEqual(["a", "b"]);
+    gesture.up(pointer(320, 250, { shiftKey: true }));
+    expect(listeners.size).toBe(0);
+  });
+
   it("a right-click on a painted handle is not the pane's: no add-node menu, the browser's own menu", () => {
     editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 100 }]]);
     const event = new MouseEvent("contextmenu", { clientX: 1102, clientY: 100, cancelable: true });

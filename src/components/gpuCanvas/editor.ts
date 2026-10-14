@@ -249,7 +249,9 @@ export class Editor {
     // Space held (or the pan button) pans wherever the press lands, as React Flow's pan key does.
     if (action === "pan" && (space || event.button !== 0)) return scene.panGesture(event);
     if (event.button !== 0) return null;
-    if (!editing.locked) {
+    const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
+    // With the selection key held, React Flow's pane takes the press before a handle can: no connection starts.
+    if (!editing.locked && !keyHeld) {
       const handle = this.handleFromEvent(event) ?? this.paintedHandleAt(at.x, at.y);
       if (handle) return this.connectGesture(event, handle);
     }
@@ -257,7 +259,7 @@ export class Editor {
     const edge = node < 0 ? scene.edgeAt(at.x, at.y) : -1;
     // With the selection key held, a press on a node or connection starts a selection: a drag draws a
     // marquee at once, a release is still a click (Shift toggles it, as multiSelectionKeyCode).
-    if ((node >= 0 || edge >= 0) && selectionKeyHeld(editing.navigation, modifiers) && !editing.locked) {
+    if ((node >= 0 || edge >= 0) && keyHeld && !editing.locked) {
       const click = node >= 0 ? () => this.clickNode(scene.graph.nodes[node].id, event.shiftKey) : () => this.clickEdge(event, edge);
       return this.clickGesture(event, click, () => this.marqueeGesture(event), 0);
     }
@@ -267,7 +269,7 @@ export class Editor {
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     // A marquee starts once the press moves (at once with the selection key held); a release before that is a pane click.
     if (action === "select" && !editing.locked) {
-      return this.clickGesture(event, () => this.paneClick(), () => this.marqueeGesture(event), selectionKeyHeld(editing.navigation, modifiers) ? 0 : PANE_CLICK_DISTANCE);
+      return this.clickGesture(event, () => this.paneClick(), () => this.marqueeGesture(event), keyHeld ? 0 : PANE_CLICK_DISTANCE);
     }
     return this.paneGesture(event, null);
   };
@@ -497,15 +499,19 @@ export class Editor {
 
   private marqueeGesture(down: PointerEvent): Gesture {
     const scene = this.scene;
-    const start = scene.local(down);
+    // The press is held in flow coordinates, so a pan or zoom mid-marquee keeps its corner on the same canvas spot.
+    const down0 = scene.local(down);
+    const anchor = scene.toWorld(down0.x, down0.y);
+    let last = down0;
     let previousNodes = "", previousEdges = "";
     // A marquee replaces the selection: it starts from none (React Flow's resetSelectedElements as it starts).
     this.hideSelectionFrame();
     this.clearSelection();
     // Live nodes are judged by their cards as they show now, as NodeMarqueeSelection measures the DOM as it starts.
     const cards = this.liveCards();
-    const update = (event: PointerEvent) => {
-      const at = scene.local(event);
+    const update = (at: { x: number; y: number }) => {
+      last = at;
+      const start = scene.toScreen(anchor.x, anchor.y);
       const left = Math.min(start.x, at.x), top = Math.min(start.y, at.y), width = Math.abs(at.x - start.x), height = Math.abs(at.y - start.y);
       Object.assign(this.marquee.style, { display: "block", left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       const a = scene.toWorld(left, top), b = scene.toWorld(left + width, top + height);
@@ -530,9 +536,14 @@ export class Editor {
         if (changes.length) now.onEdgesChange(changes);
       }
     };
-    const end = () => { this.marquee.style.display = "none"; };
+    // A wheel or pinch redraws the box at once, from where the pointer last was.
+    const offView = scene.onViewChanged(() => update(last));
+    const end = () => {
+      offView();
+      this.marquee.style.display = "none";
+    };
     return {
-      move: update,
+      move: (event) => update(scene.local(event)),
       up: (event) => {
         end();
         // A marquee that took only connections opens the toolbar at the release (handleSelectionEnd).
