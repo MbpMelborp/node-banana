@@ -5,14 +5,20 @@ import { OPENAI_IMAGE_SIZE_PRESETS, validateOpenAIImageSize } from "@/lib/provid
 import { NumberField, SelectField } from "./ui/Field";
 import { useNodeUiState } from "./paintMode";
 
-export function OpenAIImageSizeField({ value, onChange }: {
+export function OpenAIImageSizeField({ value, onChange, scope = "" }: {
   value: string;
   onChange: (size: string) => void;
+  /**
+   * The model block and model this field sizes. On classic the field mounts
+   * afresh for each (a tab switch, a model change), starting at the presets;
+   * on the GPU canvas its view state is kept under this, to the same effect.
+   */
+  scope?: string;
 }) {
   // "Custom…" chosen with a preset still set: node view state, so a painted
   // copy on the GPU canvas keeps showing Width and Height (useNodeUiState).
   const nodeId = useNodeId();
-  const [customSelected, setCustomSelected] = useNodeUiState(nodeId ?? "", "openaiSizeCustom", false);
+  const [customSelected, setCustomSelected] = useNodeUiState(nodeId ?? "", "openaiSizeCustom", false, scope);
   const custom = customSelected || !OPENAI_IMAGE_SIZE_PRESETS.includes(value);
   const [width, height] = value.split("x").map(Number);
   const error = validateOpenAIImageSize(value);

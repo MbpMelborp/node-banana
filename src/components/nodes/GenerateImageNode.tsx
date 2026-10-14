@@ -422,6 +422,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
           provider={nodeData.fallbackModel.provider}
           parameters={nodeData.fallbackParameters || {}}
           onParametersChange={(p) => updateNodeData(id, { fallbackParameters: p })}
+          slot="fallback"
           onDefaults={schemaDerived.fallbackDefaults}
         />
       )}

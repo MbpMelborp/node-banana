@@ -1365,9 +1365,8 @@ export class Editor {
     // A connection's end shows React Flow's move cursor where a press would reconnect it.
     const end = handle || node >= 0 || this.editing().disabled ? null : this.edgeEndAt(at.x, at.y);
     const edge = handle || node >= 0 ? -1 : end?.edge ?? scene.edgeAt(at.x, at.y);
-    // The connection holding keyboard focus looks hovered while the pointer is on no other.
-    const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
-    scene.setHoveredEdge(edge >= 0 ? edge : focused ?? -1);
+    // Only the pointer hovers a connection: classic draws one holding keyboard focus unchanged.
+    scene.setHoveredEdge(edge);
     // A live connection's label brightens under the pointer, as EditableEdge's own hover does.
     setHoveredSceneEdge(edge >= 0 ? scene.graph.edges[edge].id : null);
     // React Flow's `selectable` edge class (and its pointer cursor): the edge's own flag, else elementsSelectable,
@@ -1381,8 +1380,8 @@ export class Editor {
   };
 
   /**
-   * The scene's onHoverEnd: no connection is hovered (the one holding keyboard focus still looks it) until
-   * the next idle move. Off the canvas or under a wheel the painted handle is no longer hovered either, so
+   * The scene's onHoverEnd: no connection is hovered (not even the one holding keyboard focus, as on
+   * classic) until the next idle move. Off the canvas or under a wheel the painted handle is no longer hovered either, so
    * its hidden connections stop ghosting in; a pressed handle keeps it until its drag starts. The live
    * label's hover is the canvas's own pointerleave listener's on a leave (it may have gone onto that label).
    */
@@ -1392,8 +1391,7 @@ export class Editor {
       this.hoveredHandle = null;
       if (useWorkflowStore.getState().hoveredHandle) useWorkflowStore.getState().setHoveredHandle(null);
     }
-    const focused = this.keyboard.edgeId == null ? undefined : scene.graph.edgeIndexOf.get(this.keyboard.edgeId);
-    scene.setHoveredEdge(focused ?? -1);
+    scene.setHoveredEdge(-1);
     if (reason !== "leave") setHoveredSceneEdge(null);
   };
 

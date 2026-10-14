@@ -199,6 +199,7 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
           provider={nodeData.fallbackModel.provider}
           parameters={nodeData.fallbackParameters || {}}
           onParametersChange={(p) => updateNodeData(id, { fallbackParameters: p })}
+          slot="fallback"
           onDefaults={schemaDerived.fallbackDefaults}
         />
       )}

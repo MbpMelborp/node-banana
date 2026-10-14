@@ -213,7 +213,11 @@ an OpenAI size field's "Custom…", an Image Compare divider) lives in
 classic), so the live component and its painted copies show the same, and a
 change repaints the node. The divider is written once it rests, not per
 drag frame. It is forgotten when the node goes or another
-workflow opens, as classic's remount forgets it. Painted copies never show
+workflow opens, as classic's remount forgets it. State classic resets by
+remounting the component holding it is reset here too: the size field's
+"Custom…" is kept per model block and model (`useNodeUiState`'s `scope`;
+ModelParameters' `slot`), and the divider goes back to the centre when an
+input disconnects. Painted copies never show
 hover: their headers' hover-only controls and hover video previews read no
 hovered node.
 
@@ -477,9 +481,9 @@ The scene takes every press and asks the editor what it starts:
   store's order as on classic (`keyboardFocus.ts`): a node is made live,
   centred at the same zoom when off screen (React Flow's
   `autoPanOnNodeFocus`) and focused, its own fields in turn; a connection's
-  focus is held by a sentry at the head of the canvas named after it, the
-  scene draws it hovered, and Enter or Space selects it, Escape unselects
-  it. A click on a connection focuses it the same way (classic's click
+  focus is held by a sentry at the head of the canvas named after it, its
+  stroke unchanged as classic's (only the pointer hovers a connection), and
+  Enter or Space selects it, Escape unselects it. A click on a connection focuses it the same way (classic's click
   focuses its EdgeWrapper), so those keys act on it, not on a node pressed
   earlier. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu (on a node, its header or a

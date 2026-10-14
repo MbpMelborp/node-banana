@@ -46,7 +46,8 @@ import { EdgeLabelCoverContext } from "@/components/edges/edgeLabelCover";
 // A selected angular connection's segment handle drags its middle segment (EditableEdge's own drag), so it takes the pointer.
 // The scene drags the nodes, so React Flow's draggable cursors are given here: grab, grabbing while a drag moves them (the
 // editor's data-gpu-dragging), the default arrow when locked or under a dialog. A focused node shows no ring, as classic's
-// selectable nodes (React Flow's .selectable:focus outline none; the wrappers stay focusable, as classic's).
+// selectable nodes (React Flow's .selectable:focus outline none; the wrappers stay focusable, as classic's); a locked
+// canvas or one under a dialog keeps the browser's ring, as classic's wrappers that elementsSelectable off leaves unselectable.
 // A node swapping in is laid out (measured, its images decoding) but not shown until its painted copy goes.
 const ENTERING = "gpu-entering";
 export const LIVE_STYLE = `
@@ -59,7 +60,7 @@ export const LIVE_STYLE = `
   [data-gpu-canvas-live] .edge-segment-handle { pointer-events: all !important; }
   [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grab; }
   [data-gpu-canvas-live][data-gpu-dragging]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grabbing; }
-  [data-gpu-canvas-live] .react-flow__node:focus, [data-gpu-canvas-live] .react-flow__node:focus-visible { outline: none; }
+  [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node:focus, [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node:focus-visible { outline: none; }
   [data-gpu-canvas-live] .react-flow__node.${ENTERING} { visibility: hidden; }
 `;
 

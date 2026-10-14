@@ -230,6 +230,7 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
           provider={nodeData.fallbackModel.provider}
           parameters={nodeData.fallbackParameters || {}}
           onParametersChange={(p) => updateNodeData(id, { fallbackParameters: p })}
+          slot="fallback"
           onDefaults={schemaDerived.fallbackDefaults}
         />
       )}

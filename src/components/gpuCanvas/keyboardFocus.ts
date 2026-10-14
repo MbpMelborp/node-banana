@@ -10,9 +10,10 @@
  *   focused once mounted (Shift+Tab lands on its last field, as on classic);
  *   inside a live node Tab walks its fields, then moves on;
  * - a connection has no element: a sentry at the head of the canvas holds
- *   focus for it, named as React Flow names an edge, and the scene draws it
- *   hovered. Enter or Space selects it, Escape unselects it, Delete removes
- *   it once selected, as a focused edge does;
+ *   focus for it, named as React Flow names an edge; the stroke is left as it
+ *   is, as classic draws a focused edge unchanged. Enter or Space selects it,
+ *   Escape unselects it, Delete removes it once selected, as a focused edge
+ *   does;
  * - past either end, focus leaves the canvas for the page around it.
  */
 import type { EdgeChange, NodeChange } from "@xyflow/react";
@@ -57,7 +58,7 @@ export class KeyboardFocus {
   private offs: (() => void)[] = [];
 
   constructor(
-    private scene: Pick<Scene, "graph" | "view" | "canvas" | "setView" | "setHoveredEdge">,
+    private scene: Pick<Scene, "graph" | "view" | "canvas" | "setView">,
     private live: Pick<LiveLayer, "element" | "live" | "want" | "settled" | "nodeElement">,
     host: HTMLElement,
     private locked: () => boolean,
@@ -179,7 +180,6 @@ export class KeyboardFocus {
     if (id === this.edgeId) return;
     this.edgeId = id;
     const e = id == null ? undefined : this.scene.graph.edgeIndexOf.get(id);
-    this.scene.setHoveredEdge(e ?? -1);
     const edge = e == null ? undefined : this.scene.graph.edges[e];
     if (edge) {
       this.sentry.setAttribute("aria-roledescription", "edge");

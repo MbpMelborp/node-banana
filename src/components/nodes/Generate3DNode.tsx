@@ -130,6 +130,7 @@ export function Generate3DNode({ id, data, selected }: NodeProps<Generate3DNodeT
           provider={nodeData.fallbackModel.provider}
           parameters={nodeData.fallbackParameters || {}}
           onParametersChange={(p) => updateNodeData(id, { fallbackParameters: p })}
+          slot="fallback"
           onDefaults={schemaDerived.fallbackDefaults}
         />
       )}

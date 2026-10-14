@@ -28,9 +28,14 @@ const POSITION_COMMIT_MS = 150;
  * when the node goes back to a picture), not on every drag frame, since each
  * write repaints the node. On the classic canvas the slider stays
  * uncontrolled, as before: `null`.
+ *
+ * While the node is not `ready` (an input disconnected) the slider is gone,
+ * as on classic, where it mounts again at the centre: the kept position goes
+ * back to the centre, and a drag still waiting to be written is dropped.
  */
-export function useComparePosition(id: string) {
+export function useComparePosition(id: string, ready = true) {
   const live = useIsLiveLayerNode(), painted = useIsPaintedNode();
+  const gpu = live || painted;
   const [position, setPosition] = useNodeUiState(id, "comparePosition", 50);
   const pending = useRef<number | null>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -38,7 +43,13 @@ export function useComparePosition(id: string) {
     window.clearTimeout(timer.current);
     if (pending.current !== null) setPosition(pending.current);
   }, [setPosition]);
-  if (!live && !painted) return null;
+  useEffect(() => {
+    if (ready || !gpu) return;
+    window.clearTimeout(timer.current);
+    pending.current = null;
+    setPosition(50);
+  }, [ready, gpu, setPosition]);
+  if (!gpu) return null;
   if (painted) return { position };
   return {
     position,
@@ -55,7 +66,6 @@ export function useComparePosition(id: string) {
 
 export function ImageCompareNode({ id, data, selected }: NodeProps<ImageCompareNodeType>) {
   const nodeData = data;
-  const sliderPosition = useComparePosition(id);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Collect images in real-time from connected nodes (same pattern as
@@ -99,6 +109,7 @@ export function ImageCompareNode({ id, data, selected }: NodeProps<ImageCompareN
   const imageA = displayImages[0] || nodeData.imageA || null;
   const imageB = displayImages[1] || nodeData.imageB || null;
   const ready = Boolean(imageA && imageB);
+  const sliderPosition = useComparePosition(id, ready);
 
   const media = ready
     ? { kind: "aspect" as const, aspect: loadedAspect?.src === imageA ? loadedAspect.aspect : 1 }

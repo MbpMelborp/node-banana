@@ -34,4 +34,18 @@ describe("Image Compare divider position", () => {
     liveNode.unmount();
     expect(useNodeUiStore.getState().byNode.c1).toEqual({ comparePosition: 70 });
   });
+
+  it("puts the divider back at the centre when an input goes, as classic's slider mounting again", () => {
+    const liveNode = renderHook(({ ready }) => useComparePosition("c1", ready), { wrapper: live, initialProps: { ready: true } });
+    act(() => { liveNode.result.current!.onPositionChange!(30); vi.advanceTimersByTime(200); });
+    expect(liveNode.result.current!.position).toBe(30);
+    // A drag still settling when the input goes is dropped, not written later.
+    act(() => liveNode.result.current!.onPositionChange!(80));
+    liveNode.rerender({ ready: false });
+    act(() => { vi.advanceTimersByTime(200); });
+    liveNode.rerender({ ready: true });
+    expect(liveNode.result.current!.position).toBe(50);
+    liveNode.unmount();
+    expect(useNodeUiStore.getState().byNode.c1).toEqual({ comparePosition: 50 });
+  });
 });

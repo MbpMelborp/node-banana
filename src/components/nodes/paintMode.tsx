@@ -93,17 +93,40 @@ type SetValue<T> = (value: T | ((previous: T) => T)) => void;
  * kept in useNodeUiStore under the node's id and `key` on the GPU canvas (its
  * live layer and its painted copies), so a node looks the same whichever way
  * it is drawn.
+ *
+ * `scope` stands for what classic's component is mounted for (a model, a
+ * settings tab): there a change of it remounts the component and resets its
+ * state. Here a stored value belongs to the scope it was set under; under
+ * another it reads as `initial`, and is dropped so it does not come back with
+ * its old scope.
  */
-export function useNodeUiState<T>(id: string, key: string, initial: T): [T, SetValue<T>] {
+export function useNodeUiState<T>(id: string, key: string, initial: T, scope?: string): [T, SetValue<T>] {
   const live = useIsLiveLayerNode(), painted = useIsPaintedNode();
+  const gpu = live || painted;
   const [local, setLocal] = useState(initial);
-  const stored = useNodeUiStore((state) => state.byNode[id]?.[key]) as T | undefined;
+  const raw = useNodeUiStore((state) => state.byNode[id]?.[key]);
   const setStored = useCallback<SetValue<T>>((next) => {
-    const store = useNodeUiStore.getState(), current = store.byNode[id]?.[key] as T | undefined;
-    store.set(id, key, typeof next === "function" ? (next as (previous: T) => T)(current === undefined ? initial : current) : next);
-  }, [id, key, initial]);
-  if (!live && !painted) return [local, setLocal];
+    const store = useNodeUiStore.getState();
+    const current = scopedValue<T>(store.byNode[id]?.[key], scope);
+    const value = typeof next === "function" ? (next as (previous: T) => T)(current === undefined ? initial : current) : next;
+    store.set(id, key, scope === undefined ? value : { scope, value });
+  }, [id, key, initial, scope]);
+  const stale = gpu && scope !== undefined && raw !== undefined && scopedValue(raw, scope) === undefined;
+  useEffect(() => {
+    if (!stale) return;
+    const store = useNodeUiStore.getState(), current = store.byNode[id]?.[key];
+    if (current !== undefined && scopedValue(current, scope) === undefined) store.set(id, key, undefined);
+  }, [stale, id, key, scope]);
+  if (!gpu) return [local, setLocal];
+  const stored = scopedValue<T>(raw, scope);
   return [stored === undefined ? initial : stored, setStored];
+}
+
+/** A stored view-state entry's value, `undefined` when it was set under another scope. */
+export function scopedValue<T>(raw: unknown, scope: string | undefined): T | undefined {
+  if (scope === undefined) return raw as T | undefined;
+  const entry = raw as { scope?: unknown; value?: T } | null | undefined;
+  return entry && typeof entry === "object" && entry.scope === scope ? entry.value : undefined;
 }
 
 /**

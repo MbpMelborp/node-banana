@@ -44,4 +44,23 @@ describe("OpenAI output dimensions", () => {
     expect(screen.getByLabelText("Width")).toHaveValue(1024);
     useNodeUiStore.getState().forget();
   });
+  it("starts at the presets for another model block or model on the GPU canvas, as classic's remount does", () => {
+    useNodeUiStore.getState().forget();
+    const field = (scope: string) => <HoldLiveProvider hold={() => () => {}}><OpenAIImageSizeField value="1024x1024" onChange={() => {}} scope={scope} /></HoldLiveProvider>;
+    const view = render(field("primary:openai:gpt-image-1"));
+    pickOption(screen.getByLabelText("Size"), "custom");
+    expect(screen.getByLabelText("Width")).toHaveValue(1024);
+    // The fallback tab, whose preset size shows its presets.
+    view.rerender(field("fallback:openai:gpt-image-1"));
+    expect(screen.queryByLabelText("Width")).toBeNull();
+    // Back on the primary block: classic's field mounted afresh, at the presets.
+    view.rerender(field("primary:openai:gpt-image-1"));
+    expect(screen.queryByLabelText("Width")).toBeNull();
+    pickOption(screen.getByLabelText("Size"), "custom");
+    view.rerender(field("primary:openai:gpt-image-1.5"));
+    expect(screen.queryByLabelText("Width")).toBeNull();
+    view.rerender(field("primary:openai:gpt-image-1"));
+    expect(screen.queryByLabelText("Width")).toBeNull();
+    useNodeUiStore.getState().forget();
+  });
 });

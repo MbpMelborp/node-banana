@@ -107,13 +107,15 @@ describe("the GPU canvas's keyboard focus", () => {
     focusRing.sentry.focus();
     expect(document.activeElement).toBe(focusRing.sentry);
     expect(focusRing.edgeId).toBe("e");
-    expect(hovered).toBe(0);
+    // Classic draws a focused connection unchanged: it is named, not hovered.
+    expect(hovered).toBe(-1);
     expect(focusRing.sentry.getAttribute("aria-label")).toBe("Edge from a to b");
 
     tab();
     expect(document.activeElement).toBe(live.nodeElement("a"));
     expect(focusRing.edgeId).toBeNull();
     expect(hovered).toBe(-1);
+    expect(focusRing.sentry.getAttribute("aria-label")).toBe("Workflow canvas");
 
     tab(true);
     expect(document.activeElement).toBe(focusRing.sentry);

@@ -59,6 +59,12 @@ interface ModelParametersProps {
    * is absent). A painted copy on the GPU canvas stores them through this.
    */
   onDefaults?: (defaults: Record<string, unknown>, model: SchemaModel) => void;
+  /**
+   * Which of the node's model blocks this is. Classic mounts the primary and
+   * fallback blocks apart, so their fields' view state is their own; on the
+   * GPU canvas it is kept per block and model through this.
+   */
+  slot?: "primary" | "fallback";
 }
 
 /** The model a schema was fetched for. */
@@ -80,6 +86,7 @@ function ModelParametersInner({
   onExpandChange,
   onInputsLoaded,
   onDefaults,
+  slot = "primary",
 }: ModelParametersProps) {
   const painted = useIsPaintedNode();
   const [schema, setSchema] = useState<ModelParameter[]>([]);
@@ -278,6 +285,7 @@ function ModelParametersInner({
           {sortedSchema.map((param) => (
             isOpenAI25 && param.name === "size" ? <OpenAIImageSizeField
               key={`${provider}:${modelId}:size`}
+              scope={`${slot}:${provider}:${modelId}`}
               value={String(parameters.size ?? "auto")}
               onChange={size => handleParameterChange("size", size)}
             /> : <ParameterInput
