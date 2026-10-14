@@ -175,8 +175,11 @@ size React Flow measured: without it React Flow hides the node until it
 measures it again, which blurs a field being typed in. What React Flow
 measures of a live node (its height, its handles) also goes to the scene, so
 presses, the marquee and its connections follow a node that grew or shrank
-since it was painted; once it is painted again the scene takes the painted
-measure back.
+since it was painted. A paint of a live node (its painted copy hidden) is
+only held by the painter: it changes neither the scene's box nor the store's
+measured size, which stay React Flow's, and a rebuilt graph takes the live
+sizes again. Once the node leaves the layer the scene and the store take
+the painted measure back (`Painter.restoreMeasured`).
 
 A controls card widened past its node (its grips, `data.controlsWidth`)
 overflows both sides, as on classic: the node's picture is widened by the
@@ -339,8 +342,16 @@ The scene takes every press and asks the editor what it starts:
   (a run's status, an edit elsewhere) does not move it back. Near the
   canvas's edge the view pans every frame and the nodes move with it
   (React Flow's `autoPanOnNodeDrag`). Space held (the "space" pan mode)
-  pans only from empty canvas or a connection: a node still drags and a
-  handle still connects, as they are React Flow's `nopan`. A press on a
+  pans only from empty canvas: a node still drags and a handle still
+  connects, as they are React Flow's `nopan`. A connection is `nopan` too:
+  a left drag from it moves nothing in any pan mode, and a release still on
+  it clicks it, however far the pointer went. A press on a floating header
+  is FloatingNodeHeader's drag whatever the keys and the pan mode: it makes
+  an unselected node the only selection at once, moves past 5 px on either
+  axis (the selection too only if the node was already selected, following
+  the pointer from the press) and regroups every moved node on release.
+  On the Mac a Control+click is a secondary click, which fires no click: it
+  starts nothing (not a selection, a drag or a marquee), only the menu. A press on a
   live node takes the pointer only once it becomes a drag, so a click still
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
   A live node's buttons and links drag it too, as React Flow's do (only
@@ -434,7 +445,7 @@ The scene takes every press and asks the editor what it starts:
 - A middle press on a node or connection pans in any pan mode, as React
   Flow's zoom filter allows; a right press (the "middleMouse" mode) pans only
   from empty canvas, as nodes, handles and connections are React Flow's
-  `nopan`. No drag pans with Control or the selection key held.
+  `nopan` (a left drag from a connection pans in no mode). No drag pans with Control or the selection key held.
 - The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
   the live flow's too). Fit view frames every node as React Flow's
   `fitView` (10% padding); a minimap click glides the view there over 250

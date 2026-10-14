@@ -1032,6 +1032,11 @@ export class Scene {
     this.touchEdges(i);
   }
 
+  /** Whether the live layer covers the node (setHidden). */
+  isHidden(i: number) {
+    return this.hidden.has(i);
+  }
+
   /** Nodes the live layer covers are not drawn by the scene. */
   setHidden(i: number, hidden: boolean) {
     if (hidden === this.hidden.has(i)) return;

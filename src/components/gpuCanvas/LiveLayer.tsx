@@ -27,7 +27,7 @@ import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workfl
 import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
-import type { HandleAnchor, SceneNode } from "@/lib/gpuCanvas/graph";
+import type { SceneNode } from "@/lib/gpuCanvas/graph";
 import { paintedCover } from "@/lib/gpuCanvas/edgeRoutes";
 import { dimClassName } from "@/lib/gpuCanvas/dimming";
 import type { Position } from "@xyflow/react";
@@ -251,8 +251,8 @@ export interface LivePainter {
   isFresh(id: string): boolean;
   /** Whether the painter still has the node's paint to do. */
   painting(id: string): boolean;
-  /** The node's height and handles as its painted image has them. */
-  measured(id: string): { height: number; handles?: Map<string, HandleAnchor> } | undefined;
+  /** Gives the scene (and the store) the node's box, handles and cards as its painted image has them. */
+  restoreMeasured(id: string): boolean;
 }
 
 export class LiveLayer {
@@ -714,12 +714,8 @@ export class LiveLayer {
     const i = this.scene.graph.indexOf.get(id);
     if (i != null) {
       this.scene.setHidden(i, false);
-      // The scene's box is the painted image's again.
-      const painted = this.painter?.measured(id);
-      if (painted) {
-        this.scene.setNodeHeight(i, painted.height);
-        if (painted.handles) this.scene.setHandles(i, painted.handles);
-      }
+      // The scene's box (handles, cards) is the painted image's again, and the store's measured size with it.
+      this.painter?.restoreMeasured(id);
     }
     // Off the layer a frame later, once the scene has drawn its image.
     requestAnimationFrame(() => {
@@ -747,7 +743,16 @@ export class LiveLayer {
     for (const id of this.live) {
       const i = this.scene.graph.indexOf.get(id);
       if (i == null) this.drop(id);
-      else this.scene.setHidden(i, true);
+      else {
+        this.scene.setHidden(i, true);
+        // The painter set every node's painted height again: a live node's is React Flow's.
+        this.applyLiveSize(id);
+      }
+    }
+    // One still leaving shows on the layer until its painted image is current: its copy stays hidden.
+    for (const id of this.leaving) {
+      const i = this.scene.graph.indexOf.get(id);
+      if (i != null) this.scene.setHidden(i, true);
     }
     void this.render();
   }

@@ -617,6 +617,90 @@ describe("node drags on the GPU canvas", () => {
   });
 });
 
+describe("a floating header's drag on the GPU canvas", () => {
+  const position = (id: string) => useWorkflowStore.getState().nodes.find((n) => n.id === id)!.position;
+  beforeEach(() => {
+    // Node c's header band, 30 flow units above it (the scene's index files it; the test's does not).
+    const scene = editor["scene"] as unknown as Record<string, unknown>;
+    const nodeAt = scene.nodeAt as (x: number, y: number) => number;
+    scene.nodeAt = (x: number, y: number) => (y < 0 && y >= -30 && x >= 800 && x < 1100 ? 2 : nodeAt(x, y));
+  });
+
+  it("selects an unselected node on the press, whatever the keys, and moves it alone past 5px on an axis", () => {
+    const stops: string[] = [];
+    settings.onNodeDragStop = (_event, node) => stops.push(node.id);
+    useWorkflowStore.getState().onEdgesChange([{ type: "select", id: "ac", selected: true }]);
+    const gesture = editor.press(pointer(900, -10, { shiftKey: true }))!;
+    expect(selected()).toEqual(["c"]);
+    expect(selectedEdges()).toEqual([]);
+    // 4px on each axis: not yet a drag (FloatingNodeHeader's per-axis threshold).
+    gesture.move(pointer(904, -6, { shiftKey: true }));
+    expect(position("c")).toEqual({ x: 800, y: 0 });
+    gesture.move(pointer(920, -10, { shiftKey: true }));
+    gesture.up(pointer(920, -10, { shiftKey: true }));
+    // Measured from the press, as the header's drag is.
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([0, 400, 820]);
+    expect(selected()).toEqual(["c"]);
+    expect(stops).toEqual(["c"]);
+  });
+
+  it("an already selected node carries the selection, and every moved node is regrouped", () => {
+    const stops: string[] = [];
+    settings.onNodeDragStop = (_event, node) => stops.push(node.id);
+    editor.selectNodes(["a", "b", "c"], false);
+    const gesture = editor.press(pointer(900, -10))!;
+    gesture.move(pointer(930, -10));
+    gesture.up(pointer(930, -10));
+    expect([position("a").x, position("b").x, position("c").x]).toEqual([30, 430, 830]);
+    expect(stops.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("a click changes nothing past the press's selection", () => {
+    click(900, -10);
+    expect(selected()).toEqual(["c"]);
+    click(900, -10, { shiftKey: true });
+    expect(selected()).toEqual(["c"]);
+  });
+});
+
+describe("presses on a connection (React Flow's nopan)", () => {
+  const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+  beforeEach(() => {
+    panGesture.mockClear();
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
+    edgeHit = 0;
+  });
+
+  it.each([
+    ["the always pan mode", { panMode: "always" as const }, {}],
+    ["Space held in the space mode", { panMode: "space" as const }, { space: true }],
+  ])("a left drag from a connection pans nothing in %s; a release still on it clicks it", (_name, navigation, flags) => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, ...navigation };
+    (editor as unknown as { space: boolean }).space = "space" in flags;
+    drag([500, 1000], [520, 1000]);
+    expect(panGesture).not.toHaveBeenCalled();
+    expect(selectedEdges()).toEqual(["ac"]);
+  });
+
+  it("a drag that ends off the connection does nothing", () => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "always" };
+    const gesture = editor.press(pointer(500, 1000))!;
+    edgeHit = -1;
+    gesture.move(pointer(500, 1100));
+    gesture.up(pointer(500, 1100));
+    expect(panGesture).not.toHaveBeenCalled();
+    expect(selectedEdges()).toEqual([]);
+  });
+
+  it("on a locked canvas a left drag from a connection pans nothing either", () => {
+    settings = { ...settings, locked: true, onEdgeClick: vi.fn(), navigation: { ...defaultCanvasNavigationSettings, panMode: "always" } };
+    drag([500, 1000], [530, 1000]);
+    expect(panGesture).not.toHaveBeenCalled();
+    expect(settings.onEdgeClick).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("canvas-interacting during a node drag", () => {
   it("is held for the whole drag, and the canvas hears when it is let go", () => {
     const ended = vi.fn();
@@ -688,6 +772,8 @@ describe("presses held through a rebuilt graph", () => {
     edgeHit = 0;
     const gesture = editor.press(pointer(500, 1000))!;
     rebuild();
+    // The release is still on that connection, renumbered behind the added one.
+    edgeHit = 1;
     gesture.up(pointer(500, 1000));
     expect(selectedEdges()).toEqual(["ac"]);
     expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));

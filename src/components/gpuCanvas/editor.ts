@@ -46,6 +46,8 @@ import { KeyboardFocus } from "./keyboardFocus";
 const CLICK_DISTANCE = 5;
 /** Pointer travel (css px) a press on empty canvas must pass to start a marquee or a pan (React Flow's paneClickDistance). */
 const PANE_CLICK_DISTANCE = 1;
+/** FloatingNodeHeader's drag starts once the pointer is more than this far from the press on either axis. */
+const HEADER_DRAG_DISTANCE = 5;
 /** Under this a press on a handle is a click that opens its menu. */
 const HANDLE_CLICK_SLOP = 4;
 /** Pointer travel (css px) past which a press on a handle draws its connection line (React Flow's connectionDragThreshold). */
@@ -329,6 +331,14 @@ export class Editor {
       return this.pan(event);
     }
     if (editing.disabled) return null;
+    // A floating header's own drag (FloatingNodeHeader) takes a left press whatever the keys and the pan mode say.
+    if (event.button === 0) {
+      const header = this.headerFromEvent(event, at);
+      if (header >= 0) return this.headerGesture(event, header);
+    }
+    // On the Mac a Control+click is a secondary click: the browser fires no click for it, only the context menu
+    // (Editor.contextMenu), so classic's click-driven selection changes nothing. It starts no gesture here either.
+    if (isMac && event.button === 0 && event.ctrlKey) return null;
     const space = this.space && !editing.tutorial;
     const modifiers = { button: event.button, shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, space };
     const panning = paneDragAction(editing.navigation, modifiers, isMac);
@@ -369,11 +379,8 @@ export class Editor {
     }
     // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
     if (node >= 0) return this.nodeGesture(event, node);
-    // A connection is not nopan: a drag from it pans as the pane's does.
-    if (edge >= 0) {
-      const edgeId = scene.graph.edges[edge].id;
-      return this.clickGesture(event, () => this.clickEdge(event, edgeId), action === "pan" ? () => this.pan(event) : undefined);
-    }
+    // A connection is React Flow's nopan: only the middle button pans from it (above), and a left drag moves nothing.
+    if (edge >= 0) return this.edgePressGesture(event, scene.graph.edges[edge].id);
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     // A marquee starts once the press moves (at once with the selection key held); a release before that is a pane click.
     if (action === "select" && !editing.locked) {
@@ -388,6 +395,22 @@ export class Editor {
     if (!target?.closest("[data-gpu-canvas-live]")) return null;
     const id = target.closest("[data-node-header]")?.getAttribute("data-node-header") ?? target.closest(".react-flow__node:not(.react-flow__node-gpuGhost)")?.getAttribute("data-id");
     return id ? this.scene.graph.indexOf.get(id) ?? null : null;
+  }
+
+  /**
+   * The node whose floating header a press landed on: the live header's element, or a painted node's header band
+   * (above its box). None on a locked canvas, whose nodes and headers are the pane's.
+   */
+  private headerFromEvent(event: PointerEvent, at: { x: number; y: number }): number {
+    if (this.editing().locked) return -1;
+    const target = event.target instanceof Element ? event.target : null;
+    const graph = this.scene.graph;
+    if (target?.closest("[data-gpu-canvas-live]")) {
+      const id = target.closest("[data-node-header]")?.getAttribute("data-node-header");
+      return id ? graph.indexOf.get(id) ?? -1 : -1;
+    }
+    const i = this.scene.nodeAt(at.x, at.y);
+    return i >= 0 && this.scene.toWorld(at.x, at.y).y < graph.nodes[i].y ? i : -1;
   }
 
   /** A handle of a live node, when the press came from the live layer. */
@@ -457,6 +480,24 @@ export class Editor {
         } else if (!moved) click();
       },
       cancel: () => dragging?.cancel(),
+    };
+  }
+
+  /**
+   * A left press on a connection: it never drags or captures. As the browser's click, which needs the press and the
+   * release on the same element, a release still on that connection clicks it, however far the pointer travelled.
+   */
+  private edgePressGesture(event: PointerEvent, edgeId: string): Gesture {
+    return {
+      move: () => {},
+      up: (up) => {
+        const at = this.scene.local(up);
+        // A node over the release point (its element on classic, unless locked) takes the release: no click.
+        if (!this.editing().locked && this.scene.nodeAt(at.x, at.y) >= 0) return;
+        const edge = this.scene.edgeAt(at.x, at.y);
+        if (edge >= 0 && this.scene.graph.edges[edge]?.id === edgeId) this.clickEdge(event, edgeId);
+      },
+      cancel: () => {},
     };
   }
 
@@ -592,16 +633,62 @@ export class Editor {
     };
   }
 
-  /** The pressed node is held by id: a graph rebuilt between the press and the drag renumbers it. */
-  private dragGesture(down: PointerEvent, first: PointerEvent, pressedId: string): Gesture | null {
+  /**
+   * A press on a node's floating header, as FloatingNodeHeader's drag: the press makes an unselected node the only
+   * selection, whatever the keys; past 5px on either axis the node moves, with the selection only if it was already
+   * selected; on release every moved node is regrouped. A release before that changes nothing more.
+   */
+  private headerGesture(event: PointerEvent, i: number): Gesture {
+    const id = this.scene.graph.nodes[i].id;
+    const wasSelected = !!useWorkflowStore.getState().nodes.find((n) => n.id === id)?.selected;
+    if (!wasSelected) {
+      this.hideSelectionFrame();
+      this.selectNodes([id], false);
+    }
+    const startX = event.clientX, startY = event.clientY;
+    const fromLive = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]");
+    let dragging: Gesture | null = null, moved = false;
+    this.live.want(id, "press", true);
+    const release = () => this.live.want(id, "press", false);
+    return {
+      move: (move) => {
+        if (dragging) return dragging.move(move);
+        if (moved || Math.max(Math.abs(move.clientX - startX), Math.abs(move.clientY - startY)) <= HEADER_DRAG_DISTANCE) return;
+        moved = true;
+        dragging = this.dragGesture(event, move, id, { header: true, carry: wasSelected });
+        if (!dragging) return;
+        this.scene.capture();
+        dragging.move(move);
+      },
+      up: (up) => {
+        if (dragging) {
+          dragging.up(up);
+          if (fromLive) swallowNextClick();
+        }
+        release();
+      },
+      cancel: () => {
+        dragging?.cancel();
+        release();
+      },
+    };
+  }
+
+  /**
+   * The pressed node is held by id: a graph rebuilt between the press and the drag renumbers it. `header` is a
+   * floating header's drag: it carries the selection only when `carry` says so, follows the pointer from the press
+   * and regroups every moved node on release.
+   */
+  private dragGesture(down: PointerEvent, first: PointerEvent, pressedId: string, header?: { header: true; carry: boolean }): Gesture | null {
     const scene = this.scene, graph = scene.graph;
     const store = useWorkflowStore.getState();
     const pressedNode = store.nodes.find((n) => n.id === pressedId);
     if (!pressedNode || pressedNode.draggable === false) return null;
     // React Flow's XYDrag with selectNodesOnDrag off: a selected node carries the selection; an unselected one
     // clears it and moves alone, unless Shift (multiSelectionKeyCode) is held, when it moves with the selection.
-    if (!pressedNode.selected && !down.shiftKey) this.clearSelection();
-    const carried = pressedNode.selected || down.shiftKey
+    if (!header && !pressedNode.selected && !down.shiftKey) this.clearSelection();
+    const carries = header ? header.carry : pressedNode.selected || down.shiftKey;
+    const carried = carries
       ? useWorkflowStore.getState().nodes.filter((n) => n.selected && n.draggable !== false).map((n) => n.id)
       : [];
     const ids = [...new Set([...carried, pressedId])].filter((id) => graph.indexOf.has(id));
@@ -629,7 +716,8 @@ export class Editor {
     // as classic's drag positions are laid over the store's nodes; a replaced canvas holds nothing.
     scene.graph.hold = (id) => replaced() ? undefined : held(id);
     // As React Flow's drag starts once past its threshold: from where the pointer is then, so the nodes do not jump.
-    const at0 = scene.local(first), origin = scene.toWorld(at0.x, at0.y);
+    // The header's drag measures from the press.
+    const at0 = scene.local(header ? down : first), origin = scene.toWorld(at0.x, at0.y);
     // The dragged nodes stay live while they move (the pressed one is hovered, a selection is live).
     this.live.wantOnly("drag", ids);
     this.holdInteracting(true);
@@ -688,8 +776,11 @@ export class Editor {
       state.onNodesChange(this.positionChanges(indices, false));
       scene.graph.hold = null;
       if (!event) return;
-      const node = useWorkflowStore.getState().nodes.find((n) => n.id === pressedId);
-      if (node) this.editing().onNodeDragStop(event, node);
+      // React Flow's onNodeDragStop names the pressed node; the header's drag checks every moved node's group.
+      for (const id of header ? ids : [pressedId]) {
+        const node = useWorkflowStore.getState().nodes.find((n) => n.id === id);
+        if (node) this.editing().onNodeDragStop(event, node);
+      }
     };
     panFrame = requestAnimationFrame(autoPan);
     return { move: place, up: (event) => finish(event), cancel: () => finish(null) };

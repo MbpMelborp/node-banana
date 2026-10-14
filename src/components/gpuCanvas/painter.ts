@@ -95,6 +95,11 @@ interface NodePaint {
   height?: number;
   /** Its handles' anchors as painting measured them. */
   handles?: Map<string, HandleAnchor>;
+  /** The node's width when they were measured (the scene's own when not known). */
+  handlesWidth?: number;
+  /** Its media card's and controls card's boxes as painting measured them. */
+  card?: SceneNode["card"];
+  overhang?: SceneNode["overhang"];
   shown?: HeldImage;
   lastSeen: number;
 }
@@ -317,12 +322,6 @@ export class Painter {
   }
 
   /** Paints a node at the view's tier now (ahead of the queue) and resolves once the scene shows it. */
-  /** The node's height and handles as its painted image has them. */
-  measured(id: string): { height: number; handles?: Map<string, HandleAnchor> } | undefined {
-    const paint = this.paints.get(id);
-    return paint?.height == null ? undefined : { height: paint.height, handles: paint.handles };
-  }
-
   /** Whether the scene's image of the node is current at the view's tier (or the node is gone). */
   isFresh(id: string) {
     return !this.scene.graph.indexOf.has(id) || this.fresh(id, this.wanted());
@@ -828,20 +827,45 @@ export class Painter {
     this.afterBatch(done, t0);
   }
 
-  /** The node's measured height and handles reach the scene (its edges move to them). */
-  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: { x: number; y: number; w: number; h: number } | null, width?: number, overhang?: SceneNode["overhang"]) {
+  /**
+   * The node's measured height and handles reach the scene (its edges move to them). A live node (its painted copy
+   * hidden) keeps the box React Flow measures for it, as on classic, where the DOM is the node: they are only held,
+   * and reach the scene when it goes back to its painted image (restoreMeasured).
+   */
+  private applyMeasured(id: string, height: number, handles?: Map<string, HandleAnchor>, card?: SceneNode["card"], width?: number, overhang?: SceneNode["overhang"]) {
     const i = this.scene.graph.indexOf.get(id);
     if (i == null) return;
+    const paint = this.paint(id);
+    paint.height = height;
+    if (card !== undefined) paint.card = card;
+    if (overhang !== undefined) paint.overhang = overhang;
+    if (handles) {
+      paint.handles = handles;
+      paint.handlesWidth = width;
+    }
+    if (this.scene.isHidden(i)) return;
+    this.measuredToScene(id, i, height, handles, card, width, overhang);
+  }
+
+  private measuredToScene(id: string, i: number, height: number, handles?: Map<string, HandleAnchor>, card?: SceneNode["card"], width?: number, overhang?: SceneNode["overhang"]) {
     if (card !== undefined) this.scene.graph.nodes[i].card = card;
     if (overhang !== undefined) this.scene.setOverhang(i, overhang);
     this.scene.setNodeHeight(i, height);
-    if (handles) {
-      // At the width it was painted at: a width changed since moves them until the next paint.
-      this.scene.setHandles(i, handles, width);
-      this.paint(id).handles = handles;
-    }
+    // At the width it was painted at: a width changed since moves them until the next paint.
+    if (handles) this.scene.setHandles(i, handles, width);
     if (!this.measuredIds.size) queueMicrotask(() => this.reportMeasured());
     this.measuredIds.add(id);
+  }
+
+  /**
+   * A node leaving the live layer: the scene's box, handles and cards are its painted image's again, and that size
+   * reaches the store. Whether the painter has measured the node.
+   */
+  restoreMeasured(id: string): boolean {
+    const paint = this.paints.get(id), i = this.scene.graph.indexOf.get(id);
+    if (paint?.height == null || i == null) return false;
+    this.measuredToScene(id, i, paint.height, paint.handles, paint.card, paint.handlesWidth, paint.overhang);
+    return true;
   }
 
   /** The measured sizes reach the store as React Flow's measuring does on the classic canvas (no undo step, nothing unsaved). */
@@ -849,6 +873,11 @@ export class Painter {
     const ids = this.measuredIds;
     this.measuredIds = new Set();
     if (this.disposed) return;
+    // A node live by now: the live flow reports React Flow's measurement of it.
+    for (const id of ids) {
+      const i = this.scene.graph.indexOf.get(id);
+      if (i != null && this.scene.isHidden(i)) ids.delete(id);
+    }
     const store = useWorkflowStore.getState();
     const changes = measuredChanges(store.nodes, (id) => indexOfNode(store.nodes, id), this.scene.graph, ids);
     if (changes.length) store.onNodesChange(changes);
