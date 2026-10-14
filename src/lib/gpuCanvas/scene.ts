@@ -25,6 +25,8 @@ import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
  */
 const NODE_STRIDE = 24;
 const FLAG_SELECTED = 1, FLAG_HOVERED = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG_PAINTED = 16, FLAG_RUNNING = 32;
+/** A painted node whose floating header the live layer shows (a live node covers it): the header pass skips it. */
+const FLAG_HEADER_LIVE = 64;
 /**
  * Floats per edge instance, one cubic segment of a connection: the cubic (8),
  * colour (3), flags (1), width (1), length along the edge where it starts (1)
@@ -140,6 +142,7 @@ const NODE_FRAGMENT = /* glsl */ `
   precision highp sampler2DArray;
   uniform vec3 uView;
   uniform sampler2DArray uPainted;
+  uniform float uHeaderPass;
   in vec2 vLocal;
   in vec2 vSize;
   in vec4 vUv;
@@ -162,12 +165,17 @@ const NODE_FRAGMENT = /* glsl */ `
       outColor = vec4(vColor, max(inside * 0.08, border * 0.5));
       return;
     }
+    // The header pass draws painted nodes' floating headers over every node, as classic's sit above the nodes (z-index 1500).
+    bool header = vLocal.y < vBox.y;
+    if (uHeaderPass > 0.5 && (!header || (vFlags & ${FLAG_PAINTED}) == 0 || (vFlags & ${FLAG_HEADER_LIVE}) != 0)) discard;
     if ((vFlags & ${FLAG_PAINTED}) != 0) {
       // The image holds the node, its header and its margin; the outline is drawn by the live node's own frame when selected.
+      // The body pass leaves the header (above the node's box) to the header pass.
+      if (header && uHeaderPass < 0.5) discard;
       if (any(lessThan(vLocal, vec2(0.0))) || any(greaterThan(vLocal, vSize))) discard;
       outColor = texture(uPainted, vec3(mix(vUv.xy, vUv.zw, vLocal / vSize), vLayer));
       // A dimmed node fades as classic's node element does; its floating header, above it, does not.
-      if (vLocal.y >= vBox.y) outColor.a *= vAlpha;
+      if (!header) outColor.a *= vAlpha;
       return;
     }
     // The stand-in card: the node's body in its type's colour stripe.
@@ -475,7 +483,9 @@ export class Scene {
   private uniforms = { uViewport: { value: new THREE.Vector2() }, uView: { value: new THREE.Vector3() }, uDpr: { value: 1 } };
   private nodeData = new Float32Array(0);
   private nodeAttr: THREE.InstancedInterleavedBuffer | null = null;
-  private nodeUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPainted: { value: EMPTY_ARRAY }, uPad: { value: 3 } };
+  private nodeUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPainted: { value: EMPTY_ARRAY }, uPad: { value: 3 }, uHeaderPass: { value: 0 } };
+  /** The node pass's own uniforms (the painted texture is the same one), drawing only headers. */
+  private headerUniforms: Record<string, THREE.IUniform> = { ...this.nodeUniforms, uHeaderPass: { value: 1 } };
   /** Room past a painted node's quad for its selection shadow below the card. */
   private outlineUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPad: { value: 24 } };
   private haloUniforms: Record<string, THREE.IUniform> = { ...this.uniforms, uPad: { value: 16 }, uTime: { value: 0 }, uMotion: { value: 1 } };
@@ -506,6 +516,8 @@ export class Scene {
   private graphMeshes: THREE.Mesh[] = [];
   private painted = new Map<number, PaintedQuad>();
   private hidden = new Set<number>();
+  /** Painted nodes whose header the live layer shows (setHeadersLive). */
+  private headersLive = new Set<number>();
   private selected = new Set<number>();
   private hovered = -1;
   private index: GridIndex;
@@ -605,6 +617,8 @@ export class Scene {
     this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, this.nodeUniforms)), 3);
     // The same instances again, drawing only outlines over painted nodes.
     this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, OUTLINE_FRAGMENT, this.outlineUniforms)), 4);
+    // And again for painted nodes' floating headers, over every node and its outline.
+    this.addGraphMesh(new THREE.Mesh(geometry, material(NODE_VERTEX, NODE_FRAGMENT, this.headerUniforms)), 4.5);
     // And again for running nodes' halos, shown only zoomed out.
     this.haloMesh = new THREE.Mesh(geometry, material(NODE_VERTEX, HALO_FRAGMENT, this.haloUniforms));
     this.addGraphMesh(this.haloMesh, 5);
@@ -640,6 +654,7 @@ export class Scene {
     if (this.selected.has(i)) flags |= FLAG_SELECTED;
     if (this.hovered === i) flags |= FLAG_HOVERED;
     if (this.running.has(node.id)) flags |= FLAG_RUNNING;
+    if (this.headersLive.has(i)) flags |= FLAG_HEADER_LIVE;
     const painted = this.painted.get(i), alpha = this.opacityOf(node.id, performance.now());
     // The media card's box, once measured (the node's own box until then).
     const card = node.card ?? { x: 0, y: 0, w: node.w, h: node.h };
@@ -886,6 +901,7 @@ export class Scene {
     this.graph = graph;
     this.painted.clear();
     this.hidden.clear();
+    this.headersLive.clear();
     this.selected.clear();
     this.hovered = -1;
     this.routes = [];
@@ -963,6 +979,19 @@ export class Scene {
     if (hidden) this.hidden.add(i);
     else this.hidden.delete(i);
     this.touchNode(i);
+  }
+
+  /** Painted nodes whose floating header the live layer shows instead, above the live node covering it. */
+  setHeadersLive(nodes: Iterable<number>) {
+    const next = new Set(nodes);
+    for (const i of this.headersLive) if (!next.has(i)) {
+      this.headersLive.delete(i);
+      this.touchNode(i);
+    }
+    for (const i of next) if (!this.headersLive.has(i)) {
+      this.headersLive.add(i);
+      this.touchNode(i);
+    }
   }
 
   setSelected(nodes: Iterable<number>) {

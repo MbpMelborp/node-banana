@@ -59,10 +59,10 @@ beforeEach(() => {
     edgeAt: () => edgeHit,
     edgesWithin: () => [0],
     edgeRoute: () => ({ segments: [[0, 1000, 400, 1000, 800, 1000, 1200, 1000]], stems }),
-    capture: noop, input: noop, nodesMoved: noop, setHeldEdge: noop, panGesture: () => ({ move: noop, up: noop, cancel: noop }),
+    capture: noop, input: noop, nodesMoved: noop, setHeldEdge: noop, setHoveredEdge: noop, panGesture: () => ({ move: noop, up: noop, cancel: noop }),
     onViewChanged: () => noop, onLayoutChanged: () => noop,
   } as unknown as Scene;
-  const live = { refresh: noop, wantOnly: noop, live: new Set<string>() } as unknown as LiveLayer;
+  const live = { refresh: noop, wantOnly: noop, live: new Set<string>(), element: document.createElement("div") } as unknown as LiveLayer;
   host = document.createElement("div");
   document.body.appendChild(host);
   settings = {
@@ -96,22 +96,26 @@ describe("presses on the GPU canvas", () => {
   });
 
   it("a middle press on a node or connection pans in any pan mode, even under a dialog; on empty canvas only where the mode pans", () => {
-    const pan = { move: noop, up: noop, cancel: noop };
-    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => pan;
+    const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
     settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
     settings.disabled = true;
-    expect(editor.press(pointer(100, 100, { button: 1 }))).toBe(pan);
+    expect(editor.press(pointer(100, 100, { button: 1 }))).not.toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(1);
     edgeHit = 0;
-    expect(editor.press(pointer(500, 1000, { button: 1 }))).toBe(pan);
+    expect(editor.press(pointer(500, 1000, { button: 1 }))).not.toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(2);
     edgeHit = -1;
     expect(editor.press(pointer(2000, 2000, { button: 1 }))).toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(2);
   });
 
   it("in the middleMouse mode a right drag pans only from empty canvas, and not with the selection key held", () => {
-    const pan = { move: noop, up: noop, cancel: noop };
-    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => pan;
+    const panGesture = vi.fn(() => ({ move: noop, up: noop, cancel: noop }));
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = panGesture;
     settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
-    expect(editor.press(pointer(2000, 2000, { button: 2 }))).toBe(pan);
+    expect(editor.press(pointer(2000, 2000, { button: 2 }))).not.toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(1);
     expect(editor.press(pointer(2000, 2000, { button: 2, shiftKey: true }))).toBeNull();
     expect(editor.press(pointer(100, 100, { button: 2 }))).toBeNull();
     edgeHit = 0;
@@ -119,7 +123,8 @@ describe("presses on the GPU canvas", () => {
     edgeHit = -1;
     // A locked canvas's nodes are not draggable, so not nopan: a right drag pans from them.
     settings.locked = true;
-    expect(editor.press(pointer(100, 100, { button: 2 }))).toBe(pan);
+    expect(editor.press(pointer(100, 100, { button: 2 }))).not.toBeNull();
+    expect(panGesture).toHaveBeenCalledTimes(2);
   });
 
   it("a drag on empty canvas in select mode still selects by marquee", () => {
@@ -221,15 +226,51 @@ describe("presses on the GPU canvas", () => {
     const canvas = editor["scene"].canvas;
     settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "always" };
     editor.idleMove(pointer(2000, 2000) as PointerEvent);
-    expect(canvas.style.cursor).toBe("");
+    expect(canvas.style.cursor).toBe("grab");
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
     expect(canvas.style.cursor).toBe("pointer");
     window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift" }));
-    expect(canvas.style.cursor).toBe("");
+    expect(canvas.style.cursor).toBe("grab");
     // Over a node the key leaves the node's cursor alone.
     editor.idleMove(pointer(850, 100) as PointerEvent);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
     expect(canvas.style.cursor).toBe("grab");
+  });
+
+  it("empty canvas shows grab where a left drag pans (not in the tutorial or the middleMouse mode), grabbing while it pans", () => {
+    (editor["scene"] as unknown as Record<string, unknown>).setHoveredEdge = noop;
+    const canvas = editor["scene"].canvas;
+    // Off a Mac the default "space" mode pans on the left button.
+    editor.idleMove(pointer(2000, 2000) as PointerEvent);
+    expect(canvas.style.cursor).toBe("grab");
+    const gesture = editor.press(pointer(2000, 2000));
+    expect(canvas.style.cursor).toBe("grabbing");
+    gesture?.move(pointer(2010, 2000));
+    gesture?.up(pointer(2010, 2000));
+    expect(canvas.style.cursor).toBe("grab");
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "middleMouse" };
+    editor.idleMove(pointer(2000, 2000) as PointerEvent);
+    expect(canvas.style.cursor).toBe("");
+    settings = { ...settings, tutorial: true, navigation: { ...defaultCanvasNavigationSettings, panMode: "always" } };
+    editor.idleMove(pointer(2000, 2000) as PointerEvent);
+    expect(canvas.style.cursor).toBe("");
+  });
+
+  it("a node shows grab, and grabbing on the canvas and live nodes while a drag moves it; the arrow under a dialog", () => {
+    (editor["scene"] as unknown as Record<string, unknown>).setHoveredEdge = noop;
+    const canvas = editor["scene"].canvas, liveElement = editor["live"].element;
+    editor.idleMove(pointer(850, 100) as PointerEvent);
+    expect(canvas.style.cursor).toBe("grab");
+    const gesture = editor.press(pointer(850, 100));
+    gesture?.move(pointer(870, 100));
+    expect(canvas.style.cursor).toBe("grabbing");
+    expect(liveElement.hasAttribute("data-gpu-dragging")).toBe(true);
+    gesture?.up(pointer(870, 100));
+    expect(canvas.style.cursor).toBe("grab");
+    expect(liveElement.hasAttribute("data-gpu-dragging")).toBe(false);
+    settings.disabled = true;
+    editor.idleMove(pointer(850, 100) as PointerEvent);
+    expect(canvas.style.cursor).toBe("");
   });
 
   it("the connection under the pointer is the live connections' hovered one, until the pointer leaves the canvas", () => {

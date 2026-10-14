@@ -650,7 +650,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     <div ref={hostRef} className="absolute inset-0 overflow-hidden bg-neutral-900" data-gpu-canvas="">
       {/* select-none: as globals.css gives React Flow's pane (Chromium need not hit-test the canvas to extend a selection). */}
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none select-none" />
-      <div ref={liveRef} data-gpu-canvas-live="" data-locked={editing.locked ? "" : undefined} className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div ref={liveRef} data-gpu-canvas-live="" data-locked={editing.locked ? "" : undefined} data-disabled={editing.disabled ? "" : undefined} className="pointer-events-none absolute inset-0 overflow-hidden">
         <LiveFlow connect={connectLive} onViewChanged={liveViewChanged} initialView={initialView} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions}
           onEdgesChange={onEdgesChange} headers={headers} hold={holdLive} onNodeClick={liveNodeClick} onMeasured={liveMeasured}>
           {flowChildren}

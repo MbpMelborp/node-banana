@@ -41,6 +41,9 @@ import { flowNode, handleAnchors, noop, settleNodes, type HeaderProps } from "./
 // cursor is given back here. On a locked canvas the nodes take no pointer, as classic's (presses go to the scene's pane).
 // A panel that opts out (the navigator in the locked tutorial) stays inert, as classic's.
 // A selected angular connection's segment handle drags its middle segment (EditableEdge's own drag), so it takes the pointer.
+// The scene drags the nodes, so React Flow's draggable cursors are given here: grab, grabbing while a drag moves them (the
+// editor's data-gpu-dragging), the default arrow when locked or under a dialog. A focused node shows no ring, as classic's
+// selectable nodes (React Flow's .selectable:focus outline none; the wrappers stay focusable, as classic's).
 const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__pane, [data-gpu-canvas-live] .react-flow__renderer, [data-gpu-canvas-live] .react-flow { pointer-events: none !important; background: transparent !important; }
   [data-gpu-canvas-live] .react-flow__node, [data-gpu-canvas-live] .react-flow__panel:not(.pointer-events-none) { pointer-events: all !important; }
@@ -49,6 +52,9 @@ const LIVE_STYLE = `
   [data-gpu-canvas-live] .react-flow__edge-path { visibility: hidden; }
   [data-gpu-canvas-live] .react-flow__handle.connectable { cursor: crosshair; }
   [data-gpu-canvas-live] .edge-segment-handle { pointer-events: all !important; }
+  [data-gpu-canvas-live]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grab; }
+  [data-gpu-canvas-live][data-gpu-dragging]:not([data-locked]):not([data-disabled]) .react-flow__node { cursor: grabbing; }
+  [data-gpu-canvas-live] .react-flow__node:focus, [data-gpu-canvas-live] .react-flow__node:focus-visible { outline: none; }
 `;
 
 /**
@@ -63,7 +69,11 @@ function GhostNode() {
 /** Painted nodes over live connections (paintedCover): the connections they cover, and their boxes. */
 type EdgeCover = { edgeIds: string[]; boxes: { x: number; y: number; w: number; h: number }[] };
 
-type FlowState = { nodes: Node[]; edges: Edge[]; cover?: EdgeCover; committed: () => void };
+/** `headers`: painted nodes whose floating header a live node would cover; the flow shows those headers, above it. */
+type FlowState = { nodes: Node[]; edges: Edge[]; headers?: Node[]; cover?: EdgeCover; committed: () => void };
+
+/** A floating header's height above its node (FloatingNodeHeader's top offset). */
+const HEADER_HEIGHT = 26;
 
 /** The mask live connections under painted nodes wear: the nodes' boxes cut out, at the card's corner radius (--radius-card). */
 const EDGE_MASK_ID = "gpu-live-edge-mask";
@@ -105,9 +115,10 @@ const RENDER_TIMEOUT_MS = 2000;
  * stay live as they stay mounted on today's canvas (the 3D viewer), and
  * "pending" while it has work to pick up only a mounted node can (a
  * ComfyUI workflow to import, a run streaming previews), and "running"
- * while it works on its output (its spinner turns).
+ * while it works on its output (its spinner turns). "cover" keeps a later node in the store over an
+ * unselected live node it overlaps, as classic stacks nodes in store order (the layer sets it, coverChanged).
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "cover";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {
@@ -173,8 +184,9 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
   const [state, setState] = useState<FlowState>({ nodes: [], edges: [], committed: noop });
   const { nodes, edges } = state;
   const types = useMemo(() => ({ ...nodeTypes, gpuGhost: GhostNode }), [nodeTypes]);
-  // Floating headers belong to the live nodes, not to the stand-ins.
+  // Floating headers belong to the live nodes, not to the stand-ins, and to the painted nodes a live node covers.
   const real = useMemo(() => nodes.filter((n) => n.type !== "gpuGhost"), [nodes]);
+  const headerNodes = useMemo(() => state.headers?.length ? [...real, ...state.headers] : real, [real, state.headers]);
   useLayoutEffect(() => connect({ setNodes: setState }), [connect]);
   useLayoutEffect(() => state.committed(), [state]);
   // A live node's measured size reaches the store, as on the classic canvas (the painted ones' come from painting).
@@ -212,7 +224,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
           zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
           panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
           <ViewSync connect={connect} onViewChanged={onViewChanged} />
-          <FloatingNodeHeaders nodes={real} {...headers} />
+          <FloatingNodeHeaders nodes={headerNodes} {...headers} />
           {children}
         </ReactFlow>
       </StoreSocketConnections>
@@ -390,6 +402,8 @@ export class LiveLayer {
    */
   refresh(sync = false) {
     void this.render(sync);
+    // Moved nodes may overlap others now.
+    if (this.coverChanged()) this.pending = this.sync();
   }
 
   /** Resolves once the latest change of live nodes has finished swapping. */
@@ -404,6 +418,7 @@ export class LiveLayer {
     else reasons.delete(reason);
     if (reasons.size) this.wanted.set(id, reasons);
     else this.wanted.delete(id);
+    this.coverChanged();
     this.pending = this.sync();
   }
 
@@ -423,7 +438,47 @@ export class LiveLayer {
       else this.wanted.set(id, new Set([reason]));
       changed = true;
     }
-    if (changed) this.pending = this.sync();
+    if (this.coverChanged() || changed) this.pending = this.sync();
+  }
+
+  /**
+   * Gives "cover" to the nodes that must stay over a live one: the live layer draws over the scene, so a node later
+   * in the store that overlaps an unselected live node (a hovered or dragged one) is made live too, and the flow
+   * stacks them in store order, as classic's (only a selected node is raised, by React Flow's elevateNodesOnSelect).
+   * Returns whether the set changed.
+   */
+  private coverChanged(): boolean {
+    const nodes = useWorkflowStore.getState().nodes;
+    const graph = this.scene.graph;
+    const raised = [...this.wanted].filter(([, reasons]) => reasons.size > 1 || !reasons.has("cover")).map(([id]) => id);
+    const live = new Set(raised), cover = new Set<string>();
+    for (let next = raised.pop(); next !== undefined; next = raised.pop()) {
+      const i = indexOfNode(nodes, next), g = graph.indexOf.get(next);
+      if (i < 0 || g == null || nodes[i].selected) continue;
+      const n = graph.nodes[g];
+      for (const j of this.scene.nodesWithin(n.x, n.y, n.x + n.w, n.y + n.h)) {
+        const o = graph.nodes[j];
+        if (live.has(o.id) || cover.has(o.id) || indexOfNode(nodes, o.id) < i) continue;
+        // Overlapping, not only touching.
+        if (o.x >= n.x + n.w || o.x + o.w <= n.x || o.y >= n.y + n.h || o.y + o.h <= n.y) continue;
+        cover.add(o.id);
+        raised.push(o.id);
+      }
+    }
+    let changed = false;
+    for (const [id, reasons] of this.wanted) if (reasons.has("cover") && !cover.has(id)) {
+      reasons.delete("cover");
+      if (!reasons.size) this.wanted.delete(id);
+      changed = true;
+    }
+    for (const id of cover) {
+      const reasons = this.wanted.get(id);
+      if (reasons?.has("cover")) continue;
+      if (reasons) reasons.add("cover");
+      else this.wanted.set(id, new Set(["cover"]));
+      changed = true;
+    }
+    return changed;
   }
 
   private drop(id: string) {
@@ -442,7 +497,9 @@ export class LiveLayer {
     // it is measured again, which blurs the field being typed in: carry the
     // size React Flow already measured.
     const lookup = this.flowState()?.nodeLookup;
-    for (const id of new Set([...this.wanted.keys(), ...this.leaving])) {
+    // In store order, as classic's flow stacks its nodes.
+    const ids = [...new Set([...this.wanted.keys(), ...this.leaving])].sort((a, b) => indexOfNode(nodes, a) - indexOfNode(nodes, b));
+    for (const id of ids) {
       const i = indexOfNode(nodes, id), g = graph.indexOf.get(id);
       if (i < 0 || g == null) continue;
       const n = graph.nodes[g];
@@ -451,6 +508,22 @@ export class LiveLayer {
       if (measured?.width && measured.height) node.measured = { width: measured.width, height: measured.height };
       flowNodes.push(node);
       present.add(id);
+    }
+    // A painted node's floating header sits over every node on classic, but the live nodes draw over the scene:
+    // where one would cover a painted header, the flow shows that header (the scene leaves it out, setHeadersLive).
+    const headers: Node[] = [];
+    for (const id of ids) {
+      const g = graph.indexOf.get(id);
+      if (g == null) continue;
+      const n = graph.nodes[g];
+      for (const j of this.scene.nodesWithin(n.x, n.y, n.x + n.w, n.y + n.h + HEADER_HEIGHT)) {
+        const p = graph.nodes[j], k = indexOfNode(nodes, p.id);
+        if (k < 0 || present.has(p.id) || headers.some((h) => h.id === p.id)) continue;
+        if (p.x >= n.x + n.w || p.x + p.w <= n.x || p.y <= n.y || p.y - HEADER_HEIGHT >= n.y + n.h) continue;
+        const header = flowNode(nodes[k], p.x, p.y, p.w, !!nodes[k].selected);
+        header.measured = { width: p.w, height: p.h };
+        headers.push(header);
+      }
     }
     const flowEdges: Edge[] = [];
     for (const id of this.edgeIds) {
@@ -472,7 +545,14 @@ export class LiveLayer {
     // A commit that never comes (the tree failed) must not hold up whoever waits on the layer.
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, RENDER_TIMEOUT_MS);
-      this.setNodes({ nodes: flowNodes, edges: flowEdges, cover, committed: () => { clearTimeout(timer); resolve(); } }, sync);
+      const committed = () => {
+        clearTimeout(timer);
+        // The flow shows these headers now: the scene stops drawing them.
+        const graph = this.scene.graph;
+        this.scene.setHeadersLive(headers.map((h) => graph.indexOf.get(h.id)).filter((i): i is number => i != null));
+        resolve();
+      };
+      this.setNodes({ nodes: flowNodes, edges: flowEdges, headers, cover, committed }, sync);
     });
   }
 

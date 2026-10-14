@@ -75,6 +75,14 @@ describe("GridIndex", () => {
     // Only nodes containing the point compete.
     expect(index.at(50, 50, true, (i) => (i === 1 ? 1 : 0))).toBe(0);
   });
+
+  it("lets a header band answer over a node's box, raised or later, as headers sit above the nodes", () => {
+    const graph = new SceneGraph([node("a", 0, 0), node("b", 0, 100)], [], {});
+    const index = new GridIndex(graph.nodes, 512, 30);
+    // (10, 90) is inside a's box and b's header band.
+    expect(index.at(10, 90, true, (i) => (i === 0 ? 2 : 0))).toBe(1);
+    expect(index.at(10, 90, false)).toBe(0);
+  });
 });
 
 describe("AtlasLayout", () => {

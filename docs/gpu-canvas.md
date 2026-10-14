@@ -166,8 +166,21 @@ floating header left as it is.
 
 Live nodes take the pointer: React Flow sets `pointer-events: none` inline
 on nodes it cannot select or drag, which is every node of the live flow, so
-the live layer's style overrides it. Hover follows the live node the pointer
-is on (its floating header included) as well as the scene's hit test.
+the live layer's style overrides it, and gives back classic's draggable
+cursors (grab, grabbing while dragged, the arrow when locked or under a
+dialog) and its selectable nodes' missing focus ring. Hover follows the live
+node the pointer is on (its floating header included) as well as the scene's
+hit test.
+
+Nodes stack as classic's: in store order, a selected one raised. The live
+flow holds its nodes in store order, and since the live layer draws over the
+scene, a node later in the store that overlaps an unselected live node (a
+hovered or dragged one) goes live with it ("cover"), so it stays on top.
+Floating headers sit over every node: the scene draws painted nodes'
+headers in a pass of their own after the nodes, and where a live node would
+cover a painted node's header, the live flow shows that header and the scene
+leaves it out (`setHeadersLive`). A header band answers presses before any
+node's box, as classic's headers take them.
 
 ## Live content
 
@@ -304,7 +317,10 @@ The scene takes every press and asks the editor what it starts:
   wheel pan or pinch mid-marquee keeps it on the same canvas spot. Empty
   canvas shows the pointer cursor while a drag there would draw a marquee
   (the selection key held, or the Mac default), changing as the key goes
-  down or up, as React Flow's pane with its `selection` class.
+  down or up, as React Flow's pane with its `selection` class, and grab where
+  a left drag would pan (its `draggable` class: Space held in the "space"
+  mode, the "always" mode, off a Mac); a pan shows grabbing from the press,
+  and so does a node drag.
 - On a locked canvas nodes take no pointer, as React Flow gives them
   `pointer-events: none`: a press on one is the pane's (a drag pans as the
   pan mode says, a click is a pane click), and live nodes' controls are

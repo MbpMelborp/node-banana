@@ -372,6 +372,9 @@ export class SceneGraph {
 /** Flow units above a node that its floating header takes: a press there is on the node. */
 export const NODE_HEADER = 30;
 
+/** A rank above any node's raise (GridIndex.at): what a header band adds. */
+const HEADER_RAISE = 1000;
+
 /**
  * A uniform grid over node rectangles, for finding the node under a point.
  * `top` extends each node's hit area upwards (its floating header); `within`
@@ -421,7 +424,8 @@ export class GridIndex {
 
   /**
    * The topmost node containing the point, its header band included unless `header` is false, or -1.
-   * Topmost is the highest `rank` (nodes raised above the others), then the last drawn.
+   * Topmost is a header band over any node's box (floating headers sit above the nodes, as classic's
+   * z-index 1500), then the highest `rank` (nodes raised above the others), then the last drawn.
    */
   at(x: number, y: number, header = true, rank?: (i: number) => number): number {
     const top = header ? this.top : 0;
@@ -430,7 +434,7 @@ export class GridIndex {
     for (const i of list ?? []) {
       const n = this.nodes[i];
       if (!(x >= n.x && x <= n.x + n.w && y >= n.y - top && y <= n.y + n.h)) continue;
-      const r = rank?.(i) ?? 0;
+      const r = (rank?.(i) ?? 0) + (y < n.y ? HEADER_RAISE : 0);
       if (r > bestRank || (r === bestRank && i > best)) {
         best = i;
         bestRank = r;

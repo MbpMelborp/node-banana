@@ -318,7 +318,7 @@ export class Editor {
     // A middle press on a node or connection pans whatever the pan mode, the tutorial or a dialog say:
     // the first rule of React Flow's zoom filter, ahead of its panOnDrag checks.
     if (event.button === 1 && (this.nodeFromEvent(event) != null || scene.nodeAt(at.x, at.y) >= 0 || scene.edgeAt(at.x, at.y) >= 0)) {
-      return scene.panGesture(event);
+      return this.pan(event);
     }
     if (editing.disabled) return null;
     const space = this.space && !editing.tutorial;
@@ -330,10 +330,10 @@ export class Editor {
     // button (the "middleMouse" mode's) does not from a handle, a draggable node or a connection: React Flow's nopan.
     // A left press, Space held or not, still takes a handle or a node first, for the same reason.
     if (action === "pan" && event.button !== 0) {
-      if (event.button === 1) return scene.panGesture(event);
+      if (event.button === 1) return this.pan(event);
       const onNode = !editing.locked && (this.nodeFromEvent(event) ?? scene.nodeAt(at.x, at.y)) >= 0;
       if (onNode || this.handleFromEvent(event) || this.paintedHandleAt(at.x, at.y) || scene.edgeAt(at.x, at.y) >= 0) return null;
-      return scene.panGesture(event);
+      return this.pan(event);
     }
     if (event.button !== 0) return null;
     const keyHeld = selectionKeyHeld(editing.navigation, modifiers);
@@ -360,7 +360,7 @@ export class Editor {
     // Otherwise a drag that selects (selectionOnDrag) starts only on empty canvas, as React Flow's pane does.
     if (node >= 0) return this.nodeGesture(event, node);
     // A connection is not nopan: a drag from it pans as the pane's does.
-    if (edge >= 0) return this.clickGesture(event, () => this.clickEdge(event, edge), action === "pan" ? () => scene.panGesture(event) : undefined);
+    if (edge >= 0) return this.clickGesture(event, () => this.clickEdge(event, edge), action === "pan" ? () => this.pan(event) : undefined);
     if (action === "pan") return this.paneGesture(event, scene.panGesture(event));
     // A marquee starts once the press moves (at once with the selection key held); a release before that is a pane click.
     if (action === "select" && !editing.locked) {
@@ -452,7 +452,35 @@ export class Editor {
    * pixel as d3-zoom does (its clickDistance is React Flow's paneClickDistance).
    */
   private paneGesture(event: PointerEvent, pan: Gesture | null): Gesture {
-    return this.clickGesture(event, () => this.paneClick(), () => pan, pan ? PANE_CLICK_DISTANCE : CLICK_DISTANCE);
+    const gesture = this.clickGesture(event, () => this.paneClick(), () => pan, pan ? PANE_CLICK_DISTANCE : CLICK_DISTANCE);
+    // React Flow's pane is `dragging` from the press (d3-zoom's start), a click included.
+    return pan ? this.withCursor(gesture, this.panCursor(event)) : gesture;
+  }
+
+  /** A pan from this press, the canvas showing the pane's cursor while it runs. */
+  private pan(event: PointerEvent): Gesture {
+    return this.withCursor(this.scene.panGesture(event), this.panCursor(event));
+  }
+
+  /** The pane's cursor while it pans: its `dragging` class's grabbing, unless its `selection` class (paneCursor) wins. */
+  private panCursor(event: PointerEvent) {
+    return this.paneCursor(event.shiftKey, event.altKey) === "pointer" ? "pointer" : "grabbing";
+  }
+
+  /** Shows `cursor` on the canvas while `gesture` runs; as it ends, what is under the pointer sets the cursor again. */
+  private withCursor(gesture: Gesture, cursor: string): Gesture {
+    this.scene.canvas.style.cursor = cursor;
+    return {
+      move: (move) => gesture.move(move),
+      up: (up) => {
+        gesture.up(up);
+        this.idleMove(up);
+      },
+      cancel: () => {
+        gesture.cancel();
+        this.scene.canvas.style.cursor = "";
+      },
+    };
   }
 
   /**
@@ -577,6 +605,9 @@ export class Editor {
     // The dragged nodes stay live while they move (the pressed one is hovered, a selection is live).
     this.live.wantOnly("drag", ids);
     this.holdInteracting(true);
+    // React Flow's .draggable.dragging: grabbing while the nodes move, on the canvas and the live nodes.
+    this.live.element.setAttribute("data-gpu-dragging", "");
+    scene.canvas.style.cursor = "grabbing";
     let committedFirst = false, ended = false, panFrame = 0, pointer = first;
     const place = (event: PointerEvent) => {
       if (ended || replaced()) return;
@@ -613,6 +644,9 @@ export class Editor {
       cancelAnimationFrame(panFrame);
       this.live.wantOnly("drag", []);
       this.holdInteracting(false);
+      this.live.element.removeAttribute("data-gpu-dragging");
+      if (event) this.idleMove(event);
+      else scene.canvas.style.cursor = "";
       // The canvas was replaced mid-drag: the positions belong to the old one.
       if (replaced()) {
         scene.graph.hold = null;
@@ -976,7 +1010,9 @@ export class Editor {
     // A live connection's label brightens under the pointer, as EditableEdge's own hover does.
     setHoveredSceneEdge(edge >= 0 ? scene.graph.edges[edge].id : null);
     this.idleOnPane = !handle && node < 0 && edge < 0;
-    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? "grab" : end ? "move" : edge >= 0 ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
+    // A node is React Flow's draggable one (grab), but under a dialog (nodesDraggable off: the default arrow).
+    const nodeCursor = this.editing().disabled ? "" : "grab";
+    scene.canvas.style.cursor = handle ? "crosshair" : node >= 0 ? nodeCursor : end ? "move" : edge >= 0 ? "pointer" : this.paneCursor(event.shiftKey, event.altKey);
   };
 
   /**
@@ -999,13 +1035,15 @@ export class Editor {
   /**
    * Empty canvas's cursor: the pointer while a drag there would draw a marquee, as React Flow's pane with its
    * `selection` class (the selection key held, or selectionOnDrag while panOnDrag is not on; Space in the
-   * "space" pan mode turns panOnDrag on). No class while a dialog is open.
+   * "space" pan mode turns panOnDrag on); otherwise grab while a left drag would pan (its `draggable` class:
+   * panOnDrag on for the left button, which the tutorial turns off). No class while a dialog is open.
    */
   private paneCursor(shiftKey: boolean, altKey: boolean): string {
     const editing = this.editing();
     if (editing.disabled) return "";
     const modifiers = { button: 0, shiftKey, altKey, ctrlKey: false, space: this.space && !editing.tutorial };
-    return paneDragAction(editing.navigation, modifiers, isMac) === "select" ? "pointer" : "";
+    const action = paneDragAction(editing.navigation, modifiers, isMac);
+    return action === "select" ? "pointer" : action === "pan" && !editing.tutorial ? "grab" : "";
   }
 
   /** The selection key (or Space) went down or up: empty canvas under the pointer takes its cursor at once. */
