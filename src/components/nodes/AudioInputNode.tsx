@@ -21,7 +21,7 @@ const MEDIA_HEIGHT = 96;
 export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeType>) {
   const nodeData = data;
   const updateNodeData = useUpdateNodeData();
-  const { beginRequest, cancelRequest } = useNodeMediaRequest();
+  const { beginRequest, cancelRequest } = useNodeMediaRequest(id);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);

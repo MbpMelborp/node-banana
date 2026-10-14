@@ -306,6 +306,9 @@ export interface LivePainter {
   restoreMeasured(id: string): boolean;
 }
 
+/** The elements alignToPixels moves: live node wrappers and floating headers. */
+const SNAP_TARGETS = ".react-flow__node[data-id], [data-node-header]";
+
 export class LiveLayer {
   /** Nodes asked to be live, and why. */
   private wanted = new Map<string, Set<LiveReason>>();
@@ -500,30 +503,48 @@ export class LiveLayer {
 
   /** The nodes the flow shows (live, or for their floating header), which alignToPixels places. */
   private shown: string[] = [];
-  private snapStyle: HTMLStyleElement | null = null;
+  /** The `translate` alignToPixels last wrote on each node and header element. */
+  private snapped = new Map<HTMLElement, string>();
+  /** Places node and header elements the flow mounts after its commit (React Flow renders nodes a pass later). */
+  private snapObserver: MutationObserver | null = null;
 
   /**
    * The scene starts a painted node on a whole css pixel (Scene.pixelSnap): each node the flow shows, and its
-   * floating header, is moved by the same offset, so a swap between painted and live does not shift it.
+   * floating header, is moved by the same offset, so a swap between painted and live does not shift it. The
+   * offset is written on the elements themselves (only those whose offset changed), so a pan or zoom frame
+   * restyles those elements alone, not the document as a replaced stylesheet would.
    */
   private alignToPixels() {
     const graph = this.scene.graph;
-    const rules: string[] = [];
+    const offsets = new Map<string, string>();
     for (const id of this.shown) {
       const i = graph.indexOf.get(id);
       if (i == null) continue;
       const [dx, dy] = this.scene.pixelSnap(i);
-      if (!dx && !dy) continue;
-      const key = CSS.escape(id);
-      rules.push(`[data-gpu-canvas-live] .react-flow__node[data-id="${key}"], [data-gpu-canvas-live] [data-node-header="${key}"] { translate: ${dx}px ${dy}px; }`);
+      if (dx || dy) offsets.set(id, `${dx}px ${dy}px`);
     }
-    const text = rules.join("\n");
-    if (!this.snapStyle) {
-      if (!text) return;
-      this.snapStyle = document.createElement("style");
-      document.head.appendChild(this.snapStyle);
+    const next = new Map<HTMLElement, string>();
+    if (offsets.size) {
+      for (const element of this.element.querySelectorAll<HTMLElement>(SNAP_TARGETS)) {
+        const id = element.getAttribute("data-node-header") ?? element.getAttribute("data-id");
+        const offset = id == null ? undefined : offsets.get(id);
+        if (offset) next.set(element, offset);
+      }
     }
-    if (this.snapStyle.textContent !== text) this.snapStyle.textContent = text;
+    for (const element of this.snapped.keys()) if (!next.has(element)) element.style.translate = "";
+    for (const [element, offset] of next) if (this.snapped.get(element) !== offset) element.style.translate = offset;
+    this.snapped = next;
+    this.observeSnapTargets();
+  }
+
+  private observeSnapTargets() {
+    if (this.snapObserver || typeof MutationObserver === "undefined") return;
+    this.snapObserver = new MutationObserver((records) => {
+      if (!this.shown.length) return;
+      const added = records.some((record) => [...record.addedNodes].some((n) => n instanceof Element && (n.matches(SNAP_TARGETS) || !!n.querySelector(SNAP_TARGETS))));
+      if (added) this.alignToPixels();
+    });
+    this.snapObserver.observe(this.element, { childList: true, subtree: true });
   }
 
   /** Set while the scene follows a view the flow moved to (connection.viewChanged). */
@@ -824,7 +845,10 @@ export class LiveLayer {
     this.connection.hold = undefined;
     this.connection.measured = undefined;
     this.generation++;
-    this.snapStyle?.remove();
+    this.snapObserver?.disconnect();
+    this.snapObserver = null;
+    for (const element of this.snapped.keys()) element.style.translate = "";
+    this.snapped.clear();
     this.setNodes({ nodes: [], edges: [], committed: noop });
   }
 }

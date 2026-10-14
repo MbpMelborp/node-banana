@@ -282,8 +282,6 @@ export class Editor {
     if (event.key === "Delete" || event.key === "Backspace") {
       // React Flow's delete key: the key alone, with no modifier held.
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      // A dialog open over the canvas keeps its keys.
-      if (document.querySelector("[data-dialog-overlay]") || (event.target instanceof Element && event.target.closest('[role="dialog"]'))) return;
       if (this.deleteSelection()) event.preventDefault();
       return;
     }
@@ -717,6 +715,10 @@ export class Editor {
     const store = useWorkflowStore.getState();
     const edge = store.edges.find((candidate) => candidate.id === id);
     if (!edge) return;
+    // Classic's click focuses the connection's EdgeWrapper (when it is focusable), whatever the selection does:
+    // its keys (Escape, Enter, Space) then act on it, not on a node pressed earlier.
+    this.keyTarget = null;
+    if (edge.focusable !== false) void this.keyboard.go({ kind: "edge", id });
     // On a locked canvas, or for a connection that cannot be selected, the click still reaches
     // WorkflowCanvas (its toolbar moves there) without changing the selection, as React Flow's EdgeWrapper.
     if (!editing.locked && edge.selectable !== false) {

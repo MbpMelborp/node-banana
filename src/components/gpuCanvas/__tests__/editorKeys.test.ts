@@ -48,7 +48,7 @@ beforeEach(() => {
   useAssetStore.setState({ appView: "canvas" });
   const graph = new SceneGraph(nodes, [], {});
   const canvas = document.createElement("canvas");
-  const scene = { graph, canvas, nodesMoved: noop, onViewChanged: () => noop, onLayoutChanged: () => noop } as unknown as Scene;
+  const scene = { graph, canvas, nodesMoved: noop, setHoveredEdge: noop, onViewChanged: () => noop, onLayoutChanged: () => noop } as unknown as Scene;
   const live = { refresh: noop } as unknown as LiveLayer;
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -83,7 +83,23 @@ describe("the GPU canvas's keys", () => {
     expect(ids(() => true)).toEqual(["b"]);
   });
 
-  it("deletes while the navigator lock is on, but not under a dialog", () => {
+  it("deletes with focus in a non-modal dialog (the recent-generations drop-down), but not inside .nokey", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const inner = document.createElement("div");
+    inner.className = "nokey";
+    const kept = document.createElement("button");
+    inner.appendChild(kept);
+    const button = document.createElement("button");
+    dialog.append(inner, button);
+    document.body.appendChild(dialog);
+    press("Delete", {}, kept);
+    expect(ids(() => true)).toEqual(["a", "b"]);
+    press("Delete", {}, button);
+    expect(ids(() => true)).toEqual(["b"]);
+  });
+
+  it("deletes while the navigator lock is on, but not while disabled (a modal open)", () => {
     settings = { ...editing, locked: true };
     press("Delete");
     expect(ids(() => true)).toEqual(["b"]);
@@ -185,5 +201,27 @@ describe("the GPU canvas's keys", () => {
     expect(ids((n) => !!n.selected)).toEqual([]);
     press("Enter");
     expect(ids((n) => !!n.selected)).toEqual([]);
+  });
+
+  it("a clicked connection takes the keys from a node pressed earlier", () => {
+    useWorkflowStore.setState({
+      nodes: [node("a", 0, 0), node("b", 400, 0)],
+      edges: [{ id: "e", source: "a", target: "b" }] as never,
+    });
+    editor.clickNode("a", false);
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }]);
+    const click = new MouseEvent("pointerup") as unknown as PointerEvent;
+    editor["clickEdge"](click, "e");
+    expect(useWorkflowStore.getState().edges[0].selected).toBe(true);
+    expect(document.activeElement).toBe(editor.keyboard.sentry);
+    expect(editor.keyboard.edgeId).toBe("e");
+    // Enter keeps the connection selected; Escape unselects it, and node a stays unselected.
+    press("Enter");
+    expect(useWorkflowStore.getState().edges[0].selected).toBe(true);
+    expect(ids((n) => !!n.selected)).toEqual([]);
+    press("Escape");
+    expect(useWorkflowStore.getState().edges[0].selected).toBe(false);
+    expect(ids((n) => !!n.selected)).toEqual([]);
+    expect(editor.keyboard.edgeId).toBe(null);
   });
 });

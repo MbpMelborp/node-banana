@@ -162,7 +162,9 @@ shows doubled over the picture (a node with no picture yet shows at once).
 Only the entering nodes' own images and videos (and their headers') hold
 the swap, never media elsewhere on the layer. The scene starts a painted
 image on a whole css pixel; a live node and its floating header are moved
-(CSS `translate`) by the same offset, so the swap does not shift them.
+(an inline `translate` on each element, written only where it changed, so a
+pan or zoom frame restyles no more than those elements) by the same offset,
+so the swap does not shift them.
 A pressed node stays live until the press ends, a press its fields keep (a
 slider, a Split Grid line) included, and a hover holds while a
 button is down (as NodeShell ignores a leave then). Focus survives the
@@ -446,7 +448,8 @@ The scene takes every press and asks the editor what it starts:
   and the caught connections route through the fork as they are carried
   (`RouteContext.hookDrag`); the release bundles them there.
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
-  dialog open) removes the selected connections, then nodes. The arrow keys
+  modal open; a non-modal dialog such as the recent-generations drop-down
+  does not stop it, as on classic) removes the selected connections, then nodes. The arrow keys
   move the selection 5 px (20 px with Shift) while focus is on nothing or on
   a selected live node; Enter, Space or Escape selects a focused node (a
   live one holding focus, or the painted node last pressed while focus is
@@ -459,7 +462,9 @@ The scene takes every press and asks the editor what it starts:
   `autoPanOnNodeFocus`) and focused, its own fields in turn; a connection's
   focus is held by a sentry at the head of the canvas named after it, the
   scene draws it hovered, and Enter or Space selects it, Escape unselects
-  it. Past either end focus goes to the page around the canvas.
+  it. A click on a connection focuses it the same way (classic's click
+  focuses its EdgeWrapper), so those keys act on it, not on a node pressed
+  earlier. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu (on a node, its header or a
   handle the browser's own, as on classic). The connection menu opens in
   every pan mode; on the pane the browser's menu never shows, and the
