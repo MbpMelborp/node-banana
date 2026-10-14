@@ -24,6 +24,7 @@ import { HoldLiveProvider, type HoldLive } from "@/components/nodes/paintMode";
 import { useWorkflowStore, subscribeToWorkflowNodeChanges } from "@/store/workflowStore";
 import { indexOfNode } from "@/store/nodeChanges";
 import type { Scene, View } from "@/lib/gpuCanvas/scene";
+import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import type { HandleAnchor, SceneNode } from "@/lib/gpuCanvas/graph";
 import type { Position } from "@xyflow/react";
 import type { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
@@ -159,7 +160,7 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
     <HoldLiveProvider hold={hold}>
       <style>{LIVE_STYLE}</style>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={types} edgeTypes={edgeTypes} defaultEdgeOptions={defaultEdgeOptions} onEdgesChange={onEdgesChange} onNodesChange={onNodesChange} onNodeClick={nodeClick}
-        defaultViewport={initialView} minZoom={0.01} maxZoom={4} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
+        defaultViewport={initialView} minZoom={CANVAS_MIN_ZOOM} maxZoom={CANVAS_MAX_ZOOM} edgesFocusable={false} edgesReconnectable={false} connectOnClick={false} autoPanOnConnect={false}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} panOnScroll={false} zoomOnPinch={false}
         zoomOnDoubleClick={false} preventScrolling={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null}
         panActivationKeyCode={null} zoomActivationKeyCode={null} proOptions={{ hideAttribution: true }} style={{ background: "transparent" }}>
@@ -244,7 +245,13 @@ export class LiveLayer {
     connection.viewChanged = (view) => {
       const current = scene.view;
       if (Math.abs(view.x - current.x) < 0.01 && Math.abs(view.y - current.y) < 0.01 && Math.abs(view.zoom - current.zoom) < 1e-6) return;
-      scene.setView(view);
+      // The flow holds this view already: handing it back would interrupt its animated move (setCenter with a duration).
+      this.followingFlow = true;
+      try {
+        scene.setView(view);
+      } finally {
+        this.followingFlow = false;
+      }
     };
     // Live nodes show the store's data as it changes.
     this.unsubscribe = subscribeToWorkflowNodeChanges((changes) => {
@@ -295,7 +302,11 @@ export class LiveLayer {
     void this.render();
   }
 
+  /** Set while the scene follows a view the flow moved to (connection.viewChanged). */
+  private followingFlow = false;
+
   setView(view: View) {
+    if (this.followingFlow) return;
     this.connection.setView?.({ ...view });
   }
 

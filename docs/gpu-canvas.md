@@ -309,6 +309,15 @@ The scene takes every press and asks the editor what it starts:
   apply: an inner area that can still scroll keeps the wheel, the zoom
   modifier steps 1.2x about the centre, a macOS trackpad pans, and any
   other wheel does nothing.
+- The view keeps classic's limits, 10% to 400% (`src/lib/canvasZoom.ts`,
+  the live flow's too). Fit view frames every node as React Flow's
+  `fitView` (10% padding); a minimap click glides the view there over 250
+  ms. A move the page asks of the flow (`setCenter` or `fitView` with a
+  duration) runs to its end: the scene follows the flow's transition
+  without handing the view back, which would interrupt it.
+- On empty canvas a drag that pans moves the view from the first pixel
+  (React Flow's `paneClickDistance`, 1 px); only a press that stays put is
+  a pane click.
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
   `panActivationKeyCode` off): a press that would pan selects, drags and
   connects as a plain one. Nodes still move, connect and select.

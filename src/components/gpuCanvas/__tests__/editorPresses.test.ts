@@ -84,6 +84,16 @@ describe("presses on the GPU canvas", () => {
     expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
   });
 
+  it("with the pane panning on the left button, a 2px drag pans and keeps the selection", () => {
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "always" };
+    const moves: number[] = [];
+    (editor["scene"] as unknown as Record<string, unknown>).panGesture = () => ({ move: (e: PointerEvent) => moves.push(e.clientX), up: noop, cancel: noop });
+    drag([2000, 2000], [2002, 2000]);
+    expect(moves).toEqual([2002]);
+    expect(selected()).toEqual(["a", "b"]);
+    expect(settings.onPaneClick).not.toHaveBeenCalled();
+  });
+
   it("a drag on empty canvas in select mode still selects by marquee", () => {
     drag([780, -20], [1200, 400], { shiftKey: true });
     expect(selected()).toEqual(["c"]);

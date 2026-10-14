@@ -22,6 +22,7 @@ import {
   type XYPosition,
 } from "@xyflow/react";
 import { frameLoadedGraph } from "@/utils/frameGraph";
+import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import "@xyflow/react/dist/style.css";
 
 import { useWorkflowStore, WorkflowFile } from "@/store/workflowStore";
@@ -2816,8 +2817,8 @@ export function WorkflowCanvas() {
         zoomOnScroll={tutorialActive ? false : false}
         zoomOnPinch={tutorialActive ? false : !isModalOpen}
         zoomOnDoubleClick={false}
-        minZoom={0.1}
-        maxZoom={4}
+        minZoom={CANVAS_MIN_ZOOM}
+        maxZoom={CANVAS_MAX_ZOOM}
         defaultViewport={initialViewport ?? DEFAULT_VIEWPORT}
         panActivationKeyCode={
           tutorialActive

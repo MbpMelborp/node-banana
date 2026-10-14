@@ -12,10 +12,12 @@
  * callbacks; it never writes to the workflow store.
  */
 import * as THREE from "three";
+import { getViewportForBounds } from "@xyflow/react";
 import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
 import { cubicLength, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
+import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 
 /** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the rect (4), unused (3). */
 const NODE_STRIDE = 20;
@@ -31,8 +33,8 @@ const EDGE_SELECTED = 1, EDGE_HOVERED = 2, EDGE_ACTIVE = 4, EDGE_HIDDEN = 8, EDG
 /** How near (css px) a press must be to a connection to take it. */
 const EDGE_HIT_PX = 7;
 
-export const MIN_ZOOM = 0.02;
-export const MAX_ZOOM = 4;
+export const MIN_ZOOM = CANVAS_MIN_ZOOM;
+export const MAX_ZOOM = CANVAS_MAX_ZOOM;
 
 export interface View {
   x: number;
@@ -884,19 +886,13 @@ export class Scene {
     for (const listener of this.viewListeners) listener();
   }
 
-  /** Fits a rectangle (flow units) on screen, at most at `maxZoom`. */
-  fitRect(rect: { minX: number; minY: number; maxX: number; maxY: number }, padding = 40, maxZoom = 1) {
-    const { clientWidth: w, clientHeight: h } = this.canvas;
-    if (!w || !h) return;
-    const width = Math.max(1, rect.maxX - rect.minX), height = Math.max(1, rect.maxY - rect.minY);
-    const zoom = Math.min(maxZoom, MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((w - padding * 2) / width, (h - padding * 2) / height)));
-    this.setView({ zoom, x: (w - width * zoom) / 2 - rect.minX * zoom, y: (h - height * zoom) / 2 - rect.minY * zoom });
-  }
-
-  /** Fits every node on screen. */
+  /** Fits every node on screen as React Flow's fitView does: 10% padding, within the zoom limits. */
   fit() {
     const bounds = this.graph.bounds();
-    if (bounds) this.fitRect(bounds);
+    const { clientWidth: w, clientHeight: h } = this.canvas;
+    if (!bounds || !w || !h) return;
+    const rect = { x: bounds.minX, y: bounds.minY, width: Math.max(1, bounds.maxX - bounds.minX), height: Math.max(1, bounds.maxY - bounds.minY) };
+    this.setView(getViewportForBounds(rect, w, h, MIN_ZOOM, MAX_ZOOM, 0.1));
   }
 
   toWorld(cssX: number, cssY: number) {

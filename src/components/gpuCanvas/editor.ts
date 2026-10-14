@@ -43,7 +43,7 @@ import { KeyboardFocus } from "./keyboardFocus";
 
 /** Pointer travel (css px) under which a press is a click (React Flow's nodeClickDistance and nodeDragThreshold). */
 const CLICK_DISTANCE = 5;
-/** Pointer travel (css px) a press on empty canvas must pass to start a marquee (React Flow's paneClickDistance). */
+/** Pointer travel (css px) a press on empty canvas must pass to start a marquee or a pan (React Flow's paneClickDistance). */
 const PANE_CLICK_DISTANCE = 1;
 /** Under this a press on a handle is a click that opens its menu. */
 const HANDLE_CLICK_SLOP = 4;
@@ -410,9 +410,12 @@ export class Editor {
     };
   }
 
-  /** Empty canvas: a click clears the selection; a drag pans when `pan` is given. */
+  /**
+   * Empty canvas: a click clears the selection; a drag pans when `pan` is given, from the first
+   * pixel as d3-zoom does (its clickDistance is React Flow's paneClickDistance).
+   */
   private paneGesture(event: PointerEvent, pan: Gesture | null): Gesture {
-    return this.clickGesture(event, () => this.paneClick(), () => pan);
+    return this.clickGesture(event, () => this.paneClick(), () => pan, pan ? PANE_CLICK_DISTANCE : CLICK_DISTANCE);
   }
 
   /**

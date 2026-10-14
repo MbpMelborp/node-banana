@@ -78,7 +78,7 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
     const unsubscribe = bridge.subscribe(schedule);
     schedule();
 
-    // A drag moves the view with the pointer (in minimap units); a click centres it.
+    // A drag moves the view with the pointer (in minimap units); a click glides it to centre there.
     const toFlow = (event: MouseEvent) => {
       const box = canvas.getBoundingClientRect();
       return { x: (event.clientX - box.left) / fit.scale + fit.x, y: (event.clientY - box.top) / fit.scale + fit.y };
@@ -104,7 +104,8 @@ export function GpuMinimap({ width, height, className, bgColor, maskColor, maskS
       drag = null;
       if (!wasClick) return;
       const p = toFlow(event), view = bridge.view(), size = bridge.size();
-      bridge.setView({ x: size.width / 2 - p.x * view.zoom, y: size.height / 2 - p.y * view.zoom });
+      // Glides there as the navigator's setCenter does on today's canvas.
+      bridge.animateView({ zoom: view.zoom, x: size.width / 2 - p.x * view.zoom, y: size.height / 2 - p.y * view.zoom }, 250);
     };
     const wheel = (event: WheelEvent) => {
       event.preventDefault();
