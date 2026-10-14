@@ -251,6 +251,9 @@ not. On the GPU canvas a node stays live for as long as it holds something
   textures in the scene: a playing one is a real `<video>` on the live
   layer, and a still one is painted at its first frame (painting waits for
   it, as for images).
+- **animated**: a GIF Encoder holding its GIF, so the GIF plays as it does
+  on today's canvas (a picture would hold one frame). Other animated
+  images (a GIF or animated WebP shown by another node) are painted still.
 - **resident**: the 3D viewer, always: it holds a WebGL view the user orbits.
   Its blob URL outlives an unmount unless the node or its model went.
 - **pending**: a ComfyUI node with a workflow to import or a "Replace
@@ -280,7 +283,13 @@ video (`videoPosterCache`), so a node mounted again shows them at once. A node i
 something upstream changes, so that is where it derives. Output nodes run on
 a new connection through a store watcher (`outputAutoRun.ts`) instead of
 their component, and a failed generation's toast comes from one too
-(`errorToasts.ts`), once, whichever copies are mounted. A video player's
+(`errorToasts.ts`), once, whichever copies are mounted. Two more watchers
+stand in for effects that run once per mount on today's canvas, where every
+node stays mounted: a Prompt node copies its connected text when the canvas
+opens, when it appears and when the connection arrives
+(`promptConnectedText.ts`), so a hand edit survives hovering it; and a Video
+Trim node learns its source video's length when that source changes
+(`videoTrimDuration.ts`), though it is a picture. A video player's
 sound icon follows the shared setting: it is part of the node's key. Annotation opens its editor from the live node, as today.
 
 ## Editing
@@ -524,6 +533,8 @@ interacting), until the pointer moves again.
 
 - Videos are never textures in the scene: a playing video is a live
   `<video>`, so many playing at once cost what they cost on today's canvas.
+- Animated images other than a GIF Encoder's output (a GIF loaded into an
+  image node, say) are painted at one frame until the node is live.
 - Spinners outside a loading node (a thumbnail resolving, a button waiting)
   are painted still.
 

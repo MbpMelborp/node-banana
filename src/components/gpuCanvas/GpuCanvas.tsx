@@ -29,6 +29,8 @@ import { Editor, type GpuEditing } from "./editor";
 import { setGpuCanvasBridge } from "./bridge";
 import { LiveContent } from "./liveContent";
 import { watchOutputAutoRun } from "@/lib/gpuCanvas/outputAutoRun";
+import { watchPromptConnectedText } from "@/lib/gpuCanvas/promptConnectedText";
+import { watchVideoTrimDurations } from "@/lib/gpuCanvas/videoTrimDuration";
 import { watchGenerationErrors } from "@/lib/gpuCanvas/errorToasts";
 import { useToast } from "@/components/Toast";
 import { routePolylines, routeSceneEdge } from "@/lib/gpuCanvas/edgeRoutes";
@@ -273,6 +275,10 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       setRunning: (ids) => scene.setRunning(ids),
     });
     const stopAutoRun = watchOutputAutoRun(useWorkflowStore);
+    // Prompt nodes copy their connected text as classic's mounted ones do, not on every live mount.
+    const stopPromptText = watchPromptConnectedText(useWorkflowStore);
+    // Video Trim nodes learn their source's length though they are not mounted.
+    const stopTrimDurations = watchVideoTrimDurations(useWorkflowStore);
     const stopErrorToasts = watchGenerationErrors(useWorkflowStore, (title, error) => useToast.getState().show(title, "error", true, error));
     const editor = new Editor(scene, live, host, () => propsRef.current.editing);
     // A press just before the drag may still hold the tracker active: resetting it lets the next pan put the class back.
@@ -691,6 +697,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       connectLive({ nodeClick: undefined });
       liveContent.dispose();
       stopAutoRun();
+      stopPromptText();
+      stopTrimDurations();
       stopErrorToasts();
       stats.dispose();
       live.dispose();

@@ -121,7 +121,8 @@ const RENDER_TIMEOUT_MS = 2000;
  * Why a node is live. Besides being worked in (hover, selection, focus, a
  * press, a drag, zoomed in, a connection being drawn to or over it): "held" while it shows something of its own (a dialog,
  * a lightbox), "playing" while its video plays, "resident" for types that
- * stay live as they stay mounted on today's canvas (the 3D viewer), and
+ * stay live as they stay mounted on today's canvas (the 3D viewer), "animated"
+ * while it shows an animation only its component plays (a GIF Encoder's GIF), and
  * "pending" while it has work to pick up only a mounted node can (a
  * ComfyUI workflow to import, a run streaming previews), and "running"
  * while it works on its output (its spinner turns). "added" holds a node just added until its first paint shows. "cover" keeps a later node in the store over an
@@ -129,7 +130,7 @@ const RENDER_TIMEOUT_MS = 2000;
  * "groupChrome" holds a node whose header a group's label or open menu overlaps, so the header stays above them as on classic.
  * "drop" holds the node a file is dragged over, so the file lands on the node's own drop zone as on classic.
  */
-export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "press" | "drag" | "connect" | "test" | "held" | "playing" | "resident" | "pending" | "running" | "added" | "cover" | "groupChrome" | "drop";
+export type LiveReason = "hover" | "selected" | "focus" | "zoom" | "open" | "press" | "drag" | "connect" | "test" | "held" | "playing" | "animated" | "resident" | "pending" | "running" | "added" | "cover" | "groupChrome" | "drop";
 
 /** What the layer's React tree hands its owner once mounted. */
 export interface LiveConnection {

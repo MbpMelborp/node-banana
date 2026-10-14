@@ -22,7 +22,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
-import { useUpdateNodeData, useNodeUiState } from "./paintMode";
+import { useUpdateNodeData, useNodeUiState, useIsLiveLayerNode, useIsPaintedNode } from "./paintMode";
 
 type VideoTrimNodeType = Node<VideoTrimNodeData, "videoTrim">;
 
@@ -78,9 +78,14 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
     return (d.outputVideo as string | null) ?? null;
   }, [edges, nodes, id]);
 
-  // When source video changes, load metadata to detect duration
+  // When source video changes, load metadata to detect duration. The GPU canvas
+  // mounts a node only while it is worked in: its store watcher
+  // (watchVideoTrimDurations) does this instead.
+  const liveLayer = useIsLiveLayerNode();
+  const painted = useIsPaintedNode();
+  const gpuCanvas = liveLayer || painted;
   useEffect(() => {
-    if (!sourceVideoUrl) return;
+    if (!sourceVideoUrl || gpuCanvas) return;
 
     let cancelled = false;
     const abortController = new AbortController();
@@ -132,7 +137,7 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
       video.src = "";
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-  }, [sourceVideoUrl, id, updateNodeData]);
+  }, [sourceVideoUrl, gpuCanvas, id, updateNodeData]);
 
   // Auto-switch to output when trimming completes
   const prevOutputVideoRef = useRef(nodeData.outputVideo);
