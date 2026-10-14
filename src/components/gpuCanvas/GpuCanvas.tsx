@@ -255,6 +255,28 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       scene.setView({ zoom, x: w / 2 - (n.x + n.w / 2) * zoom, y: h / 2 - (n.y + n.h / 2) * zoom });
     }
 
+    // React Flow's SelectionListener: WorkflowCanvas hears of every change in the selected nodes or
+    // connections, a click's or the store's own (paste, undo, the agent), once the change is through.
+    let selectionCheck = false, disposed = false;
+    const readSelection = () => {
+      const { nodes, edges } = useWorkflowStore.getState();
+      const selected = { nodes: nodes.filter((n) => n.selected), edges: edges.filter((e) => e.selected) };
+      return { selected, key: `${selected.nodes.map((n) => n.id).join("\n")}\t${selected.edges.map((e) => e.id).join("\n")}` };
+    };
+    let selectionKey = readSelection().key;
+    function selectionChanged() {
+      if (selectionCheck) return;
+      selectionCheck = true;
+      queueMicrotask(() => {
+        selectionCheck = false;
+        if (disposed) return;
+        const { selected, key } = readSelection();
+        if (key === selectionKey) return;
+        selectionKey = key;
+        propsRef.current.editing.onSelectionChange?.(selected);
+      });
+    }
+
     // Store changes reach the graph, the scene, the painter and the live layer.
     const unsubscribeNodes = subscribeToWorkflowNodeChanges((changes) => {
       const state = useWorkflowStore.getState();
@@ -279,6 +301,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       }
       showSelection();
       showLiveEdges();
+      selectionChanged();
     });
     const showEdgeSelection = () => {
       const { edges } = useWorkflowStore.getState();
@@ -333,6 +356,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       }
       showEdgeSelection();
       showLiveEdges();
+      selectionChanged();
     });
 
     // Above 100% every visible node is live, once the view settles; the view is kept for the tab.
@@ -436,6 +460,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       document.documentElement.toggleAttribute("data-gpu-canvas-active", false);
       clearTimeout(settleTimer);
       clearTimeout(hoverTimer);
+      disposed = true;
       unsubscribeNodes();
       unsubscribeStore();
       unsubscribeView();

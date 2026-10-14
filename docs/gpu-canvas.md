@@ -212,19 +212,27 @@ The scene takes every press and asks the editor what it starts:
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
 - **A connection** (within 7 px): selects it, as React Flow would; Shift
   adds it, unless nodes are selected (WorkflowCanvas drops connections from
-  a selection with nodes in it).
+  a selection with nodes in it). On a locked canvas it selects nothing but
+  still moves the connection toolbar there.
 - With the selection key held (Shift, or Alt in "altDrag"), a press on a
   node or connection is a click that toggles it, and any movement turns it
   into a marquee.
-- **The pane**: a click clears the selection and is WorkflowCanvas's pane
-  click, whatever a drag would do; a drag pans or draws the marquee as the
+- **The pane**: a click clears the selection (not on a locked canvas) and
+  is WorkflowCanvas's pane click, whatever a drag would do; a drag pans or draws the marquee as the
   navigation settings say (`paneDragAction`); drawing on drag (the Mac
   default) starts only from empty canvas, once the press moves (at once with
   the selection key), and clears the selection as it starts. The marquee
-  takes a node only when it holds its media card, or the whole node without
-  one; with no nodes taken it selects the connections it crosses. Nodes it
-  took are framed (React Flow's dotted `NodesSelection`) until a click or
+  takes a node only when it holds its media card (a live node's as it shows
+  when the marquee starts, a painted one's as painted), or the whole node
+  without one; with no nodes taken it selects the connections it crosses,
+  a bundle's shared stem counting for the connection that draws it. Nodes
+  it took are framed (React Flow's dotted `NodesSelection`) until a click or
   until none is selected.
+- Every change in the selected nodes or connections, a press's or the
+  store's own (paste, undo, the agent), reaches WorkflowCanvas's
+  `handleSelectionChange` once it is through, as React Flow's
+  `onSelectionChange`: it closes a connection toolbar whose connection is
+  no longer selected and drops connections from a selection with nodes.
 - **Delete / Backspace** (alone, outside a field or `.nokey`, with no
   dialog open) removes the selected connections, then nodes. The arrow keys
   move the selection 5 px (20 px with Shift) while focus is on nothing or on
@@ -237,7 +245,8 @@ The scene takes every press and asks the editor what it starts:
   focus is held by a sentry at the head of the canvas named after it, the
   scene draws it hovered, and Enter or Space selects it, Escape unselects
   it. Past either end focus goes to the page around the canvas.
-  Right-click opens the pane or connection menu; a double-click on the pane
+  Right-click opens the pane or connection menu (on a node, its header or a
+  handle the browser's own, as on classic); a double-click on the pane
   opens the add-node menu (not on a connection or a handle).
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
   `panActivationKeyCode` off): a press that would pan selects, drags and

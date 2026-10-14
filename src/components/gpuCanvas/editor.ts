@@ -32,10 +32,11 @@ import { EDGE_COLORS, edgeColorForHandles } from "@/lib/edges/colors";
 import { routeEdge } from "@/lib/edges/route";
 import { Position } from "@xyflow/react";
 import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
-import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type HandleHit } from "@/lib/gpuCanvas/gestures";
+import { handleAt, marqueeNodes, paneDragAction, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import type { LiveLayer } from "./LiveLayer";
+import { mediaCardBox } from "./nodeSheets";
 import { KeyboardFocus } from "./keyboardFocus";
 
 /** Pointer travel (css px) under which a press is a click (React Flow's nodeClickDistance and nodeDragThreshold). */
@@ -77,6 +78,8 @@ export interface GpuEditing {
   onPaneMenu: (clientX: number, clientY: number) => void;
   onEdgeClick: (event: MouseEvent, edge: WorkflowEdge) => void;
   onEdgeContextMenu: (event: MouseEvent, edge: WorkflowEdge) => void;
+  /** The selected nodes or connections changed, however (React Flow's onSelectionChange; GpuCanvas calls it). */
+  onSelectionChange?: (params: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) => void;
 }
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -346,10 +349,13 @@ export class Editor {
     return this.clickGesture(event, () => this.paneClick(), () => pan);
   }
 
-  /** A click on empty canvas: clears the selection, and WorkflowCanvas's onPaneClick (it collapses the stub group). */
+  /**
+   * A click on empty canvas: clears the selection (not on a locked canvas, where React Flow's
+   * resetSelectedElements keeps it), and WorkflowCanvas's onPaneClick (it collapses the stub group).
+   */
   private paneClick() {
     this.hideSelectionFrame();
-    this.clearSelection();
+    if (!this.editing().locked) this.clearSelection();
     this.editing().onPaneClick();
   }
 
@@ -395,22 +401,25 @@ export class Editor {
 
   private clickEdge(event: PointerEvent, e: number) {
     const editing = this.editing();
-    if (editing.locked) return;
     const store = useWorkflowStore.getState();
     const edge = store.edges.find((candidate) => candidate.id === this.scene.graph.edges[e]?.id);
-    if (!edge || edge.selectable === false) return;
-    // Shift adds the connection, and selected nodes drop it again at once (WorkflowCanvas's handleSelectionChange,
-    // which closes its toolbar too): nothing changes.
-    if (event.shiftKey && store.nodes.some((n) => n.selected)) return;
-    // React Flow's edge click: only this connection, or added to the selection with Shift.
-    const additive = event.shiftKey;
-    const nodes = additive ? [] : store.nodes.filter((n) => n.selected).map((n): NodeChange<WorkflowNode> => ({ type: "select", id: n.id, selected: false }));
-    const edges = store.edges.flatMap((candidate): EdgeChange<WorkflowEdge>[] => {
-      const selected = candidate.id === edge.id ? (additive ? !candidate.selected : true) : additive ? !!candidate.selected : false;
-      return !!candidate.selected === selected ? [] : [{ type: "select", id: candidate.id, selected }];
-    });
-    if (nodes.length) store.onNodesChange(nodes);
-    if (edges.length) store.onEdgesChange(edges);
+    if (!edge) return;
+    // On a locked canvas, or for a connection that cannot be selected, the click still reaches
+    // WorkflowCanvas (its toolbar moves there) without changing the selection, as React Flow's EdgeWrapper.
+    if (!editing.locked && edge.selectable !== false) {
+      // Shift adds the connection, and selected nodes drop it again at once (WorkflowCanvas's handleSelectionChange,
+      // which closes its toolbar too): nothing changes.
+      if (event.shiftKey && store.nodes.some((n) => n.selected)) return;
+      // React Flow's edge click: only this connection, or added to the selection with Shift.
+      const additive = event.shiftKey;
+      const nodes = additive ? [] : store.nodes.filter((n) => n.selected).map((n): NodeChange<WorkflowNode> => ({ type: "select", id: n.id, selected: false }));
+      const edges = store.edges.flatMap((candidate): EdgeChange<WorkflowEdge>[] => {
+        const selected = candidate.id === edge.id ? (additive ? !candidate.selected : true) : additive ? !!candidate.selected : false;
+        return !!candidate.selected === selected ? [] : [{ type: "select", id: candidate.id, selected }];
+      });
+      if (nodes.length) store.onNodesChange(nodes);
+      if (edges.length) store.onEdgesChange(edges);
+    }
     editing.onEdgeClick(event, edge);
   }
 
@@ -493,13 +502,15 @@ export class Editor {
     // A marquee replaces the selection: it starts from none (React Flow's resetSelectedElements as it starts).
     this.hideSelectionFrame();
     this.clearSelection();
+    // Live nodes are judged by their cards as they show now, as NodeMarqueeSelection measures the DOM as it starts.
+    const cards = this.liveCards();
     const update = (event: PointerEvent) => {
       const at = scene.local(event);
       const left = Math.min(start.x, at.x), top = Math.min(start.y, at.y), width = Math.abs(at.x - start.x), height = Math.abs(at.y - start.y);
       Object.assign(this.marquee.style, { display: "block", left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       const a = scene.toWorld(left, top), b = scene.toWorld(left + width, top + height);
       const box = { left: a.x, top: a.y, right: b.x, bottom: b.y };
-      const taken = marqueeNodes(scene.graph, scene.nodesWithin(a.x, a.y, b.x, b.y), box).map((i) => scene.graph.nodes[i].id);
+      const taken = marqueeNodes(scene.graph, scene.nodesWithin(a.x, a.y, b.x, b.y), box, cards).map((i) => scene.graph.nodes[i].id);
       const key = taken.join("\n");
       const state = useWorkflowStore.getState();
       if (key !== previousNodes) {
@@ -540,6 +551,17 @@ export class Editor {
     };
   }
 
+  /** The media cards of the live nodes as they show (an image loaded or a section opened since their paint). */
+  private liveCards(): Map<number, CardBox> {
+    const cards = new Map<number, CardBox>();
+    for (const id of this.live.live) {
+      const i = this.scene.graph.indexOf.get(id);
+      if (i == null || !this.live.nodeElement(id)?.offsetWidth) continue;
+      cards.set(i, mediaCardBox(this.live.element, id));
+    }
+    return cards;
+  }
+
   /** Frames the selected nodes (the union of their boxes, in css px), or hides the frame when none is selected. */
   private placeSelectionFrame() {
     const scene = this.scene, graph = scene.graph;
@@ -569,12 +591,15 @@ export class Editor {
 
   private edgesCrossing(box: { left: number; top: number; right: number; bottom: number }): string[] {
     const scene = this.scene, ids: string[] = [];
+    const rect = { x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top };
     for (const e of scene.edgesWithin(box.left, box.top, box.right, box.bottom)) {
       const edge = scene.graph.edges[e]?.edge;
       const route = scene.edgeRoute(e);
       if (!edge || !route || edge.hidden || edge.data?.hidden || edge.selectable === false || edge.type === "reference") continue;
-      const points = route.segments.flatMap((c) => Array.from({ length: 17 }, (_, k) => cubicAt(c, k / 16)));
-      if (pathIntersectsRect(points, { x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top })) ids.push(edge.id);
+      // The noodle is one path; a bundle's shared stem is a path of its first member's (BundleStem).
+      const sample = (c: (typeof route.segments)[number]) => Array.from({ length: 17 }, (_, k) => cubicAt(c, k / 16));
+      const paths = [route.segments.flatMap(sample), ...route.stems.map((stem) => sample(stem.segment))];
+      if (paths.some((points) => pathIntersectsRect(points, rect))) ids.push(edge.id);
     }
     return ids;
   }
@@ -716,7 +741,8 @@ export class Editor {
     const editing = this.editing();
     if (editing.disabled) return;
     const scene = this.scene, at = scene.local(event);
-    if (scene.nodeAt(at.x, at.y) >= 0) return;
+    // A node, its header band or a painted handle is not the pane: the browser's own menu shows.
+    if (scene.nodeAt(at.x, at.y) >= 0 || this.paintedHandleAt(at.x, at.y)) return;
     const e = scene.edgeAt(at.x, at.y);
     const edge = e >= 0 ? useWorkflowStore.getState().edges.find((candidate) => candidate.id === scene.graph.edges[e].id) : undefined;
     // The right button pans in "middleMouse" mode (React Flow's panOnDrag [2] swallows the menu).

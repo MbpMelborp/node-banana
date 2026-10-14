@@ -75,15 +75,19 @@ export function handleAt(graph: SceneGraph, nodes: Iterable<number>, x: number, 
   return best;
 }
 
+export type CardBox = { x: number; y: number; w: number; h: number } | null;
+
 /**
  * The nodes a marquee takes (flow units): it must hold the node's media
  * card whole, or the node whole when it has none (marqueeSelection.ts).
+ * `cards` holds cards measured as they show now (live nodes), which win
+ * over the painted ones; null is a node with no card.
  */
-export function marqueeNodes(graph: SceneGraph, candidates: Iterable<number>, marquee: Box): number[] {
+export function marqueeNodes(graph: SceneGraph, candidates: Iterable<number>, marquee: Box, cards?: ReadonlyMap<number, CardBox>): number[] {
   const taken: number[] = [];
   for (const i of candidates) {
     const n = graph.nodes[i];
-    const card = n.card;
+    const card = cards?.has(i) ? cards.get(i) : n.card;
     const box: Box = card
       ? { left: n.x + card.x, top: n.y + card.y, right: n.x + card.x + card.w, bottom: n.y + card.y + card.h }
       : { left: n.x, top: n.y, right: n.x + n.w, bottom: n.y + n.h };

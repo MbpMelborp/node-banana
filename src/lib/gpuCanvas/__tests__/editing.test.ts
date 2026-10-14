@@ -164,6 +164,19 @@ describe("hit tests", () => {
     expect(marqueeNodes(graph, [0, 1], marquee)).toEqual([0]);
     expect(marqueeNodes(graph, [0, 1], { ...marquee, bottom: 400 })).toEqual([0, 1]);
   });
+
+  it("judges a node by the card measured as it shows now over the painted one", () => {
+    const graph = new SceneGraph([node("a", 0, 0), node("b", 400, 0)], [], {});
+    graph.nodes[0].h = 300;
+    graph.nodes[1].h = 300;
+    graph.nodes[0].card = { x: 0, y: 0, w: 300, h: 280 };
+    const marquee = { left: -10, top: -10, right: 1000, bottom: 250 };
+    const cards = new Map([[0, { x: 0, y: 0, w: 300, h: 200 }], [1, { x: 0, y: 40, w: 300, h: 150 }]]);
+    expect(marqueeNodes(graph, [0, 1], marquee)).toEqual([]);
+    expect(marqueeNodes(graph, [0, 1], marquee, cards)).toEqual([0, 1]);
+    // A live node without a card is taken whole.
+    expect(marqueeNodes(graph, [0, 1], marquee, new Map([[0, null]]))).toEqual([]);
+  });
 });
 
 describe("measuredChanges", () => {

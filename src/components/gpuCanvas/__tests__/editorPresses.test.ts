@@ -16,6 +16,7 @@ let editor: Editor;
 let host: HTMLDivElement;
 let settings: GpuEditing;
 let edgeHit: number;
+let stems: { segment: number[]; width: number }[];
 
 /** A pointer event at a css point (the fake scene's css and flow coordinates are the same). */
 function pointer(x: number, y: number, init: MouseEventInit = {}) {
@@ -45,6 +46,7 @@ beforeEach(() => {
   const graph = new SceneGraph(nodes, edges, {});
   const index = new GridIndex(graph.nodes);
   edgeHit = -1;
+  stems = [];
   const scene = {
     graph, canvas: document.createElement("canvas"), view: { x: 0, y: 0, zoom: 1 },
     local: (event: MouseEvent) => ({ x: event.clientX, y: event.clientY }),
@@ -54,11 +56,11 @@ beforeEach(() => {
     nodesWithin: (x0: number, y0: number, x1: number, y1: number) => index.within(x0, y0, x1, y1),
     edgeAt: () => edgeHit,
     edgesWithin: () => [0],
-    edgeRoute: () => ({ segments: [[0, 1000, 400, 1000, 800, 1000, 1200, 1000]] }),
-    capture: noop, input: noop, nodesMoved: noop,
+    edgeRoute: () => ({ segments: [[0, 1000, 400, 1000, 800, 1000, 1200, 1000]], stems }),
+    capture: noop, input: noop, nodesMoved: noop, panGesture: () => ({ move: noop, up: noop, cancel: noop }),
     onViewChanged: () => noop, onLayoutChanged: () => noop,
   } as unknown as Scene;
-  const live = { refresh: noop, wantOnly: noop } as unknown as LiveLayer;
+  const live = { refresh: noop, wantOnly: noop, live: new Set<string>() } as unknown as LiveLayer;
   host = document.createElement("div");
   document.body.appendChild(host);
   settings = {
@@ -142,6 +144,33 @@ describe("presses on the GPU canvas", () => {
     expect(frame().style.display).toBe("block");
     click(2000, 2000, { shiftKey: true });
     expect(frame().style.display).toBe("none");
+  });
+
+  it("a marquee across only a bundle's stem takes the connection that draws it", () => {
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: false }, { type: "select", id: "b", selected: false }]);
+    stems = [{ segment: [300, 1500, 320, 1500, 340, 1500, 360, 1500], width: 4 }];
+    drag([310, 1450], [350, 1550], { shiftKey: true });
+    expect(selectedEdges()).toEqual(["ac"]);
+  });
+
+  it("on a locked canvas a pane click keeps the selection and a connection click still moves its toolbar", () => {
+    settings = { ...settings, locked: true, onEdgeClick: vi.fn() };
+    click(2000, 2000);
+    expect(selected()).toEqual(["a", "b"]);
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
+    edgeHit = 0;
+    click(500, 1000);
+    expect(selected()).toEqual(["a", "b"]);
+    expect(selectedEdges()).toEqual([]);
+    expect(settings.onEdgeClick).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "ac" }));
+  });
+
+  it("a right-click on a painted handle is not the pane's: no add-node menu, the browser's own menu", () => {
+    editor["scene"].graph.nodes[2].handles = new Map([["source:text", { x: 300, y: 100 }]]);
+    const event = new MouseEvent("contextmenu", { clientX: 1102, clientY: 100, cancelable: true });
+    editor.contextMenu(event);
+    expect(settings.onPaneMenu).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("a double-click opens the add-node menu on empty canvas only, not on a connection", () => {

@@ -2390,6 +2390,21 @@ export function WorkflowCanvas() {
 
   const handlePaneClick = useCallback(() => setExpandedStubGroup?.(null), [setExpandedStubGroup]);
 
+  // The selection's side effects on the edge menu and on edges. Which nodes a
+  // marquee takes is decided by NodeMarqueeSelection and handleNodesChange,
+  // which measure each node's real box.
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedConnections = [] }: OnSelectionChangeParams) => {
+    const anchor = useWorkflowStore.getState().edgeMenuAnchor;
+    if (anchor && !selectedConnections.some((edge) => edge.id === anchor.edgeId)) {
+      useWorkflowStore.setState({ edgeMenuAnchor: null });
+    }
+    // Shift-clicking nodes must not retain a previous edge selection either.
+    if (selectedNodes.length > 0) {
+      const selectedEdges = useWorkflowStore.getState().edges.filter((edge) => edge.selected);
+      if (selectedEdges.length) onEdgesChange(selectedEdges.map((edge) => ({ type: "select", id: edge.id, selected: false })));
+    }
+  }, [onEdgesChange]);
+
   // The GPU canvas edits through the same handlers as React Flow above.
   const gpuEditing = useMemo<GpuEditing>(() => ({
     navigation: canvasNavigationSettings,
@@ -2405,23 +2420,8 @@ export function WorkflowCanvas() {
     onPaneMenu: openNodeSearchMenu,
     onEdgeClick: (event, edge) => handleEdgeClick(event as unknown as React.MouseEvent, edge),
     onEdgeContextMenu: (event, edge) => handleEdgeContextMenu(event as unknown as React.MouseEvent, edge),
-  }), [canvasNavigationSettings, canvasLocked, isModalOpen, tutorialActive, isValidConnection, handleConnect, handleConnectEnd, handleNodeDragStop, handlePaneClick, openNodeSearchMenu, handleEdgeClick, handleEdgeContextMenu]);
-
-
-  // The selection's side effects on the edge menu and on edges. Which nodes a
-  // marquee takes is decided by NodeMarqueeSelection and handleNodesChange,
-  // which measure each node's real box.
-  const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedConnections = [] }: OnSelectionChangeParams) => {
-    const anchor = useWorkflowStore.getState().edgeMenuAnchor;
-    if (anchor && !selectedConnections.some((edge) => edge.id === anchor.edgeId)) {
-      useWorkflowStore.setState({ edgeMenuAnchor: null });
-    }
-    // Shift-clicking nodes must not retain a previous edge selection either.
-    if (selectedNodes.length > 0) {
-      const selectedEdges = useWorkflowStore.getState().edges.filter((edge) => edge.selected);
-      if (selectedEdges.length) onEdgesChange(selectedEdges.map((edge) => ({ type: "select", id: edge.id, selected: false })));
-    }
-  }, [onEdgesChange]);
+    onSelectionChange: handleSelectionChange,
+  }), [canvasNavigationSettings, canvasLocked, isModalOpen, tutorialActive, isValidConnection, handleConnect, handleConnectEnd, handleNodeDragStop, handlePaneClick, openNodeSearchMenu, handleEdgeClick, handleEdgeContextMenu, handleSelectionChange]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
