@@ -187,6 +187,14 @@ overflows both sides, as on classic: the node's picture is widened by the
 overhang (`controlsOverhang`), and the card's measured box
 (`SceneNode.overhang`, kept in the disk cache) takes presses and hover.
 
+A node's controls card trails it while it moves, as classic's
+(`useTrailingOffset` in NodeShell). A live node does that itself; painted
+copies turn the hook off. A painted node the store moves (a group's header
+drag, arrange, undo) trails in the scene instead (`src/lib/gpuCanvas/trail.ts`,
+`Scene.nodesMoved(…, true)`). The scene keeps a smoothed position per node,
+and the node shader draws the part of the picture below the media card offset
+by it. A node turning live or painted, and a rebuilt graph, start still.
+
 What marks a node's element from outside goes to its live copy: the
 agent's edit shimmer and the tutorial's ring hold the nodes in view live
 (the bridge's `holdLive`) and mark them there, never the painter's sheet

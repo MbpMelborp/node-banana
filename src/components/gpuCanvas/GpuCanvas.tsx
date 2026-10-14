@@ -376,7 +376,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         else if (changes.removed.size) useNodeUiStore.getState().forget(changes.removed);
       } else {
         if (moved.length) {
-          scene.nodesMoved(moved);
+          // A painted node moved by the store trails its controls card, as classic's do (Scene.nodesMoved).
+          scene.nodesMoved(moved, true);
           // Painted nodes that moved mask the live connections they now lie over (LiveLayer's EdgeMask), and a
           // node the layer renders, moved or resized from the store (a group drag, arrange, undo, its resize grips),
           // takes its new box from the graph: the layer's own listener ran first and rendered the old one.

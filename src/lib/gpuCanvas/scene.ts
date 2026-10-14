@@ -19,10 +19,12 @@ import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
 import { GROUP_FILL_ALPHA } from "@/utils/groupColors";
+import { clampTrail, stepTrail, type TrailPoint } from "./trail";
 
 /**
  * Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the
- * rect (4), opacity (1), unused (2), its media card's box within the rect (4).
+ * rect (4), opacity (1), its controls card's trail offset (2, flow units: classic's useTrailingOffset), its media
+ * card's box within the rect (4).
  */
 const NODE_STRIDE = 24;
 const FLAG_SELECTED = 1, FLAG_HOVERED = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG_PAINTED = 16, FLAG_RUNNING = 32;
@@ -120,6 +122,7 @@ const NODE_VERTEX = /* glsl */ `
   in vec4 iBox;
   in float iAlpha;
   in vec4 iCard;
+  in vec2 iTrail;
   out vec2 vLocal;
   out vec2 vSize;
   out vec4 vUv;
@@ -129,15 +132,19 @@ const NODE_VERTEX = /* glsl */ `
   flat out vec4 vBox;
   flat out float vAlpha;
   flat out vec4 vCard;
+  flat out vec2 vTrail;
   void main() {
     vFlags = int(iFlags);
     vBox = iBox;
     vAlpha = iAlpha;
     vCard = iCard;
+    vTrail = iTrail;
     if ((vFlags & ${FLAG_HIDDEN}) != 0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     // Room for the outline and antialiasing (and the running halo, for its pass).
     float pad = uPad / uView.z;
-    vec2 local = position * (iRect.zw + 2.0 * pad) - pad;
+    // A trailing controls card is drawn up to its offset outside the image.
+    vec2 lo = min(iTrail, 0.0) - pad, hi = iRect.zw + max(iTrail, 0.0) + pad;
+    vec2 local = mix(lo, hi, position);
     vLocal = local; vSize = iRect.zw; vUv = iUv; vColor = iColor; vLayer = iLayer;
     // The node starts on a whole pixel, as the page lays it out, so a painted
     // image at its own scale is copied texel for pixel rather than blurred.
@@ -163,6 +170,7 @@ const NODE_FRAGMENT = /* glsl */ `
   flat in vec4 vBox;
   flat in float vAlpha;
   flat in vec4 vCard;
+  flat in vec2 vTrail;
   out vec4 outColor;
   float box(vec2 p, vec2 half_, float r) { vec2 q = abs(p) - half_ + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
   ${SELECTION_GLSL}
@@ -204,8 +212,19 @@ const NODE_FRAGMENT = /* glsl */ `
       // The image holds the node, its header and its margin; the outline is drawn by the live node's own frame when selected.
       // The body pass leaves the header (above the node's box) to the header pass.
       if (header && uHeaderPass < 0.5) discard;
-      if (any(lessThan(vLocal, vec2(0.0))) || any(greaterThan(vLocal, vSize))) discard;
-      outColor = paintedColor(uvLocal, uvPerPx);
+      vec2 at = vLocal, uv = uvLocal;
+      if (vTrail != vec2(0.0)) {
+        // Classic's controls card trails the moving node (useTrailingOffset): what lies below the media card (the
+        // gap row and the controls) is drawn offset, over the media card where they meet, as it comes later in the DOM.
+        float below = vCard.y + vCard.w;
+        vec2 from = vLocal - vTrail;
+        if (from.y >= below && all(greaterThanEqual(from, vec2(0.0))) && all(lessThanEqual(from, vSize))) {
+          at = from;
+          uv = uvLocal - (vUv.zw - vUv.xy) * vTrail / vSize;
+        } else if (vLocal.y >= below) discard;
+      }
+      if (any(lessThan(at, vec2(0.0))) || any(greaterThan(at, vSize))) discard;
+      outColor = paintedColor(uv, uvPerPx);
       // A dimmed node fades as classic's node element does; its floating header, above it, does not.
       if (!header) outColor.a *= vAlpha;
       return;
@@ -554,6 +573,14 @@ export class Scene {
 
   private graphMeshes: THREE.Mesh[] = [];
   private painted = new Map<number, PaintedQuad>();
+  /**
+   * Painted nodes whose controls card is trailing after a move from the store (a group's header drag, arrange,
+   * undo): the smoothed position it eases from (trail.ts). Live nodes trail themselves (NodeShell).
+   */
+  private trails = new Map<number, TrailPoint>();
+  private trailTime = 0;
+  /** Each node's position as last drawn (x, y per node): where a trail starts from. */
+  private drawnAt = new Float64Array(0);
   private hidden = new Set<number>();
   /** Painted nodes whose header the live layer shows (setHeadersLive). */
   private headersLive = new Set<number>();
@@ -596,6 +623,7 @@ export class Scene {
     };
     this.graph = graph;
     this.index = new GridIndex(graph.nodes, 512, NODE_HEADER);
+    this.placeAll();
 
     const grid = new THREE.BufferGeometry();
     grid.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
@@ -682,6 +710,7 @@ export class Scene {
     geometry.setAttribute("iLayer", new THREE.InterleavedBufferAttribute(attr, 1, 12));
     geometry.setAttribute("iBox", new THREE.InterleavedBufferAttribute(attr, 4, 13));
     geometry.setAttribute("iAlpha", new THREE.InterleavedBufferAttribute(attr, 1, 17));
+    geometry.setAttribute("iTrail", new THREE.InterleavedBufferAttribute(attr, 2, 18));
     geometry.setAttribute("iCard", new THREE.InterleavedBufferAttribute(attr, 4, 20));
     geometry.instanceCount = count;
     return { geometry, attr };
@@ -698,8 +727,10 @@ export class Scene {
     // The media card's box, once measured (the node's own box until then).
     const card = node.card ?? { x: 0, y: 0, w: node.w, h: node.h };
     if (painted) {
+      const trail = this.hidden.has(i) ? undefined : this.trails.get(i);
       this.nodeData.set([node.x + painted.x, node.y + painted.y, painted.w, painted.h, painted.u0, painted.v0, painted.u1, painted.v1,
-        ...node.color, flags | FLAG_PAINTED, painted.layer, -painted.x, -painted.y, node.w, node.h, alpha, 0, 0,
+        ...node.color, flags | FLAG_PAINTED, painted.layer, -painted.x, -painted.y, node.w, node.h, alpha,
+        trail ? trail.x - node.x : 0, trail ? trail.y - node.y : 0,
         card.x - painted.x, card.y - painted.y, card.w, card.h], i * NODE_STRIDE);
       return;
     }
@@ -939,6 +970,9 @@ export class Scene {
   setGraph(graph: SceneGraph) {
     this.graph = graph;
     this.painted.clear();
+    // A new graph (an opened workflow, a canvas swap, nodes added or removed) is placed, not moved.
+    this.trails.clear();
+    this.placeAll();
     this.hidden.clear();
     this.headersLive.clear();
     this.selected.clear();
@@ -953,10 +987,35 @@ export class Scene {
     this.layoutChanged();
   }
 
-  /** Nodes moved or resized in place. */
-  nodesMoved(nodes: readonly number[]) {
+  /** Every node's position is where it is drawn from now on, with no trail. */
+  private placeAll() {
+    const nodes = this.graph.nodes;
+    this.drawnAt = new Float64Array(nodes.length * 2);
+    nodes.forEach((n, i) => this.drawnAt.set([n.x, n.y], i * 2));
+  }
+
+  /**
+   * Nodes moved or resized in place. With `trail`, a painted node that moved has its controls card ease after it, as
+   * classic's do for any move of the node (a store move: a group's header drag, arrange, undo). The editor's own
+   * drags leave it out: the nodes they move are live, and trail on the live layer.
+   */
+  nodesMoved(nodes: readonly number[], trail = false) {
     const edges = new Set<number>();
     for (const i of nodes) {
+      const node = this.graph.nodes[i];
+      if (node && i * 2 + 1 < this.drawnAt.length) {
+        const from = { x: this.drawnAt[i * 2], y: this.drawnAt[i * 2 + 1] };
+        if (from.x !== node.x || from.y !== node.y) {
+          if (trail && this.painted.has(i) && !this.hidden.has(i)) {
+            const smoothed = this.trails.get(i) ?? from;
+            clampTrail(smoothed, node);
+            if (!this.trails.size) this.trailTime = performance.now();
+            this.trails.set(i, smoothed);
+          } else this.trails.delete(i);
+        }
+        this.drawnAt[i * 2] = node.x;
+        this.drawnAt[i * 2 + 1] = node.y;
+      }
       this.index.update(i);
       this.touchNode(i);
       for (const e of this.graph.edgesOf[i] ?? []) edges.add(e);
@@ -988,7 +1047,10 @@ export class Scene {
   /** A painted image for a node, or null for its stand-in card. */
   setPainted(i: number, quad: PaintedQuad | null) {
     if (quad) this.painted.set(i, quad);
-    else this.painted.delete(i);
+    else {
+      this.painted.delete(i);
+      this.trails.delete(i);
+    }
     this.touchNode(i);
   }
 
@@ -1045,6 +1107,8 @@ export class Scene {
   /** Nodes the live layer covers are not drawn by the scene. */
   setHidden(i: number, hidden: boolean) {
     if (hidden === this.hidden.has(i)) return;
+    // A node turning live trails on the layer from where it is; one turning painted starts still.
+    this.trails.delete(i);
     if (hidden) this.hidden.add(i);
     else this.hidden.delete(i);
     this.touchNode(i);
@@ -1152,6 +1216,17 @@ export class Scene {
         if (fade.to === 1) this.fades.delete(id);
         else fade.from = fade.to;
       }
+    }
+  }
+
+  /** Eases trailing controls cards after their nodes; forgets those that settled. */
+  private stepTrails(now: number) {
+    const dt = now - this.trailTime;
+    this.trailTime = now;
+    for (const [i, smoothed] of this.trails) {
+      const node = this.graph.nodes[i];
+      if (!node || !stepTrail(smoothed, node, dt)) this.trails.delete(i);
+      this.touchNode(i);
     }
   }
 
@@ -1538,6 +1613,7 @@ export class Scene {
     this.frameHandle = requestAnimationFrame(this.tick);
     if (this.hoverStale) this.updateHover();
     if (this.fades.size) this.stepFades(performance.now());
+    if (this.trails.size) this.stepTrails(performance.now());
     let jsMs = 0;
     const halo = this.haloShown();
     if (this.haloMesh) this.haloMesh.visible = halo;
