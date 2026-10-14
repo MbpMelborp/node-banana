@@ -56,10 +56,10 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   useEffect(() => {
     if (nodeData.encoderSupported === null) {
       checkEncoderSupport().then((supported) => {
-        updateNodeData(id, { encoderSupported: supported });
+        deriveNodeData(id, { encoderSupported: supported });
       });
     }
-  }, [id, nodeData.encoderSupported, updateNodeData]);
+  }, [id, nodeData.encoderSupported, deriveNodeData]);
 
   // Get connected video edges
   const videoEdges = useMemo(() => {

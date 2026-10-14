@@ -6,7 +6,7 @@ import { defaultCanvasNavigationSettings } from "@/types/canvas";
 import { GridIndex, SceneGraph } from "@/lib/gpuCanvas/graph";
 import type { Scene } from "@/lib/gpuCanvas/scene";
 import { Editor, type GpuEditing } from "../editor";
-import { pressGoesToScene, type LiveLayer } from "../LiveLayer";
+import { liveButtonPress, pressGoesToScene, type LiveLayer } from "../LiveLayer";
 
 function node(id: string, x: number, y: number, selected = false): WorkflowNode {
   return { id, type: "prompt", position: { x, y }, data: { prompt: "" }, width: 300, height: 200, selected } as unknown as WorkflowNode;
@@ -50,8 +50,10 @@ beforeEach(() => {
   const index = new GridIndex(graph.nodes);
   edgeHit = -1;
   stems = [];
+  const canvas = document.createElement("canvas");
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 5000, bottom: 5000, x: 0, y: 0, width: 5000, height: 5000, toJSON: noop }) as DOMRect;
   const scene = {
-    graph, canvas: document.createElement("canvas"), view: { x: 0, y: 0, zoom: 1 },
+    graph, canvas, view: { x: 0, y: 0, zoom: 1 },
     local: (event: MouseEvent) => ({ x: event.clientX, y: event.clientY }),
     toWorld: (x: number, y: number) => ({ x, y }),
     toScreen: (x: number, y: number) => ({ x, y }),
@@ -91,6 +93,21 @@ describe("presses on the GPU canvas", () => {
     click(2000, 2000, { shiftKey: true });
     expect(selected()).toEqual([]);
     expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("a press on empty canvas that neither pans nor draws a marquee clicks the pane however far it travels, if released over it", () => {
+    // Control held where the press would pan (off the Mac).
+    drag([2000, 2000], [2040, 2030], { ctrlKey: true });
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(1);
+    settings.tutorial = true;
+    settings.navigation = { ...defaultCanvasNavigationSettings, panMode: "always" };
+    drag([2000, 2000], [2040, 2030]);
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(2);
+    expect(selected()).toEqual([]);
+    useWorkflowStore.getState().onNodesChange([{ type: "select", id: "a", selected: true }]);
+    drag([2000, 2000], [6000, 2000]);
+    expect(settings.onPaneClick).toHaveBeenCalledTimes(2);
+    expect(selected()).toEqual(["a"]);
   });
 
   it("with the pane panning on the left button, a 2px drag pans and keeps the selection", () => {
@@ -807,6 +824,53 @@ describe("a click on a live node's socket", () => {
     gesture.up(pointer(1103, 100));
     expect(settings.onHandleClick).toHaveBeenCalledTimes(1);
     expect(settings.onHandleClick).toHaveBeenCalledWith({ nodeId: "c", handleId: "text", type: "source", position: { x: 1100, y: 100 } });
+    live.remove();
+  });
+});
+
+describe("a still press on a live node's button", () => {
+  function liveNodeWith(child: HTMLElement) {
+    const live = editor["live"].element;
+    live.setAttribute("data-gpu-canvas-live", "");
+    document.body.appendChild(live);
+    const wrapper = document.createElement("div");
+    wrapper.className = "react-flow__node";
+    wrapper.dataset.id = "c";
+    wrapper.appendChild(child);
+    live.appendChild(wrapper);
+    return live;
+  }
+
+  function pressOn(target: Element, x: number, y: number) {
+    const event = pointer(x, y);
+    Object.defineProperty(event, "target", { value: target });
+    return event;
+  }
+
+  it("leaves the selection to the node's own click (which the button may stop); its body still selects", () => {
+    const button = document.createElement("button");
+    const icon = document.createElement("span");
+    button.appendChild(icon);
+    const live = liveNodeWith(button);
+    expect(liveButtonPress(icon)).toBe(true);
+    let gesture = editor.press(pressOn(icon, 900, 100))!;
+    gesture.up(pointer(900, 100));
+    expect(selected()).toEqual(["a", "b"]);
+    const body = button.parentElement!;
+    expect(liveButtonPress(body)).toBe(false);
+    gesture = editor.press(pressOn(body, 900, 100))!;
+    gesture.up(pointer(900, 100));
+    expect(selected()).toEqual(["c"]);
+    live.remove();
+  });
+
+  it("is not a button press on a .nodrag button, a handle, or a button outside a node", () => {
+    const nodrag = document.createElement("button");
+    nodrag.className = "nodrag";
+    const live = liveNodeWith(nodrag);
+    expect(liveButtonPress(nodrag)).toBe(false);
+    const loose = document.createElement("button");
+    expect(liveButtonPress(loose)).toBe(false);
     live.remove();
   });
 });

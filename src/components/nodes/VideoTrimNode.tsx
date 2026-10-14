@@ -22,7 +22,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
-import { useUpdateNodeData, useNodeUiState, useIsLiveLayerNode, useIsPaintedNode } from "./paintMode";
+import { useDerivedNodeData, useUpdateNodeData, useNodeUiState, useIsLiveLayerNode, useIsPaintedNode } from "./paintMode";
 
 type VideoTrimNodeType = Node<VideoTrimNodeData, "videoTrim">;
 
@@ -42,6 +42,9 @@ function formatTime(seconds: number): string {
 export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeType>) {
   const nodeData = data;
   const updateNodeData = useUpdateNodeData();
+  // Encoder support is a fact about the browser, not this copy: a painted copy
+  // (GPU canvas) settles it too, as the always-mounted classic node does.
+  const writeEncoderSupport = useDerivedNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);
@@ -60,10 +63,10 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
   useEffect(() => {
     if (nodeData.encoderSupported === null) {
       checkEncoderSupport().then((supported) => {
-        updateNodeData(id, { encoderSupported: supported });
+        writeEncoderSupport(id, { encoderSupported: supported });
       });
     }
-  }, [id, nodeData.encoderSupported, updateNodeData]);
+  }, [id, nodeData.encoderSupported, writeEncoderSupport]);
 
   // Find connected source video from incoming edges
   const sourceVideoUrl = useMemo(() => {

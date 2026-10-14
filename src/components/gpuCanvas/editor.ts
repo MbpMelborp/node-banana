@@ -38,7 +38,7 @@ import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, RECONNECT_RADIUS, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
-import type { LiveLayer } from "./LiveLayer";
+import { liveButtonPress, type LiveLayer } from "./LiveLayer";
 import { mediaCardBox } from "./nodeSheets";
 import { KeyboardFocus } from "./keyboardFocus";
 
@@ -108,6 +108,11 @@ const ARROW_STEPS: Record<string, { x: number; y: number }> = {
   ArrowLeft: { x: -5, y: 0 },
   ArrowRight: { x: 5, y: 0 },
 };
+
+/** Whether a release lands within a box (the canvas's client rect), edges included. */
+export function releasedInside(box: { left: number; top: number; right: number; bottom: number }, at: { clientX: number; clientY: number }) {
+  return at.clientX >= box.left && at.clientX <= box.right && at.clientY >= box.top && at.clientY <= box.bottom;
+}
 
 /** Stops the click the browser sends after a drag's release (removed a task later, if no click came). */
 function swallowNextClick() {
@@ -506,9 +511,25 @@ export class Editor {
    * pixel as d3-zoom does (its clickDistance is React Flow's paneClickDistance).
    */
   private paneGesture(event: PointerEvent, pan: Gesture | null): Gesture {
-    const gesture = this.clickGesture(event, () => this.paneClick(), () => pan, pan ? PANE_CLICK_DISTANCE : CLICK_DISTANCE);
+    if (!pan) return this.paneReleaseGesture();
+    const gesture = this.clickGesture(event, () => this.paneClick(), () => pan, PANE_CLICK_DISTANCE);
     // React Flow's pane is `dragging` from the press (d3-zoom's start), a click included.
     return pan ? this.withCursor(gesture, this.panCursor(event)) : gesture;
+  }
+
+  /**
+   * A press on empty canvas that neither pans nor draws a marquee (d3-zoom refuses it: the tutorial, the
+   * right-button pan mode, Control held, a locked canvas). Nothing suppresses the browser's click there, so it
+   * lands however far the pointer travelled, as long as the release is still over the pane.
+   */
+  private paneReleaseGesture(): Gesture {
+    return {
+      move: () => {},
+      up: (up) => {
+        if (releasedInside(this.scene.canvas.getBoundingClientRect(), up)) this.paneClick();
+      },
+      cancel: () => {},
+    };
   }
 
   /** A pan from this press, the canvas showing the pane's cursor while it runs. */
@@ -615,7 +636,11 @@ export class Editor {
 
   private nodeGesture(event: PointerEvent, i: number): Gesture {
     const id = this.scene.graph.nodes[i].id;
-    const gesture = this.clickGesture(event, () => this.clickNode(id, event.shiftKey), (move) => this.editing().locked ? null : this.dragGesture(event, move, id));
+    // A still press on a live node's button or link selects through the node's own click (LiveFlow's nodeClick),
+    // which the button's stopPropagation cancels, as classic's NodeWrapper click.
+    const onButton = event.target instanceof Element && !!event.target.closest("[data-gpu-canvas-live]") && liveButtonPress(event.target);
+    const click = onButton ? () => {} : () => this.clickNode(id, event.shiftKey);
+    const gesture = this.clickGesture(event, click, (move) => this.editing().locked ? null : this.dragGesture(event, move, id));
     // Classic keeps a node mounted through a press: the pressed node stays live until the gesture ends (once the
     // click has selected it or the drag let go), though the press took its hover away (a capture, a jittery click).
     this.live.want(id, "press", true);

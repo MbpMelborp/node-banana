@@ -219,9 +219,11 @@ export function LiveFlow({ connect, onViewChanged, initialView, nodeTypes, edgeT
     });
     if (measured.length) store.onNodesChange(measured.map((change) => ({ ...change, setAttributes: false })));
   }, [realIds, onMeasured]);
-  // Presses the scene took have selected already; a stopped click (OutputNode, the curve editor) never arrives.
+  // Presses the scene took have selected already, except on a button or link (liveButtonPress), which selects here
+  // as classic's NodeWrapper click; a stopped click (OutputNode, the curve editor, a button's own) never arrives.
   const nodeClick = useCallback((event: ReactMouseEvent, node: Node) => {
-    if (node.type === "gpuGhost" || !(event.target instanceof Element) || pressGoesToScene(event.target)) return;
+    if (node.type === "gpuGhost" || !(event.target instanceof Element)) return;
+    if (pressGoesToScene(event.target) && !liveButtonPress(event.target)) return;
     onNodeClick(node.id, event.shiftKey);
   }, [onNodeClick]);
   return (
@@ -785,6 +787,15 @@ export function pressGoesToScene(target: Element): boolean {
   if (target.closest(".react-flow__handle")) return true;
   const kept = target.closest(".react-flow__node") ? "input, textarea, select, [contenteditable='true'], .nodrag" : "input, textarea, select, button, a, [contenteditable='true'], .nodrag";
   return !target.closest(kept);
+}
+
+/**
+ * A press the scene takes on a live node's button or link. Its click selects through React Flow's node click
+ * (LiveFlow's nodeClick), not the scene's: a button whose onClick stops propagation then leaves the selection as
+ * it was, as on classic, where a still press selects only through NodeWrapper's click.
+ */
+export function liveButtonPress(target: Element): boolean {
+  return !!target.closest(".react-flow__node") && !!target.closest("button, a") && pressGoesToScene(target);
 }
 
 /**

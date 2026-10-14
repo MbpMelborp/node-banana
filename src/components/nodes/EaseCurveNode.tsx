@@ -24,7 +24,7 @@ import {
   SummaryValues,
   type SocketSpec,
 } from "./ui";
-import { useHoldLive, useUpdateNodeData, useNodeUiState } from "./paintMode";
+import { useDerivedNodeData, useHoldLive, useUpdateNodeData, useNodeUiState } from "./paintMode";
 
 type EaseCurveNodeType = Node<EaseCurveNodeData, "easeCurve">;
 
@@ -59,6 +59,9 @@ function generateEasingPolyline(easingName: string, width: number, height: numbe
 export function EaseCurveNode({ id, data, selected }: NodeProps<EaseCurveNodeType>) {
   const nodeData = data;
   const updateNodeData = useUpdateNodeData();
+  // Encoder support is a fact about the browser, not this copy: a painted copy
+  // (GPU canvas) settles it too, as the always-mounted classic node does.
+  const writeEncoderSupport = useDerivedNodeData();
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const edges = useWorkflowStore((state) => state.edges);
@@ -76,10 +79,10 @@ export function EaseCurveNode({ id, data, selected }: NodeProps<EaseCurveNodeTyp
   useEffect(() => {
     if (nodeData.encoderSupported === null) {
       checkEncoderSupport().then((supported) => {
-        updateNodeData(id, { encoderSupported: supported });
+        writeEncoderSupport(id, { encoderSupported: supported });
       });
     }
-  }, [id, nodeData.encoderSupported, updateNodeData]);
+  }, [id, nodeData.encoderSupported, writeEncoderSupport]);
 
   useEffect(() => {
     if (!showPresets) return;

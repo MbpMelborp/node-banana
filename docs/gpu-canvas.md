@@ -272,7 +272,8 @@ the rest as the view reaches them, and the nodes they feed are not touched.
 A painted copy writes nothing, with one exception: effects that keep
 values derived from upstream in a node's data (a Switch's input type, a
 Prompt Constructor's text, an Array's items, a resize's source image, clip
-order, a generate node's model inputs and schema defaults) write through
+order, a generate node's model inputs and schema defaults, and the encoder
+check of Video Stitch, Video Trim and Ease Curve) write through
 `useDerivedNodeData`; the schema writes check the stored node, since a copy
 can be a batch behind it. A copy still fetching its model's settings,
 decoding an audio waveform or extracting video posters (Output Gallery,
@@ -365,7 +366,10 @@ The scene takes every press and asks the editor what it starts:
   reaches what it lands on (an Output image's lightbox, a waveform's seek).
   A live node's buttons and links drag it too, as React Flow's do (only
   fields and `.nodrag` keep their presses); a drag from one swallows the
-  click its release makes, as d3-drag's does. Dragged live nodes re-render
+  click its release makes, as d3-drag's does. A still press on one selects
+  through the node's own click (React Flow's `onNodeClick`, `liveButtonPress`),
+  not the scene's, so a button that stops its click (Annotation's Download)
+  leaves the selection as classic does. Dragged live nodes re-render
   synchronously with each move (`LiveLayer.refresh(true)`), so their bodies,
   headers and sockets move in the frame that draws their connections. While
   any gesture runs, no text selection or native drag starts (d3-drag's
@@ -391,7 +395,10 @@ The scene takes every press and asks the editor what it starts:
   without one; with no nodes taken it selects the connections it crosses,
   a bundle's shared stem counting for the connection that draws it. Nodes
   it took are framed (React Flow's dotted `NodesSelection`) until a click or
-  until none is selected. Its start is held in flow coordinates, so a
+  until none is selected. A press on empty canvas that neither pans nor
+  draws (the tutorial, Control held, the right-button pan mode, a locked
+  canvas where a drag would draw the marquee) is a pane click however far it travels, if released over the
+  canvas, as the browser's click there. Its start is held in flow coordinates, so a
   wheel pan or pinch mid-marquee keeps it on the same canvas spot. Empty
   canvas shows the pointer cursor while a drag there would draw a marquee
   (the selection key held, or the Mac default), changing as the key goes
