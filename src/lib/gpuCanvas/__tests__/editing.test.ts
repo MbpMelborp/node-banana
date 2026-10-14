@@ -3,8 +3,8 @@ import { getBezierPath, getSmoothStepPath, Position } from "@xyflow/react";
 import type { WorkflowEdge, WorkflowNode } from "@/types";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
 import { defaultEdgeAppearance } from "@/types";
-import { measuredChanges, refitMeasured, SceneGraph, type SceneNode } from "../graph";
-import { cubicArcLength, cubicAt, cubicPieces, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
+import { measuredChanges, refitMeasured, resolveHandle, SceneGraph, type SceneNode } from "../graph";
+import { cubicArcLength, cubicAt, cubicPieces, cubicXExtent, distanceToCubic, paintedCover, pathToCubics, routeGradientRange, routePolylines, routeSceneEdge, type RouteContext } from "../edgeRoutes";
 import { EDGE_CAP_END, EDGE_CAP_START, Scene } from "../scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, selectionKeyHeld } from "../gestures";
 import { cachedHandle, handleFromCache } from "../paintCache";
@@ -89,6 +89,34 @@ describe("routeSceneEdge", () => {
     // Both noodles leave from the stem's end, not the handle.
     expect(first.segments[0][0]).toBeGreaterThan(300);
     expect(second.segments[0][0]).toBe(first.segments[0][0]);
+    // The gradient spans the noodle from the split point, not the stem behind it.
+    expect(routeGradientRange(first)[0]).toBe(first.segments[0][0]);
+    expect(routeGradientRange(first)[0]).toBeGreaterThan(first.ends[0]);
+  });
+
+  it("resolves an edge's handles as React Flow does: by id, the first of the kind for none, nothing for a missing one", () => {
+    const measured = { handles: new Map([["target:image", { x: 0, y: 20 }], ["source:image", { x: 300, y: 20 }], ["source:text", { x: 300, y: 60 }]]) } as SceneNode;
+    expect(resolveHandle(measured, "source", "text")?.[0]).toBe("source:text");
+    expect(resolveHandle(measured, "source", null)?.[0]).toBe("source:image");
+    expect(resolveHandle(measured, "source", "")?.[0]).toBe("source:image");
+    expect(resolveHandle(measured, "target", "gone")).toBeNull();
+    expect(resolveHandle({ handles: new Map() } as SceneNode, "target", null)).toBeNull();
+    expect(resolveHandle({} as SceneNode, "target", "text")).toBeUndefined();
+  });
+
+  it("draws and takes nothing for a connection to a handle its measured node does not have", () => {
+    const edges = [edge("e", "a", "b", {}, "text", "gone")];
+    const graph = new SceneGraph(nodes, edges, {});
+    // Not measured yet: the node's mid-side stands in.
+    expect(routeSceneEdge(graph, 0, context(edges, nodes)).unresolved).toBeFalsy();
+    graph.nodes[0].handles = new Map([["source:text", { x: 300, y: 40, position: "right" }]]);
+    graph.nodes[1].handles = new Map([["target:text", { x: 0, y: 60, position: "left" }]]);
+    const route = routeSceneEdge(graph, 0, context(edges, nodes));
+    expect(route.unresolved).toBe(true);
+    expect(route.segments).toHaveLength(0);
+    expect(route.stems).toHaveLength(0);
+    expect(graph.edgeEnds(0)).toBeNull();
+    expect(edgeEndAt(graph, [0, 1], 310, 40)).toBeNull();
   });
 
   it("carries the connections a hook sweep caught through the fork", () => {
@@ -162,8 +190,17 @@ describe("connections and painted nodes", () => {
     expect(at(0.25, 25)).toBe(0);
   });
 
+  it("gives overlapping bands to the later connection (drawn on top), even when the pointer is nearer the other", () => {
+    const lower = { segments: pathToCubics("M0,0 L300,0"), stems: [], width: 2 };
+    const upper = { segments: pathToCubics("M0,8 L300,8"), stems: [], width: 2 };
+    const fake = { graph: { edges: [{}, {}] }, view: { x: 0, y: 0, zoom: 1 }, routes: [lower, upper], edgeBounds: new Float32Array([0, 0, 300, 0, 0, 8, 300, 8]), toWorld: (x: number, y: number) => ({ x, y }) };
+    const at = (y: number) => Scene.prototype.edgeAt.call(fake as unknown as Scene, 100, y);
+    expect(at(1)).toBe(1);
+    expect(at(-5)).toBe(0);
+  });
+
   it("caps a connection's ends only, so its joints do not overlap", () => {
-    const route = { segments: pathToCubics("M0,0 L100,0 L100,100 L200,100"), stems: [{ segment: pathToCubics("M0,0 L-20,0")[0], width: 6 }], ends: [0, 0, 200, 100], width: 2, dashed: false, hidden: false };
+    const route = { segments: pathToCubics("M0,0 L50,0 L50,50 L100,50"), stems: [{ segment: pathToCubics("M0,0 L-20,0")[0], width: 6 }], ends: [0, 0, 100, 50], width: 2, dashed: false, hidden: false };
     const fake = {
       routes: [route], graph: { edges: [{ source: 0, target: 1, color: [1, 1, 1] }] }, edgeLive: new Set(), edgeHeld: -1, edgeSelected: new Set(), hoveredEdge: -1, selected: new Set(),
       routeOffset: [0], edgeData: new Float32Array(4 * 20), edgeBounds: new Float32Array(4),
@@ -171,6 +208,25 @@ describe("connections and painted nodes", () => {
     (Scene.prototype as unknown as { writeEdge(e: number): void }).writeEdge.call(fake, 0);
     const caps = [0, 1, 2, 3].map((k) => fake.edgeData[k * 20 + 11] & (EDGE_CAP_START | EDGE_CAP_END));
     expect(caps).toEqual([EDGE_CAP_START, 0, EDGE_CAP_END, EDGE_CAP_START | EDGE_CAP_END]);
+  });
+
+  it("draws a long curve in pieces, continuous and capped at its ends only", () => {
+    const route = { segments: [[0, 0, 400, 0, 0, 300, 400, 300]], stems: [], ends: [0, 0, 400, 300], width: 2, dashed: false, hidden: false };
+    const fake = {
+      routes: [route], graph: { edges: [{ source: 0, target: 1, color: [1, 1, 1] }] }, edgeLive: new Set(), edgeHeld: -1, edgeSelected: new Set(), hoveredEdge: -1, selected: new Set(),
+      routeOffset: [0], edgeData: new Float32Array(16 * 20), edgeBounds: new Float32Array(4),
+    };
+    (Scene.prototype as unknown as { writeEdge(e: number): void }).writeEdge.call(fake, 0);
+    const pieces: number[][] = [];
+    for (let k = 0; k < 16 && fake.edgeData[k * 20 + 12] > 0; k++) pieces.push([...fake.edgeData.slice(k * 20, k * 20 + 12)]);
+    expect(pieces.length).toBeGreaterThan(4);
+    for (let k = 1; k < pieces.length; k++) {
+      expect(pieces[k][0]).toBeCloseTo(pieces[k - 1][6], 3);
+      expect(pieces[k][1]).toBeCloseTo(pieces[k - 1][7], 3);
+      expect(pieces[k][11] & EDGE_CAP_START).toBe(0);
+    }
+    expect(pieces[pieces.length - 1].slice(6, 8)).toEqual([400, 300]);
+    expect(pieces[pieces.length - 1][11] & EDGE_CAP_END).toBe(EDGE_CAP_END);
   });
 
   it("names the painted nodes over live connections and the connections they cover", () => {

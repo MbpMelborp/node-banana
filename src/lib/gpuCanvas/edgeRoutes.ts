@@ -187,6 +187,11 @@ export interface EdgeRoute {
   decorated: boolean;
   /** Its target is loading: it shows the running comet (and so is decorated), at any zoom. */
   running: boolean;
+  /**
+   * A measured end has no such handle (a removed input, a stale id): React Flow renders no such edge,
+   * so it has no segments or stems, and is neither drawn nor taken by a press or a marquee.
+   */
+  unresolved?: boolean;
 }
 
 export interface RouteContext {
@@ -202,16 +207,33 @@ export interface RouteContext {
 
 const POSITIONS: Record<string, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
 
-/** Where an edge leaves its source and enters its target, and which way. */
-export function edgeAnchors(graph: SceneGraph, e: number): { source: HandleAnchor & { position: Position }; target: HandleAnchor & { position: Position } } {
+/** Where an edge leaves its source and enters its target, and which way; `missing` when a measured end has no such handle (its node's mid-side stands in). */
+export function edgeAnchors(graph: SceneGraph, e: number): { source: HandleAnchor & { position: Position }; target: HandleAnchor & { position: Position }; missing: boolean } {
   const edge = graph.edges[e];
   const s = graph.nodes[edge.source], t = graph.nodes[edge.target];
-  const from = s.handles?.get(`source:${edge.sourceHandle ?? ""}`) ?? { x: s.w, y: s.h / 2 };
-  const to = t.handles?.get(`target:${edge.targetHandle ?? ""}`) ?? { x: 0, y: t.h / 2 };
+  const handles = graph.edgeHandles(e);
+  const from = handles?.from ?? { x: s.w, y: s.h / 2 };
+  const to = handles?.to ?? { x: 0, y: t.h / 2 };
   return {
     source: { x: s.x + from.x, y: s.y + from.y, position: POSITIONS[from.position ?? "right"] ?? Position.Right },
     target: { x: t.x + to.x, y: t.y + to.y, position: POSITIONS[to.position ?? "left"] ?? Position.Left },
+    missing: !handles,
   };
+}
+
+/**
+ * The x range a route's gradient spans: its noodle's own tight extent, as classic's objectBoundingBox
+ * gradient spans the noodle path (from a bundle's split point, not the handle behind its stem).
+ */
+export function routeGradientRange(route: EdgeRoute): [number, number] {
+  if (!route.segments.length) return [Math.min(route.ends[0], route.ends[2]), Math.max(route.ends[0], route.ends[2])];
+  let min = Infinity, max = -Infinity;
+  for (const c of route.segments) {
+    const [lo, hi] = cubicXExtent(c);
+    min = Math.min(min, lo);
+    max = Math.max(max, hi);
+  }
+  return [min, max];
 }
 
 /** The route of one scene edge, as EditableEdge or ReferenceEdge would draw it. */
@@ -219,10 +241,13 @@ export function routeSceneEdge(graph: SceneGraph, e: number, context: RouteConte
   const sceneEdge = graph.edges[e];
   const edge = sceneEdge.edge;
   const data = edge?.data;
-  const { source, target } = edgeAnchors(graph, e);
+  const { source, target, missing } = edgeAnchors(graph, e);
   const hidden = !!data?.hidden;
   const isReference = edge?.type === "reference";
   const width = isReference ? 2 : context.thicknessPx;
+  if (missing) {
+    return { segments: [], stems: [], ends: [source.x, source.y, target.x, target.y], labelX: (source.x + target.x) / 2, labelY: (source.y + target.y) / 2, width, dashed: false, hidden: false, decorated: false, running: false, unresolved: true };
+  }
   const targetNode = edge ? nodeGraphIndex(context.nodes).byId.get(edge.target) : undefined;
   const loading = context.appearance.loadingPulse && (targetNode?.data as { status?: string } | undefined)?.status === "loading";
   if (isReference && !hidden) {
@@ -304,7 +329,7 @@ export function paintedCover(
   const edgeIds: string[] = [], boxes: { x: number; y: number; w: number; h: number }[] = [], taken = new Set<number>();
   for (const e of edges) {
     const route = routeOf(e);
-    if (!route) continue;
+    if (!route || route.unresolved) continue;
     let [x0, y0, x1, y1] = route.ends;
     [x0, x1] = [Math.min(x0, x1), Math.max(x0, x1)];
     [y0, y1] = [Math.min(y0, y1), Math.max(y0, y1)];

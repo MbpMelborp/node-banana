@@ -6,7 +6,7 @@
 import type { CanvasNavigationSettings } from "@/types/canvas";
 import { contains, type Box } from "@/lib/nodes/marqueeSelection";
 import { Position } from "@xyflow/react";
-import type { HandleAnchor, SceneGraph } from "./graph";
+import { resolveHandle, type HandleAnchor, type SceneGraph } from "./graph";
 import { edgeAnchors } from "./edgeRoutes";
 
 export type PaneAction = "pan" | "select" | null;
@@ -139,8 +139,9 @@ export function closestHandle(graph: SceneGraph, nodes: Iterable<number>, x: num
 export function edgeEndHandle(graph: SceneGraph, e: number, end: "source" | "target"): HandleHit {
   const edge = graph.edges[e], i = end === "source" ? edge.source : edge.target;
   const handleId = (end === "source" ? edge.sourceHandle : edge.targetHandle) ?? "";
-  const anchor = graph.nodes[i].handles?.get(`${end}:${handleId}`);
-  if (anchor) return handleHit(graph, i, `${end}:${handleId}`, anchor);
+  const resolved = resolveHandle(graph.nodes[i], end, handleId);
+  // At the handle the edge resolves to, under the id the edge names (none: the first of its kind's place).
+  if (resolved) return { ...handleHit(graph, i, resolved[0], resolved[1]), handleId };
   const { x, y } = edgeAnchors(graph, e)[end];
   return { node: i, handleId, type: end, x, y, cx: x, cy: y, connectableEnd: true };
 }
@@ -162,6 +163,8 @@ export function edgeEndAt(graph: SceneGraph, nodes: Iterable<number>, x: number,
       // React Flow renders no hidden edge, and none whose reconnectable is off.
       if (!edge || edge.edge.hidden || edge.edge.reconnectable === false) continue;
       const anchors = edgeAnchors(graph, e);
+      // Nor one whose handle is missing (React Flow draws no such edge, nor its anchors).
+      if (anchors.missing) continue;
       for (const end of ["source", "target"] as const) {
         if ((end === "source" ? edge.source : edge.target) !== i) continue;
         const { x: ax, y: ay, position } = anchors[end];

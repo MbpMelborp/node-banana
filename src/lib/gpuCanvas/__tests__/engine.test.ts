@@ -39,7 +39,7 @@ describe("SceneGraph", () => {
     graph.nodes[0].handles = new Map([["source:text", { x: 300, y: 40 }]]);
     graph.sync([node("a", 0, 0), node("b", 0, 900)], [edge("e", "a", "b")], {});
     expect(graph.nodes[0].h).toBe(777);
-    expect(graph.edgeEnds(0).slice(0, 2)).toEqual([300, 40]);
+    expect(graph.edgeEnds(0)!.slice(0, 2)).toEqual([300, 40]);
   });
 });
 

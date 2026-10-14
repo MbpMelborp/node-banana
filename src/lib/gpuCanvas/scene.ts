@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import { getViewportForBounds } from "@xyflow/react";
 import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
-import { cubicArcLength, cubicLength, cubicXExtent, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
+import { cubicArcLength, cubicLength, cubicPieces, distanceToCubic, routeGradientRange, type Cubic, type EdgeRoute } from "./edgeRoutes";
 import { easeCubicInOut, zoomPath } from "./viewPath";
 import type { SceneWheel } from "./wheel";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "@/lib/canvasZoom";
@@ -30,6 +30,23 @@ const FLAG_SELECTED = 1, FLAG_HOVERED = 2, FLAG_HIDDEN = 4, FLAG_GROUP = 8, FLAG
 const EDGE_STRIDE = 20;
 const EDGE_SEGMENTS = 24;
 const EDGE_SELECTED = 1, EDGE_HOVERED = 2, EDGE_ACTIVE = 4, EDGE_HIDDEN = 8, EDGE_DASHED = 16, EDGE_STEM = 32;
+/**
+ * The longest stretch (flow units) one instance of the strip draws: a longer cubic is cut into pieces, so
+ * its chords stay a few css px at the largest zoom (a 24-piece strip over 96 units, 16 px at 4x).
+ */
+const EDGE_PIECE = 96;
+/** At most this many pieces to a cubic. */
+const EDGE_MAX_PIECES = 16;
+const piecesOf = new WeakMap<EdgeRoute, Cubic[]>();
+/** A route's noodle as the scene draws it: each cubic cut by length (a dashed route comes cut already). */
+function drawnPieces(route: EdgeRoute): Cubic[] {
+  let pieces = piecesOf.get(route);
+  if (!pieces) {
+    pieces = route.dashed ? route.segments : route.segments.flatMap((c) => (cubicLength(c) <= EDGE_PIECE ? [c] : cubicPieces(c, EDGE_PIECE, EDGE_MAX_PIECES)));
+    piecesOf.set(route, pieces);
+  }
+  return pieces;
+}
 /** The segment starts or ends its connection, and so takes a round cap there (joints inside a route take none, or they would overlap and darken). */
 export const EDGE_CAP_START = 64, EDGE_CAP_END = 128;
 /** How near (css px) past its stroke a press must be to a connection to take it, at least. */
@@ -231,6 +248,7 @@ const EDGE_VERTEX = /* glsl */ `
   out float vAlong;
   out float vX;
   out float vHalf;
+  out float vThin;
   flat out int vFlags;
   flat out vec2 vRange;
   vec2 bezier(vec2 a, vec2 b, vec2 c, vec2 d, float t) { float u = 1.0 - t; return u*u*u*a + 3.0*u*u*t*b + 3.0*u*t*t*c + t*t*t*d; }
@@ -250,6 +268,8 @@ const EDGE_VERTEX = /* glsl */ `
     float px = 1.0 / uView.z;
     float half_ = max(iWidth, px) * 0.5;
     vHalf = half_ / px;
+    // A stroke under a css pixel is drawn a pixel wide but as faint as its share of it (an SVG hairline).
+    vThin = clamp(iWidth * uView.z, 0.0, 1.0);
     float reach = half_ + px;
     vSide = position.y * (half_ + px) / px;
     vColor = iColor;
@@ -274,6 +294,7 @@ const EDGE_FRAGMENT = /* glsl */ `
   in float vAlong;
   in float vX;
   in float vHalf;
+  in float vThin;
   flat in int vFlags;
   flat in vec2 vRange;
   out vec4 outColor;
@@ -297,7 +318,7 @@ const EDGE_FRAGMENT = /* glsl */ `
       vec3 stops = isActive || highlight ? vec3(1.0, 0.55, 1.0) : vec3(uFaded, uFaded * 0.4, uFaded);
       alpha = pos < 0.5 ? mix(stops.x, stops.y, pos * 2.0) : mix(stops.y, stops.z, (pos - 0.5) * 2.0);
     } else alpha = isActive || highlight ? 1.0 : uFaded;
-    outColor = vec4(vColor, alpha * coverage);
+    outColor = vec4(vColor, alpha * coverage * vThin);
   }
 `;
 
@@ -610,7 +631,7 @@ export class Scene {
     for (let e = 0; e < graph.edges.length; e++) {
       const route = this.routes[e] ?? (this.routes[e] = this.route(e));
       this.routeOffset[e] = total;
-      this.routeCount[e] = route.segments.length + route.stems.length;
+      this.routeCount[e] = drawnPieces(route).length + route.stems.length;
       total += this.routeCount[e];
     }
     this.edgeData = new Float32Array(Math.max(1, total) * EDGE_STRIDE);
@@ -631,7 +652,9 @@ export class Scene {
   private route(e: number): EdgeRoute {
     if (this.callbacks.routeEdge) return this.callbacks.routeEdge(e);
     // No router (tests, or before the owner set one): a plain curve between the ends.
-    const [sx, sy, tx, ty] = this.graph.edgeEnds(e);
+    const ends = this.graph.edgeEnds(e);
+    if (!ends) return { segments: [], stems: [], ends: [0, 0, 0, 0], labelX: 0, labelY: 0, width: 3, dashed: false, hidden: false, decorated: false, running: false, unresolved: true };
+    const [sx, sy, tx, ty] = ends;
     const d = tx - sx, off = d >= 0 ? 0.5 * d : 0.25 * 25 * Math.sqrt(-d);
     const segment: Cubic = [sx, sy, sx + off, sy, tx - off, ty, tx, ty];
     return { segments: [segment], stems: [], ends: [sx, sy, tx, ty], labelX: (sx + tx) / 2, labelY: (sy + ty) / 2, width: 3, dashed: false, hidden: false, decorated: false, running: false };
@@ -648,21 +671,16 @@ export class Scene {
     if (route.dashed) flags |= EDGE_DASHED;
     const [sx, sy, tx, ty] = route.ends;
     let minX = Math.min(sx, tx), maxX = Math.max(sx, tx), minY = Math.min(sy, ty), maxY = Math.max(sy, ty);
-    // The gradient spans the route's own extent, as classic's objectBoundingBox does: a backward
-    // curve's control points overshoot it, which would dim its ends.
-    let gradientMin = minX, gradientMax = maxX;
-    for (const c of route.segments) {
-      const [lo, hi] = cubicXExtent(c);
-      gradientMin = Math.min(gradientMin, lo); gradientMax = Math.max(gradientMax, hi);
-      for (let k = 0; k < 8; k += 2) {
-        minX = Math.min(minX, c[k]); maxX = Math.max(maxX, c[k]);
-        minY = Math.min(minY, c[k + 1]); maxY = Math.max(maxY, c[k + 1]);
-      }
+    // The gradient spans the noodle's own tight extent (routeGradientRange).
+    const [gradientMin, gradientMax] = routeGradientRange(route);
+    for (const c of route.segments) for (let k = 0; k < 8; k += 2) {
+      minX = Math.min(minX, c[k]); maxX = Math.max(maxX, c[k]);
+      minY = Math.min(minY, c[k + 1]); maxY = Math.max(maxY, c[k + 1]);
     }
     let at = this.routeOffset[e] * EDGE_STRIDE, along = 0;
     const [r, g, b] = edge.color;
-    const last = route.segments.length - 1;
-    route.segments.forEach((c, k) => {
+    const pieces = drawnPieces(route), last = pieces.length - 1;
+    pieces.forEach((c, k) => {
       // Dashes are laid out by true arc length (a dashed route comes in short pieces, near even in speed).
       const length = route.dashed ? cubicArcLength(c) : cubicLength(c);
       const caps = (k === 0 ? EDGE_CAP_START : 0) | (k === last ? EDGE_CAP_END : 0);
@@ -680,7 +698,9 @@ export class Scene {
       }
       at += EDGE_STRIDE;
     }
-    this.edgeBounds.set([minX, minY, maxX, maxY], e * 4);
+    // A connection with a missing handle has no extent: nothing finds it.
+    if (route.unresolved) this.edgeBounds.set([Infinity, Infinity, -Infinity, -Infinity], e * 4);
+    else this.edgeBounds.set([minX, minY, maxX, maxY], e * 4);
   }
 
   /** Writes edges again (their flags or routes changed) and uploads them. */
@@ -702,7 +722,7 @@ export class Scene {
     for (const e of list) {
       if (e < 0 || e >= this.graph.edges.length) continue;
       const route = this.route(e);
-      if (route.segments.length + route.stems.length !== this.routeCount[e]) resized = true;
+      if (drawnPieces(route).length + route.stems.length !== this.routeCount[e]) resized = true;
       this.routes[e] = route;
     }
     // A route with more or fewer segments than before moves every edge after it in the buffer.
@@ -726,33 +746,26 @@ export class Scene {
   }
 
   /**
-   * The connection under a point (css px), or -1: the nearest whose hit band takes it. The band is classic's
-   * interaction path (10 flow units either side of the centre line), and never under a few pixels past the
-   * stroke, so connections stay easy to take zoomed out.
+   * The connection under a point (css px), or -1: the topmost whose hit band takes it, as the browser gives
+   * classic's overlapping interaction paths to the later edge (drawn last, here as there). The band is
+   * classic's interaction path (10 flow units either side of the centre line), and never under a few pixels
+   * past the stroke, so connections stay easy to take zoomed out.
    */
   edgeAt(cssX: number, cssY: number): number {
     const p = this.toWorld(cssX, cssY);
     const floor = EDGE_HIT_PX / this.view.zoom;
-    let best = -1, bestDistance = Infinity;
-    for (let e = 0; e < this.graph.edges.length; e++) {
+    for (let e = this.graph.edges.length - 1; e >= 0; e--) {
       const b = e * 4, route = this.routes[e];
       if (!route) continue;
       const reach = Math.max(EDGE_HIT_FLOW, route.width / 2 + floor);
       let outer = reach;
       for (const stem of route.stems) outer = Math.max(outer, stem.width / 2 + Math.max(STEM_HIT_FLOW, floor));
       if (p.x < this.edgeBounds[b] - outer || p.x > this.edgeBounds[b + 2] + outer || p.y < this.edgeBounds[b + 1] - outer || p.y > this.edgeBounds[b + 3] + outer) continue;
-      // How far inside its band the point is (negative): the deepest wins.
-      for (const c of route.segments) {
-        const distance = distanceToCubic(c, p.x, p.y) - reach;
-        if (distance < bestDistance) { bestDistance = distance; best = e; }
-      }
+      for (const c of route.segments) if (distanceToCubic(c, p.x, p.y) <= reach) return e;
       // A bundle's shared stem is part of the connection that draws it (BundleStem's hit path).
-      for (const stem of route.stems) {
-        const distance = distanceToCubic(stem.segment, p.x, p.y) - stem.width / 2 - Math.max(STEM_HIT_FLOW, floor);
-        if (distance < bestDistance) { bestDistance = distance; best = e; }
-      }
+      for (const stem of route.stems) if (distanceToCubic(stem.segment, p.x, p.y) <= stem.width / 2 + Math.max(STEM_HIT_FLOW, floor)) return e;
     }
-    return bestDistance <= 0 ? best : -1;
+    return -1;
   }
 
   /** Edges whose bounds overlap a rectangle (flow units). */

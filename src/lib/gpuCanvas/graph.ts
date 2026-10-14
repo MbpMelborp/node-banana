@@ -67,6 +67,22 @@ export function refitMeasured(n: SceneNode, w: number) {
   if (n.card && n.card.x + n.card.w >= from - 0.5) n.card = { ...n.card, w: Math.max(0, n.card.w + dw) };
 }
 
+/**
+ * The measured handle an edge end attaches to, as React Flow's getHandle picks it: the one with that id,
+ * or the first of its kind when the edge names none. Undefined while the node is not measured; null when
+ * it has no such handle (React Flow then draws no edge: a removed input, a stale id).
+ */
+export function resolveHandle(node: SceneNode, kind: "source" | "target", id: string | null | undefined): [string, HandleAnchor] | null | undefined {
+  if (!node.handles) return undefined;
+  if (id) {
+    const anchor = node.handles.get(`${kind}:${id}`);
+    return anchor ? [`${kind}:${id}`, anchor] : null;
+  }
+  // The anchors keep React Flow's handle order, so the first of the kind is its bounds[0].
+  for (const entry of node.handles) if (entry[0].startsWith(`${kind}:`)) return entry;
+  return null;
+}
+
 export interface SceneEdge {
   id: string;
   source: number;
@@ -319,13 +335,24 @@ export class SceneGraph {
     }));
   }
 
-  /** Where an edge leaves its source and enters its target, in flow units. */
-  edgeEnds(e: number): [number, number, number, number] {
+  /**
+   * The handles an edge leaves and enters, relative to their nodes: an unmeasured node's mid-side until
+   * it is measured. Null when a measured node has no such handle, as React Flow then draws no edge.
+   */
+  edgeHandles(e: number): { from: HandleAnchor; to: HandleAnchor } | null {
     const edge = this.edges[e];
     const s = this.nodes[edge.source], t = this.nodes[edge.target];
-    const from = s.handles?.get(`source:${edge.sourceHandle ?? ""}`) ?? { x: s.w, y: s.h / 2 };
-    const to = t.handles?.get(`target:${edge.targetHandle ?? ""}`) ?? { x: 0, y: t.h / 2 };
-    return [s.x + from.x, s.y + from.y, t.x + to.x, t.y + to.y];
+    const from = resolveHandle(s, "source", edge.sourceHandle), to = resolveHandle(t, "target", edge.targetHandle);
+    if (from === null || to === null) return null;
+    return { from: from?.[1] ?? { x: s.w, y: s.h / 2 }, to: to?.[1] ?? { x: 0, y: t.h / 2 } };
+  }
+
+  /** Where an edge leaves its source and enters its target, in flow units (null: see `edgeHandles`). */
+  edgeEnds(e: number): [number, number, number, number] | null {
+    const handles = this.edgeHandles(e);
+    if (!handles) return null;
+    const edge = this.edges[e], s = this.nodes[edge.source], t = this.nodes[edge.target];
+    return [s.x + handles.from.x, s.y + handles.from.y, t.x + handles.to.x, t.y + handles.to.y];
   }
 
   /** The bounds of every node, or null for an empty graph. */

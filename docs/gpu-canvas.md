@@ -388,9 +388,17 @@ classic's nodes cover its edge layer. A selected angular connection's
 segment handle takes the pointer and drags as on classic, and the scene's
 hovered connection brightens its live label (`edgeHoverStore`). A hovered
 connection (and its bundle stem) is drawn at full strength, as classic's
-`:hover` stroke, and the gradient spans the route's own extent, as classic's
-`objectBoundingBox` gradient. Only a route's two ends take round caps, so a
-faded connection's bends are not darker where its segments meet. A reference
+`:hover` stroke, and the gradient spans the noodle's own extent (from a
+bundle's split point, not the handle behind its stem), as classic's
+`objectBoundingBox` gradient. A stroke thinner than a css pixel is drawn a
+pixel wide and as faint as its share of it, as the SVG antialiases a hairline,
+and a long curve is cut into pieces of at most 96 flow units so it stays smooth
+at 400%. Only a route's two ends take round caps, so a
+faded connection's bends are not darker where its segments meet. Where hit
+bands overlap, the later connection (drawn on top) takes the press, as the
+browser gives classic's topmost interaction path. A connection whose measured
+end has no such handle (a removed input, a stale id) is not drawn or taken, as
+React Flow renders none; one naming no handle meets its node's first. A reference
 link's dashes are laid out by arc length (its curve is cut into short pieces)
 with round ends, as the SVG's "6 4" round-capped dashes, and it stays grey when
 paused, as `ReferenceEdge` reads no pause. Hover over connections and painted handles
