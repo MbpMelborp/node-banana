@@ -325,8 +325,10 @@ The scene takes every press and asks the editor what it starts:
   under the pointer, else the nearest centre within 20 flow units. The line
   ends on it only if the connection would be made. While it is drawn, the
   connectDragStore tells nodes so: the node it starts from, the node under
-  the pointer and a valid target turn live, show their socket labels, and
-  the target's socket fills. A valid drop connects; anything else goes to
+  the pointer, a valid target and up to twelve other nodes on screen (those
+  with a socket that could take it first, then the nearest;
+  `connectCandidates`, worked out again as the view moves) turn live, show
+  their socket labels, and the target's socket fills. A valid drop connects; anything else goes to
   `handleConnectEnd` with the node under the pointer (its sockets' reach
   counts, as their elements do on classic), which connects to a compatible
   handle there or opens the connection drop menu as today. Within 40 px of
@@ -479,7 +481,11 @@ The scene takes every press and asks the editor what it starts:
   through a listener on the wrapper (`wheelRoot`). A wheel on the canvas
   hovers the node under the pointer, and hover is tested again as the view
   moves under a still pointer, so a node brought under it turns live and its
-  inner areas take the wheels that follow. As classic's `onMoveStart`, a
+  inner areas take the wheels that follow. Until then, a wheel over a
+  painted textarea or `.nowheel` area that held more than it showed when
+  painted (`scrollAreaBoxes`, kept with the paint and in the disk cache) is
+  held rather than panning or stepping the zoom (`holdOverScrollArea`); a
+  pinch still zooms over a textarea, not over `.nowheel`. As classic's `onMoveStart`, a
   moving view clears the store's hovered node (header controls, video hover
   previews) and sets `isPanningRef` until it has been still 150 ms.
 - Two fingers pinch about their midpoint and pan with it, as d3-zoom's touch
@@ -557,16 +563,17 @@ interacting), until the pointer moves again.
 
 ## What phase 3 leaves out
 
-- While a connection is drawn, painted nodes away from the pointer keep
-  their pictures without socket labels (classic shows every node's).
+- While a connection is drawn, on-screen nodes past the twelve made live
+  keep their pictures without socket labels (classic shows every node's).
 - A live connection's SVG decorations and pills are masked by a painted
   node's whole box, gaps between its cards included (the pills by its
   square corners). Hidden stubs' chips and a bundle's clamp sit over every
   node on classic too, and are left unmasked.
 - A node whose look depends on state outside its data and its inputs (a
   file loading elsewhere, a timer) may paint stale until its key changes.
-- A wheel over a painted node's scrolling text pans the canvas until the
-  node is live, a few frames after it comes under the pointer.
+- A wheel over a painted node's scrolling text is held, not passed to the
+  text, until the node is live a few frames after it comes under the
+  pointer; past the text's end it is held too, where classic would pan.
 - A painted node shows its scrolling areas at the top and a paused video at
   its first frame, wherever they were left while it was live.
 

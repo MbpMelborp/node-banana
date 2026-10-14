@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { gpuCanvasBridge } from "@/components/gpuCanvas/bridge";
+import { gpuCanvasBridge, shownNodeElement } from "@/components/gpuCanvas/bridge";
+import { createLiveProbe, type LiveProbe } from "./liveProbe";
 
 interface ElementHighlightProps {
   selector: string | string[]; // Support single or multiple selectors
@@ -41,16 +42,19 @@ export function ElementHighlight({ selector, onComplete }: ElementHighlightProps
   const [rects, setRects] = useState<ElementRect[]>([]);
   const observersRef = useRef<ResizeObserver[]>([]);
   const heldRef = useRef(new Map<string, () => void>());
+  const probeRef = useRef<LiveProbe | null>(null);
 
   const updateRects = () => {
     const selectors = Array.isArray(selector) ? selector : [selector];
     const newRects: ElementRect[] = [];
+    const missing: string[] = [];
 
     selectors.forEach((sel) => {
       const element = shownElement(sel);
       const painted = element ? null : paintedNodeId(sel);
       const bridge = painted && !heldRef.current.has(painted) ? gpuCanvasBridge() : null;
       if (painted && bridge) heldRef.current.set(painted, bridge.holdLive([painted]).release);
+      if (!element && !painted) missing.push(sel);
       if (element) {
         const bounds = element.getBoundingClientRect();
         newRects.push({
@@ -62,10 +66,16 @@ export function ElementHighlight({ selector, onComplete }: ElementHighlightProps
       }
     });
 
+    // On the GPU canvas, a node painted earlier (or from the disk cache) has no copy on the sheet either:
+    // look inside the graph's nodes by holding them live (liveProbe).
+    const bridge = gpuCanvasBridge(), probe = probeRef.current;
+    if (bridge && probe) probe.update(bridge, selectors, missing, () => { if (probeRef.current === probe) updateRects(); });
     setRects(newRects);
   };
 
   useEffect(() => {
+    const probe = createLiveProbe(shownNodeElement);
+    probeRef.current = probe;
     // Initial measurement
     updateRects();
 
@@ -102,6 +112,8 @@ export function ElementHighlight({ selector, onComplete }: ElementHighlightProps
     return () => {
       for (const release of held.values()) release();
       held.clear();
+      probe.dispose();
+      if (probeRef.current === probe) probeRef.current = null;
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("scroll", handleScroll, true);
       observersRef.current.forEach(observer => observer.disconnect());

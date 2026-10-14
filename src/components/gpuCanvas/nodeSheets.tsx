@@ -223,6 +223,30 @@ export function mediaCardBox(root: HTMLElement, id: string): { x: number; y: num
   return box && { x: box.x, y: box.y, w: box.w, h: box.h };
 }
 
+/** An inner area of a node that takes the wheel on classic (findScrollableAncestor): its box within the node, in flow units, and whether it is `.nowheel`. */
+export type ScrollArea = { x: number; y: number; w: number; h: number; nowheel: boolean };
+
+/**
+ * The node's textareas and `.nowheel` areas that hold more than they show, so a wheel over them scrolls them on
+ * classic rather than moving the canvas; relative to the node, in flow units.
+ */
+export function scrollAreaBoxes(root: HTMLElement, id: string): ScrollArea[] {
+  const node = root.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+  if (!node || !node.offsetWidth) return [];
+  const a = node.getBoundingClientRect(), scale = a.width / node.offsetWidth || 1;
+  const areas: ScrollArea[] = [];
+  for (const element of node.querySelectorAll<HTMLElement>("textarea, .nowheel")) {
+    const style = window.getComputedStyle(element);
+    const scrolls = (overflow: string) => overflow === "auto" || overflow === "scroll";
+    const y = scrolls(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+    const x = scrolls(style.overflowX) && element.scrollWidth > element.clientWidth + 1;
+    if (!x && !y) continue;
+    const b = element.getBoundingClientRect();
+    areas.push({ x: (b.left - a.left) / scale, y: (b.top - a.top) / scale, w: b.width / scale, h: b.height / scale, nowheel: element.classList.contains("nowheel") });
+  }
+  return areas;
+}
+
 /** The node's controls card when it reaches past the node's sides (SceneNode.overhang), in flow units; else null. */
 export function controlsOverhangBox(root: HTMLElement, id: string): { x: number; y: number; w: number; h: number } | null {
   const box = boxIn(root, id, "[data-controls-card]");

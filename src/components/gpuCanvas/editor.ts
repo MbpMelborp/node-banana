@@ -37,6 +37,7 @@ import { Position } from "@xyflow/react";
 import type { Gesture, Scene } from "@/lib/gpuCanvas/scene";
 import { autoPanVelocity, closestHandle, edgeEndAt, edgeEndHandle, handleAt, marqueeNodes, paneDragAction, RECONNECT_RADIUS, selectionKeyHeld, type CardBox, type HandleHit } from "@/lib/gpuCanvas/gestures";
 import { cubicAt } from "@/lib/gpuCanvas/edgeRoutes";
+import { connectCandidates } from "@/lib/gpuCanvas/connectCandidates";
 import { pathIntersectsRect } from "@/lib/edges/marquee";
 import { liveButtonPress, type LiveLayer } from "./LiveLayer";
 import { mediaCardBox } from "./nodeSheets";
@@ -1079,6 +1080,13 @@ export class Editor {
     let offs: (() => void)[] = [];
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     const wanted = from.type === "source" ? "target" : "source";
+    // The on-screen nodes that turn live to label their sockets (connectCandidates); worked out as the drag
+    // starts and again as the view moves, not per pointer move.
+    let candidates: string[] = [];
+    const findCandidates = () => {
+      const at = scene.local(last), p = scene.toWorld(at.x, at.y);
+      candidates = connectCandidates(scene.graph, scene.visible(0), p, wanted, fromId);
+    };
     const draw = (event: PointerEvent) => {
       const fromIndex = scene.graph.indexOf.get(fromId);
       // The node it starts from was removed: the connection goes with it.
@@ -1100,7 +1108,7 @@ export class Editor {
       // The nodes React Flow would show sockets for: their labels show, and a valid target's socket fills.
       setConnectDrag(true, target ? { nodeId: target.nodeId, handleId: target.hit.handleId || null, type: target.hit.type } : null);
       const under = scene.nodeAt(at.x, at.y);
-      this.live.wantOnly("connect", [fromId, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [target.nodeId] : [])]);
+      this.live.wantOnly("connect", [fromId, ...candidates, ...(under >= 0 ? [scene.graph.nodes[under].id] : []), ...(target ? [target.nodeId] : [])]);
       // React Flow's line runs between the handles' centres, in flow units inside the viewport (css px on the host).
       const tip = target ? { x: target.hit.cx, y: target.hit.cy } : p;
       const place = (x: number, y: number) => inViewport ? { x, y } : scene.toScreen(x, y);
@@ -1150,12 +1158,17 @@ export class Editor {
       // A wheel, pinch or auto-pan keeps the line on its socket (React Flow's line is in flow units) and finds
       // what is now under the still pointer; a rebuilt graph renumbers the nodes and connections.
       offs = [
-        scene.onViewChanged(() => draw(last)),
+        scene.onViewChanged(() => {
+          findCandidates();
+          draw(last);
+        }),
         scene.onLayoutChanged(() => {
           holdEdge();
+          findCandidates();
           draw(last);
         }),
       ];
+      findCandidates();
       draw(event);
       if (!ended) panFrame = requestAnimationFrame(autoPan);
     };

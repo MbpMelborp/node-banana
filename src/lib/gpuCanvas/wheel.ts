@@ -70,3 +70,16 @@ export function sceneWheel(event: WheelEvent, { settings, zoomOnPinch, wrapperWh
   // React Flow's zoomIn/zoomOut: a 1.2x step about the centre, whatever the delta.
   return { type: "zoom", factor: action === "zoomIn" ? 1.2 : 1 / 1.2, about: "centre" };
 }
+
+/**
+ * A wheel on the canvas over a painted node's inner area that scrolls (a long prompt, a `.nowheel` list). On
+ * classic that area is there and takes the wheel (findScrollableAncestor) before the canvas pans or steps its
+ * zoom; on the GPU canvas the node is still a picture (or turning live, hidden until settled), so the wheel is
+ * held instead of moving the view, and the ones after it reach the live node's area. A pinch or zoom-key zoom
+ * still zooms over a textarea, as React Flow's zoom pane takes it first, but not over `.nowheel`.
+ */
+export function holdOverScrollArea(action: SceneWheel, area: { nowheel: boolean } | null): SceneWheel {
+  if (!action || !area || action.type === "block") return action;
+  if (action.type === "zoom" && action.about === "pointer" && !area.nowheel) return action;
+  return { type: "block" };
+}

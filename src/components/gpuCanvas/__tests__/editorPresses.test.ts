@@ -70,7 +70,7 @@ beforeEach(() => {
     edgesWithin: () => [0],
     edgeRoute: () => ({ segments: [[0, 1000, 400, 1000, 800, 1000, 1200, 1000]], stems }),
     capture: noop, input: noop, nodesMoved: noop, setHeldEdge: noop, setHoveredEdge: noop, panGesture: () => ({ move: noop, up: noop, cancel: noop }),
-    onViewChanged: () => noop, onLayoutChanged: () => noop,
+    onViewChanged: () => noop, onLayoutChanged: () => noop, visible: () => graph.nodes.map((_, i) => i),
   } as unknown as Scene;
   pressed = [];
   const live = {

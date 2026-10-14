@@ -27,6 +27,8 @@ export interface CachedPaint {
   card?: [number, number, number, number] | null;
   /** The controls card's box within the node (x, y, w, h) when it reaches past the node's sides. */
   overhang?: [number, number, number, number] | null;
+  /** Inner areas that scroll (x, y, w, h, 1 when `.nowheel`): a wheel over them waits for the live node. */
+  scroll?: [number, number, number, number, number][];
   /** Deflated RGBA. */
   bytes: Blob;
   size: number;
@@ -34,7 +36,7 @@ export interface CachedPaint {
 }
 
 /** What an entry holds; part of every paint key, so entries of an older shape are painted afresh. */
-export const PAINT_CACHE_FORMAT = 3;
+export const PAINT_CACHE_FORMAT = 4;
 
 /** A handle anchor as stored: key, anchor, side, box (x, y, w, h), and "s"/"e" for where a connection may start or end. */
 export type CachedHandle = [string, number, number, string?, [number, number, number, number]?, string?];

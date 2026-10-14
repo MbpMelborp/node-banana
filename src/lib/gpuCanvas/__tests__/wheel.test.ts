@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
-import { sceneWheel, type SceneWheelOptions } from "../wheel";
+import { holdOverScrollArea, sceneWheel, type SceneWheelOptions } from "../wheel";
 import { zoomPath } from "../viewPath";
 
 function wheel(init: WheelEventInit, target: Element = document.body) {
@@ -97,5 +97,22 @@ describe("zoomPath", () => {
     // The pane centre (400, 300) stays on flow point (400, 300).
     expect((400 - mid.x) / mid.zoom).toBeCloseTo(400);
     expect((300 - mid.y) / mid.zoom).toBeCloseTo(300);
+  });
+});
+
+describe("holdOverScrollArea", () => {
+  const textarea = { nowheel: false }, list = { nowheel: true };
+  const pinch = { type: "zoom", factor: 1.1, about: "pointer" } as const;
+
+  it("holds a pan or a centre step over a painted area that scrolls, and leaves the rest", () => {
+    expect(holdOverScrollArea({ type: "pan", dx: 0, dy: 7 }, textarea)).toEqual({ type: "block" });
+    expect(holdOverScrollArea({ type: "zoom", factor: 1.2, about: "centre" }, textarea)).toEqual({ type: "block" });
+    expect(holdOverScrollArea({ type: "pan", dx: 0, dy: 7 }, null)).toEqual({ type: "pan", dx: 0, dy: 7 });
+    expect(holdOverScrollArea(null, textarea)).toBeNull();
+  });
+
+  it("lets a pinch zoom over a textarea, not over a .nowheel area", () => {
+    expect(holdOverScrollArea(pinch, textarea)).toBe(pinch);
+    expect(holdOverScrollArea(pinch, list)).toEqual({ type: "block" });
   });
 });

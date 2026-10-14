@@ -16,7 +16,7 @@ import { useNodeUiStore } from "@/store/nodeUiStore";
 import { APP_VERSION } from "@/lib/appVersion";
 import { controlsOverhang, headersUnder, NODE_HEADER, SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
-import type { SceneWheel } from "@/lib/gpuCanvas/wheel";
+import { holdOverScrollArea, type SceneWheel } from "@/lib/gpuCanvas/wheel";
 import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
 import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
@@ -212,7 +212,16 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onFailure: (reason) => queueMicrotask(() => propsRef.current.onFailure(reason)),
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
-        wheel: (event, pane) => propsRef.current.wheel(event, { pane, panKey: editor.spaceHeld }),
+        wheel: (event, pane) => {
+          const action = propsRef.current.wheel(event, { pane, panKey: editor.spaceHeld });
+          if (!action || event.target !== canvas) return action;
+          // Over a painted node's inner area that scrolls: held until the node is live (holdOverScrollArea).
+          const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+          const i = scene.nodeAt(x, y), n = i >= 0 ? scene.graph.nodes[i] : undefined;
+          if (!n) return action;
+          const p = scene.toWorld(x, y);
+          return holdOverScrollArea(action, engineRef.current?.painter?.scrollAreaAt(n.id, p.x - n.x, p.y - n.y) ?? null);
+        },
         // React Flow's zoomOnPinch: off in the tutorial and under a dialog.
         pinchZooms: () => !propsRef.current.editing.disabled && !propsRef.current.editing.tutorial,
         onHover: (i) => {

@@ -46,7 +46,7 @@ import { HEADER_HINTLESS_TYPES as HINTLESS_TYPES } from "@/components/nodes/Floa
 import { SCRUB_ROW_NODE_TYPES } from "@/components/nodes/ui/ScrubRow";
 import { soundAudible, useVideoSoundStore } from "@/store/videoSoundStore";
 import { PainterSheet } from "./PainterSheet";
-import { controlsOverhangBox, flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, type HeaderProps } from "./nodeSheets";
+import { controlsOverhangBox, flowNode, HEADER, nextFrame, noop, PAD, PAD_X, handleAnchors, mediaCardBox, scrollAreaBoxes, type HeaderProps, type ScrollArea } from "./nodeSheets";
 
 /** A sheet's size in device pixels while the canvas is in use: one upload is about 12 MB. */
 const SHEET_TEXELS = { w: 2048, h: 1536 };
@@ -100,6 +100,8 @@ interface NodePaint {
   /** Its media card's and controls card's boxes as painting measured them. */
   card?: SceneNode["card"];
   overhang?: SceneNode["overhang"];
+  /** Its inner areas that scroll (scrollAreaBoxes), as painting measured them. */
+  scroll?: ScrollArea[];
   shown?: HeldImage;
   lastSeen: number;
 }
@@ -107,7 +109,7 @@ interface NodePaint {
 interface Readback {
   buffer: WebGLBuffer;
   sync: WebGLSync;
-  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: CachedHandle[]; card: [number, number, number, number] | null; overhang: [number, number, number, number] | null }[];
+  entries: { key: string; offset: number; width: number; height: number; nodeHeight: number; handles: CachedHandle[]; card: [number, number, number, number] | null; overhang: [number, number, number, number] | null; scroll: [number, number, number, number, number][] }[];
   bytes: number;
 }
 
@@ -325,6 +327,15 @@ export class Painter {
   /** Whether the scene's image of the node is current at the view's tier (or the node is gone). */
   isFresh(id: string) {
     return !this.scene.graph.indexOf.has(id) || this.fresh(id, this.wanted());
+  }
+
+  /**
+   * The inner area that scrolls (a long prompt's textarea, a `.nowheel` list) under a point of the node's painted
+   * image, in flow units relative to the node; null when none. Classic scrolls it under a wheel; until the node is
+   * live, the GPU canvas holds the wheel there rather than moving the view.
+   */
+  scrollAreaAt(id: string, x: number, y: number): ScrollArea | null {
+    return this.paints.get(id)?.scroll?.find((a) => x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h) ?? null;
   }
 
   /** Whether a paintNow for the node is still to come: its paint waits in the loop (behind a pan, a long batch). */
@@ -703,6 +714,10 @@ export class Painter {
 
     // First pass at estimated heights, to measure.
     const first = place(misses, (id) => this.boxOf(id).h - HEADER - PAD);
+    // The key each node is drawn for: the sheet reads node data and header hints as it renders, and an urgent
+    // batch does not give way to a change after that, so its image is stamped with this key, not the one current
+    // at the blit. A change meanwhile leaves the image stale, and the repaint stale() queued still runs.
+    const renderedKeys = new Map(misses.map((r) => [r.id, this.keys.get(r.id) ?? ""]));
     this.phase(`render ${tier} ×${misses.length}`);
     await this.sheet.render(sheetNodes(misses, first), zoom);
     const t1 = performance.now();
@@ -731,7 +746,10 @@ export class Painter {
       return !a || a.x !== b.x || a.y !== b.y;
     });
     this.phase(`place ${tier} ×${fits.length}`);
-    if (moved || fits.length !== misses.length) await this.sheet.render(sheetNodes(fits, placed), zoom);
+    if (moved || fits.length !== misses.length) {
+      for (const r of fits) renderedKeys.set(r.id, this.keys.get(r.id) ?? "");
+      await this.sheet.render(sheetNodes(fits, placed), zoom);
+    }
     const nodePositions = new Map(fits.map((r) => {
       const p = placed.get(r.id)!;
       return [r.id, { x: p.x + this.boxOf(r.id).left, y: p.y + HEADER }];
@@ -792,8 +810,9 @@ export class Painter {
       const src = { x: p.x * tier, y: p.y * tier, w: box.w * tier, h: box.h * tier };
       const slot = this.slotFor(r.id, tier, Math.ceil(box.w * tier), Math.ceil(box.h * tier), r.priority !== PREFETCH);
       if (!slot) continue;
-      paint.images.set(tier, { slot, key: this.keys.get(r.id) ?? "", w: box.w, h: box.h, left: box.left });
+      paint.images.set(tier, { slot, key: renderedKeys.get(r.id) ?? "", w: box.w, h: box.h, left: box.left });
       const handles = flow ? handleAnchors(flow, r.id, this.sheet.element) : undefined;
+      paint.scroll = scrollAreaBoxes(this.sheet.element, r.id);
       this.applyMeasured(r.id, paint.height!, handles, mediaCardBox(this.sheet.element, r.id), flow?.nodeLookup.get(r.id)?.measured.width, controlsOverhangBox(this.sheet.element, r.id));
       items.push({ src, dst: slot });
       done.push(r);
@@ -1076,6 +1095,7 @@ export class Painter {
       texels += entry.width * entry.height;
       const paint = this.paint(r.id);
       paint.height = entry.nodeHeight;
+      paint.scroll = (entry.scroll ?? []).map(([x, y, w, h, nowheel]) => ({ x, y, w, h, nowheel: !!nowheel }));
       const { w, left } = this.boxOf(r.id);
       paint.images.set(r.tier, { slot, key, w, h: entry.nodeHeight + HEADER + PAD, left });
       this.applyMeasured(r.id, entry.nodeHeight, new Map(entry.handles.map(handleFromCache)), boxFromTuple(entry.card), undefined, boxFromTuple(entry.overhang));
@@ -1127,6 +1147,7 @@ export class Painter {
         handles: handles ? [...handles].map(([k, a]) => cachedHandle(k, a)) : [],
         card: cardTuple(paint?.card !== undefined ? paint.card : sceneNode?.card),
         overhang: cardTuple(paint?.overhang !== undefined ? paint.overhang : sceneNode?.overhang),
+        scroll: (paint?.scroll ?? []).map((a) => [a.x, a.y, a.w, a.h, a.nowheel ? 1 : 0]),
       });
       offset += slot.w * slot.h * 4;
     }
@@ -1175,7 +1196,7 @@ export class Painter {
       for (const entry of readback.entries) {
         const pixels = data.subarray(entry.offset, entry.offset + entry.width * entry.height * 4);
         const bytes = await deflate(pixels);
-        await cache.put({ key: entry.key, width: entry.width, height: entry.height, nodeHeight: entry.nodeHeight, handles: entry.handles, card: entry.card, overhang: entry.overhang, bytes, size: bytes.size, usedAt: Date.now() });
+        await cache.put({ key: entry.key, width: entry.width, height: entry.height, nodeHeight: entry.nodeHeight, handles: entry.handles, card: entry.card, overhang: entry.overhang, scroll: entry.scroll, bytes, size: bytes.size, usedAt: Date.now() });
       }
       this.storedSinceTrim += readback.entries.length;
       if (this.storedSinceTrim > 200) {
