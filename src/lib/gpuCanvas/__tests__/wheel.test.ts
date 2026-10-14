@@ -1,0 +1,81 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
+import { defaultCanvasNavigationSettings, type CanvasNavigationSettings } from "@/types/canvas";
+import { sceneWheel, type SceneWheelOptions } from "../wheel";
+import { zoomPath } from "../viewPath";
+
+function wheel(init: WheelEventInit, target: Element = document.body) {
+  const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
+  Object.defineProperty(event, "target", { value: target });
+  return event;
+}
+
+const altScroll: CanvasNavigationSettings = defaultCanvasNavigationSettings;
+const options = (mac: boolean, more: Partial<SceneWheelOptions> = {}): SceneWheelOptions => ({ settings: altScroll, zoomOnPinch: true, wrapperWheel: true, mac, ...more });
+
+describe("sceneWheel", () => {
+  it("pinches about the pointer by React Flow's d3 delta", () => {
+    expect(sceneWheel(wheel({ ctrlKey: true, deltaY: -10 }), options(true))).toEqual({ type: "zoom", factor: 2 ** 0.2, about: "pointer" });
+    expect(sceneWheel(wheel({ ctrlKey: true, deltaY: -10 }), options(false))).toEqual({ type: "zoom", factor: 2 ** 0.02, about: "pointer" });
+  });
+
+  it("steps the zoom 1.2x about the centre with the zoom modifier, whatever the delta", () => {
+    expect(sceneWheel(wheel({ altKey: true, deltaY: -3 }), options(true))).toEqual({ type: "zoom", factor: 1.2, about: "centre" });
+    expect(sceneWheel(wheel({ altKey: true, deltaY: 400 }), options(false))).toEqual({ type: "zoom", factor: 1 / 1.2, about: "centre" });
+  });
+
+  it("pans a macOS trackpad, and leaves a mouse wheel or any plain wheel elsewhere alone", () => {
+    expect(sceneWheel(wheel({ deltaX: 4, deltaY: 7 }), options(true))).toEqual({ type: "pan", dx: 4, dy: 7 });
+    expect(sceneWheel(wheel({ deltaY: 120 }), options(true))).toBeNull();
+    expect(sceneWheel(wheel({ deltaY: 7 }), options(false))).toBeNull();
+  });
+
+  it("lets an inner area that can scroll keep the wheel; one that cannot still pans", () => {
+    document.body.innerHTML = `<div class="react-flow"><textarea id="field"></textarea></div>`;
+    const field = document.getElementById("field") as HTMLTextAreaElement;
+    expect(sceneWheel(wheel({ deltaY: 7 }, field), options(true))).toEqual({ type: "pan", dx: 0, dy: 7 });
+    Object.defineProperties(field, { scrollHeight: { value: 300 }, clientHeight: { value: 100 } });
+    field.style.overflowY = "auto";
+    expect(sceneWheel(wheel({ deltaY: 7 }, field), options(true))).toBeNull();
+  });
+
+  it("over .nowheel a pinch skips the pointer zoom, and never zooms the page", () => {
+    document.body.innerHTML = `<div class="react-flow"><div class="nowheel" id="area"></div></div>`;
+    const area = document.getElementById("area")!;
+    expect(sceneWheel(wheel({ ctrlKey: true, deltaY: -10 }, area), options(true))).toEqual({ type: "zoom", factor: 1.2, about: "centre" });
+    Object.defineProperties(area, { scrollHeight: { value: 300 }, clientHeight: { value: 100 }, scrollTop: { value: 50 } });
+    area.style.overflowY = "auto";
+    expect(sceneWheel(wheel({ ctrlKey: true, deltaY: -10 }, area), options(true))).toEqual({ type: "block" });
+  });
+
+  it("the Meta key zooms about the pointer on macOS (React Flow's zoom activation key)", () => {
+    expect(sceneWheel(wheel({ metaKey: true, deltaY: -10 }), options(true))).toEqual({ type: "zoom", factor: 2 ** 0.02, about: "pointer" });
+  });
+
+  it("in the tutorial a pinch steps about the centre (zoomOnPinch off)", () => {
+    expect(sceneWheel(wheel({ ctrlKey: true, deltaY: 10 }), options(false, { zoomOnPinch: false }))).toEqual({ type: "zoom", factor: 1 / 1.2, about: "centre" });
+  });
+});
+
+describe("zoomPath", () => {
+  it("starts and ends on the two views, keeping the pane centre on a straight path", () => {
+    const from = { x: 0, y: 0, zoom: 1 }, to = { x: -500, y: 200, zoom: 0.5 };
+    const path = zoomPath(from, to, 800, 600);
+    const start = path(0);
+    expect(start.x).toBeCloseTo(0);
+    expect(start.y).toBeCloseTo(0);
+    expect(start.zoom).toBeCloseTo(1);
+    expect(path(1)).toEqual(to);
+    const mid = path(0.5);
+    expect(mid.zoom).toBeLessThan(1);
+    expect(Number.isFinite(mid.x) && Number.isFinite(mid.y)).toBe(true);
+  });
+
+  it("zooms in place when only the zoom changes", () => {
+    const path = zoomPath({ x: 0, y: 0, zoom: 1 }, { x: 200, y: 150, zoom: 0.5 }, 800, 600);
+    const mid = path(0.5);
+    // The pane centre (400, 300) stays on flow point (400, 300).
+    expect((400 - mid.x) / mid.zoom).toBeCloseTo(400);
+    expect((300 - mid.y) / mid.zoom).toBeCloseTo(300);
+  });
+});

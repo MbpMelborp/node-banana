@@ -14,6 +14,7 @@ import { indexOfNode } from "@/store/nodeChanges";
 import { APP_VERSION } from "@/lib/appVersion";
 import { SceneGraph } from "@/lib/gpuCanvas/graph";
 import { Scene, type View } from "@/lib/gpuCanvas/scene";
+import type { SceneWheel } from "@/lib/gpuCanvas/wheel";
 import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
 import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
@@ -49,8 +50,8 @@ export interface GpuCanvasProps {
   edgeTypes: EdgeTypes;
   defaultEdgeOptions: DefaultEdgeOptions;
   headers: HeaderProps;
-  /** Whether a wheel event zooms rather than pans (the canvas's navigation settings). */
-  wheelZooms: (event: WheelEvent) => boolean;
+  /** What a wheel does (the canvas's navigation settings, as classic's wheel handlers read them). */
+  wheel: (event: WheelEvent) => SceneWheel;
   /** WorkflowCanvas's editing settings and handlers (connect, menus, group drops). */
   editing: GpuEditing;
   /** Drawn over the canvas (the performance overlay, the agent button). */
@@ -108,7 +109,7 @@ interface Loading {
   total: number;
 }
 
-export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheelZooms, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
+export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, wheel, editing, children, flowChildren, onFailure, onContextLost }: GpuCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<HTMLDivElement>(null);
@@ -123,9 +124,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   const types = useMemo(() => boundedNodeTypes(nodeTypes), [nodeTypes]);
   const [loading, setLoading] = useState<Loading | null>(null);
   // The latest props, read by the engine without rebuilding it.
-  const propsRef = useRef({ headers, wheelZooms, editing, onFailure, onContextLost });
+  const propsRef = useRef({ headers, wheel, editing, onFailure, onContextLost });
   useLayoutEffect(() => {
-    propsRef.current = { headers, wheelZooms, editing, onFailure, onContextLost };
+    propsRef.current = { headers, wheel, editing, onFailure, onContextLost };
   });
   const loadCount = useWorkflowStore((state) => state.workflowLoadCount);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
@@ -173,7 +174,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onFailure: (reason) => queueMicrotask(() => propsRef.current.onFailure(reason)),
         onInputLatency: (ms) => stats.record("input.latencyMs", ms),
         onInput: () => interacting.signal(),
-        wheelZooms: (event) => propsRef.current.wheelZooms(event),
+        wheel: (event) => propsRef.current.wheel(event),
         onHover: (i) => {
           sceneHover = i >= 0 ? scene.graph.nodes[i].id : null;
           showHover();
@@ -181,7 +182,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         onPress: (event) => editor.press(event),
         onIdleMove: (event) => editor.idleMove(event),
         onContextMenu: (event) => editor.contextMenu(event),
-        onOpen: (i) => open(scene.graph.nodes[i].id),
         onPaneDoubleClick: (x, y, screen) => editor.paneDoubleClick(x, y, screen),
         routeEdge: (e) => {
           const state = useWorkflowStore.getState();
@@ -250,15 +250,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       live.wantOnly("selected", selectedIds);
     };
     showSelection();
-    function open(id: string) {
-      editor.selectNodes([id], false);
-      const i = scene.graph.indexOf.get(id);
-      if (i == null) return;
-      const n = scene.graph.nodes[i];
-      const zoom = Math.max(scene.view.zoom, 0.75);
-      const { clientWidth: w, clientHeight: h } = scene.canvas;
-      scene.setView({ zoom, x: w / 2 - (n.x + n.w / 2) * zoom, y: h / 2 - (n.y + n.h / 2) * zoom });
-    }
 
     // React Flow's SelectionListener: WorkflowCanvas hears of every change in the selected nodes or
     // connections, a click's or the store's own (paste, undo, the agent), once the change is through.
@@ -381,6 +372,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       view: () => scene.view,
       size: () => ({ width: scene.canvas.clientWidth, height: scene.canvas.clientHeight }),
       setView: (view) => scene.setView(view),
+      animateView: (view, duration) => scene.animateView(view, duration),
       fit: () => scene.fit(),
       subscribe: (listener) => {
         const offView = scene.onViewChanged(listener), offLayout = scene.onLayoutChanged(listener);

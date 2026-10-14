@@ -1,7 +1,7 @@
 /**
  * The running GPU canvas, for chrome that shows the whole graph and so
  * cannot read React Flow (whose store holds only the live nodes): the
- * navigator's minimap and its Fit view.
+ * navigator's minimap and its Fit view, and the agent bringing its edits into view.
  */
 import { useSyncExternalStore } from "react";
 import type { SceneGraph } from "@/lib/gpuCanvas/graph";
@@ -13,6 +13,8 @@ export interface GpuCanvasBridge {
   /** The canvas's size in css px. */
   size: () => { width: number; height: number };
   setView: (view: Partial<View>) => void;
+  /** Moves to a view over `duration` ms, as React Flow's animated setViewport. */
+  animateView: (view: View, duration: number) => void;
   fit: () => void;
   /** Called when the view or the graph's layout changed. */
   subscribe: (listener: () => void) => () => void;

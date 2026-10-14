@@ -201,12 +201,9 @@ export class LiveLayer {
       element.addEventListener(type, listener, options);
       this.listeners.push(() => element.removeEventListener(type, listener, options));
     };
-    // Wheel over a live node still pans and zooms the scene, unless an inner area scrolls.
-    on("wheel", (event) => {
-      const target = event.target as Element;
-      if (target.closest(".nowheel, textarea")) return;
-      scene.wheel(event);
-    }, { passive: false });
+    // Wheel over a live node still pans and zooms the scene; the scene leaves one to an inner area
+    // that can still scroll (sceneWheel), as on classic.
+    on("wheel", (event) => scene.wheel(event), { passive: false });
     // A press on a live node's body or floating header goes to the scene (click to select, drag to
     // move), and so does one on its handles (drag to connect); its fields keep theirs (pressGoesToScene).
     on("pointerdown", (event) => {

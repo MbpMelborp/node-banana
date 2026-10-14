@@ -102,6 +102,7 @@ import { setZoomedOut, useLowDetail, useLowDetailEnabled, useLowDetailZoom } fro
 import { NodeLowDetail } from "./nodes/NodeLowDetail";
 import { PerfOverlay } from "./PerfOverlay";
 import { reportGpuCanvasFailure, useGpuCanvasActive, useGpuCanvasFailure } from "@/lib/gpuCanvas/setting";
+import { sceneWheel } from "@/lib/gpuCanvas/wheel";
 import type { GpuEditing } from "./gpuCanvas/editor";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
 import { logger } from "@/utils/logger";
@@ -1926,10 +1927,12 @@ export function WorkflowCanvas() {
   // while a modal is open (the modal's mini canvas drives its own).
   // The GPU canvas (Settings › Canvas) takes React Flow's place, with its own pan and zoom.
   useWheelPanZoom(reactFlowWrapper, canvasNavigationSettings, !isModalOpen && !gpuCanvasActive);
-  const gpuWheelZooms = useCallback((event: WheelEvent) => {
-    const { zoomMode } = canvasNavigationSettings;
-    return zoomMode === "scroll" || (zoomMode === "altScroll" && event.altKey) || (zoomMode === "ctrlScroll" && event.metaKey);
-  }, [canvasNavigationSettings]);
+  // The GPU canvas's wheel, decided as React Flow's zoom pane and the hook above decide it here.
+  const gpuWheel = useCallback(
+    (event: WheelEvent) =>
+      sceneWheel(event, { settings: canvasNavigationSettings, zoomOnPinch: !tutorialActive && !isModalOpen, wrapperWheel: !isModalOpen }),
+    [canvasNavigationSettings, tutorialActive, isModalOpen],
+  );
   const gpuHeaders = useMemo(() => ({
     hints: readinessHints,
     getNodeTitle,
@@ -2729,7 +2732,7 @@ export function WorkflowCanvas() {
           edgeTypes={edgeTypes}
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           headers={gpuHeaders}
-          wheelZooms={gpuWheelZooms}
+          wheel={gpuWheel}
           editing={gpuEditing}
           flowChildren={
             <>

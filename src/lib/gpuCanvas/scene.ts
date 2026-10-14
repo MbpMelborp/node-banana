@@ -14,6 +14,8 @@
 import * as THREE from "three";
 import { GridIndex, NODE_HEADER, type SceneGraph } from "./graph";
 import { cubicLength, distanceToCubic, type Cubic, type EdgeRoute } from "./edgeRoutes";
+import { easeCubicInOut, zoomPath } from "./viewPath";
+import type { SceneWheel } from "./wheel";
 
 /** Floats per node instance: rect (4), uv rect (4), colour (3), flags (1), layer (1), the node's own box within the rect (4), unused (3). */
 const NODE_STRIDE = 20;
@@ -338,9 +340,7 @@ export interface SceneCallbacks {
   /** The pointer moved with no gesture under way (hover). */
   onIdleMove?: (event: PointerEvent) => void;
   onContextMenu?: (event: MouseEvent) => void;
-  /** A double-click on a node. */
-  onOpen?: (node: number) => void;
-  /** A double-click on empty canvas, at a flow position. */
+  /** A double-click on empty canvas, at a flow position (one on a node is the node's own, as on classic). */
   onPaneDoubleClick?: (x: number, y: number, screen: { x: number; y: number }) => void;
   onViewChange?: (view: View) => void;
   /** The zoom below which running nodes show a halo (0: never). */
@@ -349,8 +349,8 @@ export interface SceneCallbacks {
   onInput?: () => void;
   /** ms from an input event to the frame that drew its effect (the page's own part of input latency). */
   onInputLatency?: (ms: number) => void;
-  /** Whether a wheel event zooms rather than pans (the canvas's navigation settings). */
-  wheelZooms?: (event: WheelEvent) => boolean;
+  /** What a wheel does (the canvas's navigation settings); without it every wheel pans. */
+  wheel?: (event: WheelEvent) => SceneWheel;
 }
 
 /** A press being followed: its moves and its release, until it ends. */
@@ -366,6 +366,7 @@ export class Scene {
   graph: SceneGraph;
   /** When the pointer or wheel last moved the view (performance.now()). */
   lastInputAt = 0;
+  private viewAnimation = 0;
   private viewListeners = new Set<() => void>();
   private layoutListeners = new Set<() => void>();
   private scene = new THREE.Scene();
@@ -1087,33 +1088,57 @@ export class Scene {
 
   private onDoubleClick = (event: MouseEvent) => {
     const at = this.local(event);
-    const hit = this.nodeAt(at.x, at.y, false);
-    if (hit >= 0) this.callbacks.onOpen?.(hit);
-    // A node's header band is not empty canvas (a double-click on its title renames, on the live header).
-    else if (this.nodeAt(at.x, at.y) < 0) {
+    // A node (or its header band) is not empty canvas: on classic a double-click there is the node's
+    // own (rename, title edit) and the view stays put; a painted node has none of its own.
+    if (this.nodeAt(at.x, at.y) < 0) {
       const p = this.toWorld(at.x, at.y);
       this.callbacks.onPaneDoubleClick?.(p.x, p.y, { x: event.clientX, y: event.clientY });
     }
   };
 
   private onWheel = (event: WheelEvent) => {
+    const action: SceneWheel = this.callbacks.wheel ? this.callbacks.wheel(event) : { type: "pan", dx: event.deltaX, dy: event.deltaY };
+    if (!action) return;
     event.preventDefault();
+    if (action.type === "block") return;
     this.noteInput(event);
-    const pinch = event.ctrlKey && !event.altKey;
-    if (pinch || this.callbacks.wheelZooms?.(event)) {
-      const lines = event.deltaMode === 1 ? 40 : 1;
-      const zoom = this.view.zoom * Math.exp(-event.deltaY * lines * (pinch ? 0.01 : 0.002));
-      const at = this.local(event);
-      const p = this.toWorld(at.x, at.y);
-      const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
-      this.setView({ zoom: z, x: at.x - p.x * z, y: at.y - p.y * z });
-    } else {
-      const lines = event.deltaMode === 1 ? 40 : 1;
-      const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
-      const dy = event.shiftKey && !event.deltaX ? 0 : event.deltaY;
-      this.setView({ x: this.view.x - dx * lines, y: this.view.y - dy * lines });
+    if (action.type === "pan") this.setView({ x: this.view.x - action.dx, y: this.view.y - action.dy });
+    else {
+      this.zoomBy(action.factor, action.about === "pointer" ? this.local(event) : undefined);
     }
   };
+
+  /** Zooms by a factor, keeping a point (css px; the centre by default) in place. */
+  zoomBy(factor: number, at = { x: this.canvas.clientWidth / 2, y: this.canvas.clientHeight / 2 }) {
+    const p = this.toWorld(at.x, at.y);
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.view.zoom * factor));
+    this.setView({ zoom: z, x: at.x - p.x * z, y: at.y - p.y * z });
+  }
+
+  /**
+   * Moves the view to `to` over `duration` ms as React Flow's animated setViewport does (d3's
+   * smooth zoom path, cubic in-out). Input on the canvas, or any other change to the view, stops it.
+   */
+  animateView(to: View, duration: number) {
+    cancelAnimationFrame(this.viewAnimation);
+    const { clientWidth: w, clientHeight: h } = this.canvas;
+    if (duration <= 0 || !w || !h) {
+      this.setView(to);
+      return;
+    }
+    const path = zoomPath({ ...this.view }, to, w, h);
+    const start = performance.now(), inputAt = this.lastInputAt;
+    let last: View = { ...this.view };
+    const step = (now: number) => {
+      const moved = this.view.x !== last.x || this.view.y !== last.y || this.view.zoom !== last.zoom;
+      if (moved || this.lastInputAt !== inputAt) return;
+      const t = Math.min(1, (now - start) / duration);
+      this.setView(path(easeCubicInOut(t)));
+      last = { ...this.view };
+      if (t < 1) this.viewAnimation = requestAnimationFrame(step);
+    };
+    this.viewAnimation = requestAnimationFrame(step);
+  }
 
   private resize() {
     const { canvas } = this;
@@ -1179,6 +1204,7 @@ export class Scene {
     canvas.removeEventListener("dblclick", this.onDoubleClick);
     canvas.removeEventListener("contextmenu", this.onContextMenu);
     canvas.removeEventListener("wheel", this.onWheel);
+    cancelAnimationFrame(this.viewAnimation);
     for (const mesh of this.graphMeshes) {
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();

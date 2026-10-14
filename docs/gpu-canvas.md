@@ -59,7 +59,7 @@ out.
 | Painter | `src/components/gpuCanvas/painter.ts`, `PainterSheet.tsx` | Renders batches of real nodes on a sheet inside `<canvas layoutsubtree>`, paints the sheet into a texture, copies each node into its atlas slot |
 | Disk cache | `src/lib/gpuCanvas/paintCache.ts` | Painted images in IndexedDB (`node-banana-paint-cache`), by paint key and tier |
 | Live layer | `src/components/gpuCanvas/LiveLayer.tsx` | A real `<ReactFlow>` over the scene holding the live nodes and the connections that show more than a line. It renders under the page's `ReactFlowProvider`, so it is the page's React Flow: `screenToFlowPosition`, `setCenter`, the viewport portal and the selection toolbar answer for the GPU canvas, its viewport kept equal to the scene's both ways |
-| Bridge | `src/components/gpuCanvas/bridge.ts`, `GpuMinimap.tsx` | The whole scene graph and view for chrome that needs every node (the minimap, Fit view), since React Flow holds only the live ones |
+| Bridge | `src/components/gpuCanvas/bridge.ts`, `GpuMinimap.tsx` | The whole scene graph and view for chrome that needs every node (the minimap, Fit view, the agent bringing its edits into view), since React Flow holds only the live ones |
 | Shell | `src/components/gpuCanvas/GpuCanvas.tsx` | Builds the rest, follows the store, shows the loading screen |
 
 ## Tiers
@@ -301,7 +301,14 @@ The scene takes every press and asks the editor what it starts:
   it. Past either end focus goes to the page around the canvas.
   Right-click opens the pane or connection menu (on a node, its header or a
   handle the browser's own, as on classic); a double-click on the pane
-  opens the add-node menu (not on a connection or a handle).
+  opens the add-node menu (not on a connection or a handle), and one on a
+  node is the node's own: the view stays put.
+- The wheel is decided as classic's two handlers decide it (`wheel.ts`):
+  a pinch, or a wheel with React Flow's zoom key (Meta on macOS), zooms
+  about the pointer by d3-zoom's delta; otherwise `useWheelPanZoom`'s rules
+  apply: an inner area that can still scroll keeps the wheel, the zoom
+  modifier steps 1.2x about the centre, a macOS trackpad pans, and any
+  other wheel does nothing.
 - While the tutorial runs no drag pans (React Flow's `panOnDrag` and
   `panActivationKeyCode` off): a press that would pan selects, drags and
   connects as a plain one. Nodes still move, connect and select.
