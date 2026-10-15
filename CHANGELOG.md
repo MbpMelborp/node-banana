@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Annotate's Cancel and Done took no clicks on the desktop** — The annotation editor laid its header across the top of the window, where the desktop's tab strip is the window's drag region, so clicking Cancel or Done dragged the window instead. The editor is now a near-full-screen dialog below that band.
+
 ## [2.1.1] - 2026-10-15
 
 ### Added
