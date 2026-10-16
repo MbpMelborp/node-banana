@@ -108,6 +108,7 @@ import {
 } from "./utils/executionUtils";
 import { getConnectedInputsPure, validateWorkflowPure, nodeReadinessPure, type ConnectedInputs, type NodeReadiness } from "./utils/connectedInputs";
 import { isMissingInputError } from "./execution/missingInput";
+import { USER_STOP_REASON } from "./execution/pendingTask";
 import {
   buildCellInstances,
   fitSplitGridCellMeasurements,
@@ -2802,9 +2803,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // Abort any in-flight requests
     const controller = get()._abortController;
     if (controller) {
-      controller.abort("user-cancelled");
+      controller.abort(USER_STOP_REASON);
     }
-    abortNodeRuns(get(), "user-cancelled");
+    abortNodeRuns(get(), USER_STOP_REASON);
     set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null, batch: null });
   },
 

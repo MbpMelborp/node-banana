@@ -7,7 +7,8 @@
 
 import type { Generate3DNodeData, SelectedModel } from "@/types";
 import { buildGenerateHeaders } from "@/store/utils/buildApiHeaders";
-import { pollGenerateTask } from "./pollTaskCompletion";
+import { GenerationStillRunningError } from "./pollTaskCompletion";
+import { pendingTaskFrom, waitForPendingTask } from "./pendingTask";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
@@ -81,6 +82,8 @@ export async function executeGenerate3D(
     inputPrompt: promptText,
     status: "loading",
     error: null,
+    // A new run lets go of any request an earlier one left to pick up
+    pendingTask: undefined,
   });
 
   const runOnce = async (modelToUse: SelectedModel, parametersOverride?: Record<string, unknown>): Promise<void> => {
@@ -123,17 +126,9 @@ export async function executeGenerate3D(
 
       let result = await response.json();
 
-      // Handle polling response (long-running Kie tasks)
+      // A long-running request (Kie, Comfy Router): poll it, kept on the node meanwhile
       if (result.polling) {
-        result = await pollGenerateTask({
-          taskId: result.taskId,
-          provider: result.pollProvider,
-          modelId: result.pollModelId,
-          modelName: result.pollModelName,
-          mediaType: result.pollMediaType,
-          headers,
-          signal,
-        });
+        result = await waitForPendingTask(ctx, pendingTaskFrom(result), headers);
 
         if (!result.success) {
           updateNodeData(node.id, {
@@ -255,7 +250,8 @@ export async function executeGenerate3D(
         status: "error",
         error: errorMessage,
       });
-      throw new Error(errorMessage);
+      // Still running on the provider: no fallback, and the node keeps the request
+      throw error instanceof GenerationStillRunningError ? error : new Error(errorMessage);
     }
   };
 
