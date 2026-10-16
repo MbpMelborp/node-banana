@@ -392,12 +392,39 @@ export interface VideoStitchClip {
   handleId: string;              // Which input handle (video-0, video-1, etc.)
 }
 
+/** Where a Stitch timeline clip's video comes from: an input socket's edge, or a library asset. */
+export type StitchClipSource =
+  | { kind: "edge"; edgeId: string }
+  | { kind: "asset"; assetId: string };
+
+/** One clip of the Video Stitch sequence. See docs/stitch-editor.md. */
+export interface StitchTimelineClip {
+  id: string;                 // Stable within the node; generated once
+  source: StitchClipSource;
+  inSec: number;              // Trim start, source seconds, default 0
+  outSec: number | null;      // Trim end, source seconds; null = the source's end
+  muted: boolean;             // The clip's own sound
+  volume: number;             // 0..1 linear gain on the clip's own sound, default 1
+}
+
+/** A point on the music's volume curve: t in sequence seconds (one loop), gain 0..1 (1 = 0 dB). */
+export interface VolumePoint {
+  t: number;
+  gain: number;
+}
+
 /**
  * Video Stitch node - concatenates multiple videos into a single output
  */
 export interface VideoStitchNodeData extends BaseNodeData {
   clips: VideoStitchClip[];       // Ordered clip sequence for filmstrip
-  clipOrder: string[];            // Edge IDs in user-defined order (drag reorder)
+  clipOrder: string[];            // Edge ids in sequence order; with a timeline, kept equal to edgeIdsInOrder(timeline) for older readers
+  /** The sequence. Absent = the editor never wrote this node (a "legacy" node); read it with readStitchDraft. */
+  timeline?: StitchTimelineClip[];
+  /** Music volume curve over one loop; empty or absent = flat at 0 dB. */
+  audioCurve?: VolumePoint[];
+  /** The music track is muted (the clips' own sound still plays). */
+  audioMuted?: boolean;
   outputVideo: string | null;     // Stitched video blob URL or data URL
   loopCount: 1 | 2 | 3;          // How many times to repeat the clip sequence (1 = no loop)
   status: NodeStatus;

@@ -118,7 +118,8 @@ import {
   getSplitGridTemplate,
   needsMaterialization,
 } from "./utils/splitGridTemplate";
-import type { ArrayNodeData, SplitGridTemplate } from "@/types";
+import type { ArrayNodeData, SplitGridTemplate, VideoStitchNodeData } from "@/types";
+import { dropRemovedStitchEdges, remapStitchEdgeIds } from "@/lib/stitch/migrate";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
 import {
@@ -1316,8 +1317,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         new Set([nodeId]),
         remainingNodes
       );
+      const removedEdges = state.edges.filter((edge) => edge.source === nodeId || edge.target === nodeId);
       return {
-        nodes: healSplitGridRouterRefs(remainingNodes, new Set([nodeId])),
+        // A Stitch fed by the removed node loses those clips now (dropStitchEdges).
+        nodes: dropRemovedStitchEdges(healSplitGridRouterRefs(remainingNodes, new Set([nodeId])), removedEdges),
         edges: state.edges.filter(
           (edge) => edge.source !== nodeId && edge.target !== nodeId
         ),
@@ -1415,11 +1418,18 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       removedEdges = get().edges.filter((e) => removeIds.has(e.id));
     }
 
-    set((state) => ({
-      edges: applyEdgeChanges(changes, state.edges),
-      ...(changes.some((c) => c.type === "select" && c.selected) && state.nodes.some((n) => n.selected) ? { nodes: state.nodes.map((n) => n.selected ? { ...n, selected: false } : n) } : {}),
-      ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
-    }));
+    set((state) => {
+      const deselected = changes.some((c) => c.type === "select" && c.selected) && state.nodes.some((n) => n.selected)
+        ? state.nodes.map((n) => n.selected ? { ...n, selected: false } : n)
+        : state.nodes;
+      // A removed edge takes its Stitch clips with it, in this same undo step (dropStitchEdges).
+      const nodes = dropRemovedStitchEdges(deselected, removedEdges);
+      return {
+        edges: applyEdgeChanges(changes, state.edges),
+        ...(nodes !== state.nodes ? { nodes } : {}),
+        ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
+      };
+    });
 
     if (hasRemoveChange) {
       clearStaleInputImages(removedEdges, get);
@@ -1470,6 +1480,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     pushUndoCheckpoint(get, set);
     const removedEdge = get().edges.find((e) => e.id === edgeId);
     set((state) => ({
+      nodes: dropRemovedStitchEdges(state.nodes, removedEdge ? [removedEdge] : []),
       edges: state.edges.filter((edge) => edge.id !== edgeId),
       hasUnsavedChanges: true,
     }));
@@ -1524,7 +1535,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       selected: false,
     };
 
-    set({ edges: [...others, newEdge], hasUnsavedChanges: true });
+    set((state) => ({
+      nodes: dropRemovedStitchEdges(state.nodes, [oldEdge]),
+      edges: [...others, newEdge],
+      hasUnsavedChanges: true,
+    }));
 
     // The old target may have lost its only image source.
     deleteCheckpointActive = true;
@@ -1555,6 +1570,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (removed.length === 0) return;
     pushUndoCheckpoint(get, set);
     set((state) => ({
+      nodes: dropRemovedStitchEdges(state.nodes, removed),
       edges: state.edges.filter((edge) => !ids.has(edge.id)),
       hasUnsavedChanges: true,
     }));
@@ -1897,6 +1913,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }),
     }));
 
+    // A pasted stitch's clips name its input edges, which were just given new ids
+    const edgeIdMapping = new Map(clipboard.edges.map((edge, i) => [edge.id, newEdges[i].id]));
+    const pastedNodes = remappedNodes.map((n) =>
+      n.type === "videoStitch"
+        ? { ...n, data: remapStitchEdgeIds(n.data as VideoStitchNodeData, edgeIdMapping) }
+        : n
+    );
+
     // Deselect existing nodes and add new ones
     const updatedNodes = nodes.map((node) => ({
       ...node,
@@ -1904,7 +1928,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     }));
 
     set({
-      nodes: [...updatedNodes, ...remappedNodes] as WorkflowNode[],
+      nodes: [...updatedNodes, ...pastedNodes] as WorkflowNode[],
       edges: [...edges, ...newEdges],
       hasUnsavedChanges: true,
     });
@@ -2193,7 +2217,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const remainingGroups = { ...current.groups };
       for (const groupId of staleGroupIds) delete remainingGroups[groupId];
       return {
-        nodes: [
+        nodes: dropRemovedStitchEdges([
           ...current.nodes
             .filter((n) => !staleNodeIds.has(n.id) && n.id !== removedRouterId)
             .map((n) => {
@@ -2231,7 +2255,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             }),
           ...built.nodes,
           ...(newRouterNode ? [newRouterNode] : []),
-        ] as WorkflowNode[],
+        ] as WorkflowNode[], removedEdges),
         edges: [
           ...current.edges.filter((edge) => !removedEdgeIds.has(edge.id)),
           ...built.edges,
@@ -4339,8 +4363,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edges: state.edges,
     });
 
+    const remainingEdgeIds = new Set(result.edges.map((edge) => edge.id));
     set({
-      nodes: result.nodes,
+      nodes: dropRemovedStitchEdges(result.nodes, state.edges.filter((edge) => !remainingEdgeIds.has(edge.id))),
       edges: result.edges,
       hasUnsavedChanges: true,
     });
@@ -4375,7 +4400,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const groups = pruneEmptiedGroups(batchGroups, state.nodes, removedNodeIds, result.nodes);
 
     set({
-      nodes: removedNodeIds.size > 0 ? healSplitGridRouterRefs(result.nodes, removedNodeIds) : result.nodes,
+      nodes: dropRemovedStitchEdges(
+        removedNodeIds.size > 0 ? healSplitGridRouterRefs(result.nodes, removedNodeIds) : result.nodes,
+        removedEdges,
+      ),
       edges: result.edges,
       groups,
       hasUnsavedChanges: true,

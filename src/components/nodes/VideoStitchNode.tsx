@@ -18,13 +18,29 @@ import {
 } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useShallow } from "zustand/shallow";
-import { nodeGraphIndex } from "@/lib/edges/graphIndex";
-import { VideoStitchNodeData, WorkflowNode } from "@/types";
+import type { VideoStitchNodeData } from "@/types";
+import { readStitchDraft, type StitchReadContext } from "@/lib/stitch/draft";
+import { isLegacyStitch, stitchOrderPatch } from "@/lib/stitch/migrate";
+import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from "@/lib/stitch/sources";
+import { edgeIdsInOrder, moveClip } from "@/lib/stitch/timeline";
 import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 
 type VideoStitchNodeType = Node<VideoStitchNodeData, "videoStitch">;
+
+/** One filmstrip tile. */
+interface CardClip {
+  id: string;
+  edgeId: string;
+  videoData: string | null;
+}
+
+/** A tile's extracted frame and its source's length, kept in component state (never in node data). */
+interface TileThumbnail {
+  src: string;
+  duration: number;
+}
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "video", type: "video", label: "Output" }];
 const EMPTY_HEIGHT = 120;
@@ -37,8 +53,7 @@ const LOOP_OPTIONS = [
 export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNodeType>) {
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
-  const edges = useWorkflowStore((state) => state.edges);
-  const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
+  const [thumbnails, setThumbnails] = useState<Map<string, TileThumbnail>>(new Map());
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const removeEdge = useWorkflowStore((state) => state.removeEdge);
@@ -56,114 +71,92 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     }
   }, [id, nodeData.encoderSupported, updateNodeData]);
 
-  // Get connected video edges
-  const videoEdges = useMemo(() => {
-    return edges.filter(
-      (e) => e.target === id && e.targetHandle?.startsWith("video-")
-    );
-  }, [edges, id]);
-  // The clips' source nodes, as the store's own objects, so the list only
-  // changes when one of them does and not on every drag frame
-  const sourceNodes = useWorkflowStore(
+  // What the card reads from the graph, as primitives so the card only
+  // re-renders when the edges into it or its music connection change
+  const contextTuple = useWorkflowStore(
     useShallow((state) => {
-      const { byId } = nodeGraphIndex(state.nodes);
-      return videoEdges.map((e) => byId.get(e.source)).filter((n): n is WorkflowNode => n !== undefined);
+      const ctx = stitchReadContext(id, state.nodes, state.edges, state.dimmedNodeIds);
+      return [ctx.hasMusic ? "music" : "", ...ctx.liveEdgeIds];
     })
   );
+  const readContext = useMemo<StitchReadContext>(
+    () => ({ hasMusic: contextTuple[0] === "music", liveEdgeIds: contextTuple.slice(1) }),
+    [contextTuple]
+  );
+  // Each edge's source and video, resolved the way the executor resolves it
+  const sourceTuple = useWorkflowStore(
+    useShallow((state) => edgeClipSourceTuple(id, state.nodes, state.edges, state.dimmedNodeIds))
+  );
+  const clipSources = useMemo(() => edgeClipSourcesFromTuple(sourceTuple), [sourceTuple]);
+  // Socket count follows every video edge, loops included, as before
+  const videoEdgeCount = useWorkflowStore(
+    (state) => state.edges.filter((e) => e.target === id && e.targetHandle?.startsWith("video-")).length
+  );
 
-  // Sync clipOrder with connected edges (side effect, must be in useEffect)
-  const lastWrittenClipOrderRef = useRef<string[]>([]);
+  // The sequence, migrated and reconciled on read (never written just by reading).
+  // Keyed on the fields it reads, so a status or output write keeps the same tiles.
+  const { timeline, clipOrder, audioCurve, audioMuted, loopCount } = nodeData;
+  const draft = useMemo(
+    () => readStitchDraft({ timeline, clipOrder, audioCurve, audioMuted, loopCount }, readContext),
+    [timeline, clipOrder, audioCurve, audioMuted, loopCount, readContext]
+  );
+
+  // Write back only when the edges changed what is stored: a legacy node keeps
+  // writing clipOrder alone, a node the editor wrote gets its timeline too.
+  // The draft only says when to look. The write is built from one store
+  // snapshot, because the data prop catches up with the store a render after
+  // the edges do, and a patch built from it would replace a newer timeline.
+  const lastWrittenRef = useRef<string | null>(null);
   useEffect(() => {
-    const currentEdgeIds = videoEdges.map((e) => e.id);
-    const currentOrder = nodeData.clipOrder || [];
-
-    // Keep existing order for edges that still exist, append new ones
-    const validExisting = currentOrder.filter((eid) => currentEdgeIds.includes(eid));
-    const newEdges = currentEdgeIds.filter((eid) => !currentOrder.includes(eid));
-    const newOrder = [...validExisting, ...newEdges];
-
-    // Skip if we just wrote this exact order (prevents extra render cycle)
-    if (
-      newOrder.length === lastWrittenClipOrderRef.current.length &&
-      newOrder.every((eid, idx) => eid === lastWrittenClipOrderRef.current[idx])
-    ) {
-      return;
-    }
-
-    if (
-      newOrder.length !== currentOrder.length ||
-      !newOrder.every((eid, idx) => eid === currentOrder[idx])
-    ) {
-      lastWrittenClipOrderRef.current = newOrder;
-      updateNodeData(id, { clipOrder: newOrder });
-    }
-  }, [videoEdges, nodeData.clipOrder, id, updateNodeData]);
-
-  // Get ordered clips based on clipOrder or connection order
-  const orderedClips = useMemo(() => {
-    const clipMap = new Map<string, { edge: any; sourceNode: any; videoData: string | null; duration: number | null }>();
-
-    videoEdges.forEach((edge) => {
-      const sourceNode = sourceNodes.find((n) => n.id === edge.source);
-      if (!sourceNode) return;
-
-      let videoData: string | null = null;
-      const duration: number | null = null;
-
-      if (sourceNode.type === "generateVideo" || sourceNode.type === "easeCurve" || sourceNode.type === "videoStitch" || sourceNode.type === "videoTrim") {
-        videoData = (sourceNode.data as any).outputVideo || null;
-      }
-
-      clipMap.set(edge.id, { edge, sourceNode, videoData, duration });
-    });
-
-    let ordered: Array<{ edgeId: string; edge: any; sourceNode: any; videoData: string | null; duration: number | null }>;
-
-    if (nodeData.clipOrder && nodeData.clipOrder.length > 0) {
-      ordered = nodeData.clipOrder
-        .map((edgeId) => {
-          const clip = clipMap.get(edgeId);
-          if (!clip) return null;
-          return { edgeId, ...clip };
-        })
-        .filter((c): c is NonNullable<typeof c> => c !== null);
-
-      // Append any new edges not in clipOrder yet
-      videoEdges.forEach((edge) => {
-        if (!nodeData.clipOrder.includes(edge.id)) {
-          const clip = clipMap.get(edge.id);
-          if (clip) {
-            ordered.push({ edgeId: edge.id, ...clip });
-          }
-        }
-      });
+    const state = useWorkflowStore.getState();
+    const node = state.nodes.find((n) => n.id === id);
+    if (!node) return;
+    const stored = node.data as VideoStitchNodeData;
+    const fresh = readStitchDraft(stored, stitchReadContext(id, state.nodes, state.edges, state.dimmedNodeIds));
+    const legacy = isLegacyStitch(stored);
+    let saved: string[];
+    if (legacy) {
+      // An older card counted loop edges into clipOrder; they are not clips, so they do not make it stale
+      const loopEdgeIds = new Set(
+        state.edges.filter((e) => e.target === id && e.data?.isLoop).map((e) => e.id)
+      );
+      saved = (Array.isArray(stored.clipOrder) ? stored.clipOrder : []).filter((edgeId) => !loopEdgeIds.has(edgeId));
     } else {
-      ordered = videoEdges
-        .sort((a, b) => {
-          const timeA = (a.data as any)?.createdAt ?? 0;
-          const timeB = (b.data as any)?.createdAt ?? 0;
-          return timeA - timeB;
-        })
-        .map((edge) => {
-          const clip = clipMap.get(edge.id);
-          if (!clip) return null;
-          return { edgeId: edge.id, ...clip };
-        })
-        .filter((c): c is NonNullable<typeof c> => c !== null);
+      saved = (stored.timeline ?? []).map((c) => c?.id);
     }
+    const current = legacy ? edgeIdsInOrder(fresh.timeline) : fresh.timeline.map((c) => c.id);
+    if (current.length === saved.length && current.every((v, i) => v === saved[i])) return;
 
-    return ordered;
-  }, [videoEdges, sourceNodes, nodeData.clipOrder]);
+    // Skip a sequence this card already wrote. Undo can restore the data from
+    // before that write; every reader reconciles on read, so leaving it is
+    // harmless, while writing again would put a new step on the undo stack
+    // each time and Undo could never get past it.
+    const key = current.join("\n");
+    if (lastWrittenRef.current === key) return;
+    lastWrittenRef.current = key;
+    updateNodeData(id, stitchOrderPatch(stored, fresh.timeline));
+  }, [draft, id, updateNodeData]);
+
+  // The card's tiles: the sequence's edge clips, with their media
+  const orderedClips = useMemo<CardClip[]>(
+    () =>
+      draft.timeline.flatMap((clip) => {
+        if (clip.source.kind !== "edge") return [];
+        const source = clipSources.get(clip.source.edgeId);
+        return [{ id: clip.id, edgeId: clip.source.edgeId, videoData: source?.media ?? null }];
+      }),
+    [draft.timeline, clipSources]
+  );
 
   // Stable key that only changes when clip edges or video data actually change
   const clipKey = useMemo(
-    () => orderedClips.map((c) => `${c.edgeId}:${c.videoData ? c.videoData.slice(-20) : "0"}`).join(","),
+    () => orderedClips.map((c) => `${c.id}:${c.videoData ? c.videoData.slice(-20) : "0"}`).join(","),
     [orderedClips]
   );
 
   // Ref-based cache so the effect doesn't read stale `thumbnails` state
-  const thumbnailsRef = useRef<Map<string, string>>(new Map());
-  // Fingerprint cache: edgeId -> last-20-chars of videoData, used to detect which clips changed
+  const thumbnailsRef = useRef<Map<string, TileThumbnail>>(new Map());
+  // Fingerprint cache: clip id -> last-20-chars of videoData, used to detect which clips changed
   const thumbnailFingerprintsRef = useRef<Map<string, string>>(new Map());
 
   // Extract thumbnails from connected videos
@@ -182,7 +175,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     };
 
     const extractThumbnails = async () => {
-      const newThumbnails = new Map<string, string>();
+      const newThumbnails = new Map<string, TileThumbnail>();
       const newFingerprints = new Map<string, string>();
 
       for (const clip of orderedClips) {
@@ -190,12 +183,12 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
         if (!clip.videoData) continue;
 
         const fingerprint = clip.videoData.slice(-20);
-        newFingerprints.set(clip.edgeId, fingerprint);
+        newFingerprints.set(clip.id, fingerprint);
 
         // Reuse cached thumbnail if the video data hasn't changed
-        const cachedFingerprint = thumbnailFingerprintsRef.current.get(clip.edgeId);
-        if (cachedFingerprint === fingerprint && thumbnailsRef.current.has(clip.edgeId)) {
-          newThumbnails.set(clip.edgeId, thumbnailsRef.current.get(clip.edgeId)!);
+        const cachedFingerprint = thumbnailFingerprintsRef.current.get(clip.id);
+        if (cachedFingerprint === fingerprint && thumbnailsRef.current.has(clip.id)) {
+          newThumbnails.set(clip.id, thumbnailsRef.current.get(clip.id)!);
           continue;
         }
 
@@ -252,12 +245,9 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
           if (!ctx) { cleanupVideo(video, blobUrl); continue; }
 
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const thumbnail = canvas.toDataURL("image/jpeg", 0.7);
-          newThumbnails.set(clip.edgeId, thumbnail);
-
-          clip.duration = video.duration;
+          newThumbnails.set(clip.id, { src: canvas.toDataURL("image/jpeg", 0.7), duration: video.duration });
         } catch (error) {
-          console.warn(`Failed to extract thumbnail for clip ${clip.edgeId}:`, error);
+          console.warn(`Failed to extract thumbnail for clip ${clip.id}:`, error);
         }
         cleanupVideo(video, blobUrl);
         activeVideo = null;
@@ -286,11 +276,11 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [hoverClipId, setHoverClipId] = useState<string | null>(null);
 
-  const handlePointerDown = useCallback((e: React.PointerEvent, edgeId: string) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent, clipId: string) => {
     // Only left mouse button
     if (e.button !== 0) return;
     e.stopPropagation();
-    setDraggedClipId(edgeId);
+    setDraggedClipId(clipId);
     setHoverClipId(null);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }, []);
@@ -324,19 +314,17 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
       return;
     }
 
-    const currentOrder = [...(nodeData.clipOrder || [])];
-    const draggedIndex = currentOrder.indexOf(draggedClipId);
-    const targetIndex = currentOrder.indexOf(hoverClipId);
+    const draggedIndex = draft.timeline.findIndex((c) => c.id === draggedClipId);
+    const targetIndex = draft.timeline.findIndex((c) => c.id === hoverClipId);
 
     if (draggedIndex !== -1 && targetIndex !== -1) {
-      currentOrder.splice(draggedIndex, 1);
-      currentOrder.splice(targetIndex, 0, draggedClipId);
-      updateNodeData(id, { clipOrder: currentOrder });
+      const moved = moveClip(draft.timeline, draggedIndex, targetIndex);
+      if (moved !== draft.timeline) updateNodeData(id, stitchOrderPatch(nodeData, moved));
     }
 
     setDraggedClipId(null);
     setHoverClipId(null);
-  }, [draggedClipId, hoverClipId, nodeData.clipOrder, id, updateNodeData]);
+  }, [draggedClipId, hoverClipId, draft.timeline, nodeData, id, updateNodeData]);
 
   const handleRemoveClip = useCallback(
     (edgeId: string) => {
@@ -351,7 +339,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
 
   // Dynamic video input sockets: one per connected clip plus a free slot.
   const inputSockets = useMemo<SocketSpec[]>(() => {
-    const count = Math.max(videoEdges.length + 1, 2);
+    const count = Math.max(videoEdgeCount + 1, 2);
     const sockets: SocketSpec[] = Array.from({ length: count }, (_, i) => ({
       id: `video-${i}`,
       type: "video",
@@ -359,7 +347,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     }));
     sockets.push({ id: "audio", type: "audio", label: "Audio" });
     return sockets;
-  }, [videoEdges.length]);
+  }, [videoEdgeCount]);
 
   const encoderChecking = nodeData.encoderSupported === null;
   const encoderUnsupported = nodeData.encoderSupported === false;
@@ -373,34 +361,34 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   const filmstrip = (
     <div className="overflow-y-auto nowheel grid grid-cols-4 content-start gap-1.5 p-1.5 bg-well rounded-well squircle shadow-well max-h-[140px]">
       {orderedClips.map((clip) => {
-        const thumbnail = thumbnails.get(clip.edgeId);
+        const thumbnail = thumbnails.get(clip.id);
         return (
           <div
-            key={clip.edgeId}
-            data-clip-id={clip.edgeId}
-            onPointerDown={(e) => handlePointerDown(e, clip.edgeId)}
+            key={clip.id}
+            data-clip-id={clip.id}
+            onPointerDown={(e) => handlePointerDown(e, clip.id)}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             className={`nodrag relative w-full aspect-video bg-neutral-800 border rounded cursor-move transition-colors group ${
-              draggedClipId === clip.edgeId
+              draggedClipId === clip.id
                 ? "opacity-50 border-blue-500"
-                : hoverClipId === clip.edgeId && draggedClipId
+                : hoverClipId === clip.id && draggedClipId
                   ? "border-blue-400 ring-1 ring-blue-400/50"
                   : "border-neutral-600 hover:border-neutral-500"
             }`}
           >
             {thumbnail ? (
-              <img src={thumbnail} alt={`Clip ${clip.edgeId}`} className="w-full h-full object-cover rounded" />
+              <img src={thumbnail.src} alt={`Clip ${clip.edgeId}`} className="w-full h-full object-cover rounded" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
                 <Spinner size={14} className="text-neutral-500" />
               </div>
             )}
-            {clip.duration && (
+            {thumbnail?.duration ? (
               <div className="absolute bottom-1 right-1 bg-black/70 px-1 py-0.5 rounded text-[8px] text-white">
-                {Math.round(clip.duration)}s
+                {Math.round(thumbnail.duration)}s
               </div>
-            )}
+            ) : null}
             <button
               onClick={() => handleRemoveClip(clip.edgeId)}
               className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-600/80 hover:bg-red-500 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
