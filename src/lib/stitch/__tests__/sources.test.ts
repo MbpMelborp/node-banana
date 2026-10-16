@@ -104,6 +104,16 @@ describe("music", () => {
     expect(stitchHasMusicEdge("s", routed, undefined, [...nodes, node("r", "router", {})])).toBe(true);
   });
 
+  it("counts an empty Audio Input a generator feeds before the run fills it, so the answer does not flip", () => {
+    const relay = (audioFile: string | null) => node("m", "audioInput", { audioFile });
+    const edges = [edge("in", "ga", "m", "audio", "audio"), edge("a", "m", "s", "audio", "audio")];
+    expect(stitchHasMusicEdge("s", edges, undefined, [stitch, nodes[2], relay(null)])).toBe(true);
+    expect(stitchHasMusicEdge("s", edges, undefined, [stitch, nodes[2], relay("data:audio/mp3;base64,AAA")])).toBe(true);
+    // An empty one fed only by another empty one still has nothing to give
+    const chain = [edge("in", "m0", "m", "audio", "audio"), edge("a", "m", "s", "audio", "audio")];
+    expect(stitchHasMusicEdge("s", chain, undefined, [stitch, relay(null), node("m0", "audioInput", { audioFile: null })])).toBe(false);
+  });
+
   it("counts a generator behind a router before it has run, and nothing behind a Conditional Switch", () => {
     const routed = [edge("in", "ga", "r", "audio", "audio"), edge("a", "r", "s", "audio", "audio")];
     expect(stitchHasMusicEdge("s", routed, undefined, [...nodes, node("r", "router", {})])).toBe(true);

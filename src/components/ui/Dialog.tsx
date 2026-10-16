@@ -15,6 +15,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
@@ -460,6 +461,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
 };
 
 export interface DialogButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  /** Reaches the <button> (React 19 passes ref as a prop), e.g. for a Dialog's initialFocusRef. */
+  ref?: Ref<HTMLButtonElement>;
   variant?: ButtonVariant;
   /** Smaller button for the xs popover dialogs. */
   compact?: boolean;

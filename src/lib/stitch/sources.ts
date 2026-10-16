@@ -1,7 +1,7 @@
-import type { ComfyAppNodeData, SwitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ComfyAppNodeData, SwitchNodeData, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { getConnectedInputsPure, getSourceOutput } from "@/store/utils/connectedInputs";
-import type { StitchReadContext } from "./draft";
-import { stitchVideoEdgeIds } from "./migrate";
+import { readStitchDraft, type StitchReadContext } from "./draft";
+import { isLegacyStitch, stitchOrderPatch, stitchVideoEdgeIds } from "./migrate";
 
 /**
  * What feeds a Stitch node, read from the graph the way the executor reads it:
@@ -49,8 +49,9 @@ export function stitchMusicMedia(
  * Can this edge ever bring the stitch music? Read from graph state a run does not change, the way
  * getConnectedInputsPure walks it: a dimmed source, a disabled Switch output and a Conditional Switch (a gate that
  * passes no data) carry nothing; routers and switches are followed upstream. A generator (generateAudio, a Comfy app's
- * audio output) counts before it has run, so the answer does not flip when it finishes; any other source, such as an
- * Audio Input, counts only while it holds audio, because no run will fill it.
+ * audio output) counts before it has run, so the answer does not flip when it finishes. An Audio Input counts while it
+ * holds audio, or when something upstream can bring it some, since a run copies that into it. Any other source counts
+ * only while it holds audio, because no run will fill it.
  */
 function edgeCarriesMusic(
   edge: WorkflowEdge,
@@ -79,6 +80,10 @@ function edgeCarriesMusic(
       return false;
     case "generateAudio":
       return true;
+    case "audioInput": {
+      const { value } = getSourceOutput(source, edge.sourceHandle, edge.data as Record<string, unknown> | undefined);
+      return Boolean(value) || upstream();
+    }
     case "comfyApp": {
       const output = (source.data as ComfyAppNodeData).app?.outputs.find((o) => o.id === edge.sourceHandle);
       return output?.type === "audio";
@@ -91,19 +96,19 @@ function edgeCarriesMusic(
 }
 
 /**
- * "Music is connected", read from the graph: a non-loop edge into the "audio" handle whose source is not dimmed.
+ * The music edge, read from the graph: a non-loop edge into the "audio" handle whose source is not dimmed.
  * Output is not consulted for sources a run fills, so the card's mute badges do not flip when the music source
  * finishes running. With `nodes`, an edge counts only if it can ever deliver music (edgeCarriesMusic): the executor
- * reads music from output, and a disabled Switch output or an empty Audio Input never gives it any, so counting them
- * would show clips muted that the encode plays with their sound.
+ * reads music from output, and a disabled Switch output or an empty Audio Input with nothing upstream never gives it
+ * any, so counting them would show clips muted that the encode plays with their sound.
  */
-export function stitchHasMusicEdge(
+export function stitchMusicEdge(
   nodeId: string,
   edges: readonly WorkflowEdge[],
   dimmed?: Set<string>,
   nodes?: readonly WorkflowNode[],
-): boolean {
-  return edges.some(
+): WorkflowEdge | undefined {
+  return edges.find(
     (e) =>
       e.target === nodeId &&
       e.targetHandle === "audio" &&
@@ -111,6 +116,16 @@ export function stitchHasMusicEdge(
       !dimmed?.has(e.source) &&
       (!nodes || edgeCarriesMusic(e, nodes, edges, dimmed, new Set([nodeId]))),
   );
+}
+
+/** "Music is connected": stitchMusicEdge finds one. */
+export function stitchHasMusicEdge(
+  nodeId: string,
+  edges: readonly WorkflowEdge[],
+  dimmed?: Set<string>,
+  nodes?: readonly WorkflowNode[],
+): boolean {
+  return stitchMusicEdge(nodeId, edges, dimmed, nodes) !== undefined;
 }
 
 /** For the card and the editor. The executor builds its own, with hasMusic read from output. */
@@ -121,6 +136,40 @@ export function stitchReadContext(
   dimmed?: Set<string>,
 ): StitchReadContext {
   return { liveEdgeIds: stitchVideoEdgeIds(nodeId, edges), hasMusic: stitchHasMusicEdge(nodeId, edges, dimmed, nodes) };
+}
+
+/**
+ * A video connected to a Stitch node the editor wrote gets its clip in the same update as the connection, so in the
+ * connection's own undo step, with readStitchDraft's mute rule applied to the graph as it is at that moment. Left to
+ * the card, the clip would be written only when the card next renders the node (never while it is off-screen at low
+ * detail), and until then its mute flag would follow whether music is connected at each read. A legacy node is left
+ * alone: it is migrated on read and follows the music. Returns the input array when nothing changes.
+ */
+export function appendConnectedStitchClips(
+  nodes: WorkflowNode[],
+  prevEdges: readonly WorkflowEdge[],
+  nextEdges: WorkflowEdge[],
+  dimmed?: Set<string>,
+): WorkflowNode[] {
+  const before = new Set(prevEdges.map((e) => e.id));
+  const targets = new Set(
+    nextEdges
+      .filter((e) => !before.has(e.id) && !e.data?.isLoop && e.targetHandle?.startsWith("video-"))
+      .map((e) => e.target),
+  );
+  if (targets.size === 0) return nodes;
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.type !== "videoStitch" || !targets.has(node.id)) return node;
+    const data = node.data as VideoStitchNodeData;
+    if (isLegacyStitch(data)) return node;
+    const timeline = readStitchDraft(data, stitchReadContext(node.id, nodes, nextEdges, dimmed)).timeline;
+    const saved = (data.timeline ?? []).map((c) => c?.id);
+    if (timeline.length === saved.length && timeline.every((c, i) => c.id === saved[i])) return node;
+    changed = true;
+    return { ...node, data: { ...data, ...stitchOrderPatch(data, timeline) } } as WorkflowNode;
+  });
+  return changed ? next : nodes;
 }
 
 export interface EdgeClipSource {

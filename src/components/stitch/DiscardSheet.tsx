@@ -1,0 +1,43 @@
+"use client";
+
+import { useRef } from "react";
+import { Dialog, DialogButton, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { describeDraftChanges } from "@/lib/stitch/draft";
+
+/**
+ * "Discard changes?", over the editor when Cancel or Escape would lose
+ * edits. Keep editing is the default: it has focus, and Escape on the sheet
+ * means it too (the sheet's own Dialog hears Escape; the editor's key
+ * handler stands aside while a stacked dialog is up). It takes focus through
+ * initialFocusRef, not autoFocus: an autoFocus button is focused before the
+ * Dialog records its opener, so closing would leave focus on <body>,
+ * outside the editor.
+ */
+export function DiscardSheet() {
+  const open = useStitchEditorStore((s) => s.discardOpen);
+  const initial = useStitchEditorStore((s) => s.initial);
+  const draft = useStitchEditorStore((s) => s.draft);
+  const setDiscardOpen = useStitchEditorStore((s) => s.setDiscardOpen);
+  const close = useStitchEditorStore((s) => s.close);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
+  if (!open || !initial || !draft) return null;
+
+  const keepEditing = () => setDiscardOpen(false);
+  return (
+    <Dialog open onClose={keepEditing} size="xs" portal label="Discard changes?" initialFocusRef={keepEditingRef}>
+      <DialogHeader compact closeButton={false} className="pt-3.5 pb-1.5">
+        <DialogTitle compact>Discard changes?</DialogTitle>
+        <DialogDescription className="mt-0.5">{describeDraftChanges(initial, draft)}</DialogDescription>
+      </DialogHeader>
+      <DialogFooter compact className="mt-1.5 pb-3">
+        <DialogButton compact variant="danger" onClick={close}>
+          Discard
+        </DialogButton>
+        <DialogButton compact variant="primary" className="px-3" ref={keepEditingRef} onClick={keepEditing}>
+          Keep editing
+        </DialogButton>
+      </DialogFooter>
+    </Dialog>
+  );
+}

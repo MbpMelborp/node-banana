@@ -132,3 +132,88 @@ describe("removing an edge into a Stitch", () => {
     expect(store().nodes).toBe(before);
   });
 });
+
+describe("connecting a video to a Stitch", () => {
+  const edgeV = edgeId("gen-v", "video-2");
+  const musicEdge: WorkflowEdge = { id: "music", source: "music", target: "stitch", sourceHandle: "audio", targetHandle: "audio" };
+  const connectV = () =>
+    store().onConnect({ source: "gen-v", target: "stitch", sourceHandle: "video", targetHandle: "video-2" });
+
+  /** A node Done wrote with both clips muted under music, plus a third video source. */
+  function seedMutedUnderMusic() {
+    seed(true);
+    useWorkflowStore.setState({
+      nodes: [
+        ...store().nodes.map((n) =>
+          n.id === "stitch"
+            ? ({
+                ...n,
+                data: {
+                  ...n.data,
+                  timeline: (n.data as VideoStitchNodeData).timeline!.map((c) => ({ ...c, muted: true })),
+                },
+              } as WorkflowNode)
+            : n,
+        ),
+        node("gen-v", "generateVideo", { outputVideo: "blob:v" }),
+        node("music", "generateAudio", {}),
+      ],
+      edges: [...store().edges, musicEdge],
+    });
+  }
+
+  it("writes the clip when the connection is made, muted like the others under music, so it stays muted without the music", () => {
+    seedMutedUnderMusic();
+    connectV();
+    expect(stitchData().timeline!.map((c) => [c.id, c.muted])).toEqual([
+      [`clip:${edgeA}`, true],
+      [`clip:${edgeB}`, true],
+      [`clip:${edgeV}`, true],
+    ]);
+    expect(stitchData().clipOrder).toEqual([edgeA, edgeB, edgeV]);
+
+    store().removeEdge("music");
+    expect(draft().timeline.map((c) => c.muted)).toEqual([true, true, true]);
+  });
+
+  it("adds it with its sound when no music is connected", () => {
+    seedMutedUnderMusic();
+    store().removeEdge("music");
+    connectV();
+    expect(stitchData().timeline!.map((c) => c.muted)).toEqual([true, true, false]);
+  });
+
+  it("takes the connection and its clip away together on Undo", () => {
+    seedMutedUnderMusic();
+    connectV();
+    store().undo();
+    expect(store().edges.map((e) => e.id)).not.toContain(edgeV);
+    expect(stitchData().timeline!.map((c) => c.id)).toEqual([`clip:${edgeA}`, `clip:${edgeB}`]);
+  });
+
+  it("does the same for an agent's connection and a reconnected edge", () => {
+    seedMutedUnderMusic();
+    store().applyAgentGraphOps({
+      batchId: "b1",
+      toolCallId: "t1",
+      summary: "",
+      ops: [{ op: "addEdge", id: edgeV, source: "gen-v", target: "stitch", sourceHandle: "video", targetHandle: "video-2" }],
+    });
+    expect(stitchData().timeline!.map((c) => [c.id, c.muted])).toContainEqual([`clip:${edgeV}`, true]);
+
+    seedMutedUnderMusic();
+    store().reconnectEdge(edgeB, { source: "gen-v", target: "stitch", sourceHandle: "video", targetHandle: "video-1" });
+    const moved = edgeId("gen-v", "video-1");
+    expect(stitchData().timeline!.map((c) => [c.id, c.muted])).toEqual([
+      [`clip:${edgeA}`, true],
+      [`clip:${moved}`, true],
+    ]);
+  });
+
+  it("leaves a legacy node without a timeline", () => {
+    seed(false);
+    useWorkflowStore.setState({ nodes: [...store().nodes, node("gen-v", "generateVideo", { outputVideo: "blob:v" })] });
+    connectV();
+    expect("timeline" in stitchData()).toBe(false);
+  });
+});

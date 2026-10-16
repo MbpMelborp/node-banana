@@ -9,6 +9,7 @@ import { WorkflowTabs } from "@/components/WorkflowTabs";
 import { WorkflowCanvas } from "@/components/WorkflowCanvas";
 import { FloatingActionBar } from "@/components/FloatingActionBar";
 import { AnnotationModal } from "@/components/AnnotationModal";
+import { StitchEditorModal } from "@/components/stitch/StitchEditorModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { FTUXModal } from "@/components/onboarding/FTUXModal";
@@ -229,6 +230,7 @@ function Editor() {
           <FloatingActionBar />
         </div>
         <AnnotationModal />
+        <StitchEditorModal />
         {showFTUX && (
           <FTUXModal
             onComplete={handleFTUXComplete}

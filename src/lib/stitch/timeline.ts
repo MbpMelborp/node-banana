@@ -73,7 +73,8 @@ export function sequenceDuration(timeline: readonly StitchTimelineClip[], durati
   return timeline.reduce((sum, clip) => sum + clipLength(clip, durations.get(sourceKey(clip.source))), 0);
 }
 
-function spanAt(spans: readonly ClipSpan[], t: number): ClipSpan | null {
+/** Over precomputed spans: the non-empty span with start <= t < end; the last non-empty one at or past the end, the first before 0; null when none. */
+export function spanAtTime(spans: readonly ClipSpan[], t: number): ClipSpan | null {
   const filled = spans.filter((s) => s.length > 0);
   if (filled.length === 0) return null;
   if (t < 0) return filled[0];
@@ -86,7 +87,7 @@ export function clipAtTime(
   durations: SourceDurations,
   t: number,
 ): ClipSpan | null {
-  return spanAt(clipSpans(timeline, durations), t);
+  return spanAtTime(clipSpans(timeline, durations), t);
 }
 
 /** Source seconds shown at sequence time t: clip.inSec + clamp(t − start, 0, length). */

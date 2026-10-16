@@ -18,6 +18,7 @@ import {
   setEdgeAtPlayhead,
   snapTo,
   sourceKey,
+  spanAtTime,
   splitClipAt,
   trimClip,
   updateClipAudio,
@@ -77,6 +78,16 @@ describe("sequenceDuration and clipSpans", () => {
   it("keeps zero-length spans in place", () => {
     const spans = clipSpans([edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations);
     expect(spans.map((s) => [s.start, s.end])).toEqual([[0, 5], [5, 5], [5, 11]]);
+  });
+});
+
+describe("spanAtTime", () => {
+  it("reads precomputed spans the way clipAtTime reads a timeline", () => {
+    const spans = clipSpans(three(), threeDurations);
+    for (const t of [-1, 0, 4.99, 5, 9.5, 15, 99]) {
+      expect(spanAtTime(spans, t)?.clip.id).toBe(clipAtTime(three(), threeDurations, t)?.clip.id);
+    }
+    expect(spanAtTime(clipSpans([edgeClip("x", "missing")], threeDurations), 0)).toBeNull();
   });
 });
 

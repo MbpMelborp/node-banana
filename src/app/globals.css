@@ -58,6 +58,20 @@
   --font-mono: var(--font-jetbrains-mono), "SF Mono", Menlo, Consolas, monospace;
   --tracking-eyebrow: 0.08em;
   --tracking-display: -0.03em;
+
+  /* Stitch editor (src/components/stitch): a darker chrome than a normal
+     dialog, by request. Chrome = header, rail, transport, track headers;
+     stage = the letterboxed preview; lanes = the timeline ground; well =
+     timecode inputs and segmented groups. Stacked dialogs keep bg-card. */
+  --color-editor-chrome: #1a1a1a;
+  --color-editor-stage: #0a0a0a;
+  --color-editor-lanes: #141414;
+  --color-editor-well: #0f0f0f;
+}
+
+/* The Stitch editor's trim ghost: the part of a clip a trim cuts away. */
+@utility editor-ghost-hatch {
+  background-image: repeating-linear-gradient(135deg, rgb(255 255 255 / 0.07) 0 2px, transparent 2px 10px);
 }
 
 /* Ink range slider for the split dialogs: a 4px track filled to --p. */
