@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Stitch editor** — Expand on a Stitch node, or **Open editor** on its card, opens a near-full-screen editor: reorder clips on a timeline; trim each by dragging its edges or typing In and Out, snapping to the playhead and the clip beside it; split at the playhead; mute or lower a clip's own sound; shape the music's volume with a curve (click to add a point, Fade in, Fade out, Flat); and add videos from the asset library. Done writes the timeline back to the node and Stitch encodes exactly what it shows. A workflow that never opened the editor stitches the same clips with the same sound rule; see Fixed for the order and timing changes.
+
 ### Fixed
 
 - **Annotate's Cancel and Done took no clicks on the desktop** — The annotation editor laid its header across the top of the window, where the desktop's tab strip is the window's drag region, so clicking Cancel or Done dragged the window instead. The editor is now a near-full-screen dialog below that band.
+- **Stitch follows the card's order** — Dragging clips into a new order on a Stitch node's card changed the filmstrip but not the stitched video, which kept the order the clips were connected in. The video now follows the card.
+- **Stitched clips keep their timing and sound** — Each join lost a fraction of a frame, so the sound drifted later through a long stitch, and a clip whose sound had a different sample rate from the first came out silent. Clips now meet at their exact lengths and every clip's sound is converted into the mix.
+- **Stitch keeps every connection after clips are removed** — After clips were removed from a Stitch node (two or more, or with a gap before them), a later clip's connection could be hidden on the canvas while it still fed the stitch. The node now keeps a socket for every connected clip.
 
 ## [2.1.1] - 2026-10-15
 
