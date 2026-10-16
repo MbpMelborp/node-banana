@@ -64,7 +64,8 @@ function run(action: EditorKeyAction, requestClose: () => void): void {
  * Shift+letters, ⌘V, ?) is stopped too, without preventDefault, so nothing
  * runs behind the dialog while Tab, the arrows and Enter keep their native
  * behaviour. ⌘S still saves. A text field, a stacked dialog and the clip
- * menu each keep their own keys.
+ * menu each keep their own keys. While a trim or reorder drag runs, Escape
+ * cancels it and the other editor keys are swallowed.
  */
 export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requestClose: () => void): void {
   const isOpen = useStitchEditorStore((s) => s.isOpen);
@@ -97,6 +98,14 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
         return;
       }
 
+      // A trim or reorder drag: Escape cancels it, wherever focus is
+      if (s.cancelGesture && e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        s.cancelGesture();
+        return;
+      }
+
       // A timecode field keeps its keys (Enter commits, Escape reverts, native undo)
       if (isTypingTarget(e.target)) return;
 
@@ -105,6 +114,8 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.repeat && NO_REPEAT.has(action)) return;
+        // The drag applies what it measured at the press on release: nothing may edit the draft under it (K only pauses)
+        if (s.cancelGesture && action !== "pause") return;
         run(action, requestClose);
         return;
       }

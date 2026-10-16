@@ -5,10 +5,12 @@ import { Magnet, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, ZoomIn, Z
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuDivider } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { goToEnd, goToStart, togglePlay } from "./editorActions";
 import { isTypingTarget } from "./editorKeys";
 import { ICON_BUTTON, TEXT_GHOST, TOGGLE_ON } from "./editorStyles";
+import type { TimelineZoom } from "./timeline/useTimelineZoom";
 
 /**
  * A click must not take focus from the panel, or Space would press the button instead of playing. A timecode
@@ -26,10 +28,18 @@ const keepFocus = (event: MouseEvent<HTMLElement>) => {
 
 /**
  * The 44px transport under the stage: start, play, end, the timecode, then
- * Snap, preview Sound and the timeline zoom (wired by the timeline lane;
- * shown and disabled until then). Inert while the editor has no clips.
+ * Snap, preview Sound and the timeline's zoom (out, the slider, in, Fit).
+ * Inert while the editor has no clips.
  */
-export function EditorTransport({ total, empty }: { total: number; empty: boolean }) {
+export function EditorTransport({
+  total,
+  empty,
+  zoom,
+}: {
+  total: number;
+  empty: boolean;
+  zoom: Pick<TimelineZoom, "slider" | "setSlider" | "zoomIn" | "zoomOut" | "fit" | "pxPerSec">;
+}) {
   const playing = useStitchEditorStore((s) => s.playing);
   const playhead = useStitchEditorStore((s) => s.playhead);
   const snap = useStitchEditorStore((s) => s.snap);
@@ -92,26 +102,39 @@ export function EditorTransport({ total, empty }: { total: number; empty: boolea
         {soundOn ? <Volume2 size={16} strokeWidth={1.75} /> : <VolumeX size={16} strokeWidth={1.75} />}
       </button>
       <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
-      {/* The zoom belongs to the timeline lane, which wires it */}
       {/* -mx-[7px]: each takes its 14px icon's room in the row, as drawn, and keeps the 28px hit area */}
-      <button type="button" aria-label="Zoom out" className={cn(ICON_BUTTON, "-mx-[7px]")} disabled onMouseDown={keepFocus}>
+      <button
+        type="button"
+        aria-label="Zoom out"
+        className={cn(ICON_BUTTON, "-mx-[7px]")}
+        disabled={zoom.pxPerSec <= MIN_PX_PER_SEC}
+        onMouseDown={keepFocus}
+        onClick={zoom.zoomOut}
+      >
         <ZoomOut size={14} strokeWidth={1.75} className="text-neutral-500" />
       </button>
       <input
         type="range"
         aria-label="Timeline zoom"
-        className="range-ink mx-1.5 w-24 disabled:opacity-50"
+        className="range-ink mx-1.5 w-24"
         min={0}
         max={100}
-        value={0}
-        disabled
-        readOnly
-        style={{ "--p": "0%" } as CSSProperties}
+        step={0.5}
+        value={zoom.slider}
+        onChange={(event) => zoom.setSlider(Number(event.target.value))}
+        style={{ "--p": `${zoom.slider}%` } as CSSProperties}
       />
-      <button type="button" aria-label="Zoom in" className={cn(ICON_BUTTON, "-mx-[7px]")} disabled onMouseDown={keepFocus}>
+      <button
+        type="button"
+        aria-label="Zoom in"
+        className={cn(ICON_BUTTON, "-mx-[7px]")}
+        disabled={zoom.pxPerSec >= MAX_PX_PER_SEC}
+        onMouseDown={keepFocus}
+        onClick={zoom.zoomIn}
+      >
         <ZoomIn size={14} strokeWidth={1.75} className="text-neutral-500" />
       </button>
-      <button type="button" className={cn(TEXT_GHOST, "ml-1")} disabled onMouseDown={keepFocus}>
+      <button type="button" className={cn(TEXT_GHOST, "ml-1")} onMouseDown={keepFocus} onClick={zoom.fit}>
         Fit
       </button>
     </div>

@@ -12,6 +12,8 @@ import { EditorHeader } from "./EditorHeader";
 import { EditorRail } from "./EditorRail";
 import { EditorStage } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
+import { Timeline } from "./timeline/Timeline";
+import { useTimelineZoom } from "./timeline/useTimelineZoom";
 import { useEditorLifecycle } from "./useEditorLifecycle";
 import { usePlayableUrls } from "./usePlayableUrls";
 import { useSequencePlayback } from "./useSequencePlayback";
@@ -114,6 +116,8 @@ function StitchEditor() {
     soundOn,
   });
 
+  const zoom = useTimelineZoom(spans);
+
   const empty = timeline.length === 0;
   return (
     <Dialog
@@ -145,10 +149,11 @@ function StitchEditor() {
               musicSrc={musicUrl}
               registerAudio={registerAudio}
             />
-            <EditorTransport total={total} empty={empty} />
+            <EditorTransport total={total} empty={empty} zoom={zoom} />
           </div>
           <EditorRail media={byClip} />
         </div>
+        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} />
       </div>
       <DiscardSheet />
     </Dialog>

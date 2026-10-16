@@ -53,8 +53,17 @@ const SIZE_CLASS: Record<DialogSize, string> = {
   xl: "w-full max-w-5xl",
 };
 
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// What Tab reaches: an element taken out of the tab order (tabindex -1) is not the first or last stop
+const FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]",
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(", ");
 
 interface DialogContextValue {
   titleId: string;

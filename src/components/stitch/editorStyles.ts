@@ -52,5 +52,12 @@ export const GEOMETRY = {
   addSlot: 52,
   addSlotGap: 8,
   emptySlot: 160,
-  snapPx: 8,
+  /** The lane's margin after the add slot, and the empty lane's placeholder's right margin. */
+  endMargin: 16,
 } as const;
+
+/** The room the lane keeps after the last clip: the add slot with its gap, and the end margin. Fit leaves it too. */
+export const LANE_TRAILING_PX = GEOMETRY.addSlotGap + GEOMETRY.addSlot + GEOMETRY.endMargin;
+
+/** A clip (or slot) lifted to be dragged to a new place (design-spec §9.1). */
+export const LIFTED_CLIP = "z-10 -translate-y-1.5 -rotate-[1.5deg] shadow-[0_12px_28px_rgba(0,0,0,0.6)]";

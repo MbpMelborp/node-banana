@@ -141,9 +141,10 @@ describe("StitchEditorModal", () => {
     expect(header.getAllByText("0:09.00").length).toBeGreaterThan(0);
     // Size and rate are one item, so their dot is spaced like the words round it
     expect(header.getByText("1920 × 1080 · 24 fps")).toBeInTheDocument();
-    // The rail shows the first clip
-    expect(header.getByText("Clip 1")).toBeInTheDocument();
-    expect(header.getByText("Generate video · Veo 3.1 · 5.00 s")).toBeInTheDocument();
+    // The rail shows the first clip (the timeline names it too)
+    const rail = within(header.getByRole("complementary", { name: "Clip" }));
+    expect(rail.getByText("Clip 1")).toBeInTheDocument();
+    expect(rail.getByText("Generate video · Veo 3.1 · 5.00 s")).toBeInTheDocument();
   });
 
   it("leaves the rate out when the clips disagree", () => {

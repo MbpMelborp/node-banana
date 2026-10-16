@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { StitchTimelineClip } from "@/types";
+import { planSequence } from "../sequencePlan";
 import {
   END_EPSILON_SEC,
   MIN_CLIP_SEC,
@@ -66,6 +67,14 @@ describe("clipLength", () => {
 
   it("is 0 when in is past the source's end", () => {
     expect(clipLength(edgeClip("a", "e1", { inSec: 7 }), 5)).toBe(0);
+  });
+
+  it("is 0 under one output frame, as the encode drops such a clip, and keeps a clip of exactly one frame", () => {
+    const shortened = edgeClip("a", "e1", { inSec: 4.99 });
+    expect(clipLength(shortened, 5)).toBe(0);
+    expect(planSequence([{ inSec: 4.99, outSec: null, sourceDuration: 5 }]).clips).toEqual([]);
+    expect(clipLength(edgeClip("b", "e2"), 1 / 60)).toBe(1 / 60);
+    expect(planSequence([{ inSec: 0, outSec: null, sourceDuration: 1 / 60 }]).clips).toHaveLength(1);
   });
 });
 

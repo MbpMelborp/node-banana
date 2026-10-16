@@ -9,9 +9,10 @@ import { Kbd } from "@/components/ui/Kbd";
 import { MenuShortcut } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { clipName } from "@/lib/stitch/labels";
-import { clipLength } from "@/lib/stitch/timeline";
+import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import {
+  canRevealSource,
   canSplitSelectedAtPlayhead,
   removeSelection,
   resetSelectedTrim,
@@ -198,13 +199,13 @@ export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView
               <RailButton
                 icon={<RotateCcw size={14} strokeWidth={1.75} />}
                 label="Reset trim"
-                disabled={clip.inSec === 0 && clip.outSec === null}
+                disabled={!isTrimmed(clip)}
                 onClick={resetSelectedTrim}
               />
               <RailButton
                 icon={<Crosshair size={14} strokeWidth={1.75} />}
                 label="Reveal source node"
-                disabled={clip.source.kind !== "edge" || !view?.sourceNodeId}
+                disabled={!canRevealSource(clip, view)}
                 onClick={revealSelectedSource}
               />
               <RailButton

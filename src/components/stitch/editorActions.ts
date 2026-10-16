@@ -13,6 +13,7 @@ import {
   trimClip,
   updateClipAudio,
 } from "@/lib/stitch/timeline";
+import type { StitchTimelineClip } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 
 /**
@@ -179,6 +180,14 @@ function clipSourceNodeId(clipId: string): string | null {
   if (clip?.source.kind !== "edge") return null;
   const edgeId = clip.source.edgeId;
   return useWorkflowStore.getState().edges.find((e) => e.id === edgeId)?.source ?? null;
+}
+
+/** Whether Reveal source node has a node to go to: an edge clip whose source node the editor knows. */
+export function canRevealSource(
+  clip: Pick<StitchTimelineClip, "source">,
+  view: { sourceNodeId?: string | null } | undefined,
+): boolean {
+  return clip.source.kind === "edge" && Boolean(view?.sourceNodeId);
 }
 
 /** Reveal source node: Done, then the canvas centres on the node (it leaves the editor, so the edits are kept). */

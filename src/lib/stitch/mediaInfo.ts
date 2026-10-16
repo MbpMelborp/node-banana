@@ -128,7 +128,7 @@ export function frameTime(index: number, duration: number): number {
 }
 
 /** The extracted frame closest to sourceTime, or null when none is. */
-export function nearestFrame(info: StitchMediaInfo, sourceTime: number): string | null {
+export function nearestFrame(info: Pick<StitchMediaInfo, "frames" | "duration">, sourceTime: number): string | null {
   let best: string | null = null;
   let bestDistance = Infinity;
   for (let index = 0; index < info.frames.length; index++) {

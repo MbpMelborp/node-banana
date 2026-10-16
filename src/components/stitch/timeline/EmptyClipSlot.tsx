@@ -1,0 +1,86 @@
+"use client";
+
+import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { CircleAlert } from "lucide-react";
+import { cn } from "@/components/nodes/ui/cn";
+import { Spinner } from "@/components/nodes/ui/Spinner";
+import { clipName } from "@/lib/stitch/labels";
+import type { ClipSpan } from "@/lib/stitch/timeline";
+import { GEOMETRY, LIFTED_CLIP } from "../editorStyles";
+import type { ClipMediaView } from "../useStitchEditorMedia";
+import { keepFocus, type ClipBoxMode } from "./ClipBox";
+
+/** Why a clip has no length on the timeline. */
+export function emptyReason(span: ClipSpan, view: ClipMediaView | undefined): "loading" | "error" | "past-end" | "empty" {
+  if (view?.status === "loading") return "loading";
+  if (view?.status === "error") return "error";
+  if (view?.status === "ready" && view.duration !== null && span.clip.inSec >= view.duration) return "past-end";
+  return "empty";
+}
+
+const COPY = {
+  empty: "not generated yet",
+  loading: "loading",
+  error: "can't read this video",
+  "past-end": "trim starts past the end",
+} as const;
+
+/**
+ * A clip with no length: a source that has not run, one still being read
+ * or one that cannot be, or a trim that starts past the source's end. It
+ * keeps its place in the order as a fixed 160px slot that counts 0 s, and
+ * can be selected like a clip (so Reset trim fixes a trim past the end).
+ */
+export function EmptyClipSlot({
+  span,
+  view,
+  x,
+  width,
+  selected,
+  focusable,
+  mode,
+  onBodyPointerDown,
+  onContextMenu,
+}: {
+  span: ClipSpan;
+  view: ClipMediaView | undefined;
+  x: number;
+  width: number;
+  selected: boolean;
+  /** The listbox's one tab stop. */
+  focusable: boolean;
+  mode: ClipBoxMode;
+  onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onContextMenu: (event: MouseEvent<HTMLElement>) => void;
+}) {
+  const reason = emptyReason(span, view);
+  const name = clipName(span.index);
+  return (
+    <div
+      data-clip-id={span.clip.id}
+      data-empty-reason={reason}
+      aria-label={name}
+      aria-selected={selected}
+      role="option"
+      tabIndex={focusable ? 0 : -1}
+      onPointerDown={onBodyPointerDown}
+      onMouseDown={keepFocus}
+      onContextMenu={onContextMenu}
+      className={cn(
+        "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-media border border-dashed border-white/20 bg-white/2 text-[11px] text-neutral-500 select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
+        mode === "lifted" && cn(LIFTED_CLIP, "bg-editor-chrome"),
+        mode === "dimmed" && "opacity-40",
+        mode === "rest" && selected && "ring-2 ring-selection",
+      )}
+      style={{ left: x, top: GEOMETRY.clipTop, width, height: GEOMETRY.clipHeight }}
+    >
+      {reason === "loading" ? (
+        <Spinner size={13} className="shrink-0" />
+      ) : (
+        <CircleAlert size={13} strokeWidth={1.75} className="shrink-0" />
+      )}
+      {/* No side padding, as on the States board, so "not generated yet" fits one line; a longer reason wraps, balanced, rather than lose its end */}
+      <span className="line-clamp-2 min-w-0 text-balance leading-[14px]">{`${name} · ${COPY[reason]}`}</span>
+    </div>
+  );
+}

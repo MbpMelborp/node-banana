@@ -1,4 +1,5 @@
 import type { StitchClipSource, StitchTimelineClip } from "@/types";
+import { FRAME_RATE } from "./sequencePlan";
 
 /**
  * The Stitch timeline's clip maths: lengths, spans, trims, splits and moves.
@@ -43,11 +44,15 @@ export function createClip(
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-/** The trimmed length. An unknown source duration counts 0. */
+/**
+ * The trimmed length. An unknown source duration counts 0, and so does a length under one output frame: the encode
+ * drops such a clip (planSequence), so the editor gives it no time either.
+ */
 export function clipLength(clip: StitchTimelineClip, sourceDuration: number | undefined): number {
   if (sourceDuration === undefined || !Number.isFinite(sourceDuration)) return 0;
   const end = Math.min(clip.outSec ?? sourceDuration, sourceDuration);
-  return Math.max(0, end - Math.min(clip.inSec, sourceDuration));
+  const length = Math.max(0, end - Math.min(clip.inSec, sourceDuration));
+  return length < 1 / FRAME_RATE ? 0 : length;
 }
 
 export interface ClipSpan {
@@ -151,6 +156,11 @@ export function trimClip(
   const next = clampTrim(clip, durations.get(sourceKey(clip.source)), patch);
   if (next.inSec === clip.inSec && next.outSec === clip.outSec) return timeline;
   return timeline.map((c, i) => (i === index ? { ...c, ...next } : c));
+}
+
+/** Whether a clip has a trim to reset. */
+export function isTrimmed(clip: Pick<StitchTimelineClip, "inSec" | "outSec">): boolean {
+  return clip.inSec !== 0 || clip.outSec !== null;
 }
 
 export function resetTrim(timeline: StitchTimelineClip[], clipId: string): StitchTimelineClip[] {
