@@ -7,6 +7,7 @@
 import type { VideoStitchNodeData } from "@/types";
 import { AssetApiError, fetchAssetBlob } from "@/lib/assets/client/api";
 import type { StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes";
+import { requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { readStitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
@@ -87,6 +88,8 @@ export async function gatherStitchInputs(
           ? fetch(media.url).then((r) => r.blob())
           : fetchAssetBlob(media.assetId, signal).catch((error: unknown) => {
               if (error instanceof AssetApiError && error.status === 404) {
+                // The card and the editor read its record again, so they count it as the run found it
+                requestAssetInfo([media.assetId], { refresh: true });
                 throw new Error(`Clip ${media.position}'s library video is no longer in the library`);
               }
               throw error;

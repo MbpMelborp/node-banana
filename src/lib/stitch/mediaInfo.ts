@@ -196,7 +196,7 @@ function evict(): void {
   if (changed) notify();
 }
 
-/** Idempotent; a higher level upgrades what is already there. An unreadable source is not retried. */
+/** Idempotent; a higher level upgrades what is already there. An unreadable source is not retried (see retryMediaInfo). */
 export function requestMediaInfo(key: string, src: string, level: MediaInfoLevel): void {
   let entry = entries.get(key);
   if (!entry) {
@@ -208,6 +208,34 @@ export function requestMediaInfo(key: string, src: string, level: MediaInfoLevel
     entry.lastUsed = ++clock;
   }
   evict();
+  void pump();
+}
+
+/**
+ * Reads a source again that could not be read: a library file keeps its key
+ * (a:<id>) while the file itself can come back (a moved folder re-indexed, a
+ * read that hit a library job). A no-op unless the entry failed.
+ */
+export function retryMediaInfo(key: string): void {
+  const entry = entries.get(key);
+  if (entry?.info.status === "error") reread(entry);
+}
+
+/**
+ * Reads a source again that did read: a library record says its file (a:<id>)
+ * is missing, so the length and frames read from it before no longer stand.
+ * A no-op unless the entry is ready; a file found again since reads as before.
+ */
+export function rereadMediaInfo(key: string): void {
+  const entry = entries.get(key);
+  if (entry?.info.status === "ready") reread(entry);
+}
+
+/** A fresh entry under the same key, so a job still running for the old one writes nothing. */
+function reread(entry: Entry): void {
+  revokeFrames(entry.info);
+  entries.set(entry.key, { ...entry, info: emptyInfo(), lastUsed: ++clock });
+  notify();
   void pump();
 }
 

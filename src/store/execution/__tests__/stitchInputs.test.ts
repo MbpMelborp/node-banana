@@ -14,10 +14,11 @@ const mocks = vi.hoisted(() => {
       this.name = "AssetApiError";
     }
   }
-  return { AssetApiError, fetchAssetBlob: vi.fn(), prepareAudioAsync: vi.fn() };
+  return { AssetApiError, fetchAssetBlob: vi.fn(), prepareAudioAsync: vi.fn(), requestAssetInfo: vi.fn() };
 });
 vi.mock("@/lib/assets/client/api", () => ({ AssetApiError: mocks.AssetApiError, fetchAssetBlob: mocks.fetchAssetBlob }));
 vi.mock("@/hooks/useAudioMixing", () => ({ prepareAudioAsync: mocks.prepareAudioAsync }));
+vi.mock("@/lib/stitch/assetInfo", () => ({ requestAssetInfo: mocks.requestAssetInfo }));
 
 /** Where each fetched Blob came from (jsdom's Blob cannot be read back). */
 const origins = new WeakMap<Blob, string>();
@@ -118,17 +119,17 @@ describe("gatherStitchInputs", () => {
   it("loads a library clip from the asset library, with the run's signal", async () => {
     const { nodes, edges } = twoVideos();
     const signal = new AbortController().signal;
-    const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), assetClip("x", "asset-9")] });
+    const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), assetClip("x", "aasset0000009")] });
     const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges, { signal }), stitch.data as never);
-    expect(mocks.fetchAssetBlob).toHaveBeenCalledWith("asset-9", signal);
+    expect(mocks.fetchAssetBlob).toHaveBeenCalledWith("aasset0000009", signal);
     // e2 is not in the timeline yet, so it is appended, as on the card
-    expect(texts(g.clips.map((c) => c.blob))).toEqual(["blob:one", "asset:asset-9", "blob:two"]);
+    expect(texts(g.clips.map((c) => c.blob))).toEqual(["blob:one", "asset:aasset0000009", "blob:two"]);
   });
 
   it("fetches a split clip's source once", async () => {
     const { nodes, edges } = twoVideos();
     const stitch = stitchNode({
-      timeline: [edgeClip("a1", "e1", { outSec: 2 }), edgeClip("a2", "e1", { inSec: 2 }), assetClip("x1", "x"), assetClip("x2", "x"), edgeClip("b", "e2")],
+      timeline: [edgeClip("a1", "e1", { outSec: 2 }), edgeClip("a2", "e1", { inSec: 2 }), assetClip("x1", "alibrary00001"), assetClip("x2", "alibrary00001"), edgeClip("b", "e2")],
     });
     const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
     expect(g.clips).toHaveLength(5);
@@ -196,9 +197,9 @@ describe("gatherStitchInputs", () => {
     });
 
     it("gives a timeline node's clip the first video only", async () => {
-      const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), assetClip("x", "x")] });
+      const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), assetClip("x", "alibrary00001")] });
       const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
-      expect(texts(g.clips.map((c) => c.blob))).toEqual(["blob:1", "asset:x"]);
+      expect(texts(g.clips.map((c) => c.blob))).toEqual(["blob:1", "asset:alibrary00001"]);
     });
   });
 
@@ -224,10 +225,12 @@ describe("gatherStitchInputs", () => {
   it("says which clip's library video is gone", async () => {
     const { nodes, edges } = twoVideos();
     mocks.fetchAssetBlob.mockRejectedValue(new mocks.AssetApiError("No such asset in the library.", 404));
-    const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), edgeClip("b", "e2"), assetClip("x", "gone")] });
+    const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), edgeClip("b", "e2"), assetClip("x", "agone00000001")] });
     await expect(gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never)).rejects.toThrow(
       "Clip 3's library video is no longer in the library",
     );
+    // The card and the editor hear it now, not at the next open
+    expect(mocks.requestAssetInfo).toHaveBeenCalledWith(["agone00000001"], { refresh: true });
   });
 
   it("falls back to the connected videos when there are no edges to read", async () => {

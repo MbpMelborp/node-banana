@@ -10,7 +10,7 @@ import { COLLAPSED_CURVE, EXPANDED_CURVE, levelToY } from "@/lib/stitch/curveGeo
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import type { VolumePoint } from "@/types";
-import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
+import { EDITOR_CHIP, GEOMETRY, LABEL_BAR } from "../editorStyles";
 import type { MusicView } from "../useStitchEditorMedia";
 import { CurveLayer } from "./CurveLayer";
 import { useCurveDrag } from "./useCurveDrag";
@@ -24,7 +24,7 @@ const CONNECT_MIN_WIDTH = 180;
 function LabelBar({ music }: { music: MusicView }) {
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-linear-to-t from-black/60 to-transparent px-2 text-[11px] leading-none"
+      className={cn("pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-[11px] leading-none", LABEL_BAR)}
       style={{ height: GEOMETRY.labelBar }}
     >
       <span className="truncate font-medium text-neutral-100">{music.fileName}</span>

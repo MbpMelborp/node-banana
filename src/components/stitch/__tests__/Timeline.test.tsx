@@ -337,6 +337,28 @@ describe("Timeline", () => {
     expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3.5 * PPS + 2}px`);
   });
 
+  it("moves the add slot with a lengthening Out on the last clip, and leaves it after the ghost of a shortening one", () => {
+    seed();
+    openEditor();
+    act(() => editor().setPlayhead(0));
+    const slot = () => screen.getByTestId("stitch-add-slot");
+    // Clip 2 runs 5–9 s of the sequence and ends its 4 s source
+    const restEnd = ORIGIN + 9 * PPS;
+    expect(slot().style.left).toBe(`${restEnd + 8}px`);
+    fireEvent.pointerDown(handleOf("Clip 2", "out"), { button: 0, clientX: restEnd, pointerId: 1 });
+    pointer("pointermove", restEnd - PPS);
+    expect(screen.getByTestId("stitch-trim-ghost")).toBeInTheDocument();
+    expect(slot().style.left).toBe(`${restEnd + 8}px`);
+    pointer("pointerup", restEnd - PPS);
+    expect(editor().draft?.timeline[1].outSec).toBeCloseTo(3, 6);
+    expect(slot().style.left).toBe(`${restEnd - PPS + 8}px`);
+    // Lengthening it back pushes the slot along
+    fireEvent.pointerDown(handleOf("Clip 2", "out"), { button: 0, clientX: restEnd - PPS, pointerId: 1 });
+    pointer("pointermove", restEnd - PPS / 2);
+    expect(slot().style.left).toBe(`${restEnd - PPS / 2 + 8}px`);
+    pointer("pointerup", restEnd - PPS / 2);
+  });
+
   it("changes nothing when a handle is pressed and released without moving", () => {
     // Clip 2 has a numeric Out: rebuilding it from the sequence would add float noise
     seed({ stitch: { timeline: [clipItem("eA"), clipItem("eB", { outSec: 1.3 })], clipOrder: ["eA", "eB"] } });
@@ -373,6 +395,22 @@ describe("Timeline", () => {
     // Afterwards they work again
     press("s");
     expect(editor().draft?.timeline).toHaveLength(3);
+  });
+
+  it("opens no clip menu while a trim runs, so Escape still cancels it", () => {
+    seed();
+    openEditor();
+    const edgeX = ORIGIN + 5 * PPS;
+    fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, clientX: edgeX, pointerId: 1 });
+    pointer("pointermove", edgeX - 40);
+    fireEvent.contextMenu(clipBox("Clip 1"), { button: 2, clientX: edgeX - 40, clientY: 300 });
+    expect(editor().menu).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    press("Escape");
+    expect(editor().cancelGesture).toBeNull();
+    pointer("pointerup", edgeX - 40);
+    expect(editor().draft?.timeline[0].outSec).toBeNull();
+    expect(editor().past).toHaveLength(0);
   });
 
   it("drops a trim whose draft changed under it", () => {
@@ -509,6 +547,20 @@ describe("Timeline", () => {
     expect(lanes.scrollLeft).toBe(2000);
   });
 
+  it("keeps the pointer's place inside an empty slot across a ⌘ wheel zoom", () => {
+    seed({ bRan: false });
+    openEditor();
+    const lanes = screen.getByTestId("stitch-lanes");
+    Object.defineProperty(lanes, "clientWidth", { value: 600, configurable: true });
+    // Clip 2 has not run: a slot at 5 s, its left at x 336; the pointer 120px into it
+    const slotLeft = ORIGIN + 5 * PPS;
+    fireEvent.wheel(lanes, { ctrlKey: true, deltaY: -100, clientX: slotLeft + 120 });
+    const pps = editor().pxPerSec!;
+    expect(pps).toBeGreaterThan(PPS);
+    // The slot does not slide under the pointer: its left is still at view x 336
+    expect(ORIGIN + 5 * pps - lanes.scrollLeft).toBeCloseTo(slotLeft, 6);
+  });
+
   it("does not zoom with the ⌘ wheel while a drag runs", () => {
     seed();
     openEditor();
@@ -574,6 +626,16 @@ describe("Timeline", () => {
     click(clipBox("Clip 1"), 50);
     fireEvent.click(within(rail()).getByRole("button", { name: /Reset trim/ }));
     expect(within(clipBox("Clip 1")).getByText("5.0 s")).toBeInTheDocument();
+  });
+
+  it("gives a trim under one frame no time, as the encode leaves it out, and says why", () => {
+    const timeline: StitchTimelineClip[] = [
+      { id: "clip:eA", source: { kind: "edge", edgeId: "eA" }, inSec: 4.99, outSec: null, muted: false, volume: 1 },
+      { id: "clip:eB", source: { kind: "edge", edgeId: "eB" }, inSec: 0, outSec: null, muted: false, volume: 1 },
+    ];
+    seed({ stitch: { timeline, clipOrder: ["eA", "eB"] } });
+    openEditor();
+    expect(clipBox("Clip 1")).toHaveTextContent("Clip 1 · trim is shorter than a frame");
   });
 
   it("shows a dashed placeholder and unlabelled ticks when there are no clips", () => {
@@ -731,14 +793,35 @@ describe("Timeline", () => {
     press("z", { metaKey: true });
     press("z", { metaKey: true, shiftKey: true });
     expect(document.activeElement).toBe(clipBox("Clip 1"));
-    // The clip is the panel's last tab stop (its mute buttons are out of the tab order): Tab wraps inside the dialog
-    fireEvent.keyDown(clipBox("Clip 1"), { key: "Tab" });
+    // The add slot after the clip is the panel's last tab stop (the clips' mute buttons are out of the tab
+    // order): Tab from it wraps inside the dialog
+    const addSlot = screen.getByTestId("stitch-add-slot");
+    act(() => addSlot.focus());
+    fireEvent.keyDown(addSlot, { key: "Tab" });
     expect(dialog.contains(document.activeElement)).toBe(true);
-    expect(document.activeElement).not.toBe(clipBox("Clip 1"));
+    expect(document.activeElement).not.toBe(addSlot);
     act(() => clipBox("Clip 1").focus());
     press("Backspace");
     expect(editor().draft?.timeline).toHaveLength(0);
     expect(document.activeElement).toBe(dialog);
+  });
+
+  it("keeps focus in the lane when an undo brings clips back under the focused placeholder", () => {
+    seed();
+    const dialog = openEditor();
+    act(() => {
+      editor().apply((d) => ({ ...d, timeline: [] }));
+      editor().select(null);
+    });
+    const placeholder = screen.getByTestId("stitch-empty-lane");
+    act(() => placeholder.focus());
+    // The clips come back with nothing selected: the rail's own focus rescue does not run
+    press("z", { metaKey: true });
+    expect(editor().draft?.timeline).toHaveLength(2);
+    expect(editor().selection).toBeNull();
+    expect(placeholder.isConnected).toBe(false);
+    expect(document.activeElement).toBe(clipBox("Clip 1"));
+    expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
   it("zooms with the transport's buttons and Fit", () => {

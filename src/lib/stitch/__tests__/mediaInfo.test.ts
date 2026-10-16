@@ -11,7 +11,9 @@ import {
   mediaKeyOf,
   nearestFrame,
   requestMediaInfo,
+  rereadMediaInfo,
   retainMediaInfo,
+  retryMediaInfo,
   type MediaExtractor,
   type StitchMediaInfo,
 } from "../mediaInfo";
@@ -194,6 +196,100 @@ describe("mediaInfo", () => {
     requestMediaInfo("a", "src-a", "poster");
     await vi.waitFor(() => expect(getMediaInfo("a")?.status).toBe("error"));
     expect(getMediaInfo("a")!.duration).toBeNull();
+  });
+
+  it("does not read a failed source again by itself, but retryMediaInfo does", async () => {
+    let fail = true;
+    let probes = 0;
+    const { extractor } = fakeExtractor({
+      probe: async () => {
+        probes++;
+        if (fail) throw new Error("Not found");
+        return { duration: 6, width: 1920, height: 1080, fps: 24 };
+      },
+      open: async () => {
+        if (fail) throw new Error("Not found");
+        return { duration: 6, width: 1920, height: 1080, frame: async () => null, close() {} };
+      },
+    });
+    __setMediaExtractorForTests(extractor);
+    const key = assetMediaKey("a1");
+    requestMediaInfo(key, "/api/assets/a1/file", "metadata");
+    await vi.waitFor(() => expect(getMediaInfo(key)?.status).toBe("error"));
+    fail = false;
+    requestMediaInfo(key, "/api/assets/a1/file", "metadata");
+    await Promise.resolve();
+    expect({ probes, status: getMediaInfo(key)?.status }).toEqual({ probes: 1, status: "error" });
+
+    retryMediaInfo(key);
+    await settled(key, "metadata");
+    expect(getMediaInfo(key)).toMatchObject({ status: "ready", duration: 6 });
+    expect(probes).toBe(2);
+    // A source that reads is left alone
+    retryMediaInfo(key);
+    await Promise.resolve();
+    expect(probes).toBe(2);
+  });
+
+  it("reads a source that did read again with rereadMediaInfo, and drops what the earlier read drew", async () => {
+    let probes = 0;
+    let drawn = 0;
+    const draws: Array<() => void> = [];
+    const { extractor } = fakeExtractor({
+      probe: async () => {
+        probes++;
+        return { duration: 6, width: 1920, height: 1080, fps: 24 };
+      },
+      open: async () => ({
+        duration: 6,
+        width: 1920,
+        height: 1080,
+        frame: () => new Promise<string>((resolve) => draws.push(() => resolve(`blob:frame${++drawn}`))),
+        close() {},
+      }),
+    });
+    __setMediaExtractorForTests(extractor);
+    const key = assetMediaKey("a1");
+    requestMediaInfo(key, "/api/assets/a1/file", "poster");
+    await vi.waitFor(() => expect(draws).toHaveLength(1));
+
+    // The file went while its poster was being drawn
+    rereadMediaInfo(key);
+    expect(getMediaInfo(key)).toMatchObject({ status: "loading", duration: null, level: null });
+    draws[0]();
+    await vi.waitFor(() => expect(draws).toHaveLength(2));
+    expect(revoke).toHaveBeenCalledWith("blob:frame1");
+    expect(getMediaInfo(key)!.frames.filter(Boolean)).toEqual([]);
+    draws[1]();
+    await settled(key, "poster");
+    expect(getMediaInfo(key)!.frames.filter(Boolean)).toEqual(["blob:frame2"]);
+    expect(probes).toBe(2);
+
+    // Frames already drawn are let go
+    rereadMediaInfo(key);
+    expect(revoke).toHaveBeenCalledWith("blob:frame2");
+    expect(getMediaInfo(key)!.frames.filter(Boolean)).toEqual([]);
+  });
+
+  it("leaves a source that failed, or is still being read, alone in rereadMediaInfo", async () => {
+    const { extractor } = fakeExtractor({
+      probe: async () => {
+        throw new Error("Not found");
+      },
+      open: async () => {
+        throw new Error("Not found");
+      },
+    });
+    __setMediaExtractorForTests(extractor);
+    const key = assetMediaKey("a1");
+    requestMediaInfo(key, "/api/assets/a1/file", "metadata");
+    const loading = getMediaInfo(key);
+    rereadMediaInfo(key);
+    expect(getMediaInfo(key)).toBe(loading);
+    await vi.waitFor(() => expect(getMediaInfo(key)?.status).toBe("error"));
+    const failed = getMediaInfo(key);
+    rereadMediaInfo(key);
+    expect(getMediaInfo(key)).toBe(failed);
   });
 
   it("abandons a probe that never answers for the element, and goes on with the queue", async () => {

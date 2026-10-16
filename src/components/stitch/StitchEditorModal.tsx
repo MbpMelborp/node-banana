@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, type HTMLAttributes } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
@@ -12,6 +12,8 @@ import { EditorHeader } from "./EditorHeader";
 import { EditorRail } from "./EditorRail";
 import { EditorStage } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
+import { STITCH_EDITOR_PANEL } from "./editorStyles";
+import { LibraryPicker } from "./library/LibraryPicker";
 import { Timeline } from "./timeline/Timeline";
 import { useTimelineZoom } from "./timeline/useTimelineZoom";
 import { useEditorLifecycle } from "./useEditorLifecycle";
@@ -29,6 +31,9 @@ function requestClose(): void {
   if (selectIsDirty(s)) s.setDiscardOpen(true);
   else s.close();
 }
+
+/** The marker the library picker hands focus back by (see STITCH_EDITOR_PANEL). */
+const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLDivElement>;
 
 /**
  * The Stitch editor: a near-full-screen dialog over the canvas, opened by
@@ -127,6 +132,7 @@ function StitchEditor() {
       closeOnEscape={false}
       stopWheel={false}
       label="Edit stitch"
+      panelProps={EDITOR_PANEL_PROPS}
       className="w-[calc(100vw-48px)] max-w-none h-[calc(100vh-48px)] max-h-none bg-editor-chrome"
     >
       <div ref={rootRef} className="flex h-full min-h-0 flex-col">
@@ -156,6 +162,7 @@ function StitchEditor() {
         <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} />
       </div>
       <DiscardSheet />
+      <LibraryPicker />
     </Dialog>
   );
 }

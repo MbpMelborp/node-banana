@@ -5,16 +5,24 @@ import { CircleAlert } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Spinner } from "@/components/nodes/ui/Spinner";
 import { clipName } from "@/lib/stitch/labels";
-import type { ClipSpan } from "@/lib/stitch/timeline";
+import { clipLength, type ClipSpan } from "@/lib/stitch/timeline";
 import { GEOMETRY, LIFTED_CLIP } from "../editorStyles";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { keepFocus, type ClipBoxMode } from "./ClipBox";
 
 /** Why a clip has no length on the timeline. */
-export function emptyReason(span: ClipSpan, view: ClipMediaView | undefined): "loading" | "error" | "past-end" | "empty" {
+export function emptyReason(
+  span: ClipSpan,
+  view: ClipMediaView | undefined,
+): "gone" | "loading" | "error" | "past-end" | "under-frame" | "empty" {
+  if (view?.missing) return "gone";
   if (view?.status === "loading") return "loading";
   if (view?.status === "error") return "error";
-  if (view?.status === "ready" && view.duration !== null && span.clip.inSec >= view.duration) return "past-end";
+  if (view?.status === "ready" && view.duration !== null) {
+    if (span.clip.inSec >= view.duration) return "past-end";
+    // A source generated again shorter can leave a trim under one output frame, which the encode drops
+    if (view.duration > 0 && clipLength(span.clip, view.duration) === 0) return "under-frame";
+  }
   return "empty";
 }
 
@@ -22,12 +30,15 @@ const COPY = {
   empty: "not generated yet",
   loading: "loading",
   error: "can't read this video",
+  gone: "not in the library",
   "past-end": "trim starts past the end",
+  "under-frame": "trim is shorter than a frame",
 } as const;
 
 /**
  * A clip with no length: a source that has not run, one still being read
- * or one that cannot be, or a trim that starts past the source's end. It
+ * or one that cannot be, a library video the library no longer has, or a
+ * trim that starts past the source's end or leaves less than a frame. It
  * keeps its place in the order as a fixed 160px slot that counts 0 s, and
  * can be selected like a clip (so Reset trim fixes a trim past the end).
  */

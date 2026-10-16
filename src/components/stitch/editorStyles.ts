@@ -59,5 +59,16 @@ export const GEOMETRY = {
 /** The room the lane keeps after the last clip: the add slot with its gap, and the end margin. Fit leaves it too. */
 export const LANE_TRAILING_PX = GEOMETRY.addSlotGap + GEOMETRY.addSlot + GEOMETRY.endMargin;
 
+/**
+ * A label bar over a frame or waveform: a soft gradient, darker through the middle where the text sits, and a dense
+ * black halo round the text, so the name, the grey source and the length stay readable over a white bottom edge
+ * (sky, snow, a studio wall). Over a dark frame the halo does not show and the gradient stays a soft fade, not a band.
+ */
+export const LABEL_BAR =
+  "bg-linear-to-t from-black/80 via-black/55 via-55% to-transparent [text-shadow:0_0_1px_rgb(0_0_0),0_0_2px_rgb(0_0_0),0_0_3px_rgb(0_0_0/0.9),0_0_6px_rgb(0_0_0/0.8)]";
+
 /** A clip (or slot) lifted to be dragged to a new place (design-spec §9.1). */
 export const LIFTED_CLIP = "z-10 -translate-y-1.5 -rotate-[1.5deg] shadow-[0_12px_28px_rgba(0,0,0,0.6)]";
+
+/** The editor's panel, marked for code outside it that hands focus back (the library picker): not its label. */
+export const STITCH_EDITOR_PANEL = "data-stitch-editor";

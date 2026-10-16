@@ -1,0 +1,47 @@
+import type { AssetPageRequest, AssetSort } from "@/lib/assets/types";
+
+/**
+ * The Stitch editor's "Add from library" query, and the asset page request
+ * it becomes. Pure: the picker's hook sends what this builds.
+ */
+
+export interface LibraryVideoQuery {
+  q: string;
+  /** null = all projects; "" = not in a project; otherwise the project's folder. */
+  project: string | null;
+  favourites: boolean;
+  thisWorkflow: boolean;
+  sort: AssetSort;
+}
+
+export const LIBRARY_PAGE_SIZE = 60;
+
+export const DEFAULT_LIBRARY_QUERY: LibraryVideoQuery = {
+  q: "",
+  project: null,
+  favourites: false,
+  thisWorkflow: false,
+  sort: "newest",
+};
+
+/**
+ * Videos only, a page at a time. Every other field is sent only when it
+ * narrows the list: a search with something in it, Favourites, a project,
+ * This workflow when the canvas has an id (nothing was ever recorded from one
+ * without), and the sort when it is not the default newest first.
+ */
+export function buildLibraryRequest(
+  query: LibraryVideoQuery,
+  workflowId: string | null,
+  cursor?: string,
+): AssetPageRequest {
+  const request: AssetPageRequest = { kinds: ["video"], limit: LIBRARY_PAGE_SIZE };
+  const q = query.q.trim();
+  if (q) request.q = q;
+  if (query.favourites) request.favorite = true;
+  if (query.project !== null) request.projects = [query.project];
+  if (query.thisWorkflow && workflowId) request.workflowIds = [workflowId];
+  if (query.sort === "oldest") request.sort = "oldest";
+  if (cursor) request.cursor = cursor;
+  return request;
+}

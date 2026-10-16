@@ -92,6 +92,7 @@ vi.mock("@/components/nodes/BaseNode", () => {
 import { VideoStitchNode } from "@/components/nodes/VideoStitchNode";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import { createClip } from "@/lib/stitch/timeline";
+import { __resetAssetInfoForTests, requestAssetInfo } from "@/lib/stitch/assetInfo";
 import {
   FILMSTRIP_FRAMES,
   __resetMediaInfoForTests,
@@ -153,6 +154,7 @@ describe("VideoStitchNode", () => {
     mockCheckEncoderSupport.mockResolvedValue(true);
     setMockStoreState();
     __resetMediaInfoForTests();
+    __resetAssetInfoForTests();
     __setMediaExtractorForTests(pendingExtractor);
   });
 
@@ -538,10 +540,10 @@ describe("VideoStitchNode", () => {
     });
 
     it("shows a library clip's tile, and Stitch to preview with no socket in use", () => {
-      __setMediaInfoForTests("a:x1", { duration: 3 });
+      __setMediaInfoForTests("a:alibrary00001", { duration: 3 });
       renderCard(
         { edges: [], nodes: [] },
-        { clipOrder: [], timeline: [createClip({ kind: "asset", assetId: "x1" }, { id: "lib" })] }
+        { clipOrder: [], timeline: [createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" })] }
       );
       expect(document.querySelector('[data-clip-id="lib"]')).toHaveTextContent("3s");
       expect(screen.getByText("Stitch to preview")).toBeInTheDocument();
@@ -685,8 +687,8 @@ describe("VideoStitchNode", () => {
     });
 
     it("removes a library clip from the sequence", () => {
-      __setMediaInfoForTests("a:x1", { duration: 3 });
-      const lib = createClip({ kind: "asset", assetId: "x1" }, { id: "lib" });
+      __setMediaInfoForTests("a:alibrary00001", { duration: 3 });
+      const lib = createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" });
       const a = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
       const b = createClip({ kind: "edge", edgeId: "e2" }, { id: "b" });
       renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib, b] });
@@ -695,6 +697,80 @@ describe("VideoStitchNode", () => {
       fireEvent.click(remove);
       expect(mockRemoveEdge).not.toHaveBeenCalled();
       expect(mockUpdateNodeData).toHaveBeenCalledWith(STITCH_ID, { timeline: [a, b], clipOrder: ["e1", "e2"] });
+    });
+
+    it("counts a library clip the library no longer has as 0 s, as the editor and a run do", async () => {
+      // Read when the card was first drawn: the file's length is still in the cache
+      __setMediaInfoForTests("a:agone00000001", { duration: 3 });
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+      const lib = createClip({ kind: "asset", assetId: "agone00000001" }, { id: "lib" });
+      const a = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib] });
+      // The card reads the record again when it mounts, and the library says it is gone
+      await waitFor(() => expect(screen.getByTitle("Not in the library")).toBeInTheDocument());
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/assets/agone00000001"), expect.anything());
+      expect(screen.getByTitle("Not in the library").closest("[data-clip-id]")).toHaveAttribute("data-clip-id", "lib");
+      // Clip 1 (5 s) and e2 (4.4 s, appended): the gone clip adds nothing
+      expect(screen.getByText("0:09")).toBeInTheDocument();
+    });
+
+    it("counts a library clip as gone once a run finds its file missing, though the card read the file before", async () => {
+      // The card read the file while it was there
+      __setMediaInfoForTests("a:agone00000001", { duration: 3 });
+      const notFound = async (): Promise<never> => {
+        throw new Error("Not found");
+      };
+      __setMediaExtractorForTests({ probe: notFound, open: notFound });
+      const record = { id: "agone00000001", producer: { nodeId: "n", nodeType: "generateVideo" } };
+      const answer = (body: object) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => answer(record));
+      const lib = createClip({ kind: "asset", assetId: "agone00000001" }, { id: "lib" });
+      const a = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib] });
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      expect(screen.getByText("0:12")).toBeInTheDocument();
+
+      // A run gets a 404 for the file and reads the record again, which now says the file is missing
+      fetchSpy.mockImplementation(async () => answer({ ...record, missing: true }));
+      requestAssetInfo(["agone00000001"], { refresh: true });
+      await waitFor(() => expect(screen.getByTitle("Not in the library")).toBeInTheDocument());
+      // Clip 1 (5 s) and e2 (4.4 s, appended): the earlier read of the gone file adds nothing
+      expect(screen.getByText("0:09")).toBeInTheDocument();
+    });
+
+    it("marks a library clip with the library badge, and only a library clip", () => {
+      __setMediaInfoForTests("a:alibrary00001", { duration: 3 });
+      const lib = createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" });
+      const a = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib] });
+      const tile = document.querySelector('[data-clip-id="lib"]') as HTMLElement;
+      expect(within(tile).getByTitle("From the library")).toBeInTheDocument();
+      expect(within(document.querySelector('[data-clip-id="a"]') as HTMLElement).queryByTitle("From the library")).toBeNull();
+    });
+
+    it("stitches a node whose clips all come from the library, with no socket in use", () => {
+      __setMediaInfoForTests("a:alibrary00001", { duration: 3 });
+      __setMediaInfoForTests("a:alibrary00002", { duration: 4 });
+      renderCard(
+        { edges: [], nodes: [] },
+        {
+          clipOrder: [],
+          timeline: [
+            createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib1" }),
+            createClip({ kind: "asset", assetId: "alibrary00002" }, { id: "lib2" }),
+          ],
+        }
+      );
+      expect(document.querySelectorAll("[data-clip-id]")).toHaveLength(2);
+      expect(screen.getAllByTitle("From the library")).toHaveLength(2);
+      expect(screen.getByText("Stitch to preview")).toBeInTheDocument();
+      expect(screen.queryByText("No clips connected")).toBeNull();
+      expect(screen.queryByText("Connect videos to stitch")).toBeNull();
+      const stitch = screen.getByText("Stitch");
+      expect(stitch).not.toBeDisabled();
+      fireEvent.click(stitch);
+      expect(mockRegenerateNode).toHaveBeenCalledWith(STITCH_ID);
     });
   });
 

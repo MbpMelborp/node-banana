@@ -6,8 +6,12 @@ import {
   __resetMediaInfoForTests,
   __setMediaExtractorForTests,
   __setMediaInfoForTests,
+  assetMediaKey,
   mediaKeyOf,
 } from "@/lib/stitch/mediaInfo";
+import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
+import { createClip } from "@/lib/stitch/timeline";
+import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { setLoopCount } from "../editorActions";
@@ -113,6 +117,7 @@ beforeEach(async () => {
   wf().clearWorkflow();
   editor().close();
   __resetMediaInfoForTests();
+  __resetAssetInfoForTests();
   // Nothing is ever read from a real file here
   __setMediaExtractorForTests({ probe: () => new Promise(() => {}), open: () => new Promise(() => {}) });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -327,6 +332,17 @@ describe("StitchEditorModal", () => {
     expect(editor().draft!.timeline[0].inSec).toBe(2);
   });
 
+  it("steps back with J from the end of a sequence that got shorter, not from the old end", () => {
+    seed();
+    openEditor();
+    act(() => editor().setPlayhead(9));
+    act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
+    press(document.body, "Backspace");
+    expect(editor().draft!.timeline).toHaveLength(1);
+    press(document.body, "j");
+    expect(editor().playhead).toBe(4);
+  });
+
   it("shows the trim keys in the rail", () => {
     seed();
     openEditor();
@@ -423,6 +439,21 @@ describe("StitchEditorModal", () => {
     expect(document.activeElement).toBe(dialog);
   });
 
+  it("commits an In being typed to its own clip when another clip is right-clicked", () => {
+    seed();
+    openEditor();
+    const field = screen.getByRole("textbox", { name: "In" }) as HTMLInputElement;
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "0:02.00" } });
+    const other = document.querySelector<HTMLElement>('[data-clip-id="clip:eB"]')!;
+    fireEvent.pointerDown(other, { button: 2 });
+    fireEvent.mouseDown(other, { button: 2 });
+    fireEvent.contextMenu(other, { button: 2, clientX: 300, clientY: 400 });
+    expect(editor().draft!.timeline.map((c) => c.inSec)).toEqual([2, 0]);
+    expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:eB" });
+    expect(editor().menu).toMatchObject({ clipId: "clip:eB" });
+  });
+
   it("gives focus back to Cancel when the discard sheet closes", () => {
     seed();
     openEditor();
@@ -487,6 +518,178 @@ describe("StitchEditorModal", () => {
     fireEvent.click(done);
     expect(wf().edges).toEqual([]);
     expect(stitchData().timeline).toEqual([]);
+  });
+
+  it("opens a node whose clips all come from the library, labels them from the library, and Done writes them", () => {
+    seed({
+      clips: false,
+      stitch: {
+        timeline: [
+          createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib1" }),
+          createClip({ kind: "asset", assetId: "alibrary00002" }, { id: "lib2" }),
+        ],
+      },
+    });
+    primeAssetInfo([
+      { id: "alibrary00001", model: { provider: "kie", modelId: "veo3", displayName: "Veo 3.1" }, producer: { nodeId: "n", nodeType: "generateVideo" } },
+      { id: "alibrary00002", producer: { nodeId: "n", nodeType: "videoStitch", operation: "stitch" } },
+    ] as AssetView[]);
+    __setMediaInfoForTests(assetMediaKey("alibrary00001"), { duration: 5, width: 1280, height: 720, fps: 24 });
+    __setMediaInfoForTests(assetMediaKey("alibrary00002"), { duration: 3, width: 1280, height: 720, fps: 24 });
+    const dialog = openEditor();
+    expect(within(dialog).getByText("2 clips")).toBeInTheDocument();
+    expect(within(dialog).getByText("0:08.00")).toBeInTheDocument();
+    const rail = within(screen.getByRole("complementary"));
+    expect(rail.getByText("Library · Veo 3.1 · 5.00 s")).toBeInTheDocument();
+    // The second clip names what made it
+    act(() => editor().select({ kind: "clip", clipId: "lib2" }));
+    expect(rail.getByText("Library · Stitched · 3.00 s")).toBeInTheDocument();
+    toggleClipAudio();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(stitchData().timeline).toEqual([
+      expect.objectContaining({ id: "lib1", source: { kind: "asset", assetId: "alibrary00001" }, muted: false }),
+      expect.objectContaining({ id: "lib2", source: { kind: "asset", assetId: "alibrary00002" }, muted: true }),
+    ]);
+    expect(wf().edges).toEqual([]);
+  });
+
+  it("shows a library clip the library no longer has as a slot that counts no time", () => {
+    seed({
+      stitch: {
+        clipOrder: ["eA", "eB"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }),
+          createClip({ kind: "asset", assetId: "agone00000001" }, { id: "lib" }),
+          createClip({ kind: "edge", edgeId: "eB" }, { id: "b" }),
+        ],
+      },
+    });
+    __setMediaInfoForTests(assetMediaKey("agone00000001"), { duration: 6 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+    const dialog = openEditor();
+    return vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+      const slot = dialog.querySelector('[data-clip-id="lib"]');
+      expect(slot).toHaveAttribute("data-empty-reason", "gone");
+      expect(slot).toHaveTextContent("Clip 2 · not in the library");
+      expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+    });
+  });
+
+  it("reads a library clip's record again when the editor opens, so one deleted since shows as gone", async () => {
+    seed({
+      stitch: {
+        clipOrder: ["eA", "eB"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }),
+          createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" }),
+          createClip({ kind: "edge", edgeId: "eB" }, { id: "b" }),
+        ],
+      },
+    });
+    // Known from an earlier Add, and the card still holds its probe
+    primeAssetInfo([{ id: "alibrary00001", producer: { nodeId: "n", nodeType: "generateVideo" } }] as AssetView[]);
+    __setMediaInfoForTests(assetMediaKey("alibrary00001"), { duration: 6 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+    const dialog = openEditor();
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/assets/alibrary00001"), expect.anything());
+      expect(dialog.querySelector('[data-clip-id="lib"]')).toHaveAttribute("data-empty-reason", "gone");
+    });
+    expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+  });
+
+  it("shows a library clip as gone once the library says its file is missing, though the file was read before", async () => {
+    seed({
+      stitch: {
+        clipOrder: ["eA", "eB"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }),
+          createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" }),
+          createClip({ kind: "edge", edgeId: "eB" }, { id: "b" }),
+        ],
+      },
+    });
+    const record = { id: "alibrary00001", producer: { nodeId: "n", nodeType: "generateVideo" } };
+    primeAssetInfo([record] as AssetView[]);
+    // The card read the file while it was there; a run has since got a 404 for it
+    __setMediaInfoForTests(assetMediaKey("alibrary00001"), { duration: 6 });
+    const notFound = async (): Promise<never> => {
+      throw new Error("Not found");
+    };
+    __setMediaExtractorForTests({ probe: notFound, open: notFound });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ...record, missing: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const dialog = openEditor();
+    await vi.waitFor(() => {
+      expect(dialog.querySelector('[data-clip-id="lib"]')).toHaveAttribute("data-empty-reason", "gone");
+      expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+    });
+  });
+
+  it("counts a library clip whose record says its file is missing once the file itself reads", () => {
+    seed({
+      stitch: {
+        clipOrder: ["eA", "eB"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }),
+          createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" }),
+          createClip({ kind: "edge", edgeId: "eB" }, { id: "b" }),
+        ],
+      },
+    });
+    // A stale flag: the file route found the file again (as the encode will)
+    primeAssetInfo([{ id: "alibrary00001", missing: true, producer: { nodeId: "n", nodeType: "generateVideo" } }] as AssetView[]);
+    __setMediaInfoForTests(assetMediaKey("alibrary00001"), { duration: 6 });
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    const dialog = openEditor();
+    expect(dialog.querySelector('[data-clip-id="lib"]')).not.toHaveAttribute("data-empty-reason", "gone");
+    expect(within(dialog).getByText("0:15.00")).toBeInTheDocument();
+  });
+
+  it("reads a library clip's file again when the editor opens, after an earlier read of it failed", async () => {
+    seed({
+      stitch: {
+        clipOrder: ["eA", "eB"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }),
+          createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" }),
+          createClip({ kind: "edge", edgeId: "eB" }, { id: "b" }),
+        ],
+      },
+    });
+    primeAssetInfo([{ id: "alibrary00001", producer: { nodeId: "n", nodeType: "generateVideo" } }] as AssetView[]);
+    // An earlier read of the file failed (a library job had it); the file is back now
+    __setMediaInfoForTests(assetMediaKey("alibrary00001"), { status: "error", duration: null, level: null });
+    const probe = vi.fn(async () => ({ duration: 6, width: 1280, height: 720, fps: 24 }));
+    __setMediaExtractorForTests({ probe, open: () => new Promise(() => {}) });
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    const dialog = openEditor();
+    await vi.waitFor(() => {
+      expect(dialog.querySelector('[data-clip-id="lib"]')).not.toHaveAttribute("data-empty-reason");
+      expect(within(dialog).getByText("0:15.00")).toBeInTheDocument();
+    });
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the library picker from the empty lane's placeholder", () => {
+    seed({ clips: false });
+    // The picker's list request never answers here
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    openEditor();
+    const placeholder = screen.getByTestId("stitch-empty-lane");
+    expect(placeholder).toHaveAttribute("title", "Add from library");
+    // No separate slot while the lane is empty
+    expect(screen.queryByTestId("stitch-add-slot")).toBeNull();
+    fireEvent.click(placeholder);
+    expect(editor().pickerOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Add from library" })).toBeInTheDocument();
+    expect(screen.getByText("Pick videos to add")).toBeInTheDocument();
   });
 
   it("closes without writing when the canvas is replaced", () => {

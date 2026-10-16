@@ -1,3 +1,4 @@
+import { ASSET_ID_PATTERN } from "@/lib/assets/types";
 import type { StitchClipSource, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { createClip, edgeIdsInOrder, newClipId } from "./timeline";
 
@@ -34,7 +35,9 @@ function readSource(raw: unknown): StitchClipSource | null {
   if (source.kind === "edge" && typeof source.edgeId === "string" && source.edgeId) {
     return { kind: "edge", edgeId: source.edgeId };
   }
-  if (source.kind === "asset" && typeof source.assetId === "string" && source.assetId) {
+  // The card, the editor and a run build /api/assets/<id> URLs from it: a crafted id ("../browse-directory?") would
+  // reach another route as soon as a shared workflow loads
+  if (source.kind === "asset" && typeof source.assetId === "string" && ASSET_ID_PATTERN.test(source.assetId)) {
     return { kind: "asset", assetId: source.assetId };
   }
   return null;

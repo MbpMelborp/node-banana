@@ -1,9 +1,12 @@
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fadeIn, fadeOut, flat, removePoint } from "@/lib/stitch/curve";
+import { primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { stitchHasMusicEdge } from "@/lib/stitch/sources";
 import {
+  appendClips,
   clipAtTime,
+  createClip,
   moveClip,
   removeClip,
   resetTrim,
@@ -13,6 +16,7 @@ import {
   trimClip,
   updateClipAudio,
 } from "@/lib/stitch/timeline";
+import type { AssetView } from "@/lib/assets/types";
 import type { StitchTimelineClip, VolumePoint } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 
@@ -48,10 +52,10 @@ export function pause(): void {
   editor().setPlaying(false);
 }
 
-/** J: one second back. */
+/** J: one second back from the playhead as drawn (the store keeps one a shortened sequence no longer reaches). */
 export function stepBack(): void {
   const s = editor();
-  s.setPlayhead(Math.max(0, s.playhead - 1));
+  s.setPlayhead(Math.max(0, Math.min(s.playhead, editorTotal(s)) - 1));
 }
 
 export function goToStart(): void {
@@ -207,6 +211,33 @@ export function moveClipTo(clipId: string, toIndex: number): void {
   const from = s.draft?.timeline.findIndex((c) => c.id === clipId) ?? -1;
   if (from === -1) return;
   s.apply((d) => ({ ...d, timeline: moveClip(d.timeline, from, toIndex) }));
+}
+
+/** The Clips track's +, the slot after the last clip and the empty lane: the library picker, over a paused preview. */
+export function openLibraryPicker(): void {
+  const s = editor();
+  if (!s.draft) return;
+  s.setPlaying(false);
+  s.openMenu(null);
+  s.setPickerOpen(true);
+}
+
+/**
+ * The picker's Add: one clip per picked video, in the order they were picked, after the last clip, as one undo
+ * step. The first of them is selected with the playhead at its start, and the picker closes. The records go to
+ * the asset cache so the clips are labelled at once; the clips themselves hold only the ids.
+ */
+export function addAssetClips(views: readonly AssetView[]): void {
+  const s = editor();
+  if (!s.draft || views.length === 0) return;
+  primeAssetInfo(views);
+  const start = editorTotal(s);
+  const clips = views.map((view) => createClip({ kind: "asset", assetId: view.id }));
+  s.apply((d) => ({ ...d, timeline: appendClips(d.timeline, clips) }));
+  const after = editor();
+  after.select({ kind: "clip", clipId: clips[0].id });
+  after.setPlayhead(start);
+  after.setPickerOpen(false);
 }
 
 /** The node an edge clip comes from, or null (an asset clip, or an edge that is gone). */

@@ -1,11 +1,14 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/shallow";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useStitchAssetInfo } from "@/hooks/useStitchAssetInfo";
 import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMediaInfo";
+import { modelLabel, operationLabel } from "@/components/assets/assetFormat";
 import { assetFileUrl } from "@/lib/assets/client/api";
+import type { AssetView } from "@/lib/assets/types";
 import { nodeKindLabel, nodeModelLabel } from "@/lib/stitch/labels";
-import { assetMediaKey, mediaKeyOf } from "@/lib/stitch/mediaInfo";
+import { assetMediaKey, mediaKeyOf, retryMediaInfo } from "@/lib/stitch/mediaInfo";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { edgeClipSourcesFromTuple, edgeClipSourceTuple, stitchMusicEdge, stitchMusicMedia } from "@/lib/stitch/sources";
 import { sourceKey, type SourceKey } from "@/lib/stitch/timeline";
@@ -33,10 +36,15 @@ export interface ClipMediaView {
   fps: number | null;
   frames: ReadonlyArray<string | null>;
   sourceNodeId: string | null;
-  /** Label bar: the model ("Veo 3.1"), else the node's kind ("Ease curve"); "Library" for a library clip. */
+  /**
+   * Label bar: the model ("Veo 3.1"), else the node's kind ("Ease curve"). A library clip: the model it was made
+   * with, else what made it ("Stitched"), else "Library".
+   */
   sourceLabel: string;
-  /** "Generate video · Veo 3.1 · 5.00 s". */
+  /** "Generate video · Veo 3.1 · 5.00 s"; "Library · Veo 3.1 · 5.00 s" for a library clip. */
   railSubtitle: string;
+  /** A library clip the library no longer has (or whose file is gone): an error slot that counts 0 s. */
+  missing: boolean;
 }
 
 export interface MusicView {
@@ -50,6 +58,12 @@ export interface MusicView {
 const NO_FRAMES: ReadonlyArray<string | null> = [];
 const EMPTY: string[] = [];
 const LABEL_WIDTH = 3;
+const LIBRARY = "Library";
+
+/** A library clip's source label, from its record: the model, else the operation, else "Library". */
+function assetSourceLabel(asset: AssetView | null | undefined): string {
+  return (asset && (modelLabel(asset.model) ?? operationLabel(asset.producer?.operation))) || LIBRARY;
+}
 
 /**
  * The labels of each node feeding a live video edge, as primitives, [nodeId, kind, model, …], for a useShallow
@@ -128,6 +142,12 @@ export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaV
     [timeline, edgeViews],
   );
 
+  const assetIds = useMemo(
+    () => (timeline ?? []).flatMap((clip) => (clip.source.kind === "asset" ? [clip.source.assetId] : [])),
+    [timeline],
+  );
+  const assets = useStitchAssetInfo(assetIds);
+
   const entries = useMemo(() => {
     const seen = new Map<string, StitchMediaEntry>();
     for (const { src, mediaKey } of sources) if (src && mediaKey) seen.set(mediaKey, { key: mediaKey, src });
@@ -135,20 +155,43 @@ export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaV
   }, [sources]);
   const infos = useStitchMediaInfo(entries, "filmstrip");
 
+  // A library file that could not be read is read again once for each record the library gives for it (the
+  // editor reads every record again when it opens), so a file found again since is measured as the encode will
+  // read it, not counted 0 s for the session. The record a key was last seen with is kept, so a file that still
+  // fails is not read in a loop
+  const seenRecord = useRef(new Map<string, AssetView>());
+  useEffect(() => {
+    for (const { clip, mediaKey } of sources) {
+      if (clip.source.kind !== "asset" || !mediaKey) continue;
+      const asset = assets.get(clip.source.assetId);
+      const info = infos.get(mediaKey);
+      if (!asset || !info || seenRecord.current.get(mediaKey) === asset) continue;
+      seenRecord.current.set(mediaKey, asset);
+      if (info.status === "error") retryMediaInfo(mediaKey);
+    }
+  }, [sources, assets, infos]);
+
   const byClip = useMemo(() => {
     const views = new Map<string, ClipMediaView>();
     for (const { clip, src, mediaKey, edge } of sources) {
       const info = mediaKey ? infos.get(mediaKey) : undefined;
-      const duration = info?.status === "ready" ? info.duration : null;
+      const asset = clip.source.kind === "asset" ? assets.get(clip.source.assetId) : undefined;
+      // Gone: the library no longer has the record, or its record says the file is missing and the file
+      // could not be read either. The file route checks the file again on every read (as the encode does), so
+      // a file found again since the record was written is a clip, whatever the stale flag says
+      const missing =
+        clip.source.kind === "asset" && (asset === null || (asset?.missing === true && info?.status !== "ready"));
+      // A clip the library lost counts no time, whatever an earlier read of its file found
+      const duration = info?.status === "ready" && !missing ? info.duration : null;
       // An edge clip whose edge went away while the editor was open is still a video, not a library clip
-      const kind = clip.source.kind === "asset" ? "Library" : edge?.kind || "Video";
-      const model = edge?.model ?? null;
+      const kind = clip.source.kind === "asset" ? LIBRARY : edge?.kind || "Video";
+      const model = clip.source.kind === "asset" ? assetSourceLabel(asset) : (edge?.model ?? null);
       views.set(clip.id, {
         clipId: clip.id,
         key: sourceKey(clip.source),
         src,
         mediaKey,
-        status: !src ? "empty" : (info?.status ?? "loading"),
+        status: !src ? "empty" : missing ? "error" : (info?.status ?? "loading"),
         duration,
         width: info?.width ?? null,
         height: info?.height ?? null,
@@ -156,11 +199,14 @@ export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaV
         frames: info?.frames ?? NO_FRAMES,
         sourceNodeId: edge?.sourceNodeId ?? null,
         sourceLabel: model ?? kind,
-        railSubtitle: [kind, model, duration !== null ? formatSeconds(duration) : null].filter(Boolean).join(" · "),
+        railSubtitle: [kind, model !== kind ? model : null, duration !== null ? formatSeconds(duration) : null]
+          .filter(Boolean)
+          .join(" · "),
+        missing,
       });
     }
     return views;
-  }, [sources, infos]);
+  }, [sources, infos, assets]);
 
   // The ready lengths go to the store, where the timeline maths reads them; only when they change
   useEffect(() => {

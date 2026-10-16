@@ -70,7 +70,7 @@ describe("migrateStitchTimeline (legacy)", () => {
 
 describe("migrateStitchTimeline (timeline present)", () => {
   it("returns the stored timeline sanitised, in its own order, ignoring clipOrder", () => {
-    const stored = [assetClip("x", "asset1"), edgeClip("b", "e2", { inSec: 1, volume: 7 }), edgeClip("a", "e1")];
+    const stored = [assetClip("x", "alibrary00001"), edgeClip("b", "e2", { inSec: 1, volume: 7 }), edgeClip("a", "e1")];
     const timeline = migrateStitchTimeline(
       { clipOrder: ["e1", "e2"], timeline: stored },
       { liveEdgeIds: ["e1", "e2", "e3"], hasMusic: true },
@@ -96,14 +96,24 @@ describe("sanitizeTimeline", () => {
       { id: "nosource" },
       { id: "badsource", source: { kind: "edge" } },
       { id: "a", source: { kind: "edge", edgeId: "e1", extra: 1 }, inSec: -2, outSec: "x", muted: "yes", volume: Infinity },
-      { id: "b", source: { kind: "asset", assetId: "x" }, inSec: 3, outSec: 2, muted: true, volume: 0.4 },
+      { id: "b", source: { kind: "asset", assetId: "alibrary00001" }, inSec: 3, outSec: 2, muted: true, volume: 0.4 },
       { id: "c", source: { kind: "edge", edgeId: "e2" }, inSec: 1, outSec: 4, volume: -3 },
     ];
     expect(sanitizeTimeline(raw)).toEqual([
       { id: "a", source: { kind: "edge", edgeId: "e1" }, inSec: 0, outSec: null, muted: false, volume: 1 },
-      { id: "b", source: { kind: "asset", assetId: "x" }, inSec: 3, outSec: null, muted: true, volume: 0.4 },
+      { id: "b", source: { kind: "asset", assetId: "alibrary00001" }, inSec: 3, outSec: null, muted: true, volume: 0.4 },
       { id: "c", source: { kind: "edge", edgeId: "e2" }, inSec: 1, outSec: 4, muted: false, volume: 0 },
     ]);
+  });
+
+  it("drops a library clip whose id is not an asset id, so no URL is ever built from it", () => {
+    const raw = [
+      assetClip("dots", "../browse-directory?purpose="),
+      assetClip("slash", "a000000000000/../../env-status"),
+      assetClip("upper", "A000000000000"),
+      assetClip("ok", "alibrary00001"),
+    ];
+    expect(sanitizeTimeline(raw).map((c) => c.id)).toEqual(["ok"]);
   });
 
   it("gives a repeated id a new one, the same on every read", () => {
@@ -117,7 +127,7 @@ describe("sanitizeTimeline", () => {
 
 describe("reconcileTimelineWithEdges", () => {
   it("drops every piece of a vanished edge and keeps asset clips in place", () => {
-    const timeline = [edgeClip("a", "e1"), assetClip("x", "asset1"), edgeClip("a2", "e1"), edgeClip("b", "e2")];
+    const timeline = [edgeClip("a", "e1"), assetClip("x", "alibrary00001"), edgeClip("a2", "e1"), edgeClip("b", "e2")];
     const result = reconcileTimelineWithEdges(timeline, ["e2"]);
     expect(result.changed).toBe(true);
     expect(result.timeline.map((c) => c.id)).toEqual(["x", "b"]);
@@ -132,14 +142,14 @@ describe("reconcileTimelineWithEdges", () => {
   });
 
   it("returns the same array when nothing changes", () => {
-    const timeline = [edgeClip("a", "e1"), assetClip("x", "asset1")];
+    const timeline = [edgeClip("a", "e1"), assetClip("x", "alibrary00001")];
     const result = reconcileTimelineWithEdges(timeline, ["e1"]);
     expect(result.changed).toBe(false);
     expect(result.timeline).toBe(timeline);
   });
 
   it("falls back to a fresh id when the edge's legacy id is taken", () => {
-    const timeline = [createClip({ kind: "asset", assetId: "x" }, { id: "clip:e1" })];
+    const timeline = [createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "clip:e1" })];
     const result = reconcileTimelineWithEdges(timeline, ["e1"]);
     expect(result.timeline[1].id).not.toBe("clip:e1");
     expect(result.timeline[1].id).toMatch(/^clip_/);
@@ -147,7 +157,7 @@ describe("reconcileTimelineWithEdges", () => {
 });
 
 describe("stitchOrderPatch", () => {
-  const timeline = [edgeClip("b", "e2"), assetClip("x", "asset1"), edgeClip("a", "e1")];
+  const timeline = [edgeClip("b", "e2"), assetClip("x", "alibrary00001"), edgeClip("a", "e1")];
 
   it("writes clipOrder alone for a legacy node", () => {
     expect(stitchOrderPatch({}, timeline)).toEqual({ clipOrder: ["e2", "e1"] });
@@ -164,13 +174,13 @@ describe("remapStitchEdgeIds", () => {
   it("rewrites the timeline's edges and clipOrder, leaving unknown ids alone", () => {
     const data = {
       clipOrder: ["e1", "e2", "e9"],
-      timeline: [edgeClip("a", "e1", { inSec: 1 }), assetClip("x", "asset1"), edgeClip("c", "e9")],
+      timeline: [edgeClip("a", "e1", { inSec: 1 }), assetClip("x", "alibrary00001"), edgeClip("c", "e9")],
     };
     const remapped = remapStitchEdgeIds(data, map);
     expect(remapped.clipOrder).toEqual(["n1", "n2", "e9"]);
     expect(remapped.timeline!.map((c) => c.source)).toEqual([
       { kind: "edge", edgeId: "n1" },
-      { kind: "asset", assetId: "asset1" },
+      { kind: "asset", assetId: "alibrary00001" },
       { kind: "edge", edgeId: "e9" },
     ]);
     expect(remapped.timeline![0].inSec).toBe(1);
@@ -189,11 +199,11 @@ describe("dropStitchEdges", () => {
     const bad = { id: "bad" } as unknown as StitchTimelineClip;
     const data = {
       clipOrder: ["e1", "e2"],
-      timeline: [edgeClip("a", "e1"), assetClip("x", "lib"), edgeClip("a2", "e1"), edgeClip("b", "e2"), bad],
+      timeline: [edgeClip("a", "e1"), assetClip("x", "alibrary00002"), edgeClip("a2", "e1"), edgeClip("b", "e2"), bad],
     };
     expect(dropStitchEdges(data, new Set(["e1"]))).toEqual({
       clipOrder: ["e2"],
-      timeline: [assetClip("x", "lib"), edgeClip("b", "e2"), bad],
+      timeline: [assetClip("x", "alibrary00002"), edgeClip("b", "e2"), bad],
     });
   });
 

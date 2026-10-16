@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CircleAlert, Film, TriangleAlert, VolumeX, X } from "lucide-react";
+import { CircleAlert, Film, LibraryBig, TriangleAlert, VolumeX, X } from "lucide-react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import {
@@ -38,6 +38,7 @@ import { assetFileUrl } from "@/lib/assets/client/api";
 import { openStitchEditor } from "@/components/stitch/openStitchEditor";
 import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMediaInfo";
+import { useStitchAssetInfo } from "@/hooks/useStitchAssetInfo";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 
@@ -120,7 +121,9 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   );
 
   // Write back only when the edges changed what is stored: a legacy node keeps
-  // writing clipOrder alone, a node the editor wrote gets its timeline too.
+  // writing clipOrder alone, a node the editor wrote gets its timeline too
+  // (the store already wrote a new connection's clip, appendConnectedStitchClips,
+  // so this catches only what reached the node another way).
   // The draft only says when to look. The write is built from one store
   // snapshot, because the data prop catches up with the store a render after
   // the edges do, and a patch built from it would replace a newer timeline.
@@ -183,14 +186,33 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     return [...seen.values()];
   }, [cardClips]);
   const mediaInfo = useStitchMediaInfo(mediaEntries, "poster");
+  // The library's records for the library clips, read again when the card mounts and whenever the editor or a run
+  // reads them. A clip the library lost counts no time, as in the editor and the run (useStitchEditorMedia's rule):
+  // no record, or a record whose file is missing and a file that does not read either
+  const assetIds = useMemo(
+    () => draft.timeline.flatMap((clip) => (clip.source.kind === "asset" ? [clip.source.assetId] : [])),
+    [draft.timeline]
+  );
+  const assets = useStitchAssetInfo(assetIds);
+  const goneAssets = useMemo(() => {
+    const gone = new Set<string>();
+    for (const { clip, mediaKey } of cardClips) {
+      if (clip.source.kind !== "asset") continue;
+      const asset = assets.get(clip.source.assetId);
+      const info = mediaKey ? mediaInfo.get(mediaKey) : undefined;
+      if (asset === null || (asset?.missing === true && info?.status !== "ready")) gone.add(clip.source.assetId);
+    }
+    return gone;
+  }, [cardClips, assets, mediaInfo]);
   const durations = useMemo<SourceDurations>(() => {
     const known = new Map<SourceKey, number>();
     for (const { clip, mediaKey } of cardClips) {
+      if (clip.source.kind === "asset" && goneAssets.has(clip.source.assetId)) continue;
       const info = mediaKey ? mediaInfo.get(mediaKey) : undefined;
       if (info?.status === "ready" && info.duration !== null) known.set(sourceKey(clip.source), info.duration);
     }
     return known;
-  }, [cardClips, mediaInfo]);
+  }, [cardClips, mediaInfo, goneAssets]);
   const sequenceSec = sequenceDuration(draft.timeline, durations);
   // The length is shown once it is settled: every clip with a source read
   // (or found unreadable) and at least one length known. Until then it would
@@ -324,11 +346,22 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
                   : "ring-1 ring-white/8"
             }`}
           >
-            <ClipTileFace clip={clip} index={index} src={src} info={info} />
+            <ClipTileFace
+              clip={clip}
+              index={index}
+              src={src}
+              info={info}
+              gone={clip.source.kind === "asset" && goneAssets.has(clip.source.assetId)}
+            />
             <div className="absolute left-[3px] top-[3px] flex gap-[3px] text-neutral-300 drop-shadow-[0_1px_1.5px_rgba(0,0,0,0.9)]">
               {clip.muted && (
                 <span title="Clip audio muted" className="flex">
                   <VolumeX size={9} strokeWidth={2.5} aria-label="Clip audio muted" />
+                </span>
+              )}
+              {clip.source.kind === "asset" && (
+                <span title="From the library" className="flex">
+                  <LibraryBig size={9} strokeWidth={2.5} aria-label="From the library" />
                 </span>
               )}
             </div>
@@ -457,26 +490,31 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
 }
 
 /**
- * A tile's picture, or why there is none: a source that has not run, one that
- * is still being read, one that cannot be read, or a trim that starts past the
- * end of a source regenerated shorter. Only a readable clip shows its length.
+ * A tile's picture, or why there is none: a library clip the library no longer
+ * has, a source that has not run, one that is still being read, one that
+ * cannot be read, a trim that starts past the end of a source regenerated
+ * shorter, or a trim left shorter than one frame. Only a readable clip shows
+ * its length.
  */
 function ClipTileFace({
   clip,
   index,
   src,
   info,
+  gone,
 }: {
   clip: StitchTimelineClip;
   index: number;
   src: string | null;
   info: StitchMediaInfo | undefined;
+  gone: boolean;
 }) {
   const alert = (title: string) => (
     <div className="w-full h-full flex items-center justify-center text-neutral-500" title={title}>
       <CircleAlert size={10} strokeWidth={1.75} aria-label={title} />
     </div>
   );
+  if (gone) return alert("Not in the library");
   if (!src) return alert("Not generated yet");
   if (!info || info.status === "loading") {
     return (
@@ -489,6 +527,7 @@ function ClipTileFace({
   if (clip.inSec >= info.duration) return alert("Trim starts past the end of this video");
 
   const length = clipLength(clip, info.duration);
+  if (length === 0 && info.duration > 0) return alert("Trim is shorter than a frame");
   const poster = nearestFrame(info, clip.inSec + 0.25 * length);
   return (
     <>

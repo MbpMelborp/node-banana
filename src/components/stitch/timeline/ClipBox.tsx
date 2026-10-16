@@ -7,7 +7,7 @@ import { clipName } from "@/lib/stitch/labels";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { setClipMuted } from "../editorActions";
-import { GEOMETRY, LIFTED_CLIP } from "../editorStyles";
+import { GEOMETRY, LABEL_BAR, LIFTED_CLIP } from "../editorStyles";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { Filmstrip } from "./Filmstrip";
 
@@ -153,7 +153,7 @@ export function ClipBox({
         <div
           className={cn(
             "pointer-events-none absolute bottom-0 flex items-center gap-1.5 px-2 text-[11px] leading-none",
-            "bg-linear-to-t from-black/60 to-transparent",
+            LABEL_BAR,
             mode === "lifted" ? "left-0 right-0" : inset,
           )}
           style={{ height: GEOMETRY.labelBar }}
