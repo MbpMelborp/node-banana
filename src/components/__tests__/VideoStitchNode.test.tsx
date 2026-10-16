@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { VideoStitchNodeData } from "@/types";
 
 // Mock the workflow store
@@ -63,6 +63,12 @@ vi.mock("@/hooks/useStitchVideos", () => ({
   checkEncoderSupport: () => mockCheckEncoderSupport(),
 }));
 
+// Open editor opens the editor's store; the editor itself is not under test here
+const mockOpenStitchEditor = vi.fn();
+vi.mock("@/components/stitch/openStitchEditor", () => ({
+  openStitchEditor: (nodeId: string) => mockOpenStitchEditor(nodeId),
+}));
+
 vi.mock("@/components/Toast", () => ({
   useToast: { getState: () => ({ show: vi.fn() }) },
 }));
@@ -86,6 +92,22 @@ vi.mock("@/components/nodes/BaseNode", () => {
 import { VideoStitchNode } from "@/components/nodes/VideoStitchNode";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import { createClip } from "@/lib/stitch/timeline";
+import {
+  FILMSTRIP_FRAMES,
+  __resetMediaInfoForTests,
+  __setMediaExtractorForTests,
+  __setMediaInfoForTests,
+  type MediaExtractor,
+} from "@/lib/stitch/mediaInfo";
+
+/**
+ * jsdom cannot decode video: sources stay "loading" unless a test primes the
+ * media cache with __setMediaInfoForTests (keyed by the source's URL).
+ */
+const pendingExtractor = {
+  probe: () => new Promise<never>(() => {}),
+  open: () => new Promise<never>(() => {}),
+};
 
 /** Set up mock store state, merging overrides onto the base state. */
 function setMockStoreState(overrides: Record<string, unknown> = {}) {
@@ -130,6 +152,8 @@ describe("VideoStitchNode", () => {
     vi.clearAllMocks();
     mockCheckEncoderSupport.mockResolvedValue(true);
     setMockStoreState();
+    __resetMediaInfoForTests();
+    __setMediaExtractorForTests(pendingExtractor);
   });
 
   afterEach(() => {
@@ -373,34 +397,9 @@ describe("VideoStitchNode", () => {
     });
 
     describe("duration badges", () => {
-      /** jsdom cannot decode video: a <video> that loads, seeks and reports `duration`, and a canvas that encodes. */
-      function stubMedia(duration: number) {
-        const realCreate = document.createElement.bind(document);
-        vi.spyOn(document, "createElement").mockImplementation(((tag: string, options?: ElementCreationOptions) => {
-          if (tag === "video") {
-            const video: Record<string, unknown> = { duration, videoWidth: 160, videoHeight: 90, load() {} };
-            let src = "";
-            Object.defineProperty(video, "src", {
-              get: () => src,
-              set: (value: string) => {
-                src = value;
-                if (value) setTimeout(() => (video.onloadedmetadata as (() => void) | null)?.());
-              },
-            });
-            Object.defineProperty(video, "currentTime", {
-              set: () => setTimeout(() => (video.onseeked as (() => void) | null)?.()),
-            });
-            return video;
-          }
-          if (tag === "canvas") {
-            return { getContext: () => ({ drawImage() {} }), toDataURL: () => "data:image/jpeg;base64,AAAA" };
-          }
-          return realCreate(tag, options);
-        }) as typeof document.createElement);
-      }
-
-      it("keeps the badges after a write that does not touch the sequence", async () => {
-        stubMedia(5);
+      it("keeps the badges after a write that does not touch the sequence", () => {
+        __setMediaInfoForTests("blob:video1", { duration: 5 });
+        __setMediaInfoForTests("blob:video2", { duration: 5 });
         const graph = {
           edges: twoEdges.edges,
           nodes: [
@@ -411,13 +410,291 @@ describe("VideoStitchNode", () => {
         const props = createNodeProps({ clipOrder: ["e1", "e2"] });
         setGraph(graph, props.data);
         const { rerender } = render(<VideoStitchNode {...props} />);
-        await waitFor(() => expect(screen.getAllByText("5s")).toHaveLength(2));
+        expect(screen.getAllByText("5s")).toHaveLength(2);
 
         const looped = { ...props.data, loopCount: 2 as const };
         setGraph(graph, looped);
         rerender(<VideoStitchNode {...props} data={looped} />);
         expect(screen.getAllByText("5s")).toHaveLength(2);
       });
+    });
+  });
+
+  describe("Card", () => {
+    const STITCH_ID = "test-stitch-1";
+    const edge = (id: string, source: string, targetHandle: string) => ({
+      id,
+      source,
+      target: STITCH_ID,
+      sourceHandle: targetHandle === "audio" ? "audio" : "video",
+      targetHandle,
+    });
+    const generated = (id: string, outputVideo: string | null) => ({ id, type: "generateVideo", data: { outputVideo } });
+    /** Two generated clips: blob:v1 (5 s) on e1 and blob:v2 (4.4 s) on e2. */
+    const twoClips = {
+      edges: [edge("e1", "gen1", "video-0"), edge("e2", "gen2", "video-1")],
+      nodes: [generated("gen1", "blob:v1"), generated("gen2", "blob:v2")],
+    };
+
+    function renderCard(graph: { edges: unknown[]; nodes: unknown[] }, overrides: Partial<VideoStitchNodeData> = {}) {
+      const props = createNodeProps(overrides);
+      setMockStoreState({
+        edges: graph.edges,
+        nodes: [...graph.nodes, { id: STITCH_ID, type: "videoStitch", data: props.data }],
+      });
+      return render(<VideoStitchNode {...props} />);
+    }
+
+    beforeEach(() => {
+      __setMediaInfoForTests("blob:v1", { duration: 5 });
+      __setMediaInfoForTests("blob:v2", { duration: 4.4 });
+    });
+
+    it("opens the editor from Open editor", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      fireEvent.click(screen.getByRole("button", { name: "Open editor" }));
+      expect(mockOpenStitchEditor).toHaveBeenCalledWith(STITCH_ID);
+    });
+
+    it("keeps Open editor enabled with no clips", () => {
+      renderCard({ edges: [], nodes: [] });
+      expect(screen.getByRole("button", { name: "Open editor" })).not.toBeDisabled();
+    });
+
+    it("sums the sequence in the summary", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      expect(screen.getByText("2 clips")).toBeInTheDocument();
+      expect(screen.getByText("0:09")).toBeInTheDocument();
+      expect(screen.getByText("loop 1×")).toBeInTheDocument();
+    });
+
+    it("labels the loop chips with the multiplication sign", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      expect(screen.getByText("1×")).toBeInTheDocument();
+      expect(screen.getByText("3×")).toBeInTheDocument();
+      expect(screen.queryByText("1x")).toBeNull();
+    });
+
+    it("marks a clip whose sound is muted", () => {
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "a", muted: true }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "b" }),
+        ],
+      });
+      expect(screen.getAllByTitle("Clip audio muted")).toHaveLength(1);
+      expect(screen.getByTitle("Clip audio muted").closest("[data-clip-id]")).toHaveAttribute("data-clip-id", "a");
+    });
+
+    it("marks every clip of a legacy node with music, whose sound the music replaces", () => {
+      renderCard(
+        {
+          edges: [...twoClips.edges, edge("eM", "music", "audio")],
+          nodes: [...twoClips.nodes, { id: "music", type: "generateAudio", data: { outputAudio: null } }],
+        },
+        { clipOrder: ["e1", "e2"] }
+      );
+      expect(screen.getAllByTitle("Clip audio muted")).toHaveLength(2);
+    });
+
+    it("shows a trimmed clip's own length", () => {
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "a", inSec: 1 }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "b" }),
+        ],
+      });
+      const tile = document.querySelector('[data-clip-id="a"]') as HTMLElement;
+      expect(tile).toHaveTextContent("4s");
+      expect(screen.getByText("0:08")).toBeInTheDocument();
+    });
+
+    it("counts a trim that starts past its source's end as 0 s and says why", () => {
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "a", inSec: 6 }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "b" }),
+        ],
+      });
+      expect(screen.getByTitle("Trim starts past the end of this video")).toBeInTheDocument();
+      expect(screen.getByText("0:04")).toBeInTheDocument();
+    });
+
+    it("keeps the slot of a source that has not run", () => {
+      renderCard(
+        { edges: twoClips.edges, nodes: [generated("gen1", null), twoClips.nodes[1]] },
+        { clipOrder: ["e1", "e2"] }
+      );
+      expect(screen.getByTitle("Not generated yet").closest("[data-clip-id]")).toHaveAttribute(
+        "data-clip-id",
+        "clip:e1"
+      );
+      expect(screen.getByText("2 clips")).toBeInTheDocument();
+      expect(screen.getByText("0:04")).toBeInTheDocument();
+      expect(screen.getByText("Stitch")).not.toBeDisabled();
+    });
+
+    it("shows a library clip's tile, and Stitch to preview with no socket in use", () => {
+      __setMediaInfoForTests("a:x1", { duration: 3 });
+      renderCard(
+        { edges: [], nodes: [] },
+        { clipOrder: [], timeline: [createClip({ kind: "asset", assetId: "x1" }, { id: "lib" })] }
+      );
+      expect(document.querySelector('[data-clip-id="lib"]')).toHaveTextContent("3s");
+      expect(screen.getByText("Stitch to preview")).toBeInTheDocument();
+      expect(screen.queryByText("No clips connected")).toBeNull();
+    });
+
+    it("removes one piece of a split clip from the sequence without disconnecting its edge", () => {
+      const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "left", outSec: 2 });
+      const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "right", inSec: 2 });
+      const other = createClip({ kind: "edge", edgeId: "e2" }, { id: "other" });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [left, right, other] });
+      const remove = document.querySelector('[data-clip-id="right"] button') as HTMLElement;
+      expect(remove).toHaveAttribute("title", "Remove from stitch");
+      fireEvent.click(remove);
+      expect(mockRemoveEdge).not.toHaveBeenCalled();
+      expect(mockUpdateNodeData).toHaveBeenCalledWith(STITCH_ID, { timeline: [left, other], clipOrder: ["e1", "e2"] });
+    });
+
+    it("disconnects the edge when its last clip is removed", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      const remove = document.querySelector('[data-clip-id="clip:e2"] button') as HTMLElement;
+      expect(remove).toHaveAttribute("title", "Disconnect");
+      fireEvent.click(remove);
+      expect(mockRemoveEdge).toHaveBeenCalledWith("e2");
+      expect(mockUpdateNodeData).not.toHaveBeenCalledWith(STITCH_ID, expect.objectContaining({ timeline: expect.anything() }));
+    });
+
+    it("keeps a socket for every edge, up to the highest one in use", () => {
+      const { container } = renderCard(
+        {
+          edges: [edge("e0", "gen1", "video-0"), edge("e3", "gen2", "video-3")],
+          nodes: twoClips.nodes,
+        },
+        { clipOrder: ["e0", "e3"] }
+      );
+      const handles = [...container.querySelectorAll("[data-handleid^='video-']")].map((el) =>
+        el.getAttribute("data-handleid")
+      );
+      expect(handles).toEqual(["video-0", "video-1", "video-2", "video-3", "video-4"]);
+    });
+
+    it("has exactly one Stitch button", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      expect(screen.getAllByText("Stitch")).toHaveLength(1);
+    });
+
+    it("sums one loop in the summary and shows the loop apart", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], loopCount: 3 });
+      expect(screen.getByText("0:09")).toBeInTheDocument();
+      expect(screen.getByText("loop 3×")).toBeInTheDocument();
+    });
+
+    it("reads the loop chips from the same loop count as the summary", () => {
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], loopCount: 4 as unknown as 1 });
+      expect(screen.getByText("loop 1×")).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "1×" })).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("leaves the length out until every source is read", () => {
+      renderCard(
+        {
+          edges: [...twoClips.edges, edge("e3", "gen3", "video-2")],
+          nodes: [...twoClips.nodes, generated("gen3", "blob:v3")],
+        },
+        { clipOrder: ["e1", "e2", "e3"] }
+      );
+      expect(screen.getByText("3 clips")).toBeInTheDocument();
+      expect(screen.getByText("loop 1×")).toBeInTheDocument();
+      expect(screen.queryByText("0:09")).toBeNull();
+      expect(screen.queryByText("0:00")).toBeNull();
+    });
+
+    it("shows the lengths and the sum once the sources are read after the first render", async () => {
+      __resetMediaInfoForTests();
+      const extractor: MediaExtractor = {
+        probe: async () => ({ duration: 5, width: 160, height: 90, fps: 24 }),
+        open: async () => ({ duration: 5, width: 160, height: 90, frame: async () => "blob:f", close() {} }),
+      };
+      __setMediaExtractorForTests(extractor);
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      expect(screen.queryByText("5s")).toBeNull();
+      await waitFor(() => expect(screen.getAllByText("5s")).toHaveLength(2));
+      expect(await screen.findByText("0:10")).toBeInTheDocument();
+    });
+
+    it("shows a trimmed clip's poster from inside its own range", () => {
+      const frames = Array<string | null>(FILMSTRIP_FRAMES).fill(null);
+      frames[1] = "blob:p1";
+      frames[6] = "blob:p6";
+      __setMediaInfoForTests("blob:v1", { duration: 12, frames });
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "a", inSec: 0, outSec: 4 }),
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "b", inSec: 6 }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "c" }),
+        ],
+      });
+      const poster = (clipId: string) =>
+        (document.querySelector(`[data-clip-id="${clipId}"] img`) as HTMLImageElement | null)?.getAttribute("src");
+      expect(poster("a")).toBe("blob:p1");
+      expect(poster("b")).toBe("blob:p6");
+    });
+
+    it("gives the two pieces of a split clip their own posters", async () => {
+      __resetMediaInfoForTests();
+      // Each frame is named after its slot, so a filmstrip gives every piece a frame of its own
+      const extractor: MediaExtractor = {
+        probe: async () => ({ duration: 6, width: 160, height: 90, fps: 24 }),
+        open: async () => ({
+          duration: 6,
+          width: 160,
+          height: 90,
+          frame: async (time) => `blob:slot${Math.round((time * FILMSTRIP_FRAMES) / 6 - 0.5)}`,
+          close() {},
+        }),
+      };
+      __setMediaExtractorForTests(extractor);
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "left", outSec: 3 }),
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "right", inSec: 3 }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "other" }),
+        ],
+      });
+      const left = document.querySelector('[data-clip-id="left"]') as HTMLElement;
+      const right = document.querySelector('[data-clip-id="right"]') as HTMLElement;
+      // Poster times 0.75 s and 3.75 s: slots 1 and 7
+      expect(await within(left).findByRole("img")).toHaveAttribute("src", "blob:slot1");
+      expect(await within(right).findByRole("img")).toHaveAttribute("src", "blob:slot7");
+    });
+
+    it("says when a source cannot be read", () => {
+      __setMediaInfoForTests("blob:v1", { status: "error", duration: null });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"] });
+      expect(screen.getByTitle("Can't read this video").closest("[data-clip-id]")).toHaveAttribute(
+        "data-clip-id",
+        "clip:e1"
+      );
+    });
+
+    it("removes a library clip from the sequence", () => {
+      __setMediaInfoForTests("a:x1", { duration: 3 });
+      const lib = createClip({ kind: "asset", assetId: "x1" }, { id: "lib" });
+      const a = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
+      const b = createClip({ kind: "edge", edgeId: "e2" }, { id: "b" });
+      renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib, b] });
+      const remove = document.querySelector('[data-clip-id="lib"] button') as HTMLElement;
+      expect(remove).toHaveAttribute("title", "Remove from stitch");
+      fireEvent.click(remove);
+      expect(mockRemoveEdge).not.toHaveBeenCalled();
+      expect(mockUpdateNodeData).toHaveBeenCalledWith(STITCH_ID, { timeline: [a, b], clipOrder: ["e1", "e2"] });
     });
   });
 

@@ -6,7 +6,6 @@ import {
   Output,
   VideoSampleSink,
   VideoSampleSource,
-  EncodedPacketSink,
   AudioBufferSource,
   AudioBufferSink,
   BlobSource,
@@ -25,6 +24,7 @@ import {
   FALLBACK_HEIGHT,
   BASELINE_PIXEL_LIMIT,
   ensureEvenDimension,
+  measureVideoTrackDuration,
   readVideoTrackMetadata,
 } from '@/lib/video-probing';
 import {
@@ -35,11 +35,12 @@ import {
   type StitchMusicInput,
   type StitchOptions,
 } from '@/lib/stitch/engineTypes';
-import { FrameSlotter, planSequence, videoTrackDuration, type PlannedClip } from '@/lib/stitch/sequencePlan';
+import { FrameSlotter, planSequence, type PlannedClip } from '@/lib/stitch/sequencePlan';
 import {
   chooseMasterFormat,
   mixLoop,
   pcmFromAudioBuffer,
+  pcmHead,
   sliceChunksToRange,
   toMasterFormat,
   type LoopMix,
@@ -79,24 +80,7 @@ async function probeClip(input: Input): Promise<ClipProbe | null> {
   const { width, height, rotation, bitrate, averagePacketRate } = await readVideoTrackMetadata(videoTrack);
 
   // The same length the editor measures, so a clip lasts what the timeline shows
-  let trackDuration = 0;
-  try {
-    trackDuration = await videoTrack.computeDuration();
-  } catch {
-    try {
-      trackDuration = await input.computeDuration();
-    } catch (e) {
-      console.warn('Failed to compute duration', e);
-    }
-  }
-  // A last frame stored without a duration still gets its time on screen
-  let lastPacket: { timestamp: number; duration: number } | null = null;
-  try {
-    lastPacket = await new EncodedPacketSink(videoTrack).getPacket(Infinity, { metadataOnly: true });
-  } catch {
-    // Keep the track's own duration
-  }
-  const videoDuration = videoTrackDuration(trackDuration, lastPacket, averagePacketRate);
+  const videoDuration = await measureVideoTrackDuration(input, videoTrack, averagePacketRate);
 
   let firstTimestamp = 0;
   try {
@@ -425,12 +409,18 @@ export async function stitchVideosAsync(
           updateProgress('processing', 'Warning: no supported audio codec — audio skipped', 10);
         } else {
           audioCodec = chosen.codec;
+          // mixLoop plays loopCount loops of the music, in the master's samples: only that much of the song is
+          // converted (+1 for the resampler's last neighbour), however long it is
+          const musicPcm = (buffer: AudioBuffer) => {
+            const played = loopCount * Math.max(0, Math.round(plan.loopLength * chosen.format.sampleRate));
+            return pcmHead(buffer, (played * buffer.sampleRate) / chosen.format.sampleRate + 1);
+          };
           mix = {
             format: chosen.format,
             loopLength: plan.loopLength,
             clips: decoded.map(({ pcm, seqStart, gain }) => ({ pcm: toMasterFormat(pcm, chosen.format), seqStart, gain })),
             music: audibleMusic
-              ? { pcm: toMasterFormat(pcmFromAudioBuffer(audibleMusic.audio.buffer), chosen.format), curve: audibleMusic.curve }
+              ? { pcm: toMasterFormat(musicPcm(audibleMusic.audio.buffer), chosen.format), curve: audibleMusic.curve }
               : null,
           };
         }

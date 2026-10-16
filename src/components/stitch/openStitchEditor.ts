@@ -1,0 +1,30 @@
+import { useWorkflowStore } from "@/store/workflowStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { readStitchDraft } from "@/lib/stitch/draft";
+import { stitchReadContext } from "@/lib/stitch/sources";
+import type { VideoStitchNodeData } from "@/types";
+
+/** Opens the editor on a Stitch node with its migrated, reconciled draft. false if the node is gone. */
+export function openStitchEditor(nodeId: string): boolean {
+  const wf = useWorkflowStore.getState();
+  const node = wf.nodes.find((n) => n.id === nodeId && n.type === "videoStitch");
+  if (!node) return false;
+  const ctx = stitchReadContext(nodeId, wf.nodes, wf.edges, wf.dimmedNodeIds);
+  useStitchEditorStore.getState().open({
+    nodeId,
+    draft: readStitchDraft(node.data as VideoStitchNodeData, ctx),
+    canvasGeneration: wf.canvasGeneration,
+  });
+  return true;
+}
+
+/**
+ * The header's Expand, before any other editor: a Stitch node opens the Stitch
+ * editor (true even when the node is gone, since nothing else should expand
+ * it); any other type is left to the caller (false).
+ */
+export function openEditorForExpand(nodeId: string, nodeType: string): boolean {
+  if (nodeType !== "videoStitch") return false;
+  openStitchEditor(nodeId);
+  return true;
+}

@@ -99,8 +99,9 @@ vi.mock("mediabunny", () => {
     }
   }
   /**
-   * Yields one buffer from `start` to `end`, every sample at the track's `level`, in the
-   * track's decoded format (its container's unless `decoded` says otherwise); throws when `fails`.
+   * Yields one buffer from `start` to 0.1 s past `end` (a real decoder returns whole frames, so its last buffer
+   * runs past the range asked for), every sample at the track's `level`, in the track's decoded format (its
+   * container's unless `decoded` says otherwise); throws when `fails`.
    */
   class AudioBufferSinkMock {
     buffers: (start: number, end: number) => AsyncIterable<unknown>;
@@ -118,7 +119,7 @@ vi.mock("mediabunny", () => {
             if (track.fails) throw new Error("decode failed");
             const { sampleRate, numberOfChannels } = track.decoded ?? track;
             const timestamp = Math.max(0, start);
-            const length = Math.round((end - timestamp) * sampleRate);
+            const length = Math.round((end + 0.1 - timestamp) * sampleRate);
             const buffer = new MockAudioBuffer({ length, numberOfChannels, sampleRate });
             for (let c = 0; c < numberOfChannels; c++) buffer.getChannelData(c).fill(track.level);
             yield { buffer, timestamp, duration: length / sampleRate };
@@ -542,6 +543,33 @@ describe("useStitchVideos", () => {
         expect(sound[500]).toBe(0);
         expect(sound[1500]).toBe(0);
         expect(sound[1100]).toBeCloseTo(0.5, 6);
+      });
+
+      it("converts only the part of a long song the loops play, and plays it to the last sample", async () => {
+        // Clip sound at 1 kHz makes the master 1 kHz: the 750 Hz music is resampled. A copy of the whole song
+        // would be counted here
+        const copied: number[] = [];
+        class Watched extends Float32Array {
+          slice(start?: number, end?: number) {
+            const out = super.slice(start, end);
+            copied.push(out.length);
+            return out;
+          }
+        }
+        const data = new Watched(60 * 750).fill(0.5);
+        const music = { sampleRate: 750, numberOfChannels: 1, length: data.length, duration: 60, getChannelData: () => data };
+        const a = source("a", { duration: 1, level: 0 });
+        await stitchVideosAsync(
+          [clip(a)],
+          { audio: { buffer: music as unknown as AudioBuffer, duration: 60 }, curve: [], muted: false },
+          undefined,
+          undefined,
+          { loopCount: 3 },
+        );
+        expect(Math.max(0, ...copied)).toBeLessThan(10 * 750);
+        const sound = encodedSound();
+        expect(sound).toHaveLength(3 * SR);
+        expect(sound.every((v) => Math.abs(v - 0.5) < 1e-6)).toBe(true);
       });
 
       it("retries the codec at 48 kHz stereo when the master format has none", async () => {

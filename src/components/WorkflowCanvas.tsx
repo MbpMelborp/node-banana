@@ -126,6 +126,8 @@ import { selectCanvasOverview, setCanvasPanningClass } from "@/utils/canvasPerfo
 import { SplitGridTemplateModal } from "./splitgrid/SplitGridTemplateModal";
 import { createPortal } from "react-dom";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { openEditorForExpand } from "@/components/stitch/openStitchEditor";
 import { useAssetStore } from "@/store/assetStore";
 import { TutorialOverlay } from "./onboarding/TutorialOverlay";
 import { useFTUXStore } from "@/store/ftuxStore";
@@ -783,6 +785,7 @@ export function WorkflowCanvas() {
 
   // Stable callback for expanding a node from its header
   const handleExpandNode = useCallback((nodeId: string, nodeType: string) => {
+    if (openEditorForExpand(nodeId, nodeType)) return;
     if (nodeType === 'annotation') {
       const node = getNodeById(nodeId);
       if (!node) return;
@@ -1966,6 +1969,7 @@ export function WorkflowCanvas() {
       !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
       !useWorkflowStore.getState().isModalOpen &&
       !useAnnotationStore.getState().isModalOpen &&
+      !useStitchEditorStore.getState().isOpen &&
       !useFTUXStore.getState().tutorialActive &&
       !connectionDrop &&
       !nodeSearchMenu &&

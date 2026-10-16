@@ -1,5 +1,6 @@
-import { Input, BlobSource, ALL_FORMATS } from 'mediabunny';
+import { Input, BlobSource, ALL_FORMATS, EncodedPacketSink } from 'mediabunny';
 import type { InputVideoTrack, Rotation } from 'mediabunny';
+import { videoTrackDuration } from '@/lib/stitch/sequencePlan';
 
 export const DEFAULT_BITRATE = 8_000_000; // 8 Mbps
 export const MAX_OUTPUT_FPS = 60;
@@ -76,6 +77,38 @@ export const readVideoTrackMetadata = async (track: InputVideoTrack): Promise<Vi
     bitrate,
     averagePacketRate,
   };
+};
+
+/**
+ * A video track's length the way Stitch measures it, for the engine and the
+ * editor alike (one measurement, so a clip lasts what the timeline shows):
+ * the track's own duration (the input's when the track cannot say), plus one
+ * average frame interval when the last packet was stored without a duration
+ * (WebM from MediaRecorder). `averagePacketRate` is the full track's, as
+ * readVideoTrackMetadata reads it.
+ */
+export const measureVideoTrackDuration = async (
+  input: Input,
+  track: InputVideoTrack,
+  averagePacketRate: number,
+): Promise<number> => {
+  let trackDuration = 0;
+  try {
+    trackDuration = await track.computeDuration();
+  } catch {
+    try {
+      trackDuration = await input.computeDuration();
+    } catch (e) {
+      console.warn('Failed to compute duration', e);
+    }
+  }
+  let lastPacket: { timestamp: number; duration: number } | null = null;
+  try {
+    lastPacket = await new EncodedPacketSink(track).getPacket(Infinity, { metadataOnly: true });
+  } catch {
+    // Keep the track's own duration
+  }
+  return videoTrackDuration(trackDuration, lastPacket, averagePacketRate);
 };
 
 export const probeVideoMetadata = async (blob: Blob): Promise<VideoMetadata> => {

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TriangleAlert, X } from "lucide-react";
+import { CircleAlert, Film, TriangleAlert, VolumeX, X } from "lucide-react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import {
@@ -14,46 +14,54 @@ import {
   ScrubRow,
   Spinner,
   SummaryValues,
+  formatTime,
   type SocketSpec,
 } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useShallow } from "zustand/shallow";
-import type { VideoStitchNodeData } from "@/types";
+import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { readStitchDraft, type StitchReadContext } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchOrderPatch } from "@/lib/stitch/migrate";
 import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from "@/lib/stitch/sources";
-import { edgeIdsInOrder, moveClip } from "@/lib/stitch/timeline";
+import {
+  clipLength,
+  edgeIdsInOrder,
+  moveClip,
+  sequenceDuration,
+  sourceKey,
+  type SourceDurations,
+  type SourceKey,
+} from "@/lib/stitch/timeline";
+import { formatTileSeconds } from "@/lib/stitch/timecode";
+import { assetMediaKey, mediaKeyOf, nearestFrame, type StitchMediaInfo } from "@/lib/stitch/mediaInfo";
+import { assetFileUrl } from "@/lib/assets/client/api";
+import { openStitchEditor } from "@/components/stitch/openStitchEditor";
 import { checkEncoderSupport } from "@/hooks/useStitchVideos";
+import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMediaInfo";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 
 type VideoStitchNodeType = Node<VideoStitchNodeData, "videoStitch">;
 
-/** One filmstrip tile. */
+/** One filmstrip tile: a timeline clip and where its video is read from (null: its source has not run). */
 interface CardClip {
-  id: string;
-  edgeId: string;
-  videoData: string | null;
-}
-
-/** A tile's extracted frame and its source's length, kept in component state (never in node data). */
-interface TileThumbnail {
-  src: string;
-  duration: number;
+  clip: StitchTimelineClip;
+  src: string | null;
+  mediaKey: string | null;
 }
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "video", type: "video", label: "Output" }];
 const EMPTY_HEIGHT = 120;
 const LOOP_OPTIONS = [
-  { value: "1", label: "1x" },
-  { value: "2", label: "2x" },
-  { value: "3", label: "3x" },
+  { value: "1", label: "1×" },
+  { value: "2", label: "2×" },
+  { value: "3", label: "3×" },
 ];
+const SUMMARY_ICON = <Film size={14} strokeWidth={1.75} />;
 
 export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNodeType>) {
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
-  const [thumbnails, setThumbnails] = useState<Map<string, TileThumbnail>>(new Map());
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const removeEdge = useWorkflowStore((state) => state.removeEdge);
@@ -88,10 +96,20 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     useShallow((state) => edgeClipSourceTuple(id, state.nodes, state.edges, state.dimmedNodeIds))
   );
   const clipSources = useMemo(() => edgeClipSourcesFromTuple(sourceTuple), [sourceTuple]);
-  // Socket count follows every video edge, loops included, as before
-  const videoEdgeCount = useWorkflowStore(
-    (state) => state.edges.filter((e) => e.target === id && e.targetHandle?.startsWith("video-")).length
-  );
+  // Sockets follow every video edge, loops included: one per edge plus a free
+  // one, and never fewer than the highest in use, since handles are never
+  // renumbered and after a middle clip is removed a later edge still needs its socket
+  const videoSocketCount = useWorkflowStore((state) => {
+    let count = 0;
+    let highest = -1;
+    for (const e of state.edges) {
+      if (e.target !== id || !e.targetHandle?.startsWith("video-")) continue;
+      count++;
+      const index = Number(e.targetHandle.slice("video-".length));
+      if (Number.isInteger(index) && index > highest) highest = index;
+    }
+    return Math.max(count + 1, highest + 2, 2);
+  });
 
   // The sequence, migrated and reconciled on read (never written just by reading).
   // Keyed on the fields it reads, so a status or output write keeps the same tiles.
@@ -137,140 +155,58 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     updateNodeData(id, stitchOrderPatch(stored, fresh.timeline));
   }, [draft, id, updateNodeData]);
 
-  // The card's tiles: the sequence's edge clips, with their media
-  const orderedClips = useMemo<CardClip[]>(
+  // The card's tiles: every clip of the sequence, with where its video is read from
+  const cardClips = useMemo<CardClip[]>(
     () =>
-      draft.timeline.flatMap((clip) => {
-        if (clip.source.kind !== "edge") return [];
-        const source = clipSources.get(clip.source.edgeId);
-        return [{ id: clip.id, edgeId: clip.source.edgeId, videoData: source?.media ?? null }];
+      draft.timeline.map((clip) => {
+        if (clip.source.kind === "asset") {
+          return { clip, src: assetFileUrl(clip.source.assetId), mediaKey: assetMediaKey(clip.source.assetId) };
+        }
+        const media = clipSources.get(clip.source.edgeId)?.media ?? null;
+        return { clip, src: media, mediaKey: media ? mediaKeyOf(media) : null };
       }),
     [draft.timeline, clipSources]
   );
 
-  // Stable key that only changes when clip edges or video data actually change
-  const clipKey = useMemo(
-    () => orderedClips.map((c) => `${c.id}:${c.videoData ? c.videoData.slice(-20) : "0"}`).join(","),
-    [orderedClips]
-  );
+  // Lengths and posters from the cache the editor shares (never node data).
+  // A trimmed clip (a split piece is one) needs frames inside its own range,
+  // which the single poster frame is not, so its source gets the filmstrip.
+  const mediaEntries = useMemo(() => {
+    const seen = new Map<string, StitchMediaEntry>();
+    for (const { clip, src, mediaKey } of cardClips) {
+      if (!src || !mediaKey) continue;
+      const trimmed = clip.inSec > 0 || clip.outSec !== null;
+      const entry = seen.get(mediaKey);
+      if (!entry) seen.set(mediaKey, { key: mediaKey, src, level: trimmed ? "filmstrip" : "poster" });
+      else if (trimmed) entry.level = "filmstrip";
+    }
+    return [...seen.values()];
+  }, [cardClips]);
+  const mediaInfo = useStitchMediaInfo(mediaEntries, "poster");
+  const durations = useMemo<SourceDurations>(() => {
+    const known = new Map<SourceKey, number>();
+    for (const { clip, mediaKey } of cardClips) {
+      const info = mediaKey ? mediaInfo.get(mediaKey) : undefined;
+      if (info?.status === "ready" && info.duration !== null) known.set(sourceKey(clip.source), info.duration);
+    }
+    return known;
+  }, [cardClips, mediaInfo]);
+  const sequenceSec = sequenceDuration(draft.timeline, durations);
+  // The length is shown once it is settled: every clip with a source read
+  // (or found unreadable) and at least one length known. Until then it would
+  // read 0:00 and count up as each source is probed.
+  const sequenceSettled =
+    durations.size > 0 &&
+    cardClips.every(({ mediaKey }) => !mediaKey || (mediaInfo.get(mediaKey)?.status ?? "loading") !== "loading");
 
-  // Ref-based cache so the effect doesn't read stale `thumbnails` state
-  const thumbnailsRef = useRef<Map<string, TileThumbnail>>(new Map());
-  // Fingerprint cache: clip id -> last-20-chars of videoData, used to detect which clips changed
-  const thumbnailFingerprintsRef = useRef<Map<string, string>>(new Map());
-
-  // Extract thumbnails from connected videos
-  useEffect(() => {
-    let cancelled = false;
-    let activeVideo: HTMLVideoElement | null = null;
-    let activeBlobUrl: string | null = null;
-
-    const cleanupVideo = (video: HTMLVideoElement, blobUrl?: string | null) => {
-      video.onloadedmetadata = null;
-      video.onerror = null;
-      video.onseeked = null;
-      video.src = "";
-      video.load();
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-
-    const extractThumbnails = async () => {
-      const newThumbnails = new Map<string, TileThumbnail>();
-      const newFingerprints = new Map<string, string>();
-
-      for (const clip of orderedClips) {
-        if (cancelled) return;
-        if (!clip.videoData) continue;
-
-        const fingerprint = clip.videoData.slice(-20);
-        newFingerprints.set(clip.id, fingerprint);
-
-        // Reuse cached thumbnail if the video data hasn't changed
-        const cachedFingerprint = thumbnailFingerprintsRef.current.get(clip.id);
-        if (cachedFingerprint === fingerprint && thumbnailsRef.current.has(clip.id)) {
-          newThumbnails.set(clip.id, thumbnailsRef.current.get(clip.id)!);
-          continue;
-        }
-
-        const video = document.createElement("video");
-        activeVideo = video;
-        activeBlobUrl = null;
-        // Convert data URLs to blob URLs for metadata loading efficiency
-        // (avoids re-parsing the full base64 payload into the element).
-        let blobUrl: string | null = null;
-        if (clip.videoData.startsWith("data:")) {
-          try {
-            const blob = await (await fetch(clip.videoData)).blob();
-            if (cancelled) return;
-            blobUrl = URL.createObjectURL(blob);
-            activeBlobUrl = blobUrl;
-          } catch {
-            blobUrl = null;
-          }
-        }
-        try {
-          video.src = blobUrl ?? clip.videoData;
-          video.crossOrigin = "anonymous";
-          video.muted = true;
-          video.preload = "metadata";
-
-          await new Promise<void>((resolve, reject) => {
-            video.onloadedmetadata = () => resolve();
-            video.onerror = () => reject(new Error("Failed to load video"));
-          });
-
-          if (cancelled) { cleanupVideo(video, blobUrl); return; }
-
-          const seekTime = video.duration * 0.25;
-          video.currentTime = seekTime;
-
-          await Promise.race([
-            new Promise<void>((resolve) => {
-              video.onseeked = () => resolve();
-            }),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Seek timeout")), 10_000)
-            ),
-          ]);
-
-          if (cancelled) { cleanupVideo(video, blobUrl); return; }
-
-          const canvas = document.createElement("canvas");
-          const thumbWidth = 160;
-          const rawAspectRatio = video.videoHeight > 0 ? video.videoWidth / video.videoHeight : 0;
-          const aspectRatio = Number.isFinite(rawAspectRatio) && rawAspectRatio > 0 ? rawAspectRatio : 16 / 9;
-          canvas.width = thumbWidth;
-          canvas.height = Math.round(thumbWidth / aspectRatio);
-          const ctx = canvas.getContext("2d");
-          if (!ctx) { cleanupVideo(video, blobUrl); continue; }
-
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          newThumbnails.set(clip.id, { src: canvas.toDataURL("image/jpeg", 0.7), duration: video.duration });
-        } catch (error) {
-          console.warn(`Failed to extract thumbnail for clip ${clip.id}:`, error);
-        }
-        cleanupVideo(video, blobUrl);
-        activeVideo = null;
-        activeBlobUrl = null;
-      }
-
-      if (!cancelled) {
-        thumbnailsRef.current = newThumbnails;
-        thumbnailFingerprintsRef.current = newFingerprints;
-        setThumbnails(newThumbnails);
-      }
-    };
-
-    extractThumbnails();
-    return () => {
-      cancelled = true;
-      if (activeVideo) {
-        cleanupVideo(activeVideo, activeBlobUrl);
-        activeVideo = null;
-        activeBlobUrl = null;
-      }
-    };
-  }, [clipKey]); // eslint-disable-line react-hooks/exhaustive-deps -- orderedClips accessed via closure, clipKey is the stable dep
+  // How many clips read each edge: the last one's ✕ disconnects it
+  const piecesByEdge = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const clip of draft.timeline) {
+      if (clip.source.kind === "edge") counts.set(clip.source.edgeId, (counts.get(clip.source.edgeId) ?? 0) + 1);
+    }
+    return counts;
+  }, [draft.timeline]);
 
   // Pointer-based drag reorder (HTML5 drag doesn't work inside React Flow nodes)
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
@@ -326,28 +262,36 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     setHoverClipId(null);
   }, [draggedClipId, hoverClipId, draft.timeline, nodeData, id, updateNodeData]);
 
+  // Removing the last clip of an edge disconnects the edge (otherwise
+  // reconciliation would bring the clip back); removing one piece of a split,
+  // or a library clip, takes it out of the sequence and leaves the edge connected
   const handleRemoveClip = useCallback(
-    (edgeId: string) => {
-      removeEdge(edgeId);
+    (clip: StitchTimelineClip) => {
+      if (clip.source.kind === "edge" && piecesByEdge.get(clip.source.edgeId) === 1) {
+        removeEdge(clip.source.edgeId);
+        return;
+      }
+      const next = draft.timeline.filter((c) => c.id !== clip.id);
+      if (next.length !== draft.timeline.length) updateNodeData(id, stitchOrderPatch(nodeData, next));
     },
-    [removeEdge]
+    [draft.timeline, piecesByEdge, nodeData, id, removeEdge, updateNodeData]
   );
 
   const handleStitch = useCallback(() => {
     regenerateNode(id);
   }, [id, regenerateNode]);
 
-  // Dynamic video input sockets: one per connected clip plus a free slot.
+  // Dynamic video input sockets: one per connected clip plus a free slot,
+  // and never fewer than the highest one in use.
   const inputSockets = useMemo<SocketSpec[]>(() => {
-    const count = Math.max(videoEdgeCount + 1, 2);
-    const sockets: SocketSpec[] = Array.from({ length: count }, (_, i) => ({
+    const sockets: SocketSpec[] = Array.from({ length: videoSocketCount }, (_, i) => ({
       id: `video-${i}`,
       type: "video",
       label: `Video ${i + 1}`,
     }));
     sockets.push({ id: "audio", type: "audio", label: "Audio" });
     return sockets;
-  }, [videoEdgeCount]);
+  }, [videoSocketCount]);
 
   const encoderChecking = nodeData.encoderSupported === null;
   const encoderUnsupported = nodeData.encoderSupported === false;
@@ -358,10 +302,13 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     ? { kind: "aspect" as const, aspect: loadedAspect?.src === nodeData.outputVideo ? loadedAspect.aspect : 16 / 9 }
     : { kind: "fixed" as const, height: EMPTY_HEIGHT };
 
+  const clipCount = draft.timeline.length;
   const filmstrip = (
     <div className="overflow-y-auto nowheel grid grid-cols-4 content-start gap-1.5 p-1.5 bg-well rounded-well squircle shadow-well max-h-[140px]">
-      {orderedClips.map((clip) => {
-        const thumbnail = thumbnails.get(clip.id);
+      {cardClips.map(({ clip, src, mediaKey }, index) => {
+        const info = mediaKey ? mediaInfo.get(mediaKey) : undefined;
+        // Removing the last clip of an edge disconnects it (handleRemoveClip)
+        const isLastPiece = clip.source.kind === "edge" && piecesByEdge.get(clip.source.edgeId) === 1;
         return (
           <div
             key={clip.id}
@@ -369,30 +316,26 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
             onPointerDown={(e) => handlePointerDown(e, clip.id)}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            className={`nodrag relative w-full aspect-video bg-neutral-800 border rounded cursor-move transition-colors group ${
+            className={`nodrag relative w-full aspect-video rounded overflow-hidden bg-neutral-800 cursor-move transition-shadow group ${
               draggedClipId === clip.id
-                ? "opacity-50 border-blue-500"
+                ? "opacity-50 ring-1 ring-selection"
                 : hoverClipId === clip.id && draggedClipId
-                  ? "border-blue-400 ring-1 ring-blue-400/50"
-                  : "border-neutral-600 hover:border-neutral-500"
+                  ? "ring-2 ring-blue-400/60"
+                  : "ring-1 ring-white/8"
             }`}
           >
-            {thumbnail ? (
-              <img src={thumbnail.src} alt={`Clip ${clip.edgeId}`} className="w-full h-full object-cover rounded" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <Spinner size={14} className="text-neutral-500" />
-              </div>
-            )}
-            {thumbnail?.duration ? (
-              <div className="absolute bottom-1 right-1 bg-black/70 px-1 py-0.5 rounded text-[8px] text-white">
-                {Math.round(thumbnail.duration)}s
-              </div>
-            ) : null}
+            <ClipTileFace clip={clip} index={index} src={src} info={info} />
+            <div className="absolute left-[3px] top-[3px] flex gap-[3px] text-neutral-300 drop-shadow-[0_1px_1.5px_rgba(0,0,0,0.9)]">
+              {clip.muted && (
+                <span title="Clip audio muted" className="flex">
+                  <VolumeX size={9} strokeWidth={2.5} aria-label="Clip audio muted" />
+                </span>
+              )}
+            </div>
             <button
-              onClick={() => handleRemoveClip(clip.edgeId)}
+              onClick={() => handleRemoveClip(clip)}
               className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-600/80 hover:bg-red-500 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-              title="Disconnect"
+              title={isLastPiece ? "Disconnect" : "Remove from stitch"}
             >
               <X size={10} strokeWidth={2} />
             </button>
@@ -412,19 +355,25 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
       inputs={inputSockets}
       outputs={OUTPUT_SOCKETS}
       minWidth={300}
-      mediaClassName="group"
+      // The sockets can make the card taller than the clip: the clip grows to fill it (on black, behind a letterboxed output)
+      cardClassName="flex flex-col"
+      mediaClassName={showOutput ? "group grow bg-black" : "group grow"}
       gap={showOutput ? <ScrubRow videoRef={videoAutoplayRef} src={videoBlobUrl} className="w-full" /> : undefined}
       controls={
         <ControlsCard
           id={id}
           summary={{
-            title: `${orderedClips.length} clip${orderedClips.length === 1 ? "" : "s"}`,
-            values: <SummaryValues items={[`loop ${nodeData.loopCount || 1}x`]} />,
+            icon: SUMMARY_ICON,
+            title: `${clipCount} clip${clipCount === 1 ? "" : "s"}`,
+            // One loop, in m:ss as the scrub row reads the stitched video, so the two agree at 1×
+            values: (
+              <SummaryValues items={[sequenceSettled ? formatTime(sequenceSec) : "", `loop ${draft.loopCount}×`]} />
+            ),
           }}
           expanded={expanded}
           onToggle={() => setExpanded((v) => !v)}
         >
-          {orderedClips.length > 0 ? (
+          {clipCount > 0 ? (
             <FieldRow className="h-auto">
               <div className="w-full">{filmstrip}</div>
             </FieldRow>
@@ -433,16 +382,17 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
           )}
           <Field label="Loop">
             <ChipGroup
-              value={String(nodeData.loopCount || 1)}
+              value={String(draft.loopCount)}
               options={LOOP_OPTIONS}
               onChange={(v) => updateNodeData(id, { loopCount: Number(v) as 1 | 2 | 3 })}
             />
           </Field>
           <FieldRow className="justify-end">
+            <PanelButton onClick={() => openStitchEditor(id)}>Open editor</PanelButton>
             <PanelButton
               primary
               onClick={handleStitch}
-              disabled={orderedClips.length < 2 || nodeData.status === "loading" || isRunning}
+              disabled={clipCount < 2 || nodeData.status === "loading" || isRunning}
             >
               {nodeData.status === "loading" ? "Processing..." : "Stitch"}
             </PanelButton>
@@ -476,7 +426,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
             loop
             muted
             playsInline
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-contain"
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
               if (v.videoWidth > 0 && v.videoHeight > 0 && nodeData.outputVideo) {
@@ -493,7 +443,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
           </button>
         </>
       ) : (
-        <EmptyState message={orderedClips.length === 0 ? "Connect videos to stitch" : "Stitch to preview"} />
+        <EmptyState message={clipCount === 0 ? "Connect videos to stitch" : "Stitch to preview"} />
       )}
 
       {encoderReady && nodeData.status === "loading" && (
@@ -503,5 +453,56 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
         </div>
       )}
     </NodeShell>
+  );
+}
+
+/**
+ * A tile's picture, or why there is none: a source that has not run, one that
+ * is still being read, one that cannot be read, or a trim that starts past the
+ * end of a source regenerated shorter. Only a readable clip shows its length.
+ */
+function ClipTileFace({
+  clip,
+  index,
+  src,
+  info,
+}: {
+  clip: StitchTimelineClip;
+  index: number;
+  src: string | null;
+  info: StitchMediaInfo | undefined;
+}) {
+  const alert = (title: string) => (
+    <div className="w-full h-full flex items-center justify-center text-neutral-500" title={title}>
+      <CircleAlert size={10} strokeWidth={1.75} aria-label={title} />
+    </div>
+  );
+  if (!src) return alert("Not generated yet");
+  if (!info || info.status === "loading") {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <Spinner size={14} className="text-neutral-500" />
+      </div>
+    );
+  }
+  if (info.status === "error" || info.duration === null) return alert("Can't read this video");
+  if (clip.inSec >= info.duration) return alert("Trim starts past the end of this video");
+
+  const length = clipLength(clip, info.duration);
+  const poster = nearestFrame(info, clip.inSec + 0.25 * length);
+  return (
+    <>
+      {poster ? (
+        // eslint-disable-next-line @next/next/no-img-element -- an object URL the cache owns
+        <img src={poster} alt={`Clip ${index + 1}`} className="w-full h-full object-cover" draggable={false} />
+      ) : info.level === null || info.level === "metadata" ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <Spinner size={14} className="text-neutral-500" />
+        </div>
+      ) : null}
+      <span className="absolute right-[3px] bottom-[2px] font-mono text-[8px] leading-none text-neutral-200 [text-shadow:0_0_2px_rgb(0_0_0/0.9),0_1px_2px_rgb(0_0_0/0.8)]">
+        {formatTileSeconds(length)}
+      </span>
+    </>
   );
 }
