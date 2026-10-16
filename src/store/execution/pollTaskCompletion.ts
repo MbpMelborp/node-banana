@@ -160,9 +160,15 @@ export async function pollGenerateTask(
         continue;
       }
 
-      // Other 4xx errors are not recoverable
       const errorText = await response.text().catch(() => "");
-      return { success: false, error: errorDetail(response.status, errorText) };
+      const detail = errorDetail(response.status, errorText);
+      // The provider refused the check (no key, or a rejected one), which says
+      // nothing about the run itself
+      if (response.status === 401 || response.status === 402 || response.status === 403) {
+        throw stoppedWaiting(`could not check on the run (${detail}), and it may still be going on ${providerName}`);
+      }
+      // Any other 4xx is final: the provider's reason for failing the run
+      return { success: false, error: detail };
     }
 
     let result: GenerateResponse;

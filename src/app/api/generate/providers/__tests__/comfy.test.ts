@@ -368,6 +368,22 @@ describe("fetchComfyMediaResult", () => {
     expect(out.outputs?.[0]).toEqual({ type: "audio", data: `data:audio/mpeg;base64,${Buffer.from([9, 9]).toString("base64")}` });
   });
 
+  it("returns a refused result's explanation with the Router's status", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(refusal()) as unknown as typeof fetch;
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req");
+    expect(out).toEqual({
+      success: false,
+      statusCode: 400,
+      error: `${binding("kling/kling-v3").name}: ${REFUSAL_DETAIL} (content_policy_violation)`,
+    });
+  });
+
+  it("leaves a network failure without a status, so it is tried again", async () => {
+    global.fetch = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")) as unknown as typeof fetch;
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req");
+    expect(out).toEqual({ success: false, error: "fetch failed" });
+  });
+
   it("returns a 3D model as its URL", async () => {
     const meshy = binding("meshy/meshy-6");
     const path = meshy.result.media![0]!.split("|")[0]!.replace(/\[\*\]/g, "[0]");
@@ -522,7 +538,63 @@ describe("serving provider", () => {
   });
 });
 
+const REFUSAL_DETAIL =
+  "The model's generated output was refused by the provider's content policy. The output can differ on each run, so the same input may succeed if retried.";
+
+function refusal(): Response {
+  return new Response(JSON.stringify({ detail: REFUSAL_DETAIL, error_type: "content_policy_violation" }), {
+    status: 400,
+    headers: { "Content-Type": "application/json", "x-comfy-error-type": "content_policy_violation" },
+  });
+}
+
 describe("checkComfyTaskOnce", () => {
+  const SEEDANCE = "byteplus/dreamina-seedance-2-5-260628";
+
+  it("reports a refused run in the partner's words, read from the result URL", async () => {
+    const original = global.fetch;
+    try {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ status: "COMPLETED", error_type: "content_policy_violation" }), { status: 200 }))
+        .mockResolvedValueOnce(refusal());
+      global.fetch = fetchMock as unknown as typeof fetch;
+      expect(await checkComfyTaskOnce("t", "key", SEEDANCE, "3544457f")).toEqual({
+        status: "failed",
+        error: `${REFUSAL_DETAIL} (content_policy_violation)`,
+      });
+      expect(fetchMock.mock.calls[1]![0]).toBe("https://api.comfy.org/v2/models/byteplus/dreamina-seedance-2-5-260628/requests/3544457f");
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  it("falls back to the error code when the result URL has no explanation", async () => {
+    const original = global.fetch;
+    try {
+      for (const result of [
+        () => Promise.resolve(new Response("{}", { status: 400 })),
+        () => Promise.reject(new TypeError("fetch failed")),
+      ]) {
+        global.fetch = vi.fn()
+          .mockResolvedValueOnce(new Response(JSON.stringify({ status: "COMPLETED", error_type: "content_policy_violation" }), { status: 200 }))
+          .mockImplementationOnce(result) as unknown as typeof fetch;
+        expect(await checkComfyTaskOnce("t", "key", SEEDANCE, "r1")).toEqual({ status: "failed", error: "Comfy Router: content_policy_violation" });
+      }
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  it("marks a refused status check with the Router's status, not as the run's failure", async () => {
+    const original = global.fetch;
+    try {
+      global.fetch = vi.fn().mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
+      expect(await checkComfyTaskOnce("t", "key", SEEDANCE, "r1")).toEqual({ status: "failed", error: "Comfy API key was rejected", statusCode: 401 });
+    } finally {
+      global.fetch = original;
+    }
+  });
+
   it("keeps polling through a transient 503 or 429 from the status route", async () => {
     const original = global.fetch;
     try {

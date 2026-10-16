@@ -148,6 +148,15 @@ describe("pollGenerateTask", () => {
     expect(pollTimes).toHaveLength(10);
   });
 
+  it("stops waiting on a refused key, keeping the request: it says nothing about the run", async () => {
+    const { error, pollTimes } = await pollOnFakeTime(() => ({ ok: false, status: 401, text: () => Promise.resolve(JSON.stringify({ success: false, error: "Comfy API key not configured" })) }));
+    expect(error).toBeInstanceOf(GenerationStillRunningError);
+    expect((error as Error).message).toBe(
+      "Seedance 2.5: could not check on the run (Comfy API key not configured), and it may still be going on Comfy Router (request 3544457f). The node keeps the request; pick it up again from the node."
+    );
+    expect(pollTimes).toHaveLength(1);
+  });
+
   it("throws an AbortError when the run is stopped, whatever the net", async () => {
     const { error, pollTimes } = await pollOnFakeTime(() => json(RUNNING), { abortAfter: 60_000 });
     expect(error).toBeInstanceOf(DOMException);
