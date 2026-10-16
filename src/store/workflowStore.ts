@@ -35,6 +35,7 @@ import {
   EdgeStyle,
   EdgeAppearance,
   WorkflowEdgeData,
+  PendingGenerationTask,
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { useToast } from "@/components/Toast";
@@ -158,6 +159,8 @@ import {
   executeConditionalSwitch,
   executeComfyApp,
   runBatchIfApplicable,
+  resumePendingTask,
+  canResumePendingTask,
 } from "./execution";
 import type { NodeExecutionContext } from "./execution";
 export type { LevelGroup } from "./utils/executionUtils";
@@ -405,6 +408,12 @@ export interface WorkflowStore {
   _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null) => NodeExecutionContext;
   executeWorkflow: (startFromNodeId?: string) => Promise<void>;
   regenerateNode: (nodeId: string) => Promise<void>;
+  /**
+   * Pick up the provider request a generate node kept (`pendingTask`): poll
+   * it and finish it as its run would have. A single node's own run, outside
+   * any batch.
+   */
+  resumeGeneration: (nodeId: string) => Promise<void>;
   executeSelectedNodes: (nodeIds: string[]) => Promise<void>;
   stopWorkflow: () => void;
   /** Runs per press of Run, saved with the workflow (1–MAX_RUN_COUNT). */
@@ -634,6 +643,71 @@ function abortNodeRuns(state: WorkflowStore, reason: string): void {
     if (assetRun) closeAssetRun(assetRun, state);
   }
   nodeRuns.clear();
+}
+
+/**
+ * Start a node's own run (its Run button, or picking up a request it kept)
+ * once the caller has checked it may: its own abort and asset library run,
+ * beside any other node runs. `finish` ends it, and the last node run to
+ * end clears the running state and the log session.
+ */
+function startNodeRun(
+  get: () => WorkflowStore,
+  set: (partial: Partial<WorkflowStore>) => void,
+  nodeId: string
+): { controller: AbortController; assetRun: CurrentAssetRun | null; finish: () => Promise<void> } {
+  const controller = new AbortController();
+  const assetRun = openAssetRun(get);
+  nodeRuns.set(nodeId, { controller, assetRun });
+  set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
+  runStarts += 1;
+
+  const finish = async () => {
+    if (nodeRuns.get(nodeId)?.controller !== controller) return; // stopped, or the canvas went away
+    nodeRuns.delete(nodeId);
+    if (assetRun) closeAssetRun(assetRun, get());
+    if (nodeRuns.size > 0) {
+      set({ currentNodeIds: get().currentNodeIds.filter((id) => id !== nodeId) });
+      return;
+    }
+    set({ isRunning: false, currentNodeIds: [] });
+    saveLogSession();
+    await logger.endSession();
+  };
+  return { controller, assetRun, finish };
+}
+
+/**
+ * After a node's own run, the nodes reading its output directly: a 3D
+ * viewer fetches and loads the model, an output or gallery takes the media.
+ */
+async function runDirectConsumers(
+  get: () => WorkflowStore,
+  nodeId: string,
+  signal: AbortSignal,
+  assetRun: CurrentAssetRun | null
+): Promise<void> {
+  const downstreamEdges = get().edges.filter((e) => e.source === nodeId);
+  for (const edge of downstreamEdges) {
+    if (signal.aborted) break;
+    const targetNode = get().nodes.find((n) => n.id === edge.target);
+    if (!targetNode) continue;
+    const targetCtx = get()._buildExecutionContext(targetNode, signal, assetRun);
+    switch (targetNode.type) {
+      case "glbViewer":
+        await executeGlbViewer(targetCtx);
+        break;
+      case "output":
+        await executeOutput(targetCtx);
+        break;
+      case "outputGallery":
+        await executeOutputGallery(targetCtx);
+        break;
+      case "imageCompare":
+        await executeImageCompare(targetCtx);
+        break;
+    }
+  }
 }
 
 // How the latest executeWorkflow / executeSelectedNodes went, for runBatch:
@@ -2981,26 +3055,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Its own AbortController, so stopWorkflow() can cancel it, and its own
     // asset run, so its outputs are recorded under this run alone
-    const abortController = new AbortController();
-    const assetRun = openAssetRun(get);
     const firstNodeRun = nodeRuns.size === 0;
-    nodeRuns.set(nodeId, { controller: abortController, assetRun });
-    set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
-    runStarts += 1;
-
-    // The last node run to end clears the running state and the log session
-    const finish = async () => {
-      if (nodeRuns.get(nodeId)?.controller !== abortController) return; // stopped, or the canvas went away
-      nodeRuns.delete(nodeId);
-      if (assetRun) closeAssetRun(assetRun, get());
-      if (nodeRuns.size > 0) {
-        set({ currentNodeIds: get().currentNodeIds.filter((id) => id !== nodeId) });
-        return;
-      }
-      set({ isRunning: false, currentNodeIds: [] });
-      saveLogSession();
-      await logger.endSession();
-    };
+    const { controller: abortController, assetRun, finish } = startNodeRun(get, set, nodeId);
 
     if (firstNodeRun) await logger.startSession();
     logger.info('node.execution', 'Regenerating node', {
@@ -3070,28 +3126,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
       // After regeneration, execute directly connected downstream consumer nodes
       // (e.g. glbViewer needs to fetch+load 3D model from upstream nanoBanana)
-      const { edges: currentEdges } = get();
-      const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
-      for (const edge of downstreamEdges) {
-        if (abortController.signal.aborted) break;
-        const targetNode = get().nodes.find(n => n.id === edge.target);
-        if (!targetNode) continue;
-        const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal, assetRun);
-        switch (targetNode.type) {
-          case "glbViewer":
-            await executeGlbViewer(targetCtx);
-            break;
-          case "output":
-            await executeOutput(targetCtx);
-            break;
-          case "outputGallery":
-            await executeOutputGallery(targetCtx);
-            break;
-          case "imageCompare":
-            await executeImageCompare(targetCtx);
-            break;
-        }
-      }
+      await runDirectConsumers(get, nodeId, abortController.signal, assetRun);
 
       logger.info('node.execution', 'Node regeneration completed successfully', { nodeId });
       await finish();
@@ -3107,6 +3142,37 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
       await finish();
     }
+  },
+
+  resumeGeneration: async (nodeId: string) => {
+    if (!canStartExecution(get().desktopConnected)) return;
+    // The same rules as a node's own Run: beside other node runs, never inside a workflow run
+    if (get().isRunning && nodeRuns.size === 0) {
+      logger.warn('node.execution', 'Cannot pick up a request, workflow already running', { nodeId });
+      return;
+    }
+    if (nodeRuns.has(nodeId)) {
+      logger.warn('node.execution', 'Node is already running', { nodeId });
+      return;
+    }
+    const node = get().nodes.find((n) => n.id === nodeId);
+    const task = (node?.data as { pendingTask?: PendingGenerationTask } | undefined)?.pendingTask;
+    if (!node || !task || !canResumePendingTask(node.type)) return;
+
+    const firstNodeRun = nodeRuns.size === 0;
+    const { controller, assetRun, finish } = startNodeRun(get, set, nodeId);
+    if (firstNodeRun) await logger.startSession();
+    logger.info('node.execution', 'Picking up a provider request', { nodeId, provider: task.provider, taskId: task.taskId });
+
+    try {
+      await resumePendingTask(get()._buildExecutionContext(node, controller.signal, assetRun));
+      await runDirectConsumers(get, nodeId, controller.signal, assetRun);
+      logger.info('node.execution', 'Picked-up request finished', { nodeId });
+    } catch (error) {
+      // The node already shows what happened
+      logger.error('node.error', 'Picked-up request did not finish', { nodeId }, error instanceof Error ? error : undefined);
+    }
+    await finish();
   },
 
   executeSelectedNodes: async (nodeIds: string[]) => {

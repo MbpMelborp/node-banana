@@ -13,6 +13,7 @@ vi.mock("@/utils/deduplicatedFetch", () => ({
 // Mock the workflow store
 const mockUpdateNodeData = vi.fn();
 const mockRegenerateNode = vi.fn();
+const mockResumeGeneration = vi.fn();
 const mockAddNode = vi.fn();
 const mockIncrementModalCount = vi.fn();
 const mockDecrementModalCount = vi.fn();
@@ -104,6 +105,7 @@ describe("GenerateVideoNode", () => {
       const state = {
         updateNodeData: mockUpdateNodeData,
         regenerateNode: mockRegenerateNode,
+        resumeGeneration: mockResumeGeneration,
         addNode: mockAddNode,
         incrementModalCount: mockIncrementModalCount,
         decrementModalCount: mockDecrementModalCount,
@@ -261,6 +263,58 @@ describe("GenerateVideoNode", () => {
       // Should still show the video element
       const video = container.querySelector("video");
       expect(video).toBeInTheDocument();
+    });
+  });
+
+  describe("Kept request", () => {
+    const pendingTask = {
+      provider: "comfy",
+      taskId: "3544457f-fe6b-4156-8176-7221ec9149a3",
+      modelId: "byteplus/dreamina-seedance-2-5-260628",
+      modelName: "Seedance 2.5",
+      mediaType: "video",
+      submittedAt: Date.now() - 12 * 60_000,
+    };
+    const stillRunning = "Seedance 2.5: still running on Comfy Router after 90 minutes (request 3544457f-fe6b-4156-8176-7221ec9149a3).";
+
+    it("offers to pick the request up instead of showing a failure", () => {
+      render(
+        <TestWrapper>
+          <GenerateVideoNode {...createNodeProps({ status: "error", error: stillRunning, pendingTask })} />
+        </TestWrapper>
+      );
+
+      expect(screen.getByText("May still be running on Comfy Router")).toBeInTheDocument();
+      expect(screen.getByText("Sent 12 min ago")).toBeInTheDocument();
+      expect(screen.getByText(pendingTask.taskId)).toBeInTheDocument();
+      expect(screen.queryByText(stillRunning)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Pick up" }));
+      expect(mockResumeGeneration).toHaveBeenCalledWith("test-node-1");
+    });
+
+    it("covers an earlier video, and copies the request id", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      render(
+        <TestWrapper>
+          <GenerateVideoNode {...createNodeProps({ status: "idle", outputVideo: "data:video/mp4;base64,abc123", pendingTask })} />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByText("See toast for details")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy request id" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(pendingTask.taskId));
+    });
+
+    it("shows the run, not the request, while it is being picked up", () => {
+      render(
+        <TestWrapper>
+          <GenerateVideoNode {...createNodeProps({ status: "loading", pendingTask })} />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByText("May still be running on Comfy Router")).not.toBeInTheDocument();
     });
   });
 

@@ -12,6 +12,7 @@ import type {
   ProviderSettings,
   ImageHistoryItem,
   RunBatchTag,
+  SelectedModel,
 } from "@/types";
 import type { ConnectedInputs } from "@/store/utils/connectedInputs";
 import type { AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
@@ -71,3 +72,14 @@ export interface NodeExecutionContext {
  * May throw on error (caller handles error reporting).
  */
 export type NodeExecutor = (ctx: NodeExecutionContext) => Promise<void>;
+
+/**
+ * What a generate run asked /api/generate for, which its output is recorded
+ * with. A request picked up again rebuilds it from the node (resumeGeneration).
+ */
+export interface GenerationRequest {
+  selectedModel: SelectedModel;
+  prompt: string | null;
+  parameters?: Record<string, unknown>;
+  dynamicInputs: Record<string, string | string[]>;
+}
