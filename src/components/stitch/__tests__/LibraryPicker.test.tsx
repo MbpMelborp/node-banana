@@ -55,10 +55,11 @@ import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import { __resetAssetInfoForTests, getAssetInfo } from "@/lib/stitch/assetInfo";
 import { __resetMediaInfoForTests, __setMediaExtractorForTests, __setMediaInfoForTests, mediaKeyOf } from "@/lib/stitch/mediaInfo";
 import { createClip, sourceKey } from "@/lib/stitch/timeline";
+import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import { LibraryPicker } from "../library/LibraryPicker";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
-import type { WorkflowNode } from "@/types";
+import type { StitchSequenceLayout, WorkflowNode } from "@/types";
 
 const editor = () => useStitchEditorStore.getState();
 const T0 = Date.UTC(2026, 9, 16, 12);
@@ -113,8 +114,13 @@ const facets = (projects: AssetFacets["projects"]): AssetFacets => ({
 
 const lastRequest = () => api.fetchAssetPage.mock.calls[api.fetchAssetPage.mock.calls.length - 1][0];
 
-/** An editor session with two clips, the picker open over it. */
-function openPicker({ workflowId = "wf_1" as string | null, clips = 2 } = {}) {
+/** An editor session with two clips of `clipSec` each, the picker open over it. */
+function openPicker({
+  workflowId = "wf_1" as string | null,
+  clips = 2,
+  clipSec = 4,
+  sequenceLayout = TRACK_LAYOUT as StitchSequenceLayout,
+} = {}) {
   useWorkflowStore.setState({ workflowId });
   act(() => {
     editor().open({
@@ -124,10 +130,13 @@ function openPicker({ workflowId = "wf_1" as string | null, clips = 2 } = {}) {
         audioCurve: [],
         audioMuted: false,
         loopCount: 1,
+        sequenceLayout,
       },
       canvasGeneration: 0,
     });
-    editor().setDurations(new Map(Array.from({ length: clips }, (_, i) => [sourceKey({ kind: "edge", edgeId: `e${i}` }), 4])));
+    editor().setDurations(
+      new Map(Array.from({ length: clips }, (_, i) => [sourceKey({ kind: "edge", edgeId: `e${i}` }), clipSec])),
+    );
     editor().setPickerOpen(true);
   });
   return render(<LibraryPicker />);
@@ -340,6 +349,19 @@ describe("LibraryPicker", () => {
     // Labelled from the page's records, with nothing asked again
     expect(getAssetInfo("a3")?.filename).toBe("a3.mp4");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add from library" })).toBeNull());
+  });
+
+  it("puts the playhead on a new clip's first frame in Stacked, where it starts under the last clip", async () => {
+    openPicker({ clips: 1, clipSec: 5, sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true } });
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    fireEvent.click(tile("a1.mp4"));
+    // The footer still says where it goes in the order, and how much footage is picked
+    expect(within(dialog()).getByText("goes after Clip 1")).toBeInTheDocument();
+    expect(within(dialog()).getByText("0:05.00")).toBeInTheDocument();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Add 1 clip" }));
+    expect(editor().draft!.timeline).toHaveLength(2);
+    // The 5 s clip ends at 5; the new 5 s clip starts 1 s before that
+    expect(editor().playhead).toBe(4);
   });
 
   it("cannot pick a video whose file is missing", async () => {

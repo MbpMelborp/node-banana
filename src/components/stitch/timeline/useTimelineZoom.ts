@@ -9,7 +9,8 @@ import {
   zoomToSlider,
   type TimeAxis,
 } from "@/lib/stitch/timeAxis";
-import { clipSpans, type ClipSpan } from "@/lib/stitch/timeline";
+import { draftSpans } from "@/lib/stitch/draft";
+import type { ClipSpan } from "@/lib/stitch/timeline";
 import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
 
 /**
@@ -19,6 +20,10 @@ import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
  * observed. A zoom keeps one moment where it was on screen: the pointer's
  * for the wheel, otherwise the playhead when it is in view, else the middle.
  * While the preview plays, it scrolls the lanes to keep the playhead in view.
+ *
+ * In Stacked the axis is linear: an empty clip sits in its own row and
+ * takes no width from the clips after it. Fit leaves room for its slot only
+ * where it would reach past the sequence's end.
  *
  * It also holds the lanes' scroll position for the parts drawn only across
  * the visible range (ticks, filmstrip frames). Every scroll it makes itself
@@ -79,13 +84,29 @@ const STEP = 1.5;
 const FOLLOW_AT = 0.9;
 const clampZoom = (pps: number) => Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, pps));
 
-const pxPerSecFor = (stored: number | null, spans: readonly ClipSpan[], laneWidth: number) =>
-  stored ??
-  fitPxPerSec(spans.length > 0 ? spans[spans.length - 1].end : 0, spans.filter((s) => s.length <= 0).length, laneWidth, {
-    origin: GEOMETRY.origin,
-    slotPx: GEOMETRY.emptySlot,
-    trailingPx: LANE_TRAILING_PX,
-  });
+const FIT_LAYOUT = { origin: GEOMETRY.origin, slotPx: GEOMETRY.emptySlot, trailingPx: LANE_TRAILING_PX };
+
+/**
+ * Fit's px/s. Track: every empty clip's slot shifts the clips after it, so all of them take room. Stacked: an empty clip's
+ * slot sits at its start in its own row and can reach past the sequence's end (when the clips after it are short), so
+ * the zoom is the largest at which the sequence and every slot still end inside the lane.
+ */
+function fitFor(spans: readonly ClipSpan[], laneWidth: number, stacked: boolean): number {
+  const total = spans.length > 0 ? spans[spans.length - 1].end : 0;
+  if (!stacked) return fitPxPerSec(total, spans.filter((s) => s.length <= 0).length, laneWidth, FIT_LAYOUT);
+  let pps = fitPxPerSec(total, 0, laneWidth, FIT_LAYOUT);
+  for (const span of spans) {
+    // A slot at 0 s ends at the same x whatever the zoom
+    if (span.length <= 0 && span.start > 0) pps = Math.min(pps, fitPxPerSec(span.start, 1, laneWidth, FIT_LAYOUT));
+  }
+  return pps;
+}
+
+const pxPerSecFor = (stored: number | null, spans: readonly ClipSpan[], laneWidth: number, stacked: boolean) =>
+  stored ?? fitFor(spans, laneWidth, stacked);
+
+/** The axis's slot width: Track's empty clips shift the clips after them; Stacked's sit at an instant in their own row. */
+const slotPxFor = (stacked: boolean) => (stacked ? 0 : GEOMETRY.emptySlot);
 
 /** The moment at lane x, and the pixels from that moment's own x to it (into an empty slot). */
 function anchorAt(axis: TimeAxis, x: number, viewX: number): { time: number; extra: number; viewX: number } {
@@ -93,7 +114,7 @@ function anchorAt(axis: TimeAxis, x: number, viewX: number): { time: number; ext
   return { time, extra: x - axis.timeToX(time), viewX };
 }
 
-export function useTimelineZoom(spans: readonly ClipSpan[]): TimelineZoom {
+export function useTimelineZoom(spans: readonly ClipSpan[], stacked = false): TimelineZoom {
   const stored = useStitchEditorStore((s) => s.pxPerSec);
   const setZoom = useStitchEditorStore((s) => s.setZoom);
   const [laneWidth, setLaneWidth] = useState(0);
@@ -107,10 +128,10 @@ export function useTimelineZoom(spans: readonly ClipSpan[]): TimelineZoom {
   const [scrollPosition] = useState(createScrollPosition);
   const latestLaneWidth = useRef(0);
 
-  const pxPerSec = pxPerSecFor(stored, spans, laneWidth);
+  const pxPerSec = pxPerSecFor(stored, spans, laneWidth, stacked);
   const axis = useMemo(
-    () => buildTimeAxis(spans, pxPerSec, GEOMETRY.origin, GEOMETRY.emptySlot),
-    [spans, pxPerSec],
+    () => buildTimeAxis(spans, pxPerSec, GEOMETRY.origin, slotPxFor(stacked)),
+    [spans, pxPerSec, stacked],
   );
   const latestAxis = useRef(axis);
 
@@ -132,8 +153,14 @@ export function useTimelineZoom(spans: readonly ClipSpan[]): TimelineZoom {
 
   const axisNow = useCallback(() => {
     const s = useStitchEditorStore.getState();
-    const now = s.draft ? clipSpans(s.draft.timeline, s.durations) : [];
-    return buildTimeAxis(now, pxPerSecFor(s.pxPerSec, now, latestLaneWidth.current), GEOMETRY.origin, GEOMETRY.emptySlot);
+    const now = s.draft ? draftSpans(s.draft, s.durations) : [];
+    const stackedNow = s.draft?.sequenceLayout.mode === "stacked";
+    return buildTimeAxis(
+      now,
+      pxPerSecFor(s.pxPerSec, now, latestLaneWidth.current, stackedNow),
+      GEOMETRY.origin,
+      slotPxFor(stackedNow),
+    );
   }, []);
 
   // After a zoom, scroll so the anchored moment is back where it was

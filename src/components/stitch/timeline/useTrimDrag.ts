@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { trimDragAt, trimTargets, type TrimDragResult, type TrimDragStart } from "@/lib/stitch/trimDrag";
-import { clipSpans, sourceKey, trimClip, type ClipSpan } from "@/lib/stitch/timeline";
+import { draftSpans } from "@/lib/stitch/draft";
+import { sourceKey, trimClip, type ClipSpan } from "@/lib/stitch/timeline";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { pause } from "../editorActions";
 import { releaseTypingFocus } from "./releaseTypingFocus";
@@ -50,9 +51,10 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
 
       // The draft as it is now (the field's blur may just have changed it), not as the last render saw it
       const editor = useStitchEditorStore.getState();
-      const timelineAtStart = editor.draft?.timeline;
-      if (!timelineAtStart) return;
-      const spans = clipSpans(timelineAtStart, editor.durations);
+      const draftAtStart = editor.draft;
+      if (!draftAtStart) return;
+      const timelineAtStart = draftAtStart.timeline;
+      const spans = draftSpans(draftAtStart, editor.durations);
       const span = spans.find((s) => s.clip.id === pressed.clip.id);
       if (!span) return;
       // In Fit, a length the blur changed changes the zoom the lane re-renders at: measure with that one
@@ -63,6 +65,19 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
       editor.select({ kind: "clip", clipId: span.clip.id });
 
       const laneX = (clientX: number) => clientX - (contentRef.current?.getBoundingClientRect().left ?? 0);
+      const stacked = draftAtStart.sequenceLayout.mode === "stacked";
+      const durations = editor.durations;
+      // Stacked draws the trim as release lays it out (Timeline): the edge there is the one a snap must meet
+      const liveEdgeTime = stacked
+        ? (trim: { inSec: number; outSec: number | null }) => {
+            // The patch release applies
+            const patch = edge === "out" ? { outSec: trim.outSec } : { inSec: trim.inSec };
+            const timeline = trimClip(timelineAtStart, span.clip.id, durations, patch);
+            const laidOut = draftSpans({ ...draftAtStart, timeline }, durations);
+            const moved = laidOut.find((s) => s.clip.id === span.clip.id);
+            return moved ? (edge === "out" ? moved.end : moved.start) : Number.NaN;
+          }
+        : undefined;
       const start: TrimDragStart = {
         span,
         edge,
@@ -71,7 +86,8 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
         pxPerSec: axis.pxPerSec,
         xToTime: axis.xToTime,
         // The playhead as drawn: one left past a sequence that got shorter sits at its end
-        targets: trimTargets(spans, span.clip.id, edge, Math.min(editor.playhead, axis.total)),
+        targets: trimTargets(spans, span.clip.id, edge, Math.min(editor.playhead, axis.total), stacked),
+        liveEdgeTime,
       };
       let moved = false;
       const update = (clientX: number, shiftKey: boolean) => {

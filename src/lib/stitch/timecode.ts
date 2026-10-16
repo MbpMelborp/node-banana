@@ -31,6 +31,13 @@ export function parseTimecode(text: string): number | null {
   return Number(timed[1]) * 60 + seconds;
 }
 
+const SECONDS_UNIT = /\s*(s|sec|secs|seconds)\.?$/i;
+
+/** parseTimecode after one trailing unit: "1", "1.5", "1,5", "1.0 s", "2s", "0:01.5". */
+export function parseSeconds(text: string): number | null {
+  return parseTimecode(text.trim().replace(SECONDS_UNIT, ""));
+}
+
 /** "4.20 s", "5.0 s"; signed "−0.80 s" / "+0.80 s" (a value that rounds to zero has no sign). */
 export function formatSeconds(sec: number, digits: 1 | 2 = 2, opts: { signed?: boolean } = {}): string {
   const value = Number.isFinite(sec) ? sec : 0;

@@ -31,6 +31,9 @@ export const TIMECODE_WELL = cn(
   "h-7 w-[88px] px-2 border-0 bg-editor-well shadow-well font-mono text-xs tabular-nums text-right text-neutral-100 focus-visible:ring-1 focus-visible:ring-neutral-500",
 );
 
+/** The Overlap well: the timecode well's type, 64px wide ("1.0 s"). */
+export const SECONDS_WELL = cn(TIMECODE_WELL, "w-16");
+
 /** Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 48, transport 44, rail 280) are its Tailwind classes. */
 export const GEOMETRY = {
   timeline: 200,
@@ -54,6 +57,14 @@ export const GEOMETRY = {
   emptySlot: 160,
   /** The lane's margin after the add slot, and the empty lane's placeholder's right margin. */
   endMargin: 16,
+  /** One clip per row in Stacked. */
+  stackRow: 52,
+  stackClipTop: 6,
+  stackClipHeight: 40,
+  /** 3.5 rows: the rows scroll vertically past this. */
+  stackRowsCap: 182,
+  /** The timeline's 1px border and an 8px horizontal scrollbar. */
+  stackSlack: 9,
 } as const;
 
 /** The room the lane keeps after the last clip: the add slot with its gap, and the end margin. Fit leaves it too. */

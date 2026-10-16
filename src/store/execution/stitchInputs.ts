@@ -10,6 +10,7 @@ import type { StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes
 import { requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { readStitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
+import { sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
 import { resolveEdgeVideo, resolveEdgeVideos } from "@/lib/stitch/sources";
 import type { NodeExecutionContext } from "./types";
@@ -22,6 +23,8 @@ export interface GatheredStitch {
   loopCount: 1 | 2 | 3;
   /** Playable clips, for the asset recording. */
   clipCount: number;
+  /** Stacked with an overlap; null for Track, every legacy node, and inputs gathered without edges. */
+  stack: { overlapSec: number; crossfade: boolean } | null;
 }
 
 type ClipMedia = { kind: "url"; url: string } | { kind: "asset"; assetId: string; position: number };
@@ -61,7 +64,11 @@ export async function gatherStitchInputs(
     draft.timeline.forEach((clip, index) => {
       const trim = { inSec: clip.inSec, outSec: clip.outSec, muted: clip.muted, volume: clip.volume };
       if (clip.source.kind === "asset") {
-        pending.push({ media: { kind: "asset", assetId: clip.source.assetId, position: index + 1 }, ...trim });
+        pending.push({
+          media: { kind: "asset", assetId: clip.source.assetId, position: index + 1 },
+          ...trim,
+          ...(legacy ? {} : { source: sourceKey(clip.source) }),
+        });
       } else if (legacy) {
         // Every video the edge carries, as the stitch always took them; none yet = not generated
         for (const url of resolveEdgeVideos(node.id, clip.source.edgeId, nodes, edges, dimmed)) {
@@ -69,7 +76,8 @@ export async function gatherStitchInputs(
         }
       } else {
         const url = resolveEdgeVideo(node.id, clip.source.edgeId, nodes, edges, dimmed);
-        if (url) pending.push({ media: { kind: "url", url }, ...trim });
+        // Split pieces share the key, so the engine joins them with a cut
+        if (url) pending.push({ media: { kind: "url", url }, ...trim, source: sourceKey(clip.source) });
       }
     });
   }
@@ -105,6 +113,7 @@ export async function gatherStitchInputs(
     outSec: clip.outSec,
     muted: clip.muted,
     volume: clip.volume,
+    ...(clip.source !== undefined ? { source: clip.source } : {}),
   }));
 
   let music: StitchMusicInput | null = null;
@@ -119,5 +128,12 @@ export async function gatherStitchInputs(
     }
   }
 
-  return { clips, music, loopCount: draft.loopCount, clipCount: clips.length };
+  // Without edges the clips play whole and carry no source keys: stacking them would dissolve where the editor shows cuts
+  const layout = draft.sequenceLayout;
+  const stack =
+    layout.mode === "stacked" && layout.overlapSec > 0 && !fromInputs
+      ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
+      : null;
+
+  return { clips, music, loopCount: draft.loopCount, clipCount: clips.length, stack };
 }

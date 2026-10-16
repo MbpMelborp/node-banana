@@ -11,8 +11,12 @@ import {
   clipSpans,
   createClip,
   edgeIdsInOrder,
+  inOverlap,
+  layersAt,
   moveClip,
   neighbourTarget,
+  originalEdgeTarget,
+  reanchorTime,
   removeClip,
   resetTrim,
   sequenceDuration,
@@ -20,9 +24,12 @@ import {
   snapTo,
   sourceKey,
   spanAtTime,
+  spansAt,
   splitClipAt,
+  topSpanAt,
   trimClip,
   updateClipAudio,
+  type ClipSpan,
   type SourceDurations,
   type SourceKey,
 } from "../timeline";
@@ -81,47 +88,47 @@ describe("clipLength", () => {
 describe("sequenceDuration and clipSpans", () => {
   it("sums the trimmed lengths", () => {
     const timeline = [edgeClip("a", "e1", { inSec: 1 }), edgeClip("b", "e2", { outSec: 2 }), edgeClip("c", "e3")];
-    expect(sequenceDuration(timeline, threeDurations)).toBe(4 + 2 + 6);
+    expect(sequenceDuration(timeline, threeDurations, 0)).toBe(4 + 2 + 6);
   });
 
   it("keeps zero-length spans in place", () => {
-    const spans = clipSpans([edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations);
+    const spans = clipSpans([edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations, 0);
     expect(spans.map((s) => [s.start, s.end])).toEqual([[0, 5], [5, 5], [5, 11]]);
   });
 });
 
 describe("spanAtTime", () => {
   it("reads precomputed spans the way clipAtTime reads a timeline", () => {
-    const spans = clipSpans(three(), threeDurations);
+    const spans = clipSpans(three(), threeDurations, 0);
     for (const t of [-1, 0, 4.99, 5, 9.5, 15, 99]) {
-      expect(spanAtTime(spans, t)?.clip.id).toBe(clipAtTime(three(), threeDurations, t)?.clip.id);
+      expect(spanAtTime(spans, t)?.clip.id).toBe(clipAtTime(three(), threeDurations, t, 0)?.clip.id);
     }
-    expect(spanAtTime(clipSpans([edgeClip("x", "missing")], threeDurations), 0)).toBeNull();
+    expect(spanAtTime(clipSpans([edgeClip("x", "missing")], threeDurations, 0), 0)).toBeNull();
   });
 });
 
 describe("clipAtTime", () => {
   it("returns the next clip at a boundary", () => {
-    expect(clipAtTime(three(), threeDurations, 5)?.clip.id).toBe("b");
+    expect(clipAtTime(three(), threeDurations, 5, 0)?.clip.id).toBe("b");
   });
 
   it("skips zero-length spans", () => {
     const timeline = [edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")];
-    expect(clipAtTime(timeline, threeDurations, 5)?.clip.id).toBe("c");
+    expect(clipAtTime(timeline, threeDurations, 5, 0)?.clip.id).toBe("c");
   });
 
   it("gives the last clip at or past the end and the first before the start", () => {
-    expect(clipAtTime(three(), threeDurations, 15)?.clip.id).toBe("c");
-    expect(clipAtTime(three(), threeDurations, 99)?.clip.id).toBe("c");
+    expect(clipAtTime(three(), threeDurations, 15, 0)?.clip.id).toBe("c");
+    expect(clipAtTime(three(), threeDurations, 99, 0)?.clip.id).toBe("c");
     // An empty span at either end (a source not generated yet) is never the answer
-    expect(clipAtTime([edgeClip("a", "e1"), edgeClip("x", "missing")], threeDurations, 99)?.clip.id).toBe("a");
-    expect(clipAtTime([edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations, -1)?.clip.id).toBe("c");
-    expect(clipAtTime(three(), threeDurations, -1)?.clip.id).toBe("a");
+    expect(clipAtTime([edgeClip("a", "e1"), edgeClip("x", "missing")], threeDurations, 99, 0)?.clip.id).toBe("a");
+    expect(clipAtTime([edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations, -1, 0)?.clip.id).toBe("c");
+    expect(clipAtTime(three(), threeDurations, -1, 0)?.clip.id).toBe("a");
   });
 
   it("is null for an empty timeline or one with only empty clips", () => {
-    expect(clipAtTime([], threeDurations, 0)).toBeNull();
-    expect(clipAtTime([edgeClip("x", "missing")], threeDurations, 0)).toBeNull();
+    expect(clipAtTime([], threeDurations, 0, 0)).toBeNull();
+    expect(clipAtTime([edgeClip("x", "missing")], threeDurations, 0, 0)).toBeNull();
   });
 });
 
@@ -248,26 +255,26 @@ describe("splitClipAt", () => {
 describe("setEdgeAtPlayhead", () => {
   it("sets In or Out to the source time under the playhead", () => {
     const timeline = three();
-    const withIn = setEdgeAtPlayhead(timeline, threeDurations, "b", "in", 6);
+    const withIn = setEdgeAtPlayhead(timeline, threeDurations, "b", "in", 6, 0);
     expect(withIn).not.toBe(timeline);
     expect(withIn![1]).toMatchObject({ inSec: 1, outSec: null });
-    const withOut = setEdgeAtPlayhead(timeline, threeDurations, "b", "out", 7);
+    const withOut = setEdgeAtPlayhead(timeline, threeDurations, "b", "out", 7, 0);
     expect(withOut![1]).toMatchObject({ inSec: 0, outSec: 2 });
   });
 
   it("is null when the playhead is outside the clip", () => {
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 12)).toBeNull();
-    expect(setEdgeAtPlayhead(three(), threeDurations, "missing", "in", 6)).toBeNull();
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", NaN)).toBeNull();
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", Infinity)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 12, 0)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "missing", "in", 6, 0)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", NaN, 0)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", Infinity, 0)).toBeNull();
   });
 
   it("is null for Out at the clip's start and In at its end", () => {
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", 5)).toBeNull();
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 9)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", 5, 0)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 9, 0)).toBeNull();
     // The near boundary still counts
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", 9)![1]).toMatchObject({ inSec: 0 });
-    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 5)![1]).toMatchObject({ inSec: 0 });
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "out", 9, 0)![1]).toMatchObject({ inSec: 0 });
+    expect(setEdgeAtPlayhead(three(), threeDurations, "b", "in", 5, 0)![1]).toMatchObject({ inSec: 0 });
   });
 });
 
@@ -296,20 +303,137 @@ describe("snapTo", () => {
 
 describe("neighbourTarget", () => {
   it("gives the next clip's start for an Out and the previous clip's end for an In", () => {
-    const spans = clipSpans(three(), threeDurations);
+    const spans = clipSpans(three(), threeDurations, 0);
     expect(neighbourTarget(spans, "a", "out")).toEqual({ t: 5, kind: "edge", label: "Clip 2" });
     expect(neighbourTarget(spans, "c", "in")).toEqual({ t: 9, kind: "edge", label: "Clip 2" });
   });
 
   it("is null at the sequence's ends", () => {
-    const spans = clipSpans(three(), threeDurations);
+    const spans = clipSpans(three(), threeDurations, 0);
     expect(neighbourTarget(spans, "c", "out")).toBeNull();
     expect(neighbourTarget(spans, "a", "in")).toBeNull();
   });
 
   it("skips empty clips", () => {
-    const spans = clipSpans([edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations);
+    const spans = clipSpans([edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("c", "e3")], threeDurations, 0);
     expect(neighbourTarget(spans, "a", "out")).toEqual({ t: 5, kind: "edge", label: "Clip 3" });
     expect(neighbourTarget(spans, "c", "in")).toEqual({ t: 5, kind: "edge", label: "Clip 1" });
+  });
+});
+
+describe("Stacked: overlapped spans", () => {
+  // Clips of 5, 5 and 6 s at a 1 s overlap: 0–5, 4–9, 8–14
+  const stackDurations = durations({ "edge:e1": 5, "edge:e2": 5, "edge:e3": 6 });
+  const stacked = () => clipSpans(three(), stackDurations, 1);
+  const butted = () => clipSpans(three(), stackDurations, 0);
+  const ids = (spans: readonly ClipSpan[]) => spans.map((s) => s.clip.id);
+
+  it("starts each clip the overlap before the previous one ends", () => {
+    const spans = stacked();
+    expect(spans.map((s) => [s.start, s.end])).toEqual([
+      [0, 5],
+      [4, 9],
+      [8, 14],
+    ]);
+    expect(spans.map((s) => [s.overlapIn, s.overlapOut])).toEqual([
+      [0, 1],
+      [1, 1],
+      [1, 0],
+    ]);
+    expect(sequenceDuration(three(), stackDurations, 1)).toBe(14);
+    expect(sequenceDuration([], stackDurations, 1)).toBe(0);
+  });
+
+  it("overlaps the clips either side of an empty one", () => {
+    const timeline = [edgeClip("a", "e1"), edgeClip("x", "missing"), edgeClip("b", "e2")];
+    const spans = clipSpans(timeline, stackDurations, 1);
+    expect(spans.map((s) => [s.start, s.end, s.overlapIn, s.overlapOut])).toEqual([
+      [0, 5, 0, 1],
+      [5, 5, 0, 0],
+      [4, 9, 1, 0],
+    ]);
+  });
+
+  it("gives today's spans with no overlap, and for a call without one", () => {
+    const twoArgs = clipSpans as unknown as (t: StitchTimelineClip[], d: SourceDurations) => ClipSpan[];
+    expect(twoArgs(three(), threeDurations)).toEqual(clipSpans(three(), threeDurations, 0));
+    expect(butted().map((s) => [s.start, s.end, s.overlapIn, s.overlapOut])).toEqual([
+      [0, 5, 0, 0],
+      [5, 10, 0, 0],
+      [10, 16, 0, 0],
+    ]);
+  });
+
+  it("finds the clips at an instant, earlier first, and the one the editor means", () => {
+    const spans = stacked();
+    expect(ids(spansAt(spans, 4.5))).toEqual(["a", "b"]);
+    expect(ids(spansAt(spans, 3))).toEqual(["a"]);
+    expect(spansAt(spans, 14)).toEqual([]);
+    expect(topSpanAt(spans, 4.5)?.clip.id).toBe("a");
+    expect(topSpanAt(spans, 4.5, "b")?.clip.id).toBe("b");
+    expect(topSpanAt(spans, 4.5, "c")?.clip.id).toBe("a");
+    expect(topSpanAt(spans, 6, "a")?.clip.id).toBe("b");
+    expect(topSpanAt(spans, 99)?.clip.id).toBe("c");
+    expect(inOverlap(spans, 4.5)).toBe(true);
+    expect(inOverlap(spans, 6)).toBe(false);
+    expect(clipAtTime(three(), stackDurations, 4.5, 1, "b")?.clip.id).toBe("b");
+    expect(clipAtTime(three(), stackDurations, 4.5, 1)?.clip.id).toBe("a");
+  });
+
+  it("layers the preview", () => {
+    const one = layersAt(butted(), 6, true);
+    expect(one.map((l) => [l.span.clip.id, l.opacity, l.gain])).toEqual([["b", 1, 1]]);
+
+    const p = 0.25;
+    const fade = layersAt(stacked(), 4 + p, true);
+    expect(fade.map((l) => l.span.clip.id)).toEqual(["a", "b"]);
+    expect(fade[0].opacity).toBe(1);
+    expect(fade[0].gain).toBeCloseTo(Math.cos((p * Math.PI) / 2), 12);
+    expect(fade[1].opacity).toBeCloseTo(p, 12);
+    expect(fade[1].gain).toBeCloseTo(Math.sin((p * Math.PI) / 2), 12);
+
+    const cut = layersAt(stacked(), 4 + p, false);
+    expect(cut.map((l) => [l.span.clip.id, l.opacity, l.gain])).toEqual([
+      ["a", 1, 1],
+      ["b", 0, 1],
+    ]);
+
+    expect(layersAt(clipSpans([edgeClip("x", "missing")], stackDurations, 1), 0, true)).toEqual([]);
+  });
+
+  it("re-anchors a time on the same clip and frame", () => {
+    expect(reanchorTime(butted(), stacked(), 6)).toBe(5);
+    expect(reanchorTime(stacked(), butted(), 5)).toBe(6);
+    expect(reanchorTime(butted(), stacked(), 16)).toBe(14);
+    expect(reanchorTime(butted(), stacked(), 99)).toBe(14);
+    expect(reanchorTime(stacked(), butted(), 4.5)).toBe(4.5);
+    expect(reanchorTime(stacked(), butted(), 4.5, "b")).toBe(5.5);
+  });
+
+  it("splits only outside an overlap, and moves nothing", () => {
+    const opts = { overlapSec: 1 };
+    expect(splitClipAt(three(), stackDurations, 4.5, () => "new", opts)).toBeNull();
+    expect(splitClipAt(three(), stackDurations, 4.5, () => "new", { ...opts, preferClipId: "b" })).toBeNull();
+    expect(splitClipAt(three(), stackDurations, 5 + MIN_CLIP_SEC / 2, () => "new", opts)).toBeNull();
+    expect(splitClipAt(three(), stackDurations, 8 - MIN_CLIP_SEC / 2, () => "new", opts)).toBeNull();
+
+    const result = splitClipAt(three(), stackDurations, 6, () => "new", { ...opts, preferClipId: "a" });
+    expect(result!.leftId).toBe("b");
+    expect(result!.timeline[1]).toMatchObject({ id: "b", inSec: 0, outSec: 2 });
+    expect(result!.timeline[2]).toMatchObject({ id: "new", inSec: 2, outSec: null });
+    const after = clipSpans(result!.timeline, stackDurations, 1);
+    expect(after.map((s) => s.start)).toEqual([0, 4, 6, 8]);
+    expect(sequenceDuration(result!.timeline, stackDurations, 1)).toBe(14);
+  });
+
+  it("sets an edge at a playhead inside the clip's overlapped span", () => {
+    expect(setEdgeAtPlayhead(three(), stackDurations, "b", "in", 4.5, 0)).toBeNull();
+    expect(setEdgeAtPlayhead(three(), stackDurations, "b", "in", 4.5, 1)![1]).toMatchObject({ inSec: 0.5 });
+  });
+
+  it("offers the dragged edge's own start as a snap target", () => {
+    const b = stacked()[1];
+    expect(originalEdgeTarget(b, "out")).toEqual({ t: 9, kind: "edge", label: "the original length" });
+    expect(originalEdgeTarget(b, "in")).toEqual({ t: 4, kind: "edge", label: "the original length" });
   });
 });

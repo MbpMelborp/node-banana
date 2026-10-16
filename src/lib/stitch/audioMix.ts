@@ -1,5 +1,6 @@
 import type { VolumePoint } from "@/types";
 import { gainAt } from "./curve";
+import { crossfadeGain } from "./stack";
 
 /**
  * The Stitch sound mix on plain sample arrays. The encoder takes one sample
@@ -229,6 +230,29 @@ export function clampSamples(channels: Float32Array[]): void {
   }
 }
 
+/**
+ * A stacked clip's crossfades, in place: an equal-power fade in over its first inLength samples, a fade out over
+ * [outStart, outStart + outLength), and silence after it (the next clip has taken over). Each sample's gain is read
+ * at its middle, so the two fades of one join sum to constant power sample for sample. Zero lengths change nothing.
+ * The PCM must belong to one clip: toMasterFormat can hand back the decoded buffer itself.
+ */
+export function applyCrossfades(
+  channels: Float32Array[],
+  fades: { inLength: number; outStart: number; outLength: number },
+): void {
+  const { inLength, outStart, outLength } = fades;
+  for (const channel of channels) {
+    const n = channel.length;
+    for (let i = 0; i < Math.min(inLength, n); i++) channel[i] *= crossfadeGain((i + 0.5) / inLength, "in");
+    if (outLength <= 0) continue;
+    const outEnd = outStart + outLength;
+    for (let i = Math.max(0, outStart); i < Math.min(outEnd, n); i++) {
+      channel[i] *= crossfadeGain((i - outStart + 0.5) / outLength, "out");
+    }
+    if (outEnd < n) channel.fill(0, Math.max(0, outEnd));
+  }
+}
+
 export interface LoopMix {
   format: MasterFormat;
   /** One loop of the sequence, in seconds. */
@@ -237,6 +261,8 @@ export interface LoopMix {
   clips: ReadonlyArray<{ pcm: Pcm; seqStart: number; gain: number }>;
   /** In the master format: the music the loops play (at least loopCount loops of it). Null when none or muted. */
   music: { pcm: Pcm; curve: readonly VolumePoint[] } | null;
+  /** Clips overlap in the sequence (stacked), so their sound can sum. */
+  clipsOverlap?: boolean;
 }
 
 /**
@@ -246,9 +272,10 @@ export interface LoopMix {
  * end), and the curve, which covers one loop, shapes it again each time.
  *
  * The result is hard-clipped only when sources can sum: music under clip
- * sound, or a gain above 1. Clips never overlap, so one source at a time
- * (every unedited node) passes its samples through as they were decoded,
- * overs included.
+ * sound, a gain above 1, or clips that overlap (stacked, said by the engine
+ * rather than read from the sample ranges, so a rounding-level touch between
+ * butted clips never turns it on). One source at a time (every unedited node)
+ * passes its samples through as they were decoded, overs included.
  */
 export function mixLoop(mix: LoopMix, loopIndex: number): Float32Array[] {
   const { sampleRate, channels } = mix.format;
@@ -267,7 +294,10 @@ export function mixLoop(mix: LoopMix, loopIndex: number): Float32Array[] {
     applyCurveGain(music, sampleRate, mix.music.curve);
     mixInto(out, music, 0, 1);
   }
-  const sums = (mix.music !== null && mix.clips.length > 0) || mix.clips.some((clip) => clip.gain > 1);
+  const sums =
+    mix.clipsOverlap === true ||
+    (mix.music !== null && mix.clips.length > 0) ||
+    mix.clips.some((clip) => clip.gain > 1);
   if (sums) clampSamples(out);
   else silenceNaN(out);
   return out;

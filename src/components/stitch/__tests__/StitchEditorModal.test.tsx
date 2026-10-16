@@ -14,7 +14,7 @@ import { createClip } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
-import { setLoopCount } from "../editorActions";
+import { setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
@@ -699,5 +699,281 @@ describe("StitchEditorModal", () => {
     act(() => useWorkflowStore.setState({ canvasGeneration: wf().canvasGeneration + 1 }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect("timeline" in stitchData()).toBe(false);
+  });
+
+  describe("in Stacked", () => {
+    // Clip 1 is 5 s and clip 2 is 4 s: 9 s end to end, 8 s overlapping by 1 s
+    const totalShown = (text: string) => screen.getAllByText(text).length > 0;
+    const overlapField = () => screen.getByRole("textbox", { name: "Overlap" }) as HTMLInputElement;
+    // The header's toggle, as a user switches
+    const layoutButton = (name: "Track" | "Stacked") =>
+      within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name });
+    const stack = () => fireEvent.click(layoutButton("Stacked"));
+
+    it("puts Track | Stacked in the header's right-hand group, before Undo and a divider", () => {
+      seed();
+      openEditor();
+      const toggle = screen.getByRole("group", { name: "Timeline layout" });
+      const undo = screen.getByRole("button", { name: "Undo" });
+      const done = screen.getByRole("button", { name: "Done" });
+      // One group with Undo and Done: the header's right side, which keeps its width
+      const group = toggle.parentElement!;
+      expect(group.contains(undo)).toBe(true);
+      expect(group.contains(done)).toBe(true);
+      expect(group.firstElementChild).toBe(toggle);
+      const divider = toggle.nextElementSibling!;
+      expect(divider).toHaveAttribute("aria-hidden", "true");
+      expect(divider).toHaveClass("w-px");
+      expect(divider.nextElementSibling!.contains(undo)).toBe(true);
+      // Not in the timeline, whose height a switch changes
+      expect(screen.getByRole("listbox", { name: "Clips" }).closest(".bg-editor-lanes")!.contains(toggle)).toBe(false);
+      // It switches from there, and back
+      stack();
+      expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+      expect(toggle.isConnected).toBe(true);
+      expect(screen.getByRole("group", { name: "Timeline layout" })).toBe(toggle);
+      fireEvent.click(layoutButton("Track"));
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(editor().past).toHaveLength(2);
+    });
+
+    it("switches to Stacked from the header, which shows Overlap, Crossfade and what they do; Track hides them", () => {
+      seed();
+      openEditor();
+      expect(screen.queryByRole("textbox", { name: "Overlap" })).toBeNull();
+      expect(screen.queryByRole("switch", { name: "Crossfade" })).toBeNull();
+      stack();
+      expect(overlapField().value).toBe("1.0 s");
+      expect(screen.getByRole("switch", { name: "Crossfade" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByText("Each join blends over 1.0 s.")).toBeInTheDocument();
+      expect(screen.getByText("Loop sequence")).toBeInTheDocument();
+      expect(totalShown("0:08.00")).toBe(true);
+      fireEvent.click(screen.getByRole("switch", { name: "Crossfade" }));
+      expect(editor().draft!.sequenceLayout.crossfade).toBe(false);
+      expect(screen.getByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeInTheDocument();
+      expect(layoutButton("Stacked")).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(layoutButton("Track"));
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(layoutButton("Track")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.queryByRole("textbox", { name: "Overlap" })).toBeNull();
+      expect(totalShown("0:09.00")).toBe(true);
+    });
+
+    it("keeps Crossfade under the pointer: the summary sits above the Overlap and Crossfade row, which rests on Loop", () => {
+      seed();
+      openEditor();
+      stack();
+      const crossfade = screen.getByRole("switch", { name: "Crossfade" });
+      const row = crossfade.closest(".h-9")!;
+      const footer = row.parentElement!;
+      expect(row.contains(overlapField())).toBe(true);
+      // The line first, the row last, then Loop sequence: what the line says changes the height above the row only
+      const line = screen.getByText("Each join blends over 1.0 s.");
+      expect(footer.firstElementChild).toBe(line);
+      expect(footer.lastElementChild).toBe(row);
+      expect(footer.nextElementSibling).toHaveTextContent("Loop sequence");
+      // One sentence, nothing reserved: the other crossfade sentence is not in the page
+      expect(footer.querySelectorAll("p")).toHaveLength(1);
+      expect(screen.queryByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeNull();
+      // In a short window the line is cut before the row moves; its full text is on hover
+      expect(line).toHaveAttribute("title", "Each join blends over 1.0 s.");
+      // Pressing the switch blurs a typed Overlap, which commits: the line follows at once, with no hold, and the row
+      // stays the footer's last element
+      fireEvent.pointerDown(crossfade);
+      act(() => setOverlapSec(3));
+      expect(line).toHaveTextContent(
+        "Each join blends over 3.0 s. The join into Clip 2 is 2.00 s: an overlap is at most half a clip.",
+      );
+      expect(line).toHaveAttribute("title", line.textContent);
+      expect(footer.firstElementChild).toBe(line);
+      expect(footer.lastElementChild).toBe(row);
+      fireEvent.click(crossfade);
+      expect(editor().draft!.sequenceLayout).toEqual({ mode: "stacked", overlapSec: 3, crossfade: false });
+      expect(footer.lastElementChild).toBe(row);
+    });
+
+    it("leaves the header's toggle inert while there are no clips", () => {
+      seed({ clips: false });
+      openEditor();
+      expect(screen.getByRole("group", { name: "Timeline layout", hidden: true })).toHaveAttribute("inert");
+    });
+
+    it("takes a typed Overlap, shortens the sequence by it, and ⌘Z puts it back", () => {
+      seed();
+      openEditor();
+      stack();
+      const field = overlapField();
+      field.focus();
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: "2" } });
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(editor().draft!.sequenceLayout.overlapSec).toBe(2);
+      expect(totalShown("0:07.00")).toBe(true);
+      press(document.body, "z", { metaKey: true });
+      expect(editor().draft!.sequenceLayout.overlapSec).toBe(1);
+      expect(overlapField().value).toBe("1.0 s");
+      expect(totalShown("0:08.00")).toBe(true);
+    });
+
+    it("names a join the half-clip cap shortens", () => {
+      seed();
+      openEditor();
+      stack();
+      act(() => setOverlapSec(3));
+      expect(
+        screen.getByText("Each join blends over 3.0 s. The join into Clip 2 is 2.00 s: an overlap is at most half a clip."),
+      ).toBeInTheDocument();
+    });
+
+    it("writes the layout on Done, in the same single write", () => {
+      seed();
+      openEditor();
+      // An earlier test's spy can outlive its restore: the store copies the spied function into each new state
+      const write = vi.spyOn(wf(), "updateNodeData");
+      write.mockClear();
+      stack();
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(write.mock.calls[0][1]).toEqual({
+        timeline: [expect.objectContaining({ id: "clip:eA" }), expect.objectContaining({ id: "clip:eB" })],
+        audioCurve: [],
+        audioMuted: false,
+        loopCount: 1,
+        clipOrder: ["eA", "eB"],
+        sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true },
+      });
+    });
+
+    it("says which layout change Cancel would drop", () => {
+      seed();
+      openEditor();
+      stack();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
+      expect(within(sheet).getByText("The switch to Stacked will be lost. The node keeps what it had.")).toBeInTheDocument();
+    });
+
+    it("turns Split off inside an overlap and says why", () => {
+      seed();
+      openEditor();
+      stack();
+      const split = () => screen.getByRole("button", { name: /Split at playhead/ });
+      act(() => editor().setPlayhead(4.5));
+      expect(split()).toBeDisabled();
+      expect(split()).toHaveAttribute("title", "Move the playhead out of the overlap to split");
+      act(() => editor().setPlayhead(2.5));
+      expect(split()).toBeEnabled();
+      expect(split()).not.toHaveAttribute("title");
+    });
+
+    it("leaves Track's elements to their classes after switching back from Stacked while playing", () => {
+      seed();
+      openEditor();
+      stack();
+      act(() => editor().setPlaying(true));
+      act(() => setSequenceMode("track"));
+      expect(editor().playing).toBe(false);
+      const videos = [...screen.getByTestId("stitch-preview").querySelectorAll("video")];
+      expect(videos).toHaveLength(2);
+      expect(videos.map((v) => v.style.opacity)).toEqual(["", ""]);
+      expect(videos.filter((v) => v.classList.contains("opacity-100"))).toHaveLength(1);
+    });
+
+    // As a mouse does it: the toggle keeps focus where it was on mousedown, then the click switches
+    const pressLayout = (name: "Track" | "Stacked") => {
+      fireEvent.mouseDown(layoutButton(name));
+      fireEvent.click(layoutButton(name));
+    };
+    const option = (name: string) => within(screen.getByRole("listbox", { name: "Clips" })).getByRole("option", { name });
+
+    it("keeps focus in the dialog, on the new lane's clip, when a switch removes the focused clip", () => {
+      seed();
+      const dialog = openEditor();
+      act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
+      act(() => option("Clip 2").focus());
+      pressLayout("Stacked");
+      expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+      expect(document.activeElement).toBe(option("Clip 2"));
+      // ⌘Z from a focused stacked clip switches back: focus lands on Track's clip
+      press(document.activeElement!, "z", { metaKey: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(document.activeElement).toBe(option("Clip 2"));
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it("keeps focus in the dialog when Track takes away the focused Crossfade switch", () => {
+      seed();
+      const dialog = openEditor();
+      stack();
+      const crossfade = screen.getByRole("switch", { name: "Crossfade" });
+      act(() => crossfade.focus());
+      fireEvent.click(crossfade);
+      pressLayout("Track");
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(document.activeElement).not.toBe(document.body);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it("commits an Overlap being typed when Track is clicked, and keeps focus in the dialog", () => {
+      seed();
+      const dialog = openEditor();
+      stack();
+      const field = overlapField();
+      act(() => field.focus());
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: "3" } });
+      pressLayout("Track");
+      expect(editor().draft!.sequenceLayout).toEqual({ mode: "track", overlapSec: 3, crossfade: true });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      // Two undo steps: the overlap, then the switch
+      press(document.body, "z", { metaKey: true });
+      expect(editor().draft!.sequenceLayout).toEqual({ mode: "stacked", overlapSec: 3, crossfade: true });
+    });
+
+    it("shows the frame under the playhead after switching back to Track at Overlap 0, and on ⌘Z and ⇧⌘Z", () => {
+      seed();
+      openEditor();
+      stack();
+      act(() => setOverlapSec(0));
+      act(() => editor().setPlayhead(7.5));
+      const clip2 = () =>
+        [...screen.getByTestId("stitch-preview").querySelectorAll("video")].find((v) => v.getAttribute("src") === "blob:b")!;
+      expect(clip2().currentTime).toBeCloseTo(2.5, 6);
+      // Track mounts its own elements; the spans and the playhead are the same as Stacked's at Overlap 0
+      act(() => setSequenceMode("track"));
+      expect(clip2().currentTime).toBeCloseTo(2.5, 6);
+      press(document.body, "z", { metaKey: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+      expect(clip2().currentTime).toBeCloseTo(2.5, 6);
+      press(document.body, "z", { metaKey: true, shiftKey: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(clip2().currentTime).toBeCloseTo(2.5, 6);
+    });
+
+    it("stops playing on a switch of layout, and on the ⌘Z that switches it back", async () => {
+      seed();
+      openEditor();
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+      act(() => editor().setPlaying(true));
+      expect(editor().playing).toBe(true);
+      expect(play).toHaveBeenCalled();
+      stack();
+      expect(editor().playing).toBe(false);
+      // One <video> per clip now
+      expect(screen.getByTestId("stitch-preview").querySelectorAll("video")).toHaveLength(2);
+
+      act(() => editor().setPlaying(true));
+      expect(editor().playing).toBe(true);
+      press(document.body, "z", { metaKey: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(editor().playing).toBe(false);
+      // Nothing is started again once the loop has gone
+      const calls = play.mock.calls.length;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(play).toHaveBeenCalledTimes(calls);
+      expect(editor().playing).toBe(false);
+    });
   });
 });

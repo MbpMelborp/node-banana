@@ -13,6 +13,7 @@ import {
   resetSelectedTrim,
   revealSelectedSource,
   splitAtPlayhead,
+  splitBlockedReason,
   toggleSelectedClipMute,
 } from "../editorActions";
 import type { ClipMediaView } from "../useStitchEditorMedia";
@@ -53,6 +54,7 @@ function OpenMenu({
   const index = useStitchEditorStore((s) => s.draft?.timeline.findIndex((c) => c.id === clipId) ?? -1);
   const clip = useStitchEditorStore((s) => s.draft?.timeline.find((c) => c.id === clipId) ?? null);
   const canSplit = useStitchEditorStore(canSplitSelectedAtPlayhead);
+  const splitBlocked = useStitchEditorStore(splitBlockedReason);
   const view = media.get(clipId);
 
   // Focus goes back to the panel, so the editor's keys work and Tab stays in the dialog
@@ -130,10 +132,11 @@ function OpenMenu({
   if (!clip) return null;
   const name = clipName(index);
   const source = view?.sourceLabel;
-  const item = (label: string, icon: ReactNode, run: () => void, opts: { shortcut?: string; disabled?: boolean; danger?: boolean } = {}) => (
+  const item = (label: string, icon: ReactNode, run: () => void, opts: { shortcut?: string; disabled?: boolean; danger?: boolean; title?: string } = {}) => (
     <MenuItem
       role="menuitem"
       disabled={opts.disabled}
+      title={opts.title}
       onClick={act(run)}
       className={opts.danger ? "text-red-400 hover:text-red-300" : undefined}
     >
@@ -159,7 +162,11 @@ function OpenMenu({
         {clip.muted
           ? item("Unmute clip audio", <Volume1 {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })
           : item("Mute clip audio", <VolumeX {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })}
-        {item("Split at playhead", <Scissors {...ICON} />, splitAtPlayhead, { shortcut: "S", disabled: !canSplit })}
+        {item("Split at playhead", <Scissors {...ICON} />, splitAtPlayhead, {
+          shortcut: "S",
+          disabled: !canSplit,
+          title: canSplit ? undefined : (splitBlocked ?? undefined),
+        })}
         {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !isTrimmed(clip) })}
         <MenuDivider role="separator" className="my-1" />
         {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, { disabled: !canRevealSource(clip, view) })}

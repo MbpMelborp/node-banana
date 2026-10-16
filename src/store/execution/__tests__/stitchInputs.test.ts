@@ -242,4 +242,58 @@ describe("gatherStitchInputs", () => {
     expect(texts(g.clips.map((c) => c.blob))).toEqual(["v1", "v2"]);
     expect(g.clips.every((c) => c.inSec === 0 && c.outSec === null && !c.muted && c.volume === 1)).toBe(true);
   });
+
+  describe("the stacked layout", () => {
+    const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true };
+
+    it("passes a stacked timeline node's overlap and crossfade", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), edgeClip("b", "e2")], sequenceLayout: STACKED });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(g.stack).toEqual({ overlapSec: 1, crossfade: true });
+    });
+
+    it("is null for Track, a 0 s overlap, a legacy node (even with a stacked key) and inputs gathered without edges", async () => {
+      const { nodes, edges } = twoVideos();
+      const timeline = [edgeClip("a", "e1"), edgeClip("b", "e2")];
+      const cases: Array<{ data: Record<string, unknown>; ctx: NodeExecutionContext }> = [
+        { data: { timeline }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { timeline, sequenceLayout: { ...STACKED, mode: "track" } }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { timeline, sequenceLayout: { ...STACKED, overlapSec: 0 } }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { sequenceLayout: STACKED }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { clipOrder: ["e1", "e2"], sequenceLayout: STACKED }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        {
+          data: { timeline, sequenceLayout: STACKED },
+          ctx: makeCtx(stitchNode(), [], [], { getConnectedInputs: vi.fn().mockReturnValue({ videos: ["v1", "v2"], audio: [] }) }),
+        },
+      ];
+      for (const { data, ctx } of cases) {
+        const stitch = stitchNode(data);
+        const g = await gatherStitchInputs({ ...ctx, node: stitch } as NodeExecutionContext, stitch.data as never);
+        expect(g.stack).toBeNull();
+      }
+    });
+
+    it("keys a timeline node's clips by source, the same for split pieces", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({
+        timeline: [edgeClip("a1", "e1", { outSec: 2 }), edgeClip("a2", "e1", { inSec: 2 }), assetClip("x", "alibrary00001"), edgeClip("b", "e2")],
+        sequenceLayout: STACKED,
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(g.clips.map((c) => c.source)).toEqual(["edge:e1", "edge:e1", "asset:alibrary00001", "edge:e2"]);
+    });
+
+    it("gives a legacy node's clips and inputs gathered without edges no source", async () => {
+      const { nodes, edges } = twoVideos();
+      const legacy = stitchNode({ clipOrder: ["e1", "e2"] });
+      const g = await gatherStitchInputs(makeCtx(legacy, nodes, edges), legacy.data as never);
+      expect(g.clips.every((c) => !("source" in c))).toBe(true);
+
+      const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), edgeClip("b", "e2")] });
+      const ctx = makeCtx(stitch, [], [], { getConnectedInputs: vi.fn().mockReturnValue({ videos: ["v1", "v2"], audio: [] }) });
+      const fromInputs = await gatherStitchInputs(ctx, stitch.data as never);
+      expect(fromInputs.clips.every((c) => !("source" in c))).toBe(true);
+    });
+  });
 });

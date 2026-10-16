@@ -20,19 +20,18 @@ import {
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useShallow } from "zustand/shallow";
 import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
-import { readStitchDraft, type StitchReadContext } from "@/lib/stitch/draft";
+import { draftDuration, draftSpans, readStitchDraft, type StitchReadContext } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchOrderPatch } from "@/lib/stitch/migrate";
 import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from "@/lib/stitch/sources";
 import {
   clipLength,
   edgeIdsInOrder,
   moveClip,
-  sequenceDuration,
   sourceKey,
   type SourceDurations,
   type SourceKey,
 } from "@/lib/stitch/timeline";
-import { formatTileSeconds } from "@/lib/stitch/timecode";
+import { formatSeconds, formatTileSeconds } from "@/lib/stitch/timecode";
 import { assetMediaKey, mediaKeyOf, nearestFrame, type StitchMediaInfo } from "@/lib/stitch/mediaInfo";
 import { assetFileUrl } from "@/lib/assets/client/api";
 import { openStitchEditor } from "@/components/stitch/openStitchEditor";
@@ -114,10 +113,10 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
 
   // The sequence, migrated and reconciled on read (never written just by reading).
   // Keyed on the fields it reads, so a status or output write keeps the same tiles.
-  const { timeline, clipOrder, audioCurve, audioMuted, loopCount } = nodeData;
+  const { timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout } = nodeData;
   const draft = useMemo(
-    () => readStitchDraft({ timeline, clipOrder, audioCurve, audioMuted, loopCount }, readContext),
-    [timeline, clipOrder, audioCurve, audioMuted, loopCount, readContext]
+    () => readStitchDraft({ timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout }, readContext),
+    [timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout, readContext]
   );
 
   // Write back only when the edges changed what is stored: a legacy node keeps
@@ -213,7 +212,13 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     }
     return known;
   }, [cardClips, mediaInfo, goneAssets]);
-  const sequenceSec = sequenceDuration(draft.timeline, durations);
+  const sequenceSec = draftDuration(draft, durations);
+  // Named only when some join really overlaps: a stack of cuts encodes as Track
+  const stackedItem = useMemo(() => {
+    const layout = draft.sequenceLayout;
+    if (layout.mode !== "stacked" || !draftSpans(draft, durations).some((span) => span.overlapIn > 0)) return [];
+    return [`${formatSeconds(layout.overlapSec, 1)} ${layout.crossfade ? "crossfade" : "overlap"}`];
+  }, [draft, durations]);
   // The length is shown once it is settled: every clip with a source read
   // (or found unreadable) and at least one length known. Until then it would
   // read 0:00 and count up as each source is probed.
@@ -400,7 +405,9 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
             title: `${clipCount} clip${clipCount === 1 ? "" : "s"}`,
             // One loop, in m:ss as the scrub row reads the stitched video, so the two agree at 1×
             values: (
-              <SummaryValues items={[sequenceSettled ? formatTime(sequenceSec) : "", `loop ${draft.loopCount}×`]} />
+              <SummaryValues
+                items={[sequenceSettled ? formatTime(sequenceSec) : "", ...stackedItem, `loop ${draft.loopCount}×`]}
+              />
             ),
           }}
           expanded={expanded}

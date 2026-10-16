@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyCrossfades,
   applyCurveGain,
   chooseMasterFormat,
   clampSamples,
@@ -15,6 +16,7 @@ import {
   type Pcm,
   type PcmChunk,
 } from "../audioMix";
+import { crossfadeGain } from "../stack";
 
 const SR = 1000;
 
@@ -339,5 +341,61 @@ describe("mixLoop", () => {
     const clip = { pcm: { sampleRate: SR, channels: [filled(SR, 0.9)] }, seqStart: 0, gain: 1 };
     const [out] = mixLoop({ format, loopLength: 1, clips: [clip], music }, 0);
     expect(out[10]).toBe(1);
+  });
+});
+
+describe("applyCrossfades", () => {
+  it("fades in, fades out, and silences what follows the fade out", () => {
+    const channel = filled(100, 1);
+    applyCrossfades([channel], { inLength: 10, outStart: 60, outLength: 20 });
+    expect(channel[0]).toBeCloseTo(crossfadeGain(0.5 / 10, "in"), 6);
+    expect(channel[9]).toBeCloseTo(crossfadeGain(9.5 / 10, "in"), 6);
+    expect(channel[10]).toBe(1);
+    expect(channel[59]).toBe(1);
+    expect(channel[60]).toBeCloseTo(crossfadeGain(0.5 / 20, "out"), 6);
+    expect(channel[79]).toBeCloseTo(crossfadeGain(19.5 / 20, "out"), 6);
+    expect(channel.slice(80).every((v) => v === 0)).toBe(true);
+  });
+
+  it("changes nothing at zero lengths", () => {
+    const channel = filled(50, 0.5);
+    applyCrossfades([channel], { inLength: 0, outStart: 0, outLength: 0 });
+    expect(channel.every((v) => v === 0.5)).toBe(true);
+  });
+
+  it("fades every channel", () => {
+    const channels = [filled(20, 1), filled(20, -1)];
+    applyCrossfades(channels, { inLength: 4, outStart: 10, outLength: 4 });
+    expect(channels[1][0]).toBeCloseTo(-channels[0][0], 6);
+    expect(channels[1][19]).toBe(0);
+  });
+
+  it("keeps a constant A fading out and a constant B fading in at constant power", () => {
+    // A at 0 for 100 samples, B from 70: a 30-sample overlap
+    const a = filled(100, 1);
+    const b = filled(100, 1);
+    applyCrossfades([a], { inLength: 0, outStart: 70, outLength: 30 });
+    applyCrossfades([b], { inLength: 30, outStart: 0, outLength: 0 });
+    for (let i = 0; i < 30; i++) expect(a[70 + i] ** 2 + b[i] ** 2).toBeCloseTo(1, 6);
+  });
+});
+
+describe("mixLoop with overlapping clips", () => {
+  const format = { sampleRate: SR, channels: 1 } as const;
+
+  it("clamps when the engine says the clips overlap", () => {
+    const a = { pcm: { sampleRate: SR, channels: [filled(600, 0.8)] }, seqStart: 0, gain: 1 };
+    const b = { pcm: { sampleRate: SR, channels: [filled(600, 0.8)] }, seqStart: 0.4, gain: 1 };
+    const [out] = mixLoop({ format, loopLength: 1, clips: [a, b], music: null, clipsOverlap: true }, 0);
+    expect(out[100]).toBeCloseTo(0.8, 6);
+    expect(out[500]).toBe(1);
+  });
+
+  it("lets one source's overs pass without the flag", () => {
+    const loud = { pcm: { sampleRate: SR, channels: [filled(SR, 1.2)] }, seqStart: 0, gain: 1 };
+    const [out] = mixLoop({ format, loopLength: 1, clips: [loud], music: null }, 0);
+    expect(out[10]).toBeCloseTo(1.2, 6);
+    const [flagged] = mixLoop({ format, loopLength: 1, clips: [loud], music: null, clipsOverlap: false }, 0);
+    expect(flagged[10]).toBeCloseTo(1.2, 6);
   });
 });

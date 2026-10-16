@@ -53,6 +53,7 @@ export function AudioLane({
   visibleRight,
   contentWidth,
   contentRef,
+  top = GEOMETRY.ruler + GEOMETRY.clipRow,
 }: {
   axis: TimeAxis;
   music: MusicView | null;
@@ -66,6 +67,8 @@ export function AudioLane({
   /** The lane content's width. */
   contentWidth: number;
   contentRef: RefObject<HTMLDivElement | null>;
+  /** The row's top in its container: under the clips row in Track; 0 inside Stacked's sticky audio row. */
+  top?: number;
 }) {
   const blockRef = useRef<HTMLDivElement>(null);
   const selectedPoint = useStitchEditorStore((s) => (s.selection?.kind === "audio" ? s.selection.point : null));
@@ -78,7 +81,7 @@ export function AudioLane({
   const blockTop = GEOMETRY.audioBlockTop;
   const blockX = axis.timeToX(0);
   const blockWidth = Math.max(0, axis.timeToX(axis.total) - blockX);
-  const rowStyle = { top: GEOMETRY.ruler + GEOMETRY.clipRow, height: rowHeight };
+  const rowStyle = { top, height: rowHeight };
 
   const toLaneEnd = Math.max(0, contentWidth - GEOMETRY.origin - GEOMETRY.endMargin);
   if (!music) {

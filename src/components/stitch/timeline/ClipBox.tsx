@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { MouseEvent, ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { Volume1, VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { clipName } from "@/lib/stitch/labels";
@@ -21,6 +21,8 @@ const HANDLE_SHARE = 1 / 3;
 const MIN_GRIP_HANDLE_PX = 4;
 /** The handles' width on a clip drawn this wide: the boards' 10px, narrower on a clip too short for two. */
 const handleWidthFor = (width: number) => Math.min(GEOMETRY.handle, width * HANDLE_SHARE);
+/** A compact box narrower than this shows no length chip. */
+const MIN_CHIP_BOX_PX = 56;
 /** A mouse press takes no focus: a focused clip or button would be unmounted by its own action and drop focus out of the editor. */
 export const keepFocus = (event: MouseEvent) => event.preventDefault();
 
@@ -67,6 +69,10 @@ function Handle({
  * that unmutes it) or, on hover, the button that mutes it. Those two are
  * pointer shortcuts, hidden from the accessibility tree and the tab order:
  * an option holds no controls, and ⌥M and the clip menu do the same.
+ *
+ * Compact (a Stacked row's 40px box): no label bar at rest, since the row
+ * header names the clip; a small length chip at the right instead, and the
+ * sound badges centred at the left.
  */
 export function ClipBox({
   span,
@@ -82,6 +88,10 @@ export function ClipBox({
   pxPerSec,
   viewLeft,
   viewRight,
+  top = GEOMETRY.clipTop,
+  height = GEOMETRY.clipHeight,
+  compact = false,
+  overlay,
   onBodyPointerDown,
   onHandlePointerDown,
   onContextMenu,
@@ -102,6 +112,12 @@ export function ClipBox({
   pxPerSec: number;
   viewLeft: number;
   viewRight: number;
+  /** In its row: Track's clips row by default, a Stacked row's box otherwise. */
+  top?: number;
+  height?: number;
+  compact?: boolean;
+  /** Drawn over the frames, under the badges and handles (Stacked's crossfade marks). */
+  overlay?: ReactNode;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, edge: "in" | "out") => void;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
@@ -114,6 +130,7 @@ export function ClipBox({
   // The label bar and badges make room for handles while they show
   const inset = selected || trimEdge ? "left-2.5 right-2.5" : "left-0 right-0 group-hover:left-2.5 group-hover:right-2.5";
   const badgeLeft = selected || trimEdge ? "left-4" : "left-1.5 group-hover:left-4";
+  const badgeTop = compact ? "top-[11px]" : "top-1.5";
 
   return (
     <div
@@ -135,8 +152,9 @@ export function ClipBox({
               ? "ring-2 ring-selection"
               : "ring-1 ring-white/10 hover:ring-white/24",
         trimEdge === "in" && "z-1",
+        compact && mode === "lifted" && "cursor-ns-resize",
       )}
-      style={{ left: x, top: GEOMETRY.clipTop, width, height: GEOMETRY.clipHeight }}
+      style={{ left: x, top, width, height }}
     >
       <Filmstrip
         frames={view?.frames ?? []}
@@ -148,8 +166,9 @@ export function ClipBox({
         viewLeft={viewLeft}
         viewRight={viewRight}
       />
+      {overlay}
 
-      {mode !== "dimmed" && (
+      {(compact ? mode === "lifted" : mode !== "dimmed") && (
         <div
           className={cn(
             "pointer-events-none absolute bottom-0 flex items-center gap-1.5 px-2 text-[11px] leading-none",
@@ -169,6 +188,11 @@ export function ClipBox({
           )}
         </div>
       )}
+      {compact && atRest && width >= MIN_CHIP_BOX_PX && (
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-[4px] bg-black/60 px-1 font-mono text-[10px] tabular-nums text-neutral-300">
+          {formatSeconds(lengthSec, trimEdge ? 2 : 1)}
+        </span>
+      )}
 
       {atRest && clip.muted && (
         <button
@@ -181,7 +205,8 @@ export function ClipBox({
           onMouseDown={keepFocus}
           onClick={() => setClipMuted(clip.id, false)}
           className={cn(
-            "absolute top-1.5 z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300 hover:text-neutral-100",
+            "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300 hover:text-neutral-100",
+            badgeTop,
             badgeLeft,
           )}
         >
@@ -197,7 +222,11 @@ export function ClipBox({
           onPointerDown={stopPress}
           onMouseDown={keepFocus}
           onClick={() => setClipMuted(clip.id, true)}
-          className="absolute right-4 top-1.5 z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-100 opacity-0 group-hover:opacity-100"
+          className={cn(
+            "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-100 opacity-0 group-hover:opacity-100",
+            badgeTop,
+            compact ? badgeLeft : "right-4",
+          )}
         >
           <Volume1 size={11} strokeWidth={2} />
         </button>

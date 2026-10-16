@@ -65,8 +65,11 @@ export function buildTimeAxis(
       boxes.push({ x, width: span.length * pps });
     } else {
       boxes.push({ x, width: slotPx });
-      slots.push({ clipId: span.clip.id, index: span.index, t: span.start, x, width: slotPx });
-      shift += slotPx;
+      // A slotPx of 0 keeps the axis linear (Stacked: an empty clip sits in its own row, taking no time or width).
+      if (slotPx > 0) {
+        slots.push({ clipId: span.clip.id, index: span.index, t: span.start, x, width: slotPx });
+        shift += slotPx;
+      }
     }
   }
   const total = spans.length > 0 ? spans[spans.length - 1].end : 0;

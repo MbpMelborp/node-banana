@@ -13,17 +13,32 @@ import { TIMECODE_WELL } from "./editorStyles";
  * panel rather than <body>, so Tab stays inside the editor. The editor's
  * keys leave a focused text field alone, so typing "i" or "s" here only
  * types. The caller clamps what it is given.
+ *
+ * format, parse and className make it a seconds well (Overlap). With onNudge,
+ * ↑ and ↓ (⇧ for a big step) change the value live: the field shows what the
+ * caller stored, and that becomes the text Enter or blur would not commit.
+ * Text typed before the arrow is committed first, so the step starts from
+ * it; with ⌘, Ctrl or ⌥ held the arrows move the caret instead.
  */
 export function TimecodeField({
   value,
   onCommit,
   label,
   disabled,
+  format = formatTimecode,
+  parse = parseTimecode,
+  className = TIMECODE_WELL,
+  onNudge,
 }: {
   value: number;
   onCommit: (seconds: number) => void;
   label: string;
   disabled?: boolean;
+  format?: (seconds: number) => string;
+  parse?: (text: string) => number | null;
+  className?: string;
+  /** ↑ / ↓: applies one step and returns the value now stored, or null when nothing changed. */
+  onNudge?: (direction: 1 | -1, big: boolean) => number | null;
 }) {
   const [text, setText] = useState<string | null>(null);
   // Enter and Escape leave the field; the blur that follows must not commit again
@@ -31,10 +46,13 @@ export function TimecodeField({
   // What the field showed when it took focus: text still equal to it was not edited
   const shown = useRef("");
 
-  const commit = (raw: string) => {
-    if (raw.trim() === shown.current) return;
-    const parsed = parseTimecode(raw);
-    if (parsed !== null) onCommit(parsed);
+  /** Commits typed text that parses; true when it did. */
+  const commit = (raw: string): boolean => {
+    if (raw.trim() === shown.current) return false;
+    const parsed = parse(raw);
+    if (parsed === null) return false;
+    onCommit(parsed);
+    return true;
   };
 
   const leave = (input: HTMLInputElement) => {
@@ -45,7 +63,22 @@ export function TimecodeField({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
+    // ⌘, Ctrl or ⌥ with an arrow moves the caret, as in any text field
+    const modified = event.metaKey || event.ctrlKey || event.altKey;
+    if (onNudge && !modified && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      // A value typed and not yet committed is the one the step starts from
+      const typed = commit(event.currentTarget.value);
+      const stored = onNudge(event.key === "ArrowUp" ? 1 : -1, event.shiftKey);
+      if (stored !== null) {
+        shown.current = format(stored);
+        setText(shown.current);
+      } else if (typed) {
+        // Committed but not stepped (at a limit): show what is stored, and the blur has nothing left to commit
+        shown.current = "";
+        setText(null);
+      }
+    } else if (event.key === "Enter") {
       event.preventDefault();
       commit(event.currentTarget.value);
       leave(event.currentTarget);
@@ -66,11 +99,11 @@ export function TimecodeField({
       spellCheck={false}
       autoComplete="off"
       disabled={disabled}
-      className={TIMECODE_WELL}
-      value={text ?? formatTimecode(value)}
+      className={className}
+      value={text ?? format(value)}
       onFocus={(event) => {
         settled.current = false;
-        shown.current = formatTimecode(value);
+        shown.current = format(value);
         setText(shown.current);
         event.currentTarget.select();
       }}

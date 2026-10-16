@@ -10,7 +10,7 @@ const durations = (entries: Record<string, number>): SourceDurations =>
 
 /** 4 s, an empty clip (a 160px slot), then 6 s, at 16 px/s from x 16: the slot covers x 80..240. */
 const axis = buildTimeAxis(
-  clipSpans([clip("a", "e1"), clip("gap", "e2"), clip("b", "e3")], durations({ "edge:e1": 4, "edge:e3": 6 })),
+  clipSpans([clip("a", "e1"), clip("gap", "e2"), clip("b", "e3")], durations({ "edge:e1": 4, "edge:e3": 6 }), 0),
   16,
 );
 

@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useMemo, useRef, type HTMLAttributes } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, type HTMLAttributes } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
+import { DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "@/lib/stitch/stack";
 import { clipSpans } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { DiscardSheet } from "./DiscardSheet";
 import { EditorHeader } from "./EditorHeader";
 import { EditorRail } from "./EditorRail";
-import { EditorStage } from "./EditorStage";
+import { EditorStage, type PreviewLayerSource } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
 import { STITCH_EDITOR_PANEL } from "./editorStyles";
 import { LibraryPicker } from "./library/LibraryPicker";
@@ -54,13 +55,17 @@ function StitchEditor() {
   const durations = useStitchEditorStore((s) => s.durations);
   const curve = useStitchEditorStore((s) => s.draft?.audioCurve);
   const audioMuted = useStitchEditorStore((s) => s.draft?.audioMuted ?? false);
+  const layout = useStitchEditorStore((s) => s.draft?.sequenceLayout ?? DEFAULT_SEQUENCE_LAYOUT);
   const soundOn = useStitchEditorStore((s) => s.soundOn);
 
   useEditorLifecycle();
   useStitchEditorKeys(rootRef, requestClose);
   const { byClip, music } = useStitchEditorMedia();
 
-  const spans = useMemo(() => clipSpans(timeline, durations), [timeline, durations]);
+  const overlapSec = effectiveOverlapSec(layout);
+  const stacked = layout.mode === "stacked";
+  const crossfade = layout.crossfade;
+  const spans = useMemo(() => clipSpans(timeline, durations, overlapSec), [timeline, durations, overlapSec]);
   const total = spans.length > 0 ? spans[spans.length - 1].end : 0;
 
   // What the encode will produce: the largest ready size, and the shared rate when the clips agree.
@@ -92,14 +97,24 @@ function StitchEditor() {
     return srcs;
   }, [byClip, music]);
   const playable = usePlayableUrls(rawSources);
-  const videoSources = useMemo(() => {
-    const urls: string[] = [];
+  // Track: one element per source. Stacked: one per clip, in timeline order, since two pieces of one source can
+  // show at once
+  const videoLayers = useMemo(() => {
+    const layers: PreviewLayerSource[] = [];
+    if (stacked) {
+      for (const clip of timeline) {
+        const src = byClip.get(clip.id)?.src;
+        const url = src ? playable.get(src) : undefined;
+        if (url) layers.push({ key: clip.id, src: url });
+      }
+      return layers;
+    }
     for (const view of byClip.values()) {
       const url = view.src ? playable.get(view.src) : undefined;
-      if (url && !urls.includes(url)) urls.push(url);
+      if (url && !layers.some((layer) => layer.src === url)) layers.push({ key: url, src: url });
     }
-    return urls;
-  }, [byClip, playable]);
+    return layers;
+  }, [stacked, timeline, byClip, playable]);
   const musicUrl = music?.src ? (playable.get(music.src) ?? null) : null;
 
   const srcFor = useCallback(
@@ -113,15 +128,27 @@ function StitchEditor() {
     () => ({ src: musicUrl, curve: curve ?? [], muted: audioMuted }),
     [musicUrl, curve, audioMuted],
   );
+  const stack = useMemo(() => (stacked ? { crossfade } : null), [stacked, crossfade]);
   const { registerVideo, registerAudio, activeSrc } = useSequencePlayback({
     spans,
     total,
     srcFor,
     music: musicPlayback,
     soundOn,
+    stack,
   });
 
-  const zoom = useTimelineZoom(spans);
+  // Any change of Track/Stacked (the toggle, ⌘Z, ⇧⌘Z) swaps every preview element: stop before the next frame
+  // ticks against the ones leaving. After the playback hook, whose own layout effect hands it the new layout
+  // first: the pause re-seeks the paused frame, and must do it the new layout's way.
+  const shownStacked = useRef(stacked);
+  useLayoutEffect(() => {
+    if (shownStacked.current === stacked) return;
+    shownStacked.current = stacked;
+    useStitchEditorStore.getState().setPlaying(false);
+  }, [stacked]);
+
+  const zoom = useTimelineZoom(spans, stacked);
 
   const empty = timeline.length === 0;
   return (
@@ -149,7 +176,8 @@ function StitchEditor() {
             <EditorStage
               empty={empty}
               aspect={aspect}
-              sources={videoSources}
+              layers={videoLayers}
+              stacked={stacked}
               activeSrc={activeSrc}
               registerVideo={registerVideo}
               musicSrc={musicUrl}
@@ -159,7 +187,7 @@ function StitchEditor() {
           </div>
           <EditorRail media={byClip} music={music} total={total} />
         </div>
-        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} />
+        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} stacked={stacked} />
       </div>
       <DiscardSheet />
       <LibraryPicker />

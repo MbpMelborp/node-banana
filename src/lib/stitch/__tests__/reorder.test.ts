@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dropIndexAt, insertionX } from "../reorder";
+import { dropIndexAt, insertionX, stackedDropIndex, stackedInsertionY } from "../reorder";
 
 // Three boxes: 16–336, 336–604, 604–988
 const boxes = [
@@ -38,5 +38,28 @@ describe("insertionX", () => {
     expect(insertionX(2, boxes, 0)).toBe(990);
     // Dragging the middle clip between the other two: the gap where it was
     expect(insertionX(1, boxes, 1)).toBe(470);
+  });
+});
+
+describe("stackedDropIndex", () => {
+  it("moves a row once the lifted box's centre passes half a row", () => {
+    expect(stackedDropIndex(1, 25, 4, 52)).toBe(1);
+    expect(stackedDropIndex(1, 27, 4, 52)).toBe(2);
+    expect(stackedDropIndex(1, -27, 4, 52)).toBe(0);
+    expect(stackedDropIndex(0, 104, 4, 52)).toBe(2);
+  });
+
+  it("stops at the first and last rows", () => {
+    expect(stackedDropIndex(1, -500, 4, 52)).toBe(0);
+    expect(stackedDropIndex(1, 500, 4, 52)).toBe(3);
+    expect(stackedDropIndex(1, Number.NaN, 4, 52)).toBe(1);
+  });
+});
+
+describe("stackedInsertionY", () => {
+  it("marks above the drop row moving up, below it moving down", () => {
+    expect(stackedInsertionY(0, 2, 52)).toBe(0);
+    expect(stackedInsertionY(3, 1, 52)).toBe(208);
+    expect(stackedInsertionY(1, 1, 52)).toBeNull();
   });
 });

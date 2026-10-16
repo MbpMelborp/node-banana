@@ -162,7 +162,11 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
         updateNodeData(node.id, { progress: progress.progress });
       },
       signal,
-      { loopCount: gathered.loopCount }
+      // A Track node passes the loop count alone, as it always did
+      {
+        loopCount: gathered.loopCount,
+        ...(gathered.stack ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade } : {}),
+      }
     );
 
     if (signal?.aborted) {
@@ -202,6 +206,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       clips: gathered.clipCount,
       loopCount: gathered.loopCount,
       withAudio: gathered.music !== null,
+      ...(gathered.stack ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade } : {}),
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {

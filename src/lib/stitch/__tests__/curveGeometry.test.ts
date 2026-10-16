@@ -19,11 +19,11 @@ const durations = (entries: Record<string, number>): SourceDurations =>
   new Map(Object.entries(entries) as [SourceKey, number][]);
 
 /** 10 s at 10 px/s from x 16: x = 16 + 10·t. */
-const plainAxis = () => buildTimeAxis(clipSpans([clip("a", "e1")], durations({ "edge:e1": 10 })), 10);
+const plainAxis = () => buildTimeAxis(clipSpans([clip("a", "e1")], durations({ "edge:e1": 10 }), 0), 10);
 /** 4 s, an empty slot (160px), then 6 s: the slot sits at t = 4, x 56..216. */
 const slotAxis = () =>
   buildTimeAxis(
-    clipSpans([clip("a", "e1"), clip("gap", "e2"), clip("b", "e3")], durations({ "edge:e1": 4, "edge:e3": 6 })),
+    clipSpans([clip("a", "e1"), clip("gap", "e2"), clip("b", "e3")], durations({ "edge:e1": 4, "edge:e3": 6 }), 0),
     10,
   );
 

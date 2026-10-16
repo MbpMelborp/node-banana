@@ -8,6 +8,7 @@ import {
   fadeIn,
   fadeOut,
   flat,
+  followEndFade,
   formatDb,
   gainAt,
   gainToDb,
@@ -200,5 +201,67 @@ describe("sameCurve", () => {
     expect(sameCurve(dip, dip.map((p) => ({ t: p.t + 1e-9, gain: p.gain })))).toBe(true);
     expect(sameCurve(dip, dip.slice(1))).toBe(false);
     expect(sameCurve(dip, [dip[0], { t: 2, gain: 0.1 }, dip[2]])).toBe(false);
+  });
+});
+
+describe("followEndFade", () => {
+  const faded: VolumePoint[] = [
+    { t: 0, gain: 1 },
+    { t: 15, gain: 0.5 },
+    { t: 16, gain: 0 },
+  ];
+
+  it("moves a fade out that ends at the end with it, shorter or longer", () => {
+    expect(followEndFade(faded, 16, 14)).toEqual([
+      { t: 0, gain: 1 },
+      { t: 13, gain: 0.5 },
+      { t: 14, gain: 0 },
+    ]);
+    expect(followEndFade(faded, 16, 18)).toEqual([
+      { t: 0, gain: 1 },
+      { t: 17, gain: 0.5 },
+      { t: 18, gain: 0 },
+    ]);
+  });
+
+  it("restores the curve on the way back", () => {
+    const awkward: VolumePoint[] = [
+      { t: 0.3, gain: 0.8 },
+      { t: 14.123, gain: 0.7 },
+      { t: 15.123, gain: 0 },
+    ];
+    const there = followEndFade(awkward, 15.123, 13.456);
+    expect(sameCurve(followEndFade(there, 13.456, 15.123), awkward)).toBe(true);
+  });
+
+  it("leaves a curve alone unless it ends at gain 0 on the old end", () => {
+    const loud = faded.map((p, i) => (i === 2 ? { ...p, gain: 0.2 } : p));
+    expect(followEndFade(loud, 16, 14)).toEqual(loud);
+    expect(followEndFade(faded, 18, 14)).toEqual(faded);
+    expect(followEndFade(faded, 16 + 1 / 120, 14)[2].t).toBeCloseTo(14 - 1 / 120, 9);
+    expect(followEndFade([{ t: 16, gain: 0 }], 16, 14)).toEqual([{ t: 16, gain: 0 }]);
+    expect(followEndFade(faded, 16, 16)).toEqual(faded);
+    expect(followEndFade(faded, 16, Number.NaN)).toEqual(faded);
+    expect(followEndFade(faded, 0, 14)).toEqual(faded);
+  });
+
+  it("leaves it alone when the moved points would collide with the one before", () => {
+    // The second-to-last point would land at 0, or within the gap of the first
+    expect(followEndFade(faded, 16, 1)).toEqual(faded);
+    expect(followEndFade(faded, 16, 1 + MIN_POINT_GAP_SEC / 2)).toEqual(faded);
+    expect(followEndFade(faded, 16, 1 + 2 * MIN_POINT_GAP_SEC)[1].t).toBeCloseTo(2 * MIN_POINT_GAP_SEC, 9);
+    expect(
+      followEndFade(
+        [
+          { t: 1, gain: 0.5 },
+          { t: 2, gain: 0 },
+        ],
+        2,
+        0.5,
+      ),
+    ).toEqual([
+      { t: 1, gain: 0.5 },
+      { t: 2, gain: 0 },
+    ]);
   });
 });

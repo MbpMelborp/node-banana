@@ -41,6 +41,10 @@ const mockAddAudioTrack = vi.fn();
 const mockAudioSourceAdd = vi.fn().mockResolvedValue(undefined);
 const mockAudioSourceClose = vi.fn().mockResolvedValue(undefined);
 const mockGetFirstEncodableAudioCodec = vi.fn();
+const mockOutputCancel = vi.fn().mockResolvedValue(undefined);
+/** The stacked engine's frame blending, mocked: jsdom has no VideoFrame or canvas. */
+const mockEncodeDissolve = vi.fn().mockResolvedValue(undefined);
+const mockCreateFrameBlender = vi.fn(() => ({ blend: vi.fn() }));
 const mockBufferTargetBuffer = new ArrayBuffer(100);
 
 /** Each `samples(start, end)` call, and the setTimestamp spy of every frame it yielded. */
@@ -77,7 +81,7 @@ vi.mock("mediabunny", () => {
     addAudioTrack: Fn = (...args) => mockAddAudioTrack(...args);
     start: Fn = (...args) => mockOutputStart(...args);
     finalize: Fn = (...args) => mockOutputFinalize(...args);
-    cancel: Fn = vi.fn().mockResolvedValue(undefined);
+    cancel: Fn = (...args) => mockOutputCancel(...args);
   }
   class VideoSampleSinkMock {
     samples: (start: number, end: number) => AsyncIterable<unknown>;
@@ -88,10 +92,11 @@ vi.mock("mediabunny", () => {
         const timestamps = frameTimestamps(track, start, end);
         return {
           [Symbol.asyncIterator]: async function* () {
+            const { codedWidth, codedHeight } = track as { codedWidth?: number; codedHeight?: number };
             for (const timestamp of timestamps) {
               const setTimestamp = vi.fn();
               call.setTimestamp.push(setTimestamp);
-              yield { timestamp, setTimestamp, setDuration: vi.fn(), close: vi.fn() };
+              yield { timestamp, codedWidth, codedHeight, setTimestamp, setDuration: vi.fn(), close: vi.fn() };
             }
           },
         };
@@ -164,6 +169,11 @@ vi.mock("mediabunny", () => {
     getFirstEncodableAudioCodec: (...args: unknown[]) => mockGetFirstEncodableAudioCodec(...args),
   };
 });
+
+vi.mock("@/lib/stitch/crossfadeFrames", () => ({
+  encodeDissolve: (...args: unknown[]) => mockEncodeDissolve(...args),
+  createFrameBlender: (...args: unknown[]) => mockCreateFrameBlender(...(args as [])),
+}));
 
 vi.mock("@/lib/video-encoding", () => ({
   createAvcEncodingConfig: vi.fn(() => ({})),
@@ -319,6 +329,10 @@ describe("useStitchVideos", () => {
         opts: {
           duration?: number;
           firstTimestamp?: number;
+          /** The track's average packet rate; unknown by default. */
+          frameRate?: number;
+          width?: number;
+          height?: number;
           level?: number | null;
           sampleRate?: number;
           fails?: boolean;
@@ -327,8 +341,12 @@ describe("useStitchVideos", () => {
       ): Blob {
         const blob = new Blob([name], { type: "video/mp4" });
         const level = opts.level === undefined ? 0.5 : opts.level;
+        const video = createMockVideoTrack(opts.width ?? 1920, opts.height ?? 1080, 0, opts.duration ?? 1, opts.firstTimestamp ?? 0);
+        if (opts.frameRate !== undefined) {
+          video.computePacketStats.mockResolvedValue({ averageBitrate: 8_000_000, averagePacketRate: opts.frameRate });
+        }
         sources.set(blob, {
-          video: createMockVideoTrack(1920, 1080, 0, opts.duration ?? 1, opts.firstTimestamp ?? 0),
+          video,
           audio:
             level === null
               ? []
@@ -349,7 +367,10 @@ describe("useStitchVideos", () => {
       /** Every buffer handed to the audio track. */
       const encodedBuffers = (): MockAudioBuffer[] => mockAudioSourceAdd.mock.calls.map((call: unknown[]) => call[0] as MockAudioBuffer);
 
-      const clip = (blob: Blob, overrides: Partial<{ inSec: number; outSec: number | null; muted: boolean; volume: number }> = {}) => ({
+      const clip = (
+        blob: Blob,
+        overrides: Partial<{ inSec: number; outSec: number | null; muted: boolean; volume: number; source: string }> = {},
+      ) => ({
         blob,
         inSec: 0,
         outSec: null,
@@ -642,6 +663,339 @@ describe("useStitchVideos", () => {
       it("refuses a sequence in which every clip is empty", async () => {
         const a = source("a", { duration: 2 });
         await expect(stitchVideosAsync([clip(a, { inSec: 3 })])).rejects.toThrow("Nothing to stitch: every clip is empty");
+      });
+
+      describe("stacked", () => {
+        interface DissolveCall {
+          outgoing: unknown;
+          incoming: unknown;
+          timestamps: number[];
+          outgoingTimes: number[];
+          incomingTimes: number[];
+          alphas: number[];
+          frameDuration: number;
+        }
+        const dissolves = (): DissolveCall[] => mockEncodeDissolve.mock.calls.map((call: unknown[]) => call[0] as DissolveCall);
+        const ranges = () => sampleCalls.map(({ start, end }) => [start, end]);
+        /** Each solo run: its track and where its first frame landed. */
+        const starts = () => sampleCalls.map((call) => call.setTimestamp[0]?.mock.calls[0]?.[0]);
+        /** Every timestamp handed to the encoder, pass-through and blended, in order. */
+        const encodedTimestamps = () =>
+          mockVideoSourceAdd.mock.calls.map((call: unknown[]) => {
+            const sample = call[0] as { timestamp: number; setTimestamp?: ReturnType<typeof vi.fn> };
+            return sample.setTimestamp ? (sample.setTimestamp.mock.calls[0]?.[0] as number) : sample.timestamp;
+          });
+        const stacked = (overlapSec: number, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade });
+        const near = (actual: number, expected: number) => expect(actual).toBeCloseTo(expected, 3);
+
+        beforeEach(() => {
+          // Hands each blended frame to the encoder, as the real one does
+          mockEncodeDissolve.mockImplementation(
+            async (job: DissolveCall, _blenderFor: unknown, add: (sample: unknown) => Promise<void>) => {
+              for (const timestamp of job.timestamps) await add({ timestamp, codedWidth: 0, codedHeight: 0 });
+            },
+          );
+        });
+
+        it("Track: no dissolve, and one source's overs pass unclipped", async () => {
+          const a = source("a", { duration: 1, level: 1.2 });
+          await stitchVideosAsync([clip(a)], null, undefined, undefined, { loopCount: 1 });
+          expect(mockEncodeDissolve).not.toHaveBeenCalled();
+          expect(encodedSound()[500]).toBeCloseTo(1.2, 6);
+        });
+
+        it("runs a stack whose joins are all cuts exactly as Track", async () => {
+          const record = async (options?: Parameters<typeof stitchVideosAsync>[4], sameSource = false) => {
+            sampleCalls.length = 0;
+            mockAudioSourceAdd.mockClear();
+            sources.clear();
+            const a = source("a", { duration: 5, level: 0.5 });
+            const b = source("b", { duration: 5, level: 0.25 });
+            await stitchVideosAsync(
+              [clip(a, { source: "edge:x" }), clip(b, { source: sameSource ? "edge:x" : "edge:y" })],
+              null,
+              undefined,
+              undefined,
+              options,
+            );
+            return {
+              calls: sampleCalls.map((call) => [call.start, call.end, call.setTimestamp.map((spy) => spy.mock.calls)]),
+              sound: encodedSound(),
+            };
+          };
+          const track = await record({ loopCount: 2 });
+          // The same source on both sides, and an overlap shorter than one output frame
+          for (const [options, sameSource] of [
+            [stacked(1, true, 2), true],
+            [stacked(0.01, true, 2), false],
+          ] as const) {
+            const result = await record(options, sameSource);
+            expect(result.calls).toEqual(track.calls);
+            expect(result.sound).toEqual(track.sound);
+          }
+          expect(mockEncodeDissolve).not.toHaveBeenCalled();
+        });
+
+        it("crossfade off: the later clip starts under the earlier one, heard but not seen", async () => {
+          const a = source("a", { duration: 5, frameRate: 24, level: 0.7 });
+          const b = source("b", { duration: 5, frameRate: 24, level: 0.6 });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1, false, 2));
+          expect(mockEncodeDissolve).not.toHaveBeenCalled();
+          expect(ranges()).toEqual([
+            [0, 5],
+            [1, 5],
+            [0, 5],
+            [1, 5],
+          ]);
+          expect(starts()).toEqual([0, 5, 9, 14]);
+          const sound = encodedSound();
+          expect(sound).toHaveLength(18 * SR);
+          near(sound[Math.round(3.5 * SR)], 0.7);
+          // Both at full volume through the overlap, summed and clamped
+          expect(sound[Math.round(4.5 * SR)]).toBe(1);
+          near(sound[Math.round(6 * SR)], 0.6);
+          // B's sound starts at its sequence start, a second before its picture
+          expect(sound[Math.round(4 * SR) - 1]).toBeCloseTo(0.7, 6);
+          expect(sound[Math.round(4 * SR)]).toBe(1);
+        });
+
+        it("crossfade on, both at 24 fps: one dissolve at A's own frame times, and the solo windows around it", async () => {
+          const a = source("a", { duration: 5, frameRate: 24, level: null });
+          const b = source("b", { duration: 5, frameRate: 24, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          expect(ranges()).toEqual([
+            [0, 4],
+            [1, 5],
+          ]);
+          expect(starts()).toEqual([0, 5]);
+          const [d] = dissolves();
+          expect(dissolves()).toHaveLength(1);
+          expect(d.outgoing).toBe(sources.get(a)!.video);
+          expect(d.incoming).toBe(sources.get(b)!.video);
+          expect(d.timestamps).toHaveLength(24);
+          // A's frames 96..119 land where the slotter would put them
+          const expected = Array.from({ length: 24 }, (_, i) => Math.floor(((96 + i) / 24) * 60 + 0.5 + 1e-6) / 60);
+          expect(d.timestamps).toEqual(expected);
+          expect(d.timestamps[0]).toBe(4);
+          expect(d.timestamps[23]).toBeCloseTo(298 / 60, 9);
+          expect(d.outgoingTimes[0]).toBeCloseTo(4 + 1 / 48, 9);
+          // B's frames 0..23 at their mid-frame times: frame 24 is the first its solo window shows
+          d.incomingTimes.forEach((t, k) => expect(t).toBeCloseTo(k / 24 + 1 / 48, 9));
+          expect(d.alphas[0]).toBeCloseTo(0.5 / 24, 9);
+          expect(d.frameDuration).toBe(1 / 60);
+        });
+
+        it("crossfade on at mixed rates: every output slot of the overlap", async () => {
+          const a = source("a", { duration: 5, frameRate: 24, level: null });
+          const b = source("b", { duration: 5, frameRate: 30, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const [d] = dissolves();
+          expect(d.timestamps).toHaveLength(60);
+          expect(d.timestamps[0]).toBe(4);
+          expect(d.timestamps[59]).toBeCloseTo(4 + 59 / 60, 9);
+        });
+
+        it("crossfade on, two one-frame stills (0.2 fps): every output slot, not a cut", async () => {
+          const a = source("a", { duration: 5, frameRate: 0.2, level: null });
+          const b = source("b", { duration: 5, frameRate: 0.2, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const [d] = dissolves();
+          expect(d.timestamps).toHaveLength(60);
+          expect(d.timestamps[0]).toBe(4);
+        });
+
+        it("crossfade on, last frames stored without a duration: the cadence is the real 24 fps", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 5, level: null });
+          for (const blob of [a, b]) {
+            // 120 frames whose packet span ends at the last frame's start
+            sources.get(blob)!.video.computePacketStats.mockResolvedValue({ averageBitrate: 8_000_000, averagePacketRate: 120 / (119 / 24) });
+            Object.assign(sources.get(blob)!.video, { lastPacket: { timestamp: 119 / 24, duration: 0 } });
+          }
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const [d] = dissolves();
+          expect(d.timestamps).toHaveLength(24);
+          d.incomingTimes.forEach((t, k) => expect(t).toBeCloseTo(k / 24 + 1 / 48, 9));
+        });
+
+        it("crossfades the sound with equal power across the overlap, and A is silent after its Out", async () => {
+          const a = source("a", { duration: 5, level: 0.5 });
+          const b = source("b", { duration: 5, level: 0.4 });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const sound = encodedSound();
+          expect(sound).toHaveLength(9 * SR);
+          const i = SR / 2;
+          const x = (i + 0.5) / SR;
+          near(sound[4 * SR + i], 0.5 * Math.cos((x * Math.PI) / 2) + 0.4 * Math.sin((x * Math.PI) / 2));
+          near(sound[4 * SR - 1], 0.5);
+          near(sound[5 * SR + 100], 0.4);
+        });
+
+        it("places and fades each sound by its own clip when a neighbour is muted, soundless or fails to decode", async () => {
+          for (const quiet of ["muted", "soundless", "fails"] as const) {
+            mockAudioSourceAdd.mockClear();
+            sources.clear();
+            // A is over full scale: with no second clip sounding in any overlap it passes unclamped, as in Track (S11)
+            const a = source("a", { duration: 5, level: 1.2 });
+            const b = source("b", { duration: 5, level: quiet === "soundless" ? null : 0.5, fails: quiet === "fails" });
+            const c = source("c", { duration: 5, level: 0.4 });
+            await stitchVideosAsync(
+              [clip(a, { source: "a" }), clip(b, { source: "b", muted: quiet === "muted" }), clip(c, { source: "c" })],
+              null,
+              undefined,
+              undefined,
+              stacked(1),
+            );
+            const sound = encodedSound();
+            expect(sound).toHaveLength(13 * SR);
+            near(sound[2 * SR], 1.2);
+            // A fades out over A→B although B is silent
+            near(sound[4 * SR + SR / 2], 1.2 * Math.cos((((SR / 2 + 0.5) / SR) * Math.PI) / 2));
+            expect(sound[5 * SR]).toBe(0);
+            // C starts at its own sequence start (8 s) and fades in over B→C
+            expect(sound[8 * SR - 1]).toBe(0);
+            near(sound[8 * SR + SR / 2], 0.4 * Math.sin((((SR / 2 + 0.5) / SR) * Math.PI) / 2));
+            near(sound[10 * SR], 0.4);
+          }
+        });
+
+        it("clamps the loop when two sounding clips overlap, an over included", async () => {
+          const a = source("a", { duration: 5, level: 1.2 });
+          const b = source("b", { duration: 5, level: 0.5 });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const sound = encodedSound();
+          // A plays alone at 2 s, but the loop has a dissolve where both sound, so the whole loop is clamped
+          near(sound[2 * SR], 1);
+          near(sound[6 * SR], 0.5);
+        });
+
+        it("fades the second clip in when the first has no sound", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 5, level: 0.5 });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const sound = encodedSound();
+          expect(sound[4 * SR - 1]).toBe(0);
+          near(sound[4 * SR + SR / 2], 0.5 * Math.sin((((SR / 2 + 0.5) / SR) * Math.PI) / 2));
+          near(sound[6 * SR], 0.5);
+        });
+
+        it("reads an incoming clip that starts after In from its first timestamp", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 5, firstTimestamp: 0.04, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          const [, soloB] = sampleCalls;
+          expect(soloB.track).toBe(sources.get(b)!.video);
+          expect(soloB.start).toBeCloseTo(1.04, 9);
+          expect(soloB.end).toBe(5);
+          const [d] = dissolves();
+          expect(d.incomingTimes[0]).toBeGreaterThanOrEqual(0.04);
+          // Mid-slot through B's own solo mapping, which starts from its first frame
+          expect(d.incomingTimes[0]).toBeCloseTo(0.04 + 0.5 / 60, 6);
+          // The frame at 1.0 is held back from before 1.04 and gives way to the one at 1 + 1/24, which takes the first solo slot
+          expect(soloB.setTimestamp[0]).not.toHaveBeenCalled();
+          expect(soloB.setTimestamp[1].mock.calls[0]?.[0]).toBe(5);
+        });
+
+        it("A | B1 B2 | C: a dissolve, a cut between the pieces, then a dissolve", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 10, level: null });
+          const c = source("c", { duration: 5, level: null });
+          await stitchVideosAsync(
+            [
+              clip(a, { source: "a" }),
+              clip(b, { source: "b", outSec: 5 }),
+              clip(b, { source: "b", inSec: 5 }),
+              clip(c, { source: "c" }),
+            ],
+            null,
+            undefined,
+            undefined,
+            stacked(1),
+          );
+          expect(dissolves().map((d) => [d.outgoing, d.incoming])).toEqual([
+            [sources.get(a)!.video, sources.get(b)!.video],
+            [sources.get(b)!.video, sources.get(c)!.video],
+          ]);
+          expect(ranges()).toEqual([
+            [0, 4],
+            [1, 5],
+            [5, 9],
+            [1, 5],
+          ]);
+          // B2's solo window follows B1's directly: B1 from 5, B2 from 9
+          expect(starts()).toEqual([0, 5, 9, 14]);
+        });
+
+        it("skips a middle clip's empty solo window and claims both dissolves' slots with no repeats", async () => {
+          const a = source("a", { duration: 2, level: null });
+          const b = source("b", { duration: 2, level: null });
+          const c = source("c", { duration: 2, level: null });
+          await stitchVideosAsync(
+            [clip(a, { source: "a" }), clip(b, { source: "b" }), clip(c, { source: "c" })],
+            null,
+            undefined,
+            undefined,
+            stacked(1),
+          );
+          expect(sampleCalls.some((call) => call.track === sources.get(b)!.video)).toBe(false);
+          const [ab, bc] = dissolves();
+          expect(dissolves()).toHaveLength(2);
+          const slots = [...ab.timestamps, ...bc.timestamps].map((t) => Math.round(t * 60));
+          expect(slots).toEqual(Array.from({ length: 120 }, (_, i) => 60 + i));
+          const all = encodedTimestamps();
+          expect(all.every((t, i) => i === 0 || t > all[i - 1])).toBe(true);
+        });
+
+        it("loops with a cut at the seam: slots keep rising, no dissolve back into the first clip, no fade-in", async () => {
+          const a = source("a", { duration: 5, level: 0.5 });
+          const b = source("b", { duration: 5, level: 0.4 });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1, true, 2));
+          expect(dissolves()).toHaveLength(2);
+          expect(dissolves().every((d) => d.outgoing === sources.get(a)!.video)).toBe(true);
+          expect(dissolves()[1].timestamps[0]).toBe(13);
+          expect(starts()).toEqual([0, 5, 9, 14]);
+          const all = encodedTimestamps();
+          expect(all.every((t, i) => i === 0 || t > all[i - 1])).toBe(true);
+          const sound = encodedSound();
+          expect(sound).toHaveLength(18 * SR);
+          near(sound[0], 0.5);
+          near(sound[9 * SR], 0.5);
+          // B's tail before the seam is not faded out
+          near(sound[9 * SR - 1], 0.4);
+        });
+
+        it("makes the blender at the size of the first frame the encoder took", async () => {
+          const a = source("a", { duration: 5, width: 1280, height: 720, level: null });
+          const b = source("b", { duration: 5, width: 1920, height: 1080, level: null });
+          mockEncodeDissolve.mockImplementationOnce(async (_job: unknown, blenderFor: (first: unknown) => unknown) => {
+            blenderFor({ codedWidth: 1920, codedHeight: 1080 });
+          });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          expect(mockCreateFrameBlender).toHaveBeenCalledTimes(1);
+          expect(mockCreateFrameBlender).toHaveBeenCalledWith({ width: 1280, height: 720 });
+        });
+
+        it("stops on an abort inside a dissolve: the output is cancelled and the inputs released", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 5, level: null });
+          mockEncodeDissolve.mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+          await expect(
+            stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1)),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(mockOutputCancel).toHaveBeenCalledTimes(1);
+          expect(mockDispose).toHaveBeenCalledTimes(2);
+          expect(mockOutputFinalize).not.toHaveBeenCalled();
+        });
+
+        it("reports a dissolve that fails as the clip's failure", async () => {
+          const a = source("a", { duration: 5, level: null });
+          const b = source("b", { duration: 5, level: null });
+          mockEncodeDissolve.mockRejectedValueOnce(new Error("decoder broke"));
+          await expect(
+            stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1)),
+          ).rejects.toThrow("decoder broke");
+          expect(mockOutputCancel).toHaveBeenCalledTimes(1);
+        });
       });
     });
   });

@@ -91,6 +91,7 @@ export function TrimOverlay({
   view,
   src,
   contentRef,
+  rowTop = GEOMETRY.ruler,
 }: {
   trim: TrimLive;
   /** The dragged edge on the lane (trimEdgeX). */
@@ -99,13 +100,15 @@ export function TrimOverlay({
   src: string | null;
   /** The lane content, whose top the popover stands on. */
   contentRef?: RefObject<HTMLDivElement | null>;
+  /** Where the arrow points, in content px: the clips row's top in Track (the ruler's foot), the dragged box's top in Stacked. */
+  rowTop?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     const content = contentRef?.current;
     if (!el || !content) return;
-    el.style.top = `${content.getBoundingClientRect().top + GEOMETRY.ruler - POPOVER_HEIGHT}px`;
+    el.style.top = `${content.getBoundingClientRect().top + rowTop - POPOVER_HEIGHT}px`;
   });
   const edgeX = trim.laneLeft + laneEdgeX;
   // Kept over the visible lanes when the edge is near or past their sides; the arrow still points at the edge
@@ -122,7 +125,7 @@ export function TrimOverlay({
       aria-hidden="true"
       data-testid="stitch-trim-popover"
       className="pointer-events-none fixed z-100 flex flex-col items-center"
-      style={{ left: center - POPOVER_WIDTH / 2, top: trim.laneTop + GEOMETRY.ruler - POPOVER_HEIGHT, width: POPOVER_WIDTH }}
+      style={{ left: center - POPOVER_WIDTH / 2, top: trim.laneTop + rowTop - POPOVER_HEIGHT, width: POPOVER_WIDTH }}
     >
       <div className={cn(CHROME_SURFACE, "w-full rounded-media p-1")}>
         <EdgeFrame src={src} time={time} fallback={fallback} />
@@ -151,6 +154,7 @@ export function TrimMarks({
   axis,
   edgeX,
   scrollLeft,
+  row,
 }: {
   trim: TrimLive;
   /** The axis the playhead is drawn on during the drag (built from liveSpans). */
@@ -159,14 +163,16 @@ export function TrimMarks({
   edgeX: number;
   /** The lanes' scroll position: an In's chip goes right of the edge when the left has no room. */
   scrollLeft: number;
+  /** Stacked: the dragged box's top and bottom in content px. Without it, Track's clips row. */
+  row?: { top: number; bottom: number };
 }) {
   const { edge } = trim.start;
   // On the playhead's axis: a snapped playhead and its guide are drawn at the same x, even with a slot between
   const snapX = axis.timeToX(trim.result.edgeSeqTime);
   const snapped = trim.result.snapped;
   const chipOnRight = edge === "out" || edgeX - 12 - DELTA_CHIP_ROOM < scrollLeft;
-  const clipsTop = GEOMETRY.ruler;
-  const clipsBottom = GEOMETRY.ruler + GEOMETRY.clipRow;
+  const deltaTop = row ? row.top + 10 : GEOMETRY.ruler + 26;
+  const clipsBottom = row ? row.bottom : GEOMETRY.ruler + GEOMETRY.clipRow;
   return (
     <>
       <div
@@ -174,7 +180,7 @@ export function TrimMarks({
         data-testid="stitch-trim-delta"
         className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 whitespace-nowrap font-mono tabular-nums text-neutral-200")}
         style={{
-          top: clipsTop + 26,
+          top: deltaTop,
           ...(chipOnRight ? { left: edgeX + 12 } : { right: `calc(100% - ${edgeX - 12}px)` }),
         }}
       >

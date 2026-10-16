@@ -1,4 +1,5 @@
 import type { VolumePoint } from "@/types";
+import { MAX_OVERLAP_SEC } from "./stack";
 
 /**
  * What stitchVideosAsync takes. Pure: the executor builds these from the
@@ -17,6 +18,8 @@ export interface StitchClipInput {
   muted: boolean;
   /** 0..1 linear gain on the clip's own sound. */
   volume: number;
+  /** Which video this clip plays (the timeline's source key). Adjacent clips with the same one meet with a cut when stacked. */
+  source?: string;
 }
 
 /** prepareAudioAsync's result; also the engine's old AudioData shape. */
@@ -35,6 +38,10 @@ export interface StitchMusicInput {
 export interface StitchOptions {
   /** How many times the sequence plays; an integer >= 1, default 1. */
   loopCount?: number;
+  /** Stacked: how far each clip starts before the previous one ends, seconds. Absent, 0 or not finite: clips butt (Track). */
+  overlapSec?: number;
+  /** Stacked: dissolve and crossfade across each overlap; off, the earlier clip stays in front. Default true. */
+  crossfade?: boolean;
 }
 
 export function isMusicInput(audio: StitchAudioData | StitchMusicInput): audio is StitchMusicInput {
@@ -55,6 +62,7 @@ function readClip(clip: StitchClipInput): StitchClipInput {
     outSec: finite(clip.outSec) ? clip.outSec : null,
     muted: clip.muted === true,
     volume: finite(clip.volume) ? Math.min(Math.max(clip.volume, 0), 1) : 1,
+    ...(typeof clip.source === "string" && clip.source !== "" ? { source: clip.source } : {}),
   };
 }
 
@@ -89,4 +97,11 @@ export function normalizeStitchArgs(
 export function normalizeLoopCount(options: StitchOptions | undefined): number {
   const count = options?.loopCount;
   return finite(count) && count >= 1 ? Math.floor(count) : 1;
+}
+
+/** null unless overlapSec is finite and > 0; overlapSec clamped to MAX_OVERLAP_SEC; crossfade = options.crossfade !== false. */
+export function normalizeStack(options: StitchOptions | undefined): { overlapSec: number; crossfade: boolean } | null {
+  const overlapSec = options?.overlapSec;
+  if (!finite(overlapSec) || overlapSec <= 0) return null;
+  return { overlapSec: Math.min(overlapSec, MAX_OVERLAP_SEC), crossfade: options?.crossfade !== false };
 }

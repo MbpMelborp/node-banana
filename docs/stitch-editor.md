@@ -3,8 +3,9 @@
 The Video Stitch node (`videoStitch`) joins the videos connected to its
 `video-*` sockets into one clip, with the music on its `audio` socket under
 them. The editor is where that sequence is finished: the clips' order, a
-trim for each clip, each clip's own sound, and the music's volume over time.
-What the editor shows is what Stitch encodes.
+trim for each clip, each clip's own sound, the music's volume over time,
+and the layout (Track, clips end to end, or Stacked, each clip overlapping
+the one before). What the editor shows is what Stitch encodes.
 
 ## What the editor does
 
@@ -15,19 +16,26 @@ annotation editor (so nothing in it sits in the desktop app's drag region),
 with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
 - **Header**: "Stitch", then "N clips · length · W × H · F fps" (the frame
-  rate only when the clips agree); Undo, Redo, Cancel and Done.
-- **Stage**: the sequence previewed at the playhead, letterboxed.
+  rate only when the clips agree; in Stacked the length is less the
+  overlaps); Track | Stacked, Undo, Redo, Cancel and Done.
+- **Stage**: the sequence previewed at the playhead, letterboxed. In
+  Stacked, where two clips overlap, it shows them blended (Crossfade on) or
+  the earlier one (off).
 - **Transport**: go to start, play, go to end, the timecode, Snap, Sound,
   the zoom slider and Fit.
 - **Rail**: the selected clip's name and source, Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
   node, Remove from stitch; with the audio track selected, Track sound and
   the quick curve buttons (Fade in, Fade out, Flat). The footer holds Loop
-  sequence (1×, 2×, 3×).
+  sequence (1×, 2×, 3×); in Stacked, a line saying what Overlap and
+  Crossfade do, then Overlap and Crossfade, sit above it.
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the Audio lane (the music's waveform and its
-  volume line, taller while it is selected).
+  volume line, taller while it is selected). In Stacked the Clips lane is
+  one row per clip; the rows scroll between a fixed ruler and a fixed audio
+  row, and a clip or its row header is dragged up or down to reorder (see
+  Stacked).
 
 Edits stay inside the editor, with their own undo history (100 steps), until
 **Done**. Done writes the node in one `updateNodeData` call and does not
@@ -42,14 +50,20 @@ source node. It is off for library clips.
 
 ## How the timeline is stored
 
-Three optional fields sit on `VideoStitchNodeData` (`src/types/nodes.ts`),
+Four optional fields sit on `VideoStitchNodeData` (`src/types/nodes.ts`),
 beside the fields the node always had:
 
 ```ts
 timeline?: StitchTimelineClip[];   // the sequence, in order
 audioCurve?: VolumePoint[];        // the music's volume over one loop; empty = flat at 0 dB
 audioMuted?: boolean;              // the music is off; the clips' own sound still plays
+sequenceLayout?: StitchSequenceLayout;   // Track or Stacked; absent = Track
 
+interface StitchSequenceLayout {
+  mode: "track" | "stacked";
+  overlapSec: number;                           // Stacked: the most each join overlaps, 0..10 s in 0.1 s steps; kept in Track
+  crossfade: boolean;                           // Stacked: dissolve and crossfade each overlap; off = the earlier clip stays in front
+}
 interface StitchTimelineClip {
   id: string;                                   // stable within the node
   source: { kind: "edge"; edgeId: string } | { kind: "asset"; assetId: string };
@@ -77,6 +91,18 @@ missing, each in 0, out at the end, volume 1. Reading never writes. Only Done gi
 `timeline`; the card's own reorders keep writing `{ clipOrder }` on a legacy
 node, as before. A Done that changed nothing writes nothing, so the node
 stays legacy.
+
+**`sequenceLayout` is read leniently** (`readSequenceLayout` in
+`src/lib/stitch/draft.ts`). Absent, or not an object, it reads as Track
+with a 1.0 s overlap and Crossfade on. The mode is Stacked only when it is
+exactly `"stacked"`; the overlap is clamped to 0–10 s and rounded to 0.1 s
+(1.0 s when it is not a number); Crossfade is on unless it is `false`. A
+legacy node always reads as Track, whatever the field says. Only Done
+writes the field, and only when the editor's layout differs from what the
+stored value reads as: a trim does not add it to a node that has none, and
+a stored value with keys this build does not know survives a Done that left
+the layout alone. A build that does not know the field ignores it (its
+stitch plays the clips end to end) and keeps it when it saves.
 
 **Clips are muted under music on a legacy node.** The stitch has always
 replaced the clips' sound with the music when music was connected. To keep
@@ -144,6 +170,10 @@ slot that says why:
   it too);
 - a library clip whose asset is gone ("not in the library").
 
+In Stacked such a clip has a row of its own, with its slot drawn where it
+sits in time. It takes no time and does not separate its neighbours: the
+clips before and after it overlap as if it were not there.
+
 The encode skips a clip with no video yet, one trimmed past its end or to
 under a frame, and a file with no video track, so the editor and the output
 agree. A library clip
@@ -159,11 +189,129 @@ A Router or Switch connection can carry several videos. A legacy node
 stitches every video on it, in order, as it always did. Once the editor has
 written a timeline, that connection's clip plays its first video only.
 
+## Stacked
+
+**Track | Stacked**, in the header before Undo, sets how the sequence is
+laid out. Track, the default, is the single Clips row: each clip starts
+where the one before it ends. Stacked works like After Effects' sequence
+layers: each clip has its own row, still in order, and starts a set time
+(Overlap) before the clip above it ends. It is a setting of the node, not a
+view: a switch is one step in the editor's undo history, Done writes it,
+and Stitch encodes it. Switching back to Track keeps Overlap and Crossfade
+for the next switch; Track itself never overlaps. The switch is inert while
+the editor has no clips, and any switch (Undo and Redo included) pauses the
+preview. Cancel's discard sheet names what would be lost ("The switch to
+Stacked and the overlap will be lost."). The switch changes the timeline's
+height, and the timeline grows up from the bottom of the editor; the
+header's right side keeps its width, so the toggle never moves: to switch
+back, the other option is where it was.
+
+In Stacked the rail's footer adds, above Loop sequence, a line saying what
+Overlap and Crossfade do, then one row with the two of them. The row sits
+on Loop sequence, so it stays put when the line grows or shrinks: the rail
+above gives or takes the room. In a window too short for the whole line,
+it shows the text lines that fit, and its full text on hover.
+
+- **Overlap**: 0 to 10 s in 0.1 s steps, 1.0 s by default. ↑ and ↓ in the
+  well change it by 0.1 s (⇧ by 1 s), as one undo step until the well is
+  left; a value typed before the arrow is taken first, so the step starts
+  from it. "1.5", "1,5", "2s" and "0:01.5" can be typed.
+- **Crossfade**: on by default.
+- The line above them says what they do to this sequence: "Each join blends
+  over 1.0 s." (Crossfade on), "Each clip starts 1.0 s early, under the
+  clip above. Both are heard." (off), or "Clips play end to end, as in
+  Track." (no join overlaps). Then, when they apply: a join that gets less
+  ("The join into Clip 3 is 0.70 s: an overlap is at most half a clip.",
+  "… is a cut: …", or "2 joins are shorter: …"), "Pieces of the same video
+  meet with a cut." and, with more than one loop, "The loop restarts with a
+  cut."
+
+**Each join's overlap** (`joinOverlaps` in `src/lib/stitch/stack.ts`, shared
+by the editor, the card and the encoder). Overlap is the most a join gets.
+Each join is cut down to half of the clip on either side, and to no more
+than the piece of video that touches it, then rounded down to whole 1/60 s
+frames; under one frame, the join is a cut. So no more than two clips ever
+play at once, and the clips still end in the order they start.
+
+- An empty clip (one that counts 0 s) is skipped: the clips on either side
+  of it overlap as if it were not there.
+- Two pieces of the same video side by side (a split, or the same library
+  video twice in a row) meet with a cut. For the half-clip rule they count
+  as one clip, so a split never changes an overlap or moves a clip.
+
+**The lane.** Each row is 52 px, with the clip's box at its own start on
+the ruler. The boxes are compact: the row header names the clip and its
+source (with a muted speaker when the clip is muted), and the box shows
+its length at the right. With Crossfade on, a wedge marks the head a clip
+fades in on and the tail it fades out on; with it off, the head the clip
+above hides is darkened ("Hidden under Clip N. Its sound plays."). Up to
+three and a half rows show, so the timeline grows to 279 px tall for four
+clips or more (351 px while the audio track is selected), taking the room
+from the stage. More rows scroll up and down under the fixed ruler, above
+the fixed audio row. While the preview plays, the row under the playhead is
+kept in view, and so is a clip selected by a key, a split or an undo. A
+wheel over the row headers scrolls the rows as one over the lanes does, and
+a right press on a header opens its clip's menu. The `+` that adds from the
+library moves to the corner beside the ruler.
+
+**Moving and trimming.** Drag a clip's box, or its row header, up or down
+to reorder. The lifted box is drawn at the start it will have in its new
+place, with a line across the rows and the headers where it will land, and
+the rows scroll when it nears their top or bottom. Clips do not move
+sideways in time: a sideways drag says "Clips stay in order. Overlap sets
+where each one starts." and moves nothing. A trim works as in Track (the
+clips after it close up or are pushed along). While it is dragged, the
+boxes are drawn as release will leave them, so when a clip gets short
+enough for the half-clip rule to cut its overlaps, its own start and the
+clips after it move during the drag. The frames the trim cuts are drawn
+hatched beside the box, on the side they leave from: the head left of it
+for an In trim, the tail right of it for an Out trim.
+
+**Split.** S, the rail and the clip menu split the clip under the
+playhead, as in Track, but not inside an overlap or within 0.1 s of one.
+Inside an overlap the disabled Split's tooltip says "Move the playhead out
+of the overlap to split". Outside an overlap a split moves nothing.
+
+Switching layout or changing Overlap keeps the playhead on the same frame
+of the same clip (the selected one if the playhead is inside it, else the
+earlier one under it), and moves a fade out that ends at the end along with
+the end (see The volume curve).
+
+**Crossfade on.** Across each overlap the picture dissolves in a straight
+line from the earlier clip to the later one, and their sounds crossfade at
+equal power, which keeps two different shots at the same loudness. A muted
+or silent clip still fades the other one.
+
+**Crossfade off.** The earlier clip (the row above) stays in front until
+its Out, as the upper layer does in After Effects. The later clip starts
+under it: its first Overlap seconds are not seen, but its sound already
+plays. Both clips are heard through the overlap at their own volumes,
+added together.
+
+**Loops.** One loop is the clips' lengths less the overlaps. Each restart
+of the loop is a cut, in picture and sound: the last clip has nothing to
+fade into.
+
+**The preview.** In Stacked the stage has one `<video>` per clip, later
+clips over earlier ones. In an overlap both play: with Crossfade on the
+later clip is drawn over the earlier one at the dissolve's opacity, with it
+off it is hidden; their volumes follow the crossfade.
+
+**On the card.** The summary's length is the stacked length. When some
+join really overlaps, an item between it and the loop says "1.0 s
+crossfade" or "1.0 s overlap" (the Overlap setting; a join can get less).
+When every join comes out a cut there is none, since the output is
+Track's. The card has no layout control, and its own edits (a reorder, ✕)
+keep the layout.
+
 ## How it is encoded
 
 `stitchVideosAsync` (`src/hooks/useStitchVideos.ts`) takes one input per
-clip (`{ blob, inSec, outSec, muted, volume }`), the music with its curve,
-and the loop count. `gatherStitchInputs`
+clip (`{ blob, inSec, outSec, muted, volume }`, and on a node the editor
+wrote the clip's `source` key, so pieces of one video are known), the music
+with its curve, and the options: `{ loopCount }`, plus `overlapSec` and
+`crossfade` when the node is Stacked with an overlap above 0. A Track node
+passes `{ loopCount }` alone, as before. `gatherStitchInputs`
 (`src/store/execution/stitchInputs.ts`) builds them from the node: connected
 videos are fetched as before, library clips through
 `/api/assets/<id>/file`. If a library clip's asset is gone, the run stops
@@ -176,9 +324,9 @@ adds one frame interval when the last frame carries no duration). Both of a
 clip's tracks start at the same origin: the In, or the video's first
 timestamp if that is later. Frames are placed on a 60 fps grid at their own
 times, so 24 fps clips come out at 24 frames a second, and each clip starts
-exactly where the previous one ends. Size, bitrate, profile and rotation
-follow the old rules: the largest coded size, the first clip's rotation, at
-least 8 Mbps, H.264.
+exactly where the previous one ends (in Stacked, its overlap before that).
+Size, bitrate, profile and rotation follow the old rules: the largest coded
+size, the first clip's rotation, at least 8 Mbps, H.264.
 
 **Clip sound.** An unmuted clip's own sound plays under its picture at its
 volume. It is cut at the clip's Out, and a clip without sound is silence.
@@ -193,11 +341,39 @@ ramped inside each block. The music is cut at the encoded length and padded
 with silence when it is shorter. `audioMuted` drops it; the clips' sound
 still plays.
 
+**Stacked.** A clip's frames outside its overlaps pass straight through,
+as in Track. With Crossfade off that is every frame from where the clip
+before it ends to its own Out, and nothing is blended. With Crossfade on,
+the frames of each overlap are new (`src/lib/stitch/crossfadeFrames.ts`):
+each blends the two clips' frames at that point of the dissolve. Each
+side shows the frame its own pass-through would show on that output frame,
+so no frame is skipped or shown twice where a dissolve meets a clip's own
+frames, whatever the trims. When both
+frames have the same 8-bit pixel format and the size of the first frame
+encoded, they are blended byte by byte in their own planes, so the blend
+keeps the colour of the frames on either side. Otherwise (different sizes
+or formats, or 10-bit video) they are drawn on a canvas at that size, each
+scaled to cover it, with no rotation. The blended frames come at the
+earlier clip's own frame times when the two clips report the same frame
+rate (within 1 %, from 10 to 60 fps), so a 24 fps sequence stays 24 fps
+through its dissolves; otherwise one comes every 1/60 s. Below 10 fps (a
+slideshow, a one-frame still) too few frames fall inside an overlap to
+blend, so those dissolves also use every 1/60 s. The rate is measured from
+the gaps between frames, so a WebM whose last frame was stored without a
+duration reads as its real rate. Each clip's sound
+starts at the clip's own start, a hidden head included. With Crossfade on
+it fades in over its overlap with the clip before and out over its overlap
+with the clip after, at equal power and sample for sample with the picture;
+with it off it plays in full. A stack whose joins all come out as cuts is
+encoded exactly as Track.
+
 **Loops.** `loopCount` repeats the sequence: the encoded length is the
-sequence length times the loop count. The audio is AAC at 128 kbps (MP3 if
-the browser has no AAC encoder), tried in the master format, then 48 kHz and
-44.1 kHz stereo. All the audio is written before any video. When clip sound
-and music play together the sum is hard-clipped to full scale; one source on
+sequence length times the loop count. In Stacked one loop is the clips'
+lengths less the overlaps, and each restart is a cut. The audio is AAC at
+128 kbps (MP3 if the browser has no AAC encoder), tried in the master
+format, then 48 kHz and 44.1 kHz stereo. All the audio is written before
+any video. When clip sound and music play together, or two clips' sound
+overlaps in Stacked, the sum is hard-clipped to full scale; one source on
 its own passes through as decoded.
 
 ### "Stitches as before"
@@ -245,6 +421,10 @@ it. It is not bit-identical, by design:
 always changed the filmstrip, but the stitch kept connection order. It now
 follows the card, on legacy nodes too.
 
+**Stacked changes none of this.** A node in Track, a stacked node whose
+joins all come out as cuts, and a node the editor never wrote encode
+exactly as they did before Stacked was added.
+
 ## The volume curve
 
 The music's line is drawn on a square-root scale: a point's height is
@@ -264,12 +444,27 @@ the new end are kept and not drawn, but they still shape the line up to the
 end, so a fade out made before a trim no longer reaches silence at the new
 end. Press Fade out again after shortening.
 
+Switching between Track and Stacked, or changing Overlap, changes the
+length without a trim, so a fade out that ends at the end follows it
+(`followEndFade`): when the curve's last point is silent and within one
+1/60 s frame of the old end, it and the point before it move by the change
+in length, in the same undo step. Switching back moves them back, so the
+curve returns as it was. Other points keep their times, and a move that
+would take the point before the last below 0 or past the point ahead of it
+leaves the curve as it is.
+
 ## Library clips
 
-`+` in the Clips header, the dashed slot after the last clip, or the empty
-lane opens **Add from library**: videos only, with search, a project menu,
-Favourites, This workflow and a sort. The picked videos are added after the
-last clip, in the order they were picked, as one undo step.
+`+` in the Clips header (in Stacked, in the corner beside the ruler), the
+dashed slot after the last clip, or the empty lane opens **Add from
+library**: videos only, with search, a project menu, Favourites, This
+workflow and a sort. The picked videos are added after the last clip, in
+the order they were picked, as one undo step. The playhead goes to the
+first added clip's start. In Stacked each added clip gets a row of its own
+and overlaps the clip before it like any other; until the editor has read a
+new file, the playhead is placed with the length in the library's record.
+The picker's footer still says what the videos go after and their own total
+length, which in Stacked is more than the sequence grows by.
 
 A library clip stores only the asset's id (`source: { kind: "asset" }`); a
 saved clip whose id is not an asset id is dropped on read, so no URL is built
@@ -289,25 +484,28 @@ it.
 
 ## Keys
 
-None of these fire while a timecode field has focus. While a handle, clip or
+None of these fire while a timecode field has focus, apart from the Overlap
+well's own ↑ and ↓. While a handle, clip or
 point is being dragged, only Escape (cancels the drag) and K work.
 
 | Key | Action |
 |---|---|
 | Space | Play or pause |
 | I / O | Set the selected clip's In / Out at the playhead (the playhead must be inside it) |
-| S | Split the clip under the playhead |
+| S | Split the clip under the playhead (in Stacked, not inside an overlap) |
 | ⌫ / Delete | Remove the selected clip, or the selected curve point |
 | M | Mute or unmute the music track |
 | ⌥M | Mute or unmute the selected clip's sound |
 | ⌘Z / Ctrl+Z | Undo, in the editor only |
 | ⇧⌘Z / Ctrl+Y | Redo |
 | J / K / L | Back 1 s / pause / play |
-| ← / → / Home / End | Move the selection along the clips (with a clip focused) |
+| ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too) |
+| ↑ / ↓ in the Overlap well | 0.1 s more or less (⇧: 1 s), one undo step until the well is left |
 | Context menu key / ⇧F10 | Open the clip menu |
 | Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel |
 | ⇧ while dragging an edge | No snapping |
 | ⌥ while dragging the curve | Move the whole line |
+| ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
 | ⌘S | Saves the workflow, as everywhere |
 
 Keys the canvas would act on (⌘Z, ⌘V, Shift+letters, ⌘↵ and so on) never
@@ -316,7 +514,16 @@ reach it while the editor is open.
 **Snapping.** With Snap on, a dragged edge snaps within 8 px to the playhead
 and to the neighbouring clip's edge where the drag began, which gives the
 clip back its original length. Other clip edges move with the trim (the
-clips after it close up or are pushed along) and are not targets.
+clips after it close up or are pushed along) and are not targets. In
+Stacked, where clips overlap rather than meet, the second target is the
+dragged edge's own position where the drag began ("Snapped to the original
+length"). There an edge snaps only where the box, drawn as release leaves
+it, meets the target. An Out edge whose drawn end would miss the playhead
+(the half-clip rule moved the clip's start) is not snapped and follows the
+pointer. An In edge snaps only to the original length, never to the
+playhead: an In trim keeps the clip's start, which is set by the clip
+before it, so its box's left edge stays where it is and cannot meet the
+playhead.
 
 ## Limits
 
@@ -324,10 +531,26 @@ clips after it close up or are pushed along) and are not targets.
   source, so a join can freeze briefly; clip volume and the curve are applied
   to the elements once a frame; it plays one loop. A video served without
   CORS shows no filmstrip frames. The encode is the truth.
+- In Stacked the preview has one `<video>` per clip, so every clip loads. In
+  an overlap two play at once and can drift apart by up to 0.15 s before
+  they are seeked back together.
 - **Mixed aspect ratios crop.** The encode keeps the old behaviour: the
   largest coded size, each clip scaled to cover it. The preview letterboxes.
 - Clip sound is resampled linearly, and a mix of clip sound and music above
-  full scale is hard-clipped.
+  full scale is hard-clipped. So is clip sound in a stacked overlap, which
+  adds up: with Crossfade off both clips play at their own volumes, and two
+  loud ones can clip for the whole overlap; with it on, two very similar
+  sounds can peak 3 dB louder in the middle.
+- A stacked dissolve decodes the earlier clip a second time, from its last
+  key frame before the overlap. Many generated clips have a single key
+  frame, so that is often the whole clip, once per join and loop. Two
+  decoders run during a dissolve, and for a moment after it a third.
+- Blended frames drawn on the canvas (clips of different sizes or formats,
+  or 10-bit video) can differ slightly in colour from the frames on either
+  side, and HDR is tone-mapped there.
+- In Stacked the timeline grows to 279 px for four or more clips, taking
+  room from the stage; on a window about 900 px tall the rail then scrolls
+  a little.
 - A file mediabunny cannot open is shown at the `<video>` element's
   duration (an unreadable slot if that is not finite either), but Stitch
   reads files with mediabunny and stops on it. A file mediabunny opens with
@@ -338,6 +561,10 @@ clips after it close up or are pushed along) and are not targets.
 - A Done made while a workflow runs cannot be undone on the canvas unless it
   also disconnects a clip's connection: the store takes no undo snapshot of
   node edits during a run, as for every other edit made then.
-- The agent sees the node's `clipOrder`, not its timeline.
+- The agent sees the node's `clipOrder` and loop count, not its timeline or
+  its layout; its edits keep the layout.
 - Not built: ducking the music under clips with sound, roll edits,
-  transitions, speed changes, titles, a second video or music track.
+  transitions other than the crossfade at a stacked overlap, a crossfade at
+  the loop's restart, an overlap set per join, dragging a clip sideways in
+  time, speed changes, titles, a second video or music track (Stacked's
+  rows are still one sequence and one output track).

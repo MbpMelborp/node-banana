@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import type { StitchTimelineClip } from "@/types";
-import { clipSpans, createClip, neighbourTarget, type SnapTarget, type SourceDurations, type SourceKey } from "../timeline";
+import {
+  clipSpans,
+  createClip,
+  neighbourTarget,
+  trimClip,
+  type SnapTarget,
+  type SourceDurations,
+  type SourceKey,
+} from "../timeline";
 import { buildTimeAxis } from "../timeAxis";
 import { trimDragAt, trimTargets, type TrimDragStart } from "../trimDrag";
 
@@ -13,7 +21,7 @@ const durations = (entries: Record<string, number>): SourceDurations =>
 const PPS = 120;
 const timeline = [clip("c1", "e1"), clip("c2", "e2", { inSec: 0.8 }), clip("c3", "e3"), clip("c4", "e4")];
 const lengths = durations({ "edge:e1": 4, "edge:e2": 5, "edge:e3": 6, "edge:e4": 3 });
-const spans = clipSpans(timeline, lengths);
+const spans = clipSpans(timeline, lengths, 0);
 const playhead = (t: number): SnapTarget => ({ t, kind: "playhead", label: "the playhead" });
 
 /** A drag on clip 2's edge, pressed at x = 1000 (the press point does not matter, only the travel). */
@@ -67,7 +75,7 @@ describe("trimDragAt", () => {
   it("does not snap a lengthening Out to the later clips' starting ends (they move with it)", () => {
     // Clip 2 on a 30 s source, trimmed to 0.8–5 (4–8.2 as above): its Out can run past Clip 3's (14.2) and Clip 4's (17.2) drag-start ends
     const longTimeline = [clip("c1", "e1"), clip("c2", "e2", { inSec: 0.8, outSec: 5 }), clip("c3", "e3"), clip("c4", "e4")];
-    const long = clipSpans(longTimeline, durations({ "edge:e1": 4, "edge:e2": 30, "edge:e3": 6, "edge:e4": 3 }));
+    const long = clipSpans(longTimeline, durations({ "edge:e1": 4, "edge:e2": 30, "edge:e3": 6, "edge:e4": 3 }), 0);
     expect(long[1].end).toBeCloseTo(8.2);
     expect(long[2].end).toBeCloseTo(14.2);
     expect(long[3].end).toBeCloseTo(17.2);
@@ -103,7 +111,7 @@ describe("trimDragAt", () => {
   it("gives the clip's own In and Out back exactly when the edge has not moved", () => {
     // A clip that is not first, with a numeric Out: (start + length) − start is not always the length in floats
     const noisy = [clip("c1", "e1"), clip("c2", "e2", { inSec: 0, outSec: 1.3 })];
-    const ns = clipSpans(noisy, durations({ "edge:e1": 5, "edge:e2": 4 }));
+    const ns = clipSpans(noisy, durations({ "edge:e1": 5, "edge:e2": 4 }), 0);
     for (const edge of ["in", "out"] as const) {
       const s: TrimDragStart = { span: ns[1], edge, sourceDuration: 4, pointerX: 500, pxPerSec: 64, targets: trimTargets(ns, "c2", edge, 0) };
       for (const snap of [true, false]) {
@@ -154,7 +162,7 @@ describe("trimDragAt", () => {
   it("counts no time for an empty slot a lengthening In crosses, so it meets the playhead where it is drawn", () => {
     // Clip 1 (0–5), Clip 2 not generated (a slot at 5 s), Clip 3 with In 2 of a 6 s source; the playhead at 4 s
     const slotted = [clip("c1", "e1"), clip("c2", "e2"), clip("c3", "e3", { inSec: 2 })];
-    const ss = clipSpans(slotted, durations({ "edge:e1": 5, "edge:e3": 6 }));
+    const ss = clipSpans(slotted, durations({ "edge:e1": 5, "edge:e3": 6 }), 0);
     const axis = buildTimeAxis(ss, 64);
     const s: TrimDragStart = {
       span: ss[2],
@@ -172,5 +180,61 @@ describe("trimDragAt", () => {
     expect(r.snapped?.kind).toBe("playhead");
     expect(r.inSec).toBeCloseTo(1);
     expect(r.deltaSec).toBeCloseTo(1);
+  });
+});
+
+describe("trimTargets", () => {
+  it("offers the neighbouring edge in Track", () => {
+    expect(trimTargets(spans, "c2", "out", 20)).toEqual([playhead(20), neighbourTarget(spans, "c2", "out")]);
+  });
+
+  it("offers the edge's own start in Stacked", () => {
+    const stacked = clipSpans(timeline, lengths, 1);
+    expect(trimTargets(stacked, "c2", "out", 20, true)).toEqual([
+      playhead(20),
+      { t: stacked[1].end, kind: "edge", label: "the original length" },
+    ]);
+    expect(trimTargets(stacked, "c2", "in", 20, true)[1]).toEqual({
+      t: stacked[1].start,
+      kind: "edge",
+      label: "the original length",
+    });
+    expect(trimTargets(stacked, "missing", "in", 20, true)).toEqual([playhead(20)]);
+  });
+});
+
+describe("trimDragAt, Stacked", () => {
+  // A 5 s and B 5 s at Overlap 1: B runs 4–9
+  const pair = [clip("a", "ea"), clip("b", "eb")];
+  const pairLengths = durations({ "edge:ea": 5, "edge:eb": 5 });
+  const laid = clipSpans(pair, pairLengths, 1);
+  const stackedStart = (playheadAt: number): TrimDragStart => ({
+    span: laid[1],
+    edge: "out",
+    sourceDuration: 5,
+    pointerX: 1000,
+    pxPerSec: PPS,
+    targets: trimTargets(laid, "b", "out", playheadAt, true),
+    // As useTrimDrag lays the trim out
+    liveEdgeTime: (trim) => clipSpans(trimClip(pair, "b", pairLengths, { outSec: trim.outSec }), pairLengths, 1)[1].end,
+  });
+
+  it("keeps a playhead snap the half-clip cap would move off the playhead from claiming it", () => {
+    // B's Out 3px short of the playhead at 5.5: at 1.5 s long its join is capped at 0.75 s, so it would end at 5.75
+    const s = stackedStart(5.5);
+    const r = at(s, 5.5 - laid[1].end + 3 / PPS);
+    expect(r.snapped).toBeNull();
+    expect(r.edgeSeqTime).toBeCloseTo(5.5 + 3 / PPS, 9);
+    const laidOut = clipSpans(trimClip(pair, "b", pairLengths, { outSec: r.outSec }), pairLengths, 1)[1];
+    expect(laidOut.end).not.toBeCloseTo(5.5, 6);
+  });
+
+  it("snaps to the playhead where the laid-out edge meets it", () => {
+    // Uncapped (B stays 2 s or longer): its start holds at 4, so its end meets the playhead at 7.5
+    const s = stackedStart(7.5);
+    const r = at(s, 7.5 - laid[1].end + 3 / PPS);
+    expect(r.snapped?.kind).toBe("playhead");
+    const laidOut = clipSpans(trimClip(pair, "b", pairLengths, { outSec: r.outSec }), pairLengths, 1)[1];
+    expect(laidOut.end).toBeCloseTo(7.5, 9);
   });
 });

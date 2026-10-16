@@ -125,6 +125,26 @@ export function fadeOut(curve: readonly VolumePoint[], sequenceSec: number, leng
   return [...curve.filter((p) => p.t < start), { t: start, gain: gainAt(curve, start) }, { t: sequenceSec, gain: 0 }];
 }
 
+/**
+ * A fade out that ends at the sequence's end follows the end when the length changes without a trim (a layout switch,
+ * a new overlap): when the curve's last point has gain 0 within one 1/60 s frame of oldTotal, the last two points
+ * move by newTotal − oldTotal. Shifting rather than fading again is exactly invertible, so switching back restores the
+ * curve. Anything else, or a move that would put the second-to-last point before 0 or within MIN_POINT_GAP_SEC of
+ * the point before it, leaves the curve as it is.
+ */
+export function followEndFade(curve: readonly VolumePoint[], oldTotal: number, newTotal: number): VolumePoint[] {
+  if (curve.length < 2) return curve.slice();
+  if (!(Number.isFinite(oldTotal) && oldTotal > 0 && Number.isFinite(newTotal) && newTotal > 0)) return curve.slice();
+  const delta = newTotal - oldTotal;
+  const last = curve[curve.length - 1];
+  if (delta === 0 || last.gain !== 0 || Math.abs(last.t - oldTotal) > 1 / 60) return curve.slice();
+  const before = curve[curve.length - 2];
+  const third = curve[curve.length - 3];
+  const moved = before.t + delta;
+  if (moved < 0 || (third && moved < third.t + MIN_POINT_GAP_SEC)) return curve.slice();
+  return [...curve.slice(0, -2), { t: moved, gain: before.gain }, { t: last.t + delta, gain: last.gain }];
+}
+
 /** Flat at 0 dB. */
 export function flat(): VolumePoint[] {
   return [];

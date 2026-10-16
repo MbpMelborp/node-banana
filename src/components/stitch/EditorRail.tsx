@@ -20,9 +20,11 @@ import {
   setClipVolume,
   setLoopCount,
   splitAtPlayhead,
+  splitBlockedReason,
   trimSelected,
 } from "./editorActions";
 import { AudioTrackRail } from "./AudioTrackRail";
+import { SequenceSettings } from "./SequenceSettings";
 import { KeyHints, RailRow } from "./railParts";
 import { RAIL_BUTTON } from "./editorStyles";
 import { TimecodeField } from "./TimecodeField";
@@ -46,6 +48,7 @@ function RailButton({
   shortcut,
   danger,
   disabled,
+  title,
   onClick,
 }: {
   icon: ReactNode;
@@ -53,6 +56,7 @@ function RailButton({
   shortcut?: string;
   danger?: boolean;
   disabled?: boolean;
+  title?: string;
   onClick: () => void;
 }) {
   return (
@@ -60,6 +64,7 @@ function RailButton({
       type="button"
       className={cn(RAIL_BUTTON, danger && "text-red-400")}
       disabled={disabled}
+      title={title}
       onClick={onClick}
     >
       {icon}
@@ -72,8 +77,9 @@ function RailButton({
 /**
  * The 280px rail beside the stage: the selected clip's name and source,
  * its trim as In and Out wells, its own sound, the clip actions with the
- * trim keys, and the loop count in the footer. With the audio track
- * selected it shows the track instead (AudioTrackRail).
+ * trim keys, and the loop count in the footer, with Overlap and Crossfade
+ * above it in Stacked. With the audio track selected it shows the track
+ * instead (AudioTrackRail).
  */
 export function EditorRail({
   media,
@@ -89,6 +95,8 @@ export function EditorRail({
   const empty = !draft || draft.timeline.length === 0;
   const selection = useStitchEditorStore((s) => s.selection);
   const canSplit = useStitchEditorStore(canSplitSelectedAtPlayhead);
+  const splitBlocked = useStitchEditorStore(splitBlockedReason);
+  const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
   const endGesture = useStitchEditorStore((s) => s.endGesture);
   const railRef = useRef<HTMLElement>(null);
 
@@ -101,12 +109,14 @@ export function EditorRail({
   // The lane's rule (Timeline): the track shows only with music under a sequence with some length
   const audio = selection?.kind === "audio" && music !== null && total > 0;
 
-  // A swap of the rail's body (the last clip removed, the track for a clip or back) unmounts a focused control:
-  // focus the dialog, not <body>, so Tab stays inside
+  // A swap of the rail's body (the last clip removed, the track for a clip or back, Overlap and Crossfade coming or going
+  // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
   useEffect(() => {
     const active = document.activeElement;
-    if (active === null || active === document.body) railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus();
-  }, [hasClip, audio]);
+    if (active === null || active === document.body) {
+      railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+    }
+  }, [hasClip, audio, stacked]);
 
   return (
     <aside
@@ -201,6 +211,7 @@ export function EditorRail({
                 label="Split at playhead"
                 shortcut="S"
                 disabled={!canSplit}
+                title={canSplit ? undefined : (splitBlocked ?? undefined)}
                 onClick={splitAtPlayhead}
               />
               <RailButton
@@ -228,6 +239,7 @@ export function EditorRail({
         )}
       </div>
 
+      {stacked && <SequenceSettings empty={empty} />}
       {/* Inert with nothing to loop, like the transport beside it */}
       <div
         className={cn(

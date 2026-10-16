@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FRAME_RATE, FrameSlotter, planSequence, videoTrackDuration } from "../sequencePlan";
+import { FRAME_RATE, FrameSlotter, planSequence, secToSlot, videoTrackDuration } from "../sequencePlan";
 
 describe("planSequence", () => {
   it("plays a clip without Out to its video's end", () => {
@@ -172,5 +172,77 @@ describe("videoTrackDuration", () => {
 
   it("is 0 for a bad duration with nothing to add", () => {
     expect(videoTrackDuration(Number.NaN, null, 30)).toBe(0);
+  });
+});
+
+describe("secToSlot", () => {
+  it("rounds half up, float noise just under a half included", () => {
+    expect(secToSlot(0)).toBe(0);
+    expect(secToSlot(1)).toBe(60);
+    expect(secToSlot(2.5 / 60)).toBe(3);
+    expect(secToSlot(2.4999999 / 60)).toBe(3);
+    expect(secToSlot(2.49 / 60)).toBe(2);
+    expect(secToSlot(1, 24)).toBe(24);
+  });
+
+  it("matches where the slotter places a frame", () => {
+    const slotter = new FrameSlotter();
+    slotter.begin({ origin: 0, startSec: 0, length: 10 });
+    for (let j = 0; j < 120; j++) {
+      expect(Math.round(slotter.place(j / 24)! * FRAME_RATE)).toBe(secToSlot(j / 24));
+    }
+  });
+});
+
+describe("FrameSlotter: stacked windows", () => {
+  /** Places 24 fps frames from `from` up to `to` (source seconds) and returns their slots. */
+  const placeAll = (slotter: FrameSlotter, from: number, to: number) => {
+    const slots: number[] = [];
+    for (let j = Math.ceil(from * 24 - 1e-9); j / 24 < to; j++) {
+      const t = slotter.place(j / 24);
+      if (t !== null) slots.push(Math.round(t * FRAME_RATE));
+    }
+    return slots;
+  };
+
+  it("tiles solo A, the claimed dissolve slots and solo B with no gap or repeat", () => {
+    // A 5 s and B 5 s, overlap 1: A plays alone over [0, 4), the dissolve owns [4, 5), B plays alone from 5 (source 1)
+    const slotter = new FrameSlotter();
+    slotter.beginRange({ origin: 0, fromSec: 0, toSec: 4 });
+    const soloA = placeAll(slotter, 0, 5);
+    const dissolve: number[] = [];
+    for (let slot = secToSlot(4); slot < secToSlot(5); slot++) {
+      if (slotter.claim(slot) !== null) dissolve.push(slot);
+    }
+    slotter.beginRange({ origin: 1, fromSec: 5, toSec: 9 });
+    const soloB = placeAll(slotter, 1, 5);
+
+    expect(soloA[0]).toBe(0);
+    expect(soloA[soloA.length - 1]).toBeLessThan(240);
+    expect(dissolve).toEqual(Array.from({ length: 60 }, (_, i) => 240 + i));
+    expect(soloB[0]).toBe(300);
+    expect(soloB[soloB.length - 1]).toBeLessThan(540);
+    const all = [...soloA, ...dissolve, ...soloB];
+    expect(all.every((slot, i) => i === 0 || slot > all[i - 1])).toBe(true);
+  });
+
+  it("refuses a claim on or before the last slot written", () => {
+    const slotter = new FrameSlotter();
+    expect(slotter.claim(0)).toBe(0);
+    expect(slotter.claim(0)).toBeNull();
+    expect(slotter.claim(3)).toBeCloseTo(3 / 60, 12);
+    expect(slotter.claim(2)).toBeNull();
+    slotter.beginRange({ origin: 0, fromSec: 0, toSec: 1 });
+    // A placed frame on a claimed slot is dropped too
+    expect(slotter.place(3 / 60)).toBeNull();
+    expect(slotter.place(4 / 60)).toBeCloseTo(4 / 60, 12);
+  });
+
+  it("begins a range with the same rounding as begin", () => {
+    const a = new FrameSlotter();
+    const b = new FrameSlotter();
+    a.begin({ origin: 0.5, startSec: 2.5 / 60, length: 1 });
+    b.beginRange({ origin: 0.5, fromSec: 2.5 / 60, toSec: 2.5 / 60 + 1 });
+    for (let j = 0; j < 30; j++) expect(a.place(0.5 + j / 24)).toBe(b.place(0.5 + j / 24));
   });
 });

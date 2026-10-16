@@ -1,7 +1,15 @@
-import type { StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
+import type { StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
 import { sameCurve, sortCurve } from "./curve";
 import { isLegacyStitch, migrateStitchTimeline, reconcileTimelineWithEdges, sanitizeTimeline } from "./migrate";
-import { edgeIdsInOrder, sourceKey } from "./timeline";
+import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "./stack";
+import {
+  clipSpans,
+  edgeIdsInOrder,
+  sequenceDuration,
+  sourceKey,
+  type ClipSpan,
+  type SourceDurations,
+} from "./timeline";
 
 /**
  * Everything the Stitch editor edits, read from a node the same way by the
@@ -13,6 +21,7 @@ export interface StitchDraft {
   audioCurve: VolumePoint[];
   audioMuted: boolean;
   loopCount: 1 | 2 | 3;
+  sequenceLayout: StitchSequenceLayout;
 }
 
 export interface StitchReadContext {
@@ -25,17 +34,53 @@ function readLoopCount(value: unknown): 1 | 2 | 3 {
 }
 
 /**
+ * Not an object → DEFAULT_SEQUENCE_LAYOUT. mode "stacked" only when raw.mode === "stacked" and the node is not legacy
+ * (a legacy node always reads as Track, keeping the values); overlapSec via clampOverlapSec when finite, else the
+ * default; crossfade = raw.crossfade !== false.
+ */
+export function readSequenceLayout(raw: unknown, legacy: boolean): StitchSequenceLayout {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_SEQUENCE_LAYOUT };
+  const { mode, overlapSec, crossfade } = raw as Record<string, unknown>;
+  return {
+    mode: mode === "stacked" && !legacy ? "stacked" : "track",
+    overlapSec:
+      typeof overlapSec === "number" && Number.isFinite(overlapSec)
+        ? clampOverlapSec(overlapSec)
+        : DEFAULT_SEQUENCE_LAYOUT.overlapSec,
+    crossfade: crossfade !== false,
+  };
+}
+
+export function sameLayout(a: StitchSequenceLayout, b: StitchSequenceLayout): boolean {
+  return a.mode === b.mode && a.overlapSec === b.overlapSec && a.crossfade === b.crossfade;
+}
+
+/** The draft's spans, with its layout's effective overlap. */
+export function draftSpans(
+  d: Pick<StitchDraft, "timeline" | "sequenceLayout">,
+  durations: SourceDurations,
+): ClipSpan[] {
+  return clipSpans(d.timeline, durations, effectiveOverlapSec(d.sequenceLayout));
+}
+
+/** One loop of the draft, with its layout's effective overlap. */
+export function draftDuration(d: Pick<StitchDraft, "timeline" | "sequenceLayout">, durations: SourceDurations): number {
+  return sequenceDuration(d.timeline, durations, effectiveOverlapSec(d.sequenceLayout));
+}
+
+/**
  * legacy: migrateStitchTimeline (it already includes the live edges).
  * otherwise: reconcileTimelineWithEdges(sanitizeTimeline(data.timeline), live, { muteNew }), where
  *   muteNew = ctx.hasMusic && at least one edge clip survives reconciliation && every such clip is muted
  *   (a video connected later to a node whose clips are all muted under music follows them, so the mix stays uniform).
  */
 export function readStitchDraft(
-  data: Pick<VideoStitchNodeData, "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "loopCount">,
+  data: Pick<VideoStitchNodeData, "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "loopCount" | "sequenceLayout">,
   ctx: StitchReadContext,
 ): StitchDraft {
   let timeline: StitchTimelineClip[];
-  if (isLegacyStitch(data)) {
+  const legacy = isLegacyStitch(data);
+  if (legacy) {
     timeline = migrateStitchTimeline(data, ctx);
   } else {
     const stored = sanitizeTimeline(data.timeline);
@@ -49,6 +94,7 @@ export function readStitchDraft(
     audioCurve: sortCurve(data.audioCurve),
     audioMuted: data.audioMuted === true,
     loopCount: readLoopCount(data.loopCount),
+    sequenceLayout: readSequenceLayout(data.sequenceLayout, legacy),
   };
 }
 
@@ -71,22 +117,27 @@ export function sameDraft(a: StitchDraft, b: StitchDraft): boolean {
   return (
     a.loopCount === b.loopCount &&
     a.audioMuted === b.audioMuted &&
+    sameLayout(a.sequenceLayout, b.sequenceLayout) &&
     a.timeline.length === b.timeline.length &&
     a.timeline.every((clip, i) => sameClip(clip, b.timeline[i])) &&
     sameCurve(a.audioCurve, b.audioCurve)
   );
 }
 
-/** Exactly what Done writes: timeline, audioCurve, audioMuted, loopCount, clipOrder = edgeIdsInOrder(timeline). */
+/**
+ * What Done writes: timeline, audioCurve, audioMuted, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline).
+ * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it.
+ */
 export function draftPatch(
   d: StitchDraft,
-): Required<Pick<VideoStitchNodeData, "timeline" | "audioCurve" | "audioMuted">> &
+): Required<Pick<VideoStitchNodeData, "timeline" | "audioCurve" | "audioMuted" | "sequenceLayout">> &
   Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> {
   return {
     timeline: d.timeline,
     audioCurve: d.audioCurve,
     audioMuted: d.audioMuted,
     loopCount: d.loopCount,
+    sequenceLayout: { ...d.sequenceLayout },
     clipOrder: edgeIdsInOrder(d.timeline),
   };
 }
@@ -123,6 +174,15 @@ function onlySplit(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: re
     if (cursor === null && was.outSec !== null) return false;
   }
   return true;
+}
+
+/** The layout's parts of the discard sheet's sentence, saying which way each changed. */
+function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): string[] {
+  const parts: string[] = [];
+  if (was.mode !== now.mode) parts.push(now.mode === "stacked" ? "the switch to Stacked" : "the switch to Track");
+  if (was.overlapSec !== now.overlapSec) parts.push("the overlap");
+  if (was.crossfade !== now.crossfade) parts.push(now.crossfade ? "turning the crossfade on" : "turning the crossfade off");
+  return parts;
 }
 
 /**
@@ -169,6 +229,7 @@ export function describeDraftChanges(initial: StitchDraft, draft: StitchDraft): 
     sameCurve(initial.audioCurve, draft.audioCurve) ? null : "the volume curve",
     initial.audioMuted === draft.audioMuted ? null : "the music mute",
     initial.loopCount === draft.loopCount ? null : "the loop count",
+    ...layoutChanges(initial.sequenceLayout, draft.sequenceLayout),
   ].filter((part): part is string => part !== null);
 
   if (parts.length === 0) return "Your changes will be lost. The node keeps what it had.";

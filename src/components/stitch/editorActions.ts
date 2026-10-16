@@ -1,23 +1,28 @@
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { fadeIn, fadeOut, flat, removePoint } from "@/lib/stitch/curve";
+import { fadeIn, fadeOut, flat, followEndFade, removePoint } from "@/lib/stitch/curve";
 import { primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { stitchHasMusicEdge } from "@/lib/stitch/sources";
+import { draftDuration, draftSpans, sameLayout } from "@/lib/stitch/draft";
+import { clampOverlapSec, effectiveOverlapSec } from "@/lib/stitch/stack";
 import {
   appendClips,
   clipAtTime,
   createClip,
+  inOverlap,
   moveClip,
+  reanchorTime,
   removeClip,
   resetTrim,
-  sequenceDuration,
   setEdgeAtPlayhead,
+  sourceKey,
   splitClipAt,
   trimClip,
   updateClipAudio,
+  type SourceKey,
 } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchTimelineClip, VolumePoint } from "@/types";
+import type { StitchSequenceLayout, StitchTimelineClip, VolumePoint } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 
 /**
@@ -30,7 +35,7 @@ const editor = () => useStitchEditorStore.getState();
 
 /** One loop of the sequence, in seconds. */
 function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number {
-  return s.draft ? sequenceDuration(s.draft.timeline, s.durations) : 0;
+  return s.draft ? draftDuration(s.draft, s.durations) : 0;
 }
 
 function selectedClipId(s: StitchEditorState): string | null {
@@ -68,23 +73,39 @@ export function goToEnd(): void {
   s.setPlayhead(editorTotal(s));
 }
 
+/** The split S makes now: the selected clip when the playhead is inside it, else the earlier clip under it. */
+function splitOptions(s: StitchEditorState, layout: StitchSequenceLayout) {
+  return { overlapSec: effectiveOverlapSec(layout), preferClipId: selectedClipId(s) };
+}
+
 /** Whether S would split something now. */
 export function canSplitAtPlayhead(s: StitchEditorState): boolean {
-  return s.draft !== null && splitClipAt(s.draft.timeline, s.durations, s.playhead, () => "probe") !== null;
+  if (!s.draft) return false;
+  const opts = splitOptions(s, s.draft.sequenceLayout);
+  return splitClipAt(s.draft.timeline, s.durations, s.playhead, () => "probe", opts) !== null;
 }
 
 /** The rail's Split: S would split, and the clip it would cut is the one the rail shows. */
 export function canSplitSelectedAtPlayhead(s: StitchEditorState): boolean {
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId) return false;
-  return clipAtTime(s.draft.timeline, s.durations, s.playhead)?.clip.id === clipId && canSplitAtPlayhead(s);
+  const overlap = effectiveOverlapSec(s.draft.sequenceLayout);
+  return (
+    clipAtTime(s.draft.timeline, s.durations, s.playhead, overlap, clipId)?.clip.id === clipId && canSplitAtPlayhead(s)
+  );
+}
+
+/** Why Split is off, when the reason is not obvious: two clips play under the playhead (Stacked). */
+export function splitBlockedReason(s: StitchEditorState): string | null {
+  if (!s.draft || s.draft.sequenceLayout.mode !== "stacked") return null;
+  return inOverlap(draftSpans(s.draft, s.durations), s.playhead) ? "Move the playhead out of the overlap to split" : null;
 }
 
 /** S: splits the clip under the playhead and selects its right piece. */
 export function splitAtPlayhead(): void {
   const s = editor();
   if (!s.draft) return;
-  const result = splitClipAt(s.draft.timeline, s.durations, s.playhead);
+  const result = splitClipAt(s.draft.timeline, s.durations, s.playhead, undefined, splitOptions(s, s.draft.sequenceLayout));
   if (!result) return;
   s.apply((d) => ({ ...d, timeline: result.timeline }));
   editor().select({ kind: "clip", clipId: result.rightId });
@@ -95,7 +116,8 @@ export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
   const s = editor();
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId) return;
-  const timeline = setEdgeAtPlayhead(s.draft.timeline, s.durations, clipId, edge, s.playhead);
+  const overlap = effectiveOverlapSec(s.draft.sequenceLayout);
+  const timeline = setEdgeAtPlayhead(s.draft.timeline, s.durations, clipId, edge, s.playhead, overlap);
   if (timeline) s.apply((d) => ({ ...d, timeline }));
 }
 
@@ -206,6 +228,39 @@ export function setLoopCount(n: 1 | 2 | 3): void {
   editor().apply((d) => ({ ...d, loopCount: n }));
 }
 
+/**
+ * A new layout, as one undo step (or one gesture's): a fade out ending on the old end follows the new end
+ * (followEndFade), and the playhead stays on the same frame of the same clip (reanchorTime). Pausing is the
+ * modal's: it pauses on any change of the Track/Stacked flag, undo and redo included.
+ */
+function applyLayout(layout: StitchSequenceLayout, opts?: { gestureKey?: string }): void {
+  const s = editor();
+  if (!s.draft || sameLayout(s.draft.sequenceLayout, layout)) return;
+  const before = draftSpans(s.draft, s.durations);
+  const after = draftSpans({ timeline: s.draft.timeline, sequenceLayout: layout }, s.durations);
+  const oldTotal = draftDuration(s.draft, s.durations);
+  const newTotal = draftDuration({ timeline: s.draft.timeline, sequenceLayout: layout }, s.durations);
+  s.apply((d) => ({ ...d, sequenceLayout: layout, audioCurve: followEndFade(d.audioCurve, oldTotal, newTotal) }), opts);
+  editor().setPlayhead(reanchorTime(before, after, s.playhead, selectedClipId(s)));
+}
+
+/** Track | Stacked. The overlap and the crossfade are kept either way. */
+export function setSequenceMode(mode: StitchSequenceLayout["mode"]): void {
+  const layout = editor().draft?.sequenceLayout;
+  if (layout) applyLayout({ ...layout, mode });
+}
+
+/** Clamped to 0–10 s in 0.1 s steps; an unchanged value is no step. opts.gesture coalesces ↑/↓ nudges until endGesture. */
+export function setOverlapSec(seconds: number, opts?: { gesture?: boolean }): void {
+  const layout = editor().draft?.sequenceLayout;
+  if (layout) applyLayout({ ...layout, overlapSec: clampOverlapSec(seconds) }, opts?.gesture ? { gestureKey: "overlap" } : undefined);
+}
+
+export function setCrossfade(on: boolean): void {
+  const layout = editor().draft?.sequenceLayout;
+  if (layout) applyLayout({ ...layout, crossfade: on });
+}
+
 export function moveClipTo(clipId: string, toIndex: number): void {
   const s = editor();
   const from = s.draft?.timeline.findIndex((c) => c.id === clipId) ?? -1;
@@ -231,12 +286,19 @@ export function addAssetClips(views: readonly AssetView[]): void {
   const s = editor();
   if (!s.draft || views.length === 0) return;
   primeAssetInfo(views);
-  const start = editorTotal(s);
   const clips = views.map((view) => createClip({ kind: "asset", assetId: view.id }));
   s.apply((d) => ({ ...d, timeline: appendClips(d.timeline, clips) }));
   const after = editor();
+  // In Stacked the first new clip starts under the last one: place it with the records' lengths, which the
+  // editor has not measured yet
+  const provisional = new Map<SourceKey, number>(after.durations);
+  for (const view of views) {
+    const key = sourceKey({ kind: "asset", assetId: view.id });
+    if (!provisional.has(key) && typeof view.durationSec === "number") provisional.set(key, view.durationSec);
+  }
+  const first = after.draft ? draftSpans(after.draft, provisional).find((span) => span.clip.id === clips[0].id) : undefined;
   after.select({ kind: "clip", clipId: clips[0].id });
-  after.setPlayhead(start);
+  after.setPlayhead(first?.start ?? editorTotal(s));
   after.setPickerOpen(false);
 }
 

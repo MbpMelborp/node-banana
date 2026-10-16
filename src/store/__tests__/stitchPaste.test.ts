@@ -25,7 +25,7 @@ const stitchData = (edgeId: string, timeline: boolean): VideoStitchNodeData => (
   }),
 });
 
-function seed(timeline: boolean) {
+function seed(timeline: boolean, extra: Partial<VideoStitchNodeData> = {}) {
   const edge: WorkflowEdge = {
     id: "edge-gen-1-stitch-1-video-video-0",
     source: "gen-1",
@@ -36,7 +36,7 @@ function seed(timeline: boolean) {
   useWorkflowStore.setState({
     nodes: [
       node("gen-1", "generateVideo", { outputVideo: "blob:clip" }),
-      node("stitch-1", "videoStitch", stitchData(edge.id, timeline) as unknown as Record<string, unknown>),
+      node("stitch-1", "videoStitch", { ...stitchData(edge.id, timeline), ...extra } as unknown as Record<string, unknown>),
     ],
     edges: [edge],
   });
@@ -81,5 +81,15 @@ describe("pasting a Stitch node with its sources", () => {
     const data = pastedStitch.data as VideoStitchNodeData;
     expect(data.clipOrder).toEqual([pastedEdge.id]);
     expect("timeline" in data).toBe(false);
+  });
+
+  it("keeps a stacked node's layout", () => {
+    const sequenceLayout = { mode: "stacked" as const, overlapSec: 1.5, crossfade: false };
+    seed(true, { sequenceLayout });
+    store().copySelectedNodes();
+    store().pasteNodes();
+
+    const pastedStitch = store().nodes.find((n) => n.type === "videoStitch" && n.id !== "stitch-1")!;
+    expect((pastedStitch.data as VideoStitchNodeData).sequenceLayout).toEqual(sequenceLayout);
   });
 });

@@ -1,13 +1,15 @@
 import type { StitchClipSource, StitchTimelineClip } from "@/types";
 import { FRAME_RATE } from "./sequencePlan";
+import { crossfadeGain, joinOverlaps } from "./stack";
 
 /**
  * The Stitch timeline's clip maths: lengths, spans, trims, splits and moves.
  *
  * Pure: no React, no DOM, no mediabunny. Times are seconds. A clip's In and
  * Out are in its source's time; a span's start and end are in sequence time
- * (one loop). Clips are butted together, so a span starts where the one
- * before it ends.
+ * (one loop). In Track clips are butted together, so a span starts where
+ * the one before it ends; in Stacked each starts joinOverlaps' overlap
+ * before that end.
  */
 
 /** The shortest a trimmed clip can be. */
@@ -61,21 +63,51 @@ export interface ClipSpan {
   start: number;
   end: number;
   length: number;
+  /** Seconds this clip shares with the previous / next non-empty clip (0 in Track, at cuts and for empty clips). */
+  overlapIn: number;
+  overlapOut: number;
 }
 
-/** One loop. start/end are in sequence seconds; zero-length spans are kept (start === end). */
-export function clipSpans(timeline: readonly StitchTimelineClip[], durations: SourceDurations): ClipSpan[] {
-  let start = 0;
-  return timeline.map((clip, index) => {
-    const length = clipLength(clip, durations.get(sourceKey(clip.source)));
-    const span = { clip, index, start, end: start + length, length };
-    start += length;
-    return span;
+/**
+ * One loop. start/end are in sequence seconds; zero-length spans are kept (start === end). overlapSec is the
+ * effective overlap (effectiveOverlapSec): 0 butts the clips, and a non-finite value counts as 0. Each non-empty span
+ * starts its joinOverlaps overlap before the previous non-empty span's end; an empty one sits at that end.
+ */
+export function clipSpans(
+  timeline: readonly StitchTimelineClip[],
+  durations: SourceDurations,
+  overlapSec: number,
+): ClipSpan[] {
+  const lengths = timeline.map((clip) => clipLength(clip, durations.get(sourceKey(clip.source))));
+  const overlaps = joinOverlaps(
+    timeline.map((clip, i) => ({ length: lengths[i], source: sourceKey(clip.source) })),
+    overlapSec,
+  );
+  let cursor = 0;
+  const spans = timeline.map((clip, index): ClipSpan => {
+    const length = lengths[index];
+    if (!(length > 0)) return { clip, index, start: cursor, end: cursor, length, overlapIn: 0, overlapOut: 0 };
+    const start = cursor - overlaps[index];
+    cursor = start + length;
+    return { clip, index, start, end: cursor, length, overlapIn: overlaps[index], overlapOut: 0 };
   });
+  let next: ClipSpan | null = null;
+  for (let i = spans.length - 1; i >= 0; i--) {
+    if (!(spans[i].length > 0)) continue;
+    if (next) spans[i].overlapOut = next.overlapIn;
+    next = spans[i];
+  }
+  return spans;
 }
 
-export function sequenceDuration(timeline: readonly StitchTimelineClip[], durations: SourceDurations): number {
-  return timeline.reduce((sum, clip) => sum + clipLength(clip, durations.get(sourceKey(clip.source))), 0);
+/** One loop: the last span's end (0 when empty). */
+export function sequenceDuration(
+  timeline: readonly StitchTimelineClip[],
+  durations: SourceDurations,
+  overlapSec: number,
+): number {
+  const spans = clipSpans(timeline, durations, overlapSec);
+  return spans.length > 0 ? spans[spans.length - 1].end : 0;
 }
 
 /** Over precomputed spans: the non-empty span with start <= t < end; the last non-empty one at or past the end, the first before 0; null when none. */
@@ -86,13 +118,88 @@ export function spanAtTime(spans: readonly ClipSpan[], t: number): ClipSpan | nu
   return filled.find((s) => s.start <= t && t < s.end) ?? filled[filled.length - 1];
 }
 
-/** The non-empty span with start <= t < end. If t >= total, the last non-empty span. If t < 0, the first. No non-empty span → null. */
+/** Every non-empty span with start <= t < end, earlier first: 0, 1 or 2 (joinOverlaps never lets three meet). */
+export function spansAt(spans: readonly ClipSpan[], t: number): ClipSpan[] {
+  return spans.filter((s) => s.length > 0 && s.start <= t && t < s.end);
+}
+
+/**
+ * The clip the editor means at t: the preferred span when t is inside it; else the earlier clip at t; else
+ * spanAtTime. With no overlap it is spanAtTime.
+ */
+export function topSpanAt(spans: readonly ClipSpan[], t: number, preferClipId?: string | null): ClipSpan | null {
+  const live = spansAt(spans, t);
+  if (preferClipId) {
+    const preferred = live.find((s) => s.clip.id === preferClipId);
+    if (preferred) return preferred;
+  }
+  return live[0] ?? spanAtTime(spans, t);
+}
+
+/** Whether two clips play at t. */
+export function inOverlap(spans: readonly ClipSpan[], t: number): boolean {
+  return spansAt(spans, t).length >= 2;
+}
+
+/** One clip as the preview shows it at an instant: its picture's opacity and its sound's gain. */
+export interface PreviewLayer {
+  span: ClipSpan;
+  opacity: number;
+  gain: number;
+}
+
+/**
+ * The clips the preview plays at t, earlier first. Outside an overlap the one clip at t (spanAtTime) at full opacity
+ * and gain. Inside the overlap of A and B, p = (t − B.start) / B.overlapIn: crossfade on, A at opacity 1 under B at p,
+ * the sound at equal power; off, A in front and B hidden, both heard in full. No non-empty span → [].
+ */
+export function layersAt(spans: readonly ClipSpan[], t: number, crossfade: boolean): PreviewLayer[] {
+  const live = spansAt(spans, t);
+  if (live.length >= 2) {
+    const [a, b] = live;
+    if (!crossfade) return [{ span: a, opacity: 1, gain: 1 }, { span: b, opacity: 0, gain: 1 }];
+    const p = b.overlapIn > 0 ? Math.min(Math.max((t - b.start) / b.overlapIn, 0), 1) : 1;
+    return [
+      { span: a, opacity: 1, gain: crossfadeGain(p, "out") },
+      { span: b, opacity: p, gain: crossfadeGain(p, "in") },
+    ];
+  }
+  const span = spanAtTime(spans, t);
+  return span ? [{ span, opacity: 1, gain: 1 }] : [];
+}
+
+const spansTotal = (spans: readonly ClipSpan[]) => (spans.length > 0 ? spans[spans.length - 1].end : 0);
+
+/**
+ * Where t lands after the spans change (a layout switch, a new overlap): the same clip and the same frame of it, in
+ * `after`. At or past the end it stays at the end; a clip gone from `after` keeps t, clamped to the new total.
+ */
+export function reanchorTime(
+  before: readonly ClipSpan[],
+  after: readonly ClipSpan[],
+  t: number,
+  preferClipId?: string | null,
+): number {
+  const total = spansTotal(after);
+  const span = topSpanAt(before, t, preferClipId);
+  if (!span || t >= spansTotal(before)) return total;
+  const moved = after.find((s) => s.clip.id === span.clip.id);
+  const at = moved ? moved.start + (t - span.start) : t;
+  return clamp(at, 0, total);
+}
+
+/**
+ * topSpanAt over the spans: the preferred clip when t is inside it, else the earlier clip at t. If t >= total, the
+ * last non-empty span. If t < 0, the first. No non-empty span → null.
+ */
 export function clipAtTime(
   timeline: readonly StitchTimelineClip[],
   durations: SourceDurations,
   t: number,
+  overlapSec: number,
+  preferClipId?: string | null,
 ): ClipSpan | null {
-  return spanAtTime(clipSpans(timeline, durations), t);
+  return topSpanAt(clipSpans(timeline, durations, overlapSec), t, preferClipId);
 }
 
 /** Source seconds shown at sequence time t: clip.inSec + clamp(t − start, 0, length). */
@@ -219,19 +326,26 @@ export function appendClips(timeline: StitchTimelineClip[], clips: StitchTimelin
 }
 
 /**
- * Split the non-empty span containing t, if t is at least MIN_CLIP_SEC inside both edges. Otherwise null.
+ * Split the non-empty span containing t (opts.preferClipId's when t is inside it, else the earlier one), if t is at
+ * least MIN_CLIP_SEC inside the clip's solo part (its edges less its overlaps). Never inside an overlap. Otherwise null.
  * The left piece keeps its id and in, and its out = sourceTimeAt(t). The right piece gets a new id, in = sourceTimeAt(t) and the original out.
- * muted and volume are copied to both. A non-finite t splits nothing.
+ * muted and volume are copied to both. A non-finite t splits nothing. Pieces of one source meet with a cut, so a
+ * split outside an overlap moves nothing.
  */
 export function splitClipAt(
   timeline: StitchTimelineClip[],
   durations: SourceDurations,
   t: number,
   makeId: () => string = newClipId,
+  opts: { overlapSec?: number; preferClipId?: string | null } = {},
 ): { timeline: StitchTimelineClip[]; leftId: string; rightId: string } | null {
   if (!Number.isFinite(t)) return null;
-  const span = clipAtTime(timeline, durations, t);
-  if (!span || t - span.start < MIN_CLIP_SEC || span.end - t < MIN_CLIP_SEC) return null;
+  const spans = clipSpans(timeline, durations, opts.overlapSec ?? 0);
+  if (inOverlap(spans, t)) return null;
+  const span = topSpanAt(spans, t, opts.preferClipId);
+  if (!span || t - (span.start + span.overlapIn) < MIN_CLIP_SEC || span.end - span.overlapOut - t < MIN_CLIP_SEC) {
+    return null;
+  }
   const cut = sourceTimeAt(span, t);
   const left: StitchTimelineClip = { ...span.clip, outSec: cut };
   const right: StitchTimelineClip = { ...span.clip, id: makeId(), inSec: cut, outSec: span.clip.outSec };
@@ -250,9 +364,10 @@ export function setEdgeAtPlayhead(
   clipId: string,
   edge: "in" | "out",
   playhead: number,
+  overlapSec: number,
 ): StitchTimelineClip[] | null {
   if (!Number.isFinite(playhead)) return null;
-  const span = clipSpans(timeline, durations).find((s) => s.clip.id === clipId);
+  const span = clipSpans(timeline, durations, overlapSec).find((s) => s.clip.id === clipId);
   if (!span || span.length === 0 || playhead < span.start || playhead > span.end) return null;
   if (edge === "out" ? playhead <= span.start : playhead >= span.end) return null;
   const at = sourceTimeAt(span, playhead);
@@ -310,4 +425,9 @@ export function neighbourTarget(spans: readonly ClipSpan[], clipId: string, edge
   }
   const previous = spans.slice(0, at).reverse().find((s) => s.length > 0);
   return previous ? { t: previous.end, kind: "edge", label: `Clip ${previous.index + 1}` } : null;
+}
+
+/** Stacked's second snap target: the dragged edge where it started, which gives the clip its original length back. */
+export function originalEdgeTarget(span: ClipSpan, edge: "in" | "out"): SnapTarget {
+  return { t: edge === "out" ? span.end : span.start, kind: "edge", label: "the original length" };
 }

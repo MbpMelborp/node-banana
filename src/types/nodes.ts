@@ -413,6 +413,16 @@ export interface VolumePoint {
   gain: number;
 }
 
+/** How a Stitch sequence is laid out. See docs/stitch-editor.md. */
+export interface StitchSequenceLayout {
+  /** "track": one row, clips end to end. "stacked": one row per clip, each starting overlapSec before the previous one ends. */
+  mode: "track" | "stacked";
+  /** Stacked: the overlap at each join, seconds (0–10, 0.1 steps; capped per join). Kept while mode is "track". */
+  overlapSec: number;
+  /** Stacked: the picture dissolves and the sound crossfades across each overlap. Off: the earlier clip stays in front, both sounds play. */
+  crossfade: boolean;
+}
+
 /**
  * Video Stitch node - concatenates multiple videos into a single output
  */
@@ -425,6 +435,8 @@ export interface VideoStitchNodeData extends BaseNodeData {
   audioCurve?: VolumePoint[];
   /** The music track is muted (the clips' own sound still plays). */
   audioMuted?: boolean;
+  /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
+  sequenceLayout?: StitchSequenceLayout;
   outputVideo: string | null;     // Stitched video blob URL or data URL
   loopCount: 1 | 2 | 3;          // How many times to repeat the clip sequence (1 = no loop)
   status: NodeStatus;

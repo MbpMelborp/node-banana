@@ -7,38 +7,58 @@ import { cn } from "@/components/nodes/ui/cn";
 /** Room left around the frame on its limiting axis. */
 const STAGE_PADDING = 32;
 
-/** One source's <video>, with a ref callback that keeps its identity while the source does. */
+/** A preview element: one per source in Track, one per clip in Stacked. */
+export interface PreviewLayerSource {
+  /** What the playback registers it by: the URL in Track, the clip id in Stacked. */
+  key: string;
+  src: string;
+}
+
+/**
+ * One <video>, with a ref callback that keeps its identity while its key does. Track shows the active one by class;
+ * Stacked leaves it hidden by class and the playback writes its inline opacity.
+ */
 function PreviewVideo({
+  layerKey,
   src,
   active,
+  stacked,
   registerVideo,
 }: {
+  layerKey: string;
   src: string;
   active: boolean;
-  registerVideo: (src: string, el: HTMLVideoElement | null) => void;
+  stacked: boolean;
+  registerVideo: (key: string, el: HTMLVideoElement | null) => void;
 }) {
-  const ref = useCallback((el: HTMLVideoElement | null) => registerVideo(src, el), [registerVideo, src]);
+  const ref = useCallback((el: HTMLVideoElement | null) => registerVideo(layerKey, el), [registerVideo, layerKey]);
   return (
     <video
       ref={ref}
       src={src}
       preload="auto"
       playsInline
-      className={cn("absolute inset-0 h-full w-full object-contain", active ? "opacity-100" : "opacity-0")}
+      className={cn(
+        "absolute inset-0 h-full w-full object-contain",
+        stacked ? "opacity-0" : active ? "opacity-100" : "opacity-0",
+      )}
     />
   );
 }
 
 /**
  * The preview: the sequence letterboxed on the stage, contain-fitted to the
- * output's aspect. One <video> per source is mounted and the one under the
- * playhead is shown; useSequencePlayback drives them. The music plays from a
- * hidden <audio>. An editor with no clips shows the empty state instead.
+ * output's aspect. In Track one <video> per source is mounted and the one
+ * under the playhead is shown; in Stacked one per clip, later clips later
+ * in the DOM so they blend over the earlier ones. useSequencePlayback
+ * drives them. The music plays from a hidden <audio>. An editor with no
+ * clips shows the empty state instead.
  */
 export function EditorStage({
   empty,
   aspect,
-  sources,
+  layers,
+  stacked,
   activeSrc,
   registerVideo,
   musicSrc,
@@ -47,10 +67,11 @@ export function EditorStage({
   empty: boolean;
   /** width / height of the output; 16:9 when no clip has a size yet. */
   aspect: number;
-  /** Playable URLs, one per distinct source. */
-  sources: readonly string[];
+  /** Track: one per distinct playable URL. Stacked: one per clip with a playable URL, in timeline order. */
+  layers: ReadonlyArray<PreviewLayerSource>;
+  stacked: boolean;
   activeSrc: string | null;
-  registerVideo: (src: string, el: HTMLVideoElement | null) => void;
+  registerVideo: (key: string, el: HTMLVideoElement | null) => void;
   musicSrc: string | null;
   registerAudio: (el: HTMLAudioElement | null) => void;
 }) {
@@ -91,8 +112,15 @@ export function EditorStage({
           className="relative overflow-hidden rounded-media bg-black ring-1 ring-white/6"
           style={frame ? { width: frame.width, height: frame.height } : { width: "100%", aspectRatio: aspect }}
         >
-          {sources.map((src) => (
-            <PreviewVideo key={src} src={src} active={src === activeSrc} registerVideo={registerVideo} />
+          {layers.map((layer) => (
+            <PreviewVideo
+              key={layer.key}
+              layerKey={layer.key}
+              src={layer.src}
+              active={layer.src === activeSrc}
+              stacked={stacked}
+              registerVideo={registerVideo}
+            />
           ))}
         </div>
       )}

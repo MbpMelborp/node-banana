@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Stitch editor** — Expand on a Stitch node, or **Open editor** on its card, opens a near-full-screen editor: reorder clips on a timeline; trim each by dragging its edges or typing In and Out, snapping to the playhead and the clip beside it; split at the playhead; mute or lower a clip's own sound; shape the music's volume with a curve (click to add a point, Fade in, Fade out, Flat); and add videos from the asset library. Done writes the timeline back to the node and Stitch encodes exactly what it shows. A workflow that never opened the editor stitches the same clips with the same sound rule; see Fixed for the order and timing changes.
+- **Stacked Stitch timeline** — The Stitch editor's timeline can be laid out Stacked, like After Effects' sequence layers: one row per clip, still in order, each starting a set time before the previous one ends (Overlap, 1.0 s by default). With Crossfade on, the picture dissolves and the sound crossfades across each overlap; off, the clip above stays in front while both clips are heard. Rows reorder by dragging them up or down. Stitch encodes what the timeline shows; Track stays the default and encodes as before.
 
 ### Fixed
 

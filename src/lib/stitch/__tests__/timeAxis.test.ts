@@ -19,7 +19,7 @@ const durations = (entries: Record<string, number>): SourceDurations =>
 
 describe("buildTimeAxis", () => {
   it("maps time linearly from the origin when no clip is empty, and back", () => {
-    const spans = clipSpans([clip("a", "e1"), clip("b", "e2")], durations({ "edge:e1": 5, "edge:e2": 4 }));
+    const spans = clipSpans([clip("a", "e1"), clip("b", "e2")], durations({ "edge:e1": 5, "edge:e2": 4 }), 0);
     const axis = buildTimeAxis(spans, 64);
     expect(axis.timeToX(0)).toBe(16);
     expect(axis.timeToX(4.6)).toBeCloseTo(16 + 4.6 * 64);
@@ -31,7 +31,7 @@ describe("buildTimeAxis", () => {
 
   it("gives a clip with no length a 160px slot that shifts every later box", () => {
     // b has no duration (not generated yet): a slot at t = 5
-    const spans = clipSpans([clip("a", "e1"), clip("b", "e2"), clip("c", "e3")], durations({ "edge:e1": 5, "edge:e3": 4 }));
+    const spans = clipSpans([clip("a", "e1"), clip("b", "e2"), clip("c", "e3")], durations({ "edge:e1": 5, "edge:e3": 4 }), 0);
     const axis = buildTimeAxis(spans, 64);
     expect(axis.slots).toEqual([{ clipId: "b", index: 1, t: 5, x: 16 + 320, width: EMPTY_SLOT_PX }]);
     expect(axis.clipBox(1)).toEqual({ x: 336, width: EMPTY_SLOT_PX });
@@ -47,14 +47,14 @@ describe("buildTimeAxis", () => {
   });
 
   it("puts a playhead at a slot's time before the slot", () => {
-    const spans = clipSpans([clip("a", "e1"), clip("b", "e2"), clip("c", "e3")], durations({ "edge:e1": 5, "edge:e3": 4 }));
+    const spans = clipSpans([clip("a", "e1"), clip("b", "e2"), clip("c", "e3")], durations({ "edge:e1": 5, "edge:e3": 4 }), 0);
     const axis = buildTimeAxis(spans, 64);
     expect(axis.timeToX(5)).toBe(336);
     expect(axis.timeToX(5.001)).toBeGreaterThan(336 + 160);
   });
 
   it("starts the sequence after a leading slot", () => {
-    const spans = clipSpans([clip("a", "e1"), clip("b", "e2")], durations({ "edge:e2": 2 }));
+    const spans = clipSpans([clip("a", "e1"), clip("b", "e2")], durations({ "edge:e2": 2 }), 0);
     const axis = buildTimeAxis(spans, 100);
     expect(axis.clipBox(0)).toEqual({ x: 16, width: 160 });
     expect(axis.clipBox(1)).toEqual({ x: 176, width: 200 });
@@ -102,5 +102,25 @@ describe("zoom slider", () => {
     expect(zoomToSlider(10_000)).toBeCloseTo(100);
     expect(sliderToZoom(-5)).toBe(MIN_PX_PER_SEC);
     expect(sliderToZoom(500)).toBeCloseTo(MAX_PX_PER_SEC);
+  });
+});
+
+describe("buildTimeAxis without slots", () => {
+  it("records no slot and stays linear when slotPx is 0", () => {
+    const spans = clipSpans(
+      [clip("a", "e1"), clip("x", "missing"), clip("b", "e2")],
+      durations({ "edge:e1": 5, "edge:e2": 4 }),
+      0,
+    );
+    const axis = buildTimeAxis(spans, 64, 16, 0);
+    expect(axis.slots).toEqual([]);
+    expect(axis.timeToX(6)).toBe(16 + 6 * 64);
+    expect(axis.xToTime(16 + 6 * 64)).toBe(6);
+    expect(axis.endX).toBe(16 + 9 * 64);
+    expect(axis.clipBox(2)).toEqual({ x: 16 + 5 * 64, width: 4 * 64 });
+
+    const slotted = buildTimeAxis(spans, 64, 16, EMPTY_SLOT_PX);
+    expect(slotted.slots).toHaveLength(1);
+    expect(slotted.timeToX(6)).toBe(16 + 6 * 64 + EMPTY_SLOT_PX);
   });
 });

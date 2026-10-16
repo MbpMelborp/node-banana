@@ -249,6 +249,32 @@ describe("executeVideoStitch", () => {
     expect(mockStitchVideosAsync.mock.calls[0][4]).toEqual({ loopCount: 2 });
   });
 
+  it("passes a stacked node's overlap and crossfade to the stitch", async () => {
+    mockFetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(["v"], { type: "video/mp4" })) });
+    mockStitchVideosAsync.mockResolvedValue({ size: 21 * 1024 * 1024, type: "video/mp4" } as Blob);
+    const clip = (id: string, edgeId: string) => ({ id, source: { kind: "edge", edgeId }, inSec: 0, outSec: null, muted: false, volume: 1 });
+    const node = makeStitchNode({
+      loopCount: 2,
+      timeline: [clip("a", "e1"), clip("b", "e2")],
+      sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: false },
+    });
+    const sources = [1, 2].map(
+      (n) => ({ id: `g${n}`, type: "generateVideo", position: { x: 0, y: 0 }, data: { outputVideo: `v${n}` } }) as WorkflowNode
+    );
+    const edges = [1, 2].map((n) => ({ id: `e${n}`, source: `g${n}`, sourceHandle: "video", target: "vs-1", targetHandle: `video-${n - 1}` }));
+    const ctx = makeCtx(node, {
+      getNodes: vi.fn().mockReturnValue([node, ...sources]),
+      getEdges: vi.fn().mockReturnValue(edges),
+      getConnectedInputs: vi.fn().mockReturnValue({ images: [], videos: ["v1", "v2"], audio: [], text: null, dynamicInputs: {}, easeCurve: null }),
+    });
+
+    await executeVideoStitch(ctx);
+
+    const [clips, , , , options] = mockStitchVideosAsync.mock.calls[0];
+    expect(options).toEqual({ loopCount: 2, overlapSec: 1, crossfade: false });
+    expect(clips.map((c: { source?: string }) => c.source)).toEqual(["edge:e1", "edge:e2"]);
+  });
+
   it("should set loading status with 0 progress", async () => {
     const node = makeStitchNode();
     const ctx = makeCtx(node, {

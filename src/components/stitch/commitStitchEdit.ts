@@ -1,9 +1,10 @@
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { draftPatch, readStitchDraft, sameDraft } from "@/lib/stitch/draft";
+import { draftPatch, readSequenceLayout, readStitchDraft, sameDraft, sameLayout } from "@/lib/stitch/draft";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { stitchReadContext } from "@/lib/stitch/sources";
 import { edgeIdsInOrder } from "@/lib/stitch/timeline";
+import type { VideoStitchNodeData } from "@/types";
 
 export type CommitResult = "closed" | "written" | "gone";
 
@@ -19,6 +20,10 @@ export type CommitResult = "closed" | "written" | "gone";
  *   remain, picking up any that arrived while the editor was open. The edge
  *   removal pushes the canvas undo checkpoint and holds it for this task, so
  *   the data write joins it: one canvas undo step either way.
+ *   sequenceLayout is left out when the stored value already reads as the
+ *   draft's (read as non-legacy, so a legacy node with a hand-edited key gets
+ *   the Track it showed): a trim does not add the key to every saved file, and
+ *   a value from a newer build survives a Done that did not touch it.
  */
 export function commitStitchEdit(): CommitResult {
   const s = useStitchEditorStore.getState();
@@ -49,7 +54,9 @@ export function commitStitchEdit(): CommitResult {
   });
 
   if (orphaned.length > 0) wf.onEdgesChange(orphaned.map((id) => ({ type: "remove" as const, id })));
-  wf.updateNodeData(nodeId, draftPatch(draft));
+  const { sequenceLayout, ...patch } = draftPatch(draft);
+  const stored = readSequenceLayout((node.data as VideoStitchNodeData).sequenceLayout, false);
+  wf.updateNodeData(nodeId, sameLayout(stored, sequenceLayout) ? patch : { ...patch, sequenceLayout });
   s.close();
   return "written";
 }

@@ -25,6 +25,170 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
 import type { ReorderLive } from "./useClipReorder";
 import type { TrimLive } from "./useTrimDrag";
 
+/** Opens the clip menu at a point, selecting the clip; not over a drag, which applies what it measured on release. */
+function openMenuAt(clipId: string, x: number, y: number): void {
+  const s = useStitchEditorStore.getState();
+  // A drag applies what it measured at the press on release: no menu opens over it (a right press mid-trim)
+  if (s.cancelGesture) return;
+  s.select({ kind: "clip", clipId });
+  s.openMenu({ clipId, x, y });
+}
+
+/** A clip's contextmenu event: at the pointer, or under the clip when the keyboard sent it. */
+export function openClipMenu(event: MouseEvent<HTMLElement>, clipId: string): void {
+  event.preventDefault();
+  if (useStitchEditorStore.getState().cancelGesture) return;
+  // A right press leaves a focused In/Out field focused (the clip's mousedown keeps focus): it commits now, to
+  // the clip it was typed for, before the selection moves
+  releaseTypingFocus(event.currentTarget);
+  // A context menu from the keyboard can arrive without a pointer position: under the clip then
+  if (event.clientX === 0 && event.clientY === 0) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    openMenuAt(clipId, rect.left, rect.bottom + 4);
+    return;
+  }
+  openMenuAt(clipId, event.clientX, event.clientY);
+}
+
+/** The listbox's one tab stop: the selected clip, else the first. */
+export function laneTabStop(spans: readonly ClipSpan[], selectedId: string | null): string | null {
+  return spans.some((s) => s.clip.id === selectedId) ? selectedId : (spans[0]?.clip.id ?? null);
+}
+
+/**
+ * The listbox's keys: the arrows along it (←/→, and ↑/↓ too when it runs down the rows), Home and End move the
+ * selection and focus; the context-menu key or ⇧F10 opens the clip menu at the clip.
+ */
+export function onLaneKeyDown(
+  event: KeyboardEvent<HTMLDivElement>,
+  spans: readonly ClipSpan[],
+  tabStop: string | null,
+  vertical = false,
+): void {
+  const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'));
+  const at = spans.findIndex((s) => s.clip.id === tabStop);
+  if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    const option = options[at];
+    if (!option || at === -1) return;
+    event.preventDefault();
+    const rect = option.getBoundingClientRect();
+    openMenuAt(spans[at].clip.id, rect.left, rect.bottom + 4);
+    return;
+  }
+  let next: number | null = null;
+  if (event.key === "ArrowRight" || (vertical && event.key === "ArrowDown")) next = Math.min(spans.length - 1, at + 1);
+  else if (event.key === "ArrowLeft" || (vertical && event.key === "ArrowUp")) next = Math.max(0, at - 1);
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = spans.length - 1;
+  if (next === null || event.metaKey || event.ctrlKey || event.altKey) return;
+  event.preventDefault();
+  const clipId = spans[next].clip.id;
+  useStitchEditorStore.getState().select({ kind: "clip", clipId });
+  options.find((el) => el.dataset.clipId === clipId)?.focus();
+}
+
+/**
+ * Keeps focus in a lane whose focused clip, placeholder or add slot goes away: it moves to the new tab stop, or to
+ * the panel when there is none. Spread onFocus/onBlur on the listbox and the buttons beside it; rowRef on the
+ * element that holds them.
+ */
+export function useLaneFocus() {
+  const rowRef = useRef<HTMLDivElement>(null);
+  /**
+   * Focus is on a clip, the placeholder or the add slot. A focused element that is removed fires no blur, so
+   * this outlives it.
+   */
+  const focusInside = useRef(false);
+  const onFocus = () => {
+    focusInside.current = true;
+  };
+  const onBlur = (event: FocusEvent<HTMLElement>) => {
+    // A blur some browser fires for the clip's own removal is not focus leaving
+    if (!event.relatedTarget && !event.target.isConnected) return;
+    focusInside.current = event.currentTarget.contains(event.relatedTarget as Node | null);
+  };
+  useLayoutEffect(() => {
+    if (!focusInside.current) return;
+    const row = rowRef.current;
+    const active = document.activeElement;
+    if (!row || (active && active !== document.body && active.isConnected)) return;
+    focusInside.current = false;
+    const stop = row.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
+    (stop ?? row.closest<HTMLElement>('[role="dialog"]'))?.focus({ preventScroll: true });
+  });
+  return { rowRef, onFocus, onBlur };
+}
+
+/** The dashed placeholder across an empty lane: it adds clips from the library (off while the library is). */
+export function EmptyLaneButton({
+  libraryOn,
+  left,
+  top,
+  width,
+  height,
+  onFocus,
+  onBlur,
+}: {
+  libraryOn: boolean;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  onFocus: () => void;
+  onBlur: (event: FocusEvent<HTMLElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="stitch-empty-lane"
+      aria-label="Add a clip from the library"
+      title={libraryOn ? "Add from library" : undefined}
+      disabled={!libraryOn}
+      onClick={openLibraryPicker}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      className="absolute flex items-center justify-center rounded-md border border-dashed border-white/12 text-neutral-500 transition-colors hover:border-white/18 hover:bg-white/2 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none"
+      style={{ left, top, width, height }}
+    >
+      {libraryOn && <Plus size={16} strokeWidth={2} />}
+    </button>
+  );
+}
+
+/** The dashed + after the last clip that adds clips from the library (off while the library is). */
+export function AddSlotButton({
+  libraryOn,
+  left,
+  top,
+  height,
+  onFocus,
+  onBlur,
+}: {
+  libraryOn: boolean;
+  left: number;
+  top: number;
+  height: number;
+  onFocus: () => void;
+  onBlur: (event: FocusEvent<HTMLElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="stitch-add-slot"
+      aria-label="Add a clip from the library"
+      title={libraryOn ? "Add from library" : "The asset library is off"}
+      disabled={!libraryOn}
+      onClick={openLibraryPicker}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      className="absolute flex items-center justify-center rounded-media border border-dashed border-white/18 bg-white/2 text-neutral-500 transition-colors hover:border-white/24 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:border-white/18 disabled:hover:text-neutral-500"
+      style={{ left, top, width: GEOMETRY.addSlot, height }}
+    >
+      <Plus size={16} strokeWidth={2} />
+    </button>
+  );
+}
+
 /**
  * The clips row: one box per clip (a fixed slot for a clip with no length),
  * the trim ghost, and the insertion bar while a clip is dragged to a new
@@ -68,99 +232,24 @@ export function ClipsLane({
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
 }) {
-  const rowRef = useRef<HTMLDivElement>(null);
+  const { rowRef, onFocus, onBlur } = useLaneFocus();
   const libraryOn = useLibraryAvailable();
-  /**
-   * Focus is on a clip, the placeholder or the add slot. A focused element that is removed fires no blur, so
-   * this outlives it.
-   */
-  const focusInside = useRef(false);
-  const onFocus = () => {
-    focusInside.current = true;
-  };
-  const onBlur = (event: FocusEvent<HTMLElement>) => {
-    // A blur some browser fires for the clip's own removal is not focus leaving
-    if (!event.relatedTarget && !event.target.isConnected) return;
-    focusInside.current = event.currentTarget.contains(event.relatedTarget as Node | null);
-  };
-  useLayoutEffect(() => {
-    if (!focusInside.current) return;
-    const row = rowRef.current;
-    const active = document.activeElement;
-    if (!row || (active && active !== document.body && active.isConnected)) return;
-    focusInside.current = false;
-    const stop = row.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
-    (stop ?? row.closest<HTMLElement>('[role="dialog"]'))?.focus({ preventScroll: true });
-  });
-
-  const openMenuAt = (clipId: string, x: number, y: number) => {
-    const s = useStitchEditorStore.getState();
-    // A drag applies what it measured at the press on release: no menu opens over it (a right press mid-trim)
-    if (s.cancelGesture) return;
-    s.select({ kind: "clip", clipId });
-    s.openMenu({ clipId, x, y });
-  };
-  const openMenu = (event: MouseEvent<HTMLElement>, clipId: string) => {
-    event.preventDefault();
-    if (useStitchEditorStore.getState().cancelGesture) return;
-    // A right press leaves a focused In/Out field focused (the clip's mousedown keeps focus): it commits now, to
-    // the clip it was typed for, before the selection moves
-    releaseTypingFocus(event.currentTarget);
-    // A context menu from the keyboard can arrive without a pointer position: under the clip then
-    if (event.clientX === 0 && event.clientY === 0) {
-      const rect = event.currentTarget.getBoundingClientRect();
-      openMenuAt(clipId, rect.left, rect.bottom + 4);
-      return;
-    }
-    openMenuAt(clipId, event.clientX, event.clientY);
-  };
-  const tabStop = spans.some((s) => s.clip.id === selectedId) ? selectedId : (spans[0]?.clip.id ?? null);
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'));
-    const at = spans.findIndex((s) => s.clip.id === tabStop);
-    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
-      const option = options[at];
-      if (!option || at === -1) return;
-      event.preventDefault();
-      const rect = option.getBoundingClientRect();
-      openMenuAt(spans[at].clip.id, rect.left, rect.bottom + 4);
-      return;
-    }
-    let next: number | null = null;
-    if (event.key === "ArrowRight") next = Math.min(spans.length - 1, at + 1);
-    else if (event.key === "ArrowLeft") next = Math.max(0, at - 1);
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = spans.length - 1;
-    if (next === null || event.metaKey || event.ctrlKey || event.altKey) return;
-    event.preventDefault();
-    const clipId = spans[next].clip.id;
-    useStitchEditorStore.getState().select({ kind: "clip", clipId });
-    options.find((el) => el.dataset.clipId === clipId)?.focus();
-  };
+  const tabStop = laneTabStop(spans, selectedId);
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => onLaneKeyDown(event, spans, tabStop);
 
   const rowStyle = { top: GEOMETRY.ruler, height: GEOMETRY.clipRow };
   if (spans.length === 0) {
     return (
       <div ref={rowRef} className="absolute inset-x-0 border-b border-white/6" style={rowStyle}>
-        <button
-          type="button"
-          data-testid="stitch-empty-lane"
-          aria-label="Add a clip from the library"
-          title={libraryOn ? "Add from library" : undefined}
-          disabled={!libraryOn}
-          onClick={openLibraryPicker}
+        <EmptyLaneButton
+          libraryOn={libraryOn}
+          left={GEOMETRY.origin}
+          top={GEOMETRY.clipTop}
+          width={Math.max(0, laneWidth - GEOMETRY.origin - GEOMETRY.endMargin)}
+          height={GEOMETRY.clipHeight}
           onFocus={onFocus}
           onBlur={onBlur}
-          className="absolute flex items-center justify-center rounded-md border border-dashed border-white/12 text-neutral-500 transition-colors hover:border-white/18 hover:bg-white/2 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none"
-          style={{
-            left: GEOMETRY.origin,
-            top: GEOMETRY.clipTop,
-            width: Math.max(0, laneWidth - GEOMETRY.origin - GEOMETRY.endMargin),
-            height: GEOMETRY.clipHeight,
-          }}
-        >
-          {libraryOn && <Plus size={16} strokeWidth={2} />}
-        </button>
+        />
       </div>
     );
   }
@@ -212,7 +301,7 @@ export function ClipsLane({
           const selected = selectedId === span.clip.id;
           const focusable = tabStop === span.clip.id;
           const onBody = (event: ReactPointerEvent<HTMLElement>) => onBodyPointerDown(event, span.clip.id, i);
-          const onMenu = (event: MouseEvent<HTMLElement>) => openMenu(event, span.clip.id);
+          const onMenu = (event: MouseEvent<HTMLElement>) => openClipMenu(event, span.clip.id);
           if (span.length <= 0) {
             return (
               <EmptyClipSlot
@@ -287,20 +376,14 @@ export function ClipsLane({
           />
         )}
       </div>
-      <button
-        type="button"
-        data-testid="stitch-add-slot"
-        aria-label="Add a clip from the library"
-        title={libraryOn ? "Add from library" : "The asset library is off"}
-        disabled={!libraryOn}
-        onClick={openLibraryPicker}
+      <AddSlotButton
+        libraryOn={libraryOn}
+        left={slotX}
+        top={GEOMETRY.ruler + GEOMETRY.clipTop}
+        height={GEOMETRY.clipHeight}
         onFocus={onFocus}
         onBlur={onBlur}
-        className="absolute flex items-center justify-center rounded-media border border-dashed border-white/18 bg-white/2 text-neutral-500 transition-colors hover:border-white/24 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:border-white/18 disabled:hover:text-neutral-500"
-        style={{ left: slotX, top: GEOMETRY.ruler + GEOMETRY.clipTop, width: GEOMETRY.addSlot, height: GEOMETRY.clipHeight }}
-      >
-        <Plus size={16} strokeWidth={2} />
-      </button>
+      />
     </>
   );
 }

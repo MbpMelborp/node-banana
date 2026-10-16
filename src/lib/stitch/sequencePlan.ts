@@ -28,6 +28,14 @@ export interface PlannedClip {
   seqStart: number;
 }
 
+/**
+ * The output slot a time lands on: half rounds up, and float noise just under a half does too. Shared by the
+ * slotter and the stacked plan, so a dissolve's frames land where the slotter would put the same frames.
+ */
+export function secToSlot(sec: number, fps: number = FRAME_RATE): number {
+  return Math.floor(sec * fps + 0.5 + 1e-6);
+}
+
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 const finiteOr = (value: number | null | undefined, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -93,9 +101,8 @@ export class FrameSlotter {
     this.fps = fps;
   }
 
-  /** Half rounds up, and float noise just under a half does too. */
   private toSlot(sec: number): number {
-    return Math.floor(sec * this.fps + 0.5 + 1e-6);
+    return secToSlot(sec, this.fps);
   }
 
   /** Start one clip of one loop. startSec = loopIndex · loopLength + clip.seqStart. */
@@ -103,6 +110,23 @@ export class FrameSlotter {
     this.origin = window.origin;
     this.startSlot = this.toSlot(window.startSec);
     this.endSlot = this.toSlot(window.startSec + window.length);
+  }
+
+  /**
+   * Start the part of a clip that plays alone (stacked): its frames from `origin` on fill the slots of
+   * [fromSec, toSec), with the same rounding as begin, so the windows either side of a dissolve tile with it.
+   */
+  beginRange(window: { origin: number; fromSec: number; toSec: number }): void {
+    this.origin = window.origin;
+    this.startSlot = this.toSlot(window.fromSec);
+    this.endSlot = this.toSlot(window.toSec);
+  }
+
+  /** A slot a dissolve writes: its output timestamp, or null when the slot is not after the last one written. */
+  claim(slot: number): number | null {
+    if (!(slot > this.lastSlot)) return null;
+    this.lastSlot = slot;
+    return slot / this.fps;
   }
 
   private slotOf(timestamp: number): number {

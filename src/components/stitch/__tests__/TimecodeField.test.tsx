@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { formatSeconds, parseSeconds } from "@/lib/stitch/timecode";
+import { SECONDS_WELL, TIMECODE_WELL } from "../editorStyles";
 import { TimecodeField } from "../TimecodeField";
 
 function setup(value = 0.8) {
@@ -85,5 +87,104 @@ describe("TimecodeField", () => {
     fireEvent.keyDown(field, { key: "Escape" });
     expect(document.activeElement).toBe(panel);
     expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the timecode well's look, format and parsing by default, and ↑/↓ type nothing special", () => {
+    const { field, onCommit } = setup(1);
+    expect(field.className).toBe(TIMECODE_WELL);
+    fireEvent.focus(field);
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(field.value).toBe("0:01.00");
+    fireEvent.change(field, { target: { value: "2 s" } });
+    fireEvent.blur(field);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  describe("as a seconds well", () => {
+    function seconds(value = 1, onNudge?: (direction: 1 | -1, big: boolean) => number | null) {
+      const onCommit = vi.fn();
+      render(
+        <TimecodeField
+          label="Overlap"
+          value={value}
+          format={(s) => formatSeconds(s, 1)}
+          parse={parseSeconds}
+          className={SECONDS_WELL}
+          onCommit={onCommit}
+          onNudge={onNudge}
+        />,
+      );
+      return { field: screen.getByRole("textbox", { name: "Overlap" }) as HTMLInputElement, onCommit };
+    }
+
+    it("shows and parses seconds in its own well", () => {
+      const { field, onCommit } = seconds(1);
+      expect(field.value).toBe("1.0 s");
+      expect(field.className).toBe(SECONDS_WELL);
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: "2s" } });
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(onCommit).toHaveBeenCalledWith(2);
+    });
+
+    it("nudges with ↑ and ↓ (⇧ for a big step), shows the stored value, and commits nothing more on leaving", () => {
+      let stored = 1;
+      const onNudge = vi.fn((direction: 1 | -1, big: boolean) => {
+        stored = Math.round((stored + direction * (big ? 1 : 0.1)) * 10) / 10;
+        return stored;
+      });
+      const { field, onCommit } = seconds(1, onNudge);
+      fireEvent.focus(field);
+      fireEvent.keyDown(field, { key: "ArrowUp" });
+      expect(onNudge).toHaveBeenLastCalledWith(1, false);
+      expect(field.value).toBe("1.1 s");
+      fireEvent.keyDown(field, { key: "ArrowDown", shiftKey: true });
+      expect(onNudge).toHaveBeenLastCalledWith(-1, true);
+      expect(field.value).toBe("0.1 s");
+      fireEvent.keyDown(field, { key: "Enter" });
+      fireEvent.blur(field);
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("steps from a value typed and not yet committed, committing it first", () => {
+      let stored = 1;
+      const onNudge = vi.fn((direction: 1 | -1) => {
+        stored = Math.round((stored + direction * 0.1) * 10) / 10;
+        return stored;
+      });
+      const { field, onCommit } = seconds(1, onNudge);
+      onCommit.mockImplementation((value: number) => {
+        stored = value;
+      });
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: "2.5" } });
+      fireEvent.keyDown(field, { key: "ArrowUp" });
+      expect(onCommit).toHaveBeenCalledWith(2.5);
+      expect(onCommit.mock.invocationCallOrder[0]).toBeLessThan(onNudge.mock.invocationCallOrder[0]);
+      expect(field.value).toBe("2.6 s");
+      fireEvent.blur(field);
+      expect(onCommit).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves ⌘, Ctrl and ⌥ arrows to the caret", () => {
+      const onNudge = vi.fn(() => 2);
+      const { field } = seconds(1, onNudge);
+      fireEvent.focus(field);
+      for (const modifier of ["metaKey", "ctrlKey", "altKey"] as const) {
+        const notCancelled = fireEvent.keyDown(field, { key: "ArrowUp", [modifier]: true });
+        expect(notCancelled).toBe(true);
+      }
+      expect(onNudge).not.toHaveBeenCalled();
+      expect(field.value).toBe("1.0 s");
+    });
+
+    it("keeps its text when a nudge changes nothing", () => {
+      const onNudge = vi.fn(() => null);
+      const { field } = seconds(0, onNudge);
+      fireEvent.focus(field);
+      fireEvent.keyDown(field, { key: "ArrowDown" });
+      expect(onNudge).toHaveBeenCalledTimes(1);
+      expect(field.value).toBe("0.0 s");
+    });
   });
 });

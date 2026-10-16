@@ -28,3 +28,19 @@ export function insertionX(dropIndex: number, boxes: ReadonlyArray<Box>, dragged
   const after = others[dropIndex];
   return (before.x + before.width + after.x) / 2;
 }
+
+/**
+ * Stacked rows: the final index for moveClip from the lifted box's centre, dy pixels from its row. A row's centre
+ * crossing half a row moves it one place.
+ */
+export function stackedDropIndex(index: number, dy: number, rowCount: number, rowHeight: number): number {
+  if (rowCount <= 0) return 0;
+  const steps = Number.isFinite(dy) && rowHeight > 0 ? Math.round(dy / rowHeight) : 0;
+  return Math.min(Math.max(index + steps, 0), rowCount - 1);
+}
+
+/** y of the insertion bar's centre in the rows block: above the drop row moving up, below it moving down; null when unmoved. */
+export function stackedInsertionY(dropIndex: number, draggedIndex: number, rowHeight: number): number | null {
+  if (dropIndex === draggedIndex) return null;
+  return dropIndex < draggedIndex ? dropIndex * rowHeight : (dropIndex + 1) * rowHeight;
+}

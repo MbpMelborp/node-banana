@@ -35,6 +35,11 @@ const COPY = {
   "under-frame": "trim is shorter than a frame",
 } as const;
 
+/** What an empty clip's slot says after its name ("not generated yet"); Stacked's row header shows it too. */
+export function emptyCopy(span: ClipSpan, view: ClipMediaView | undefined): string {
+  return COPY[emptyReason(span, view)];
+}
+
 /**
  * A clip with no length: a source that has not run, one still being read
  * or one that cannot be, a library video the library no longer has, or a
@@ -50,6 +55,8 @@ export function EmptyClipSlot({
   selected,
   focusable,
   mode,
+  top = GEOMETRY.clipTop,
+  height = GEOMETRY.clipHeight,
   onBodyPointerDown,
   onContextMenu,
 }: {
@@ -61,6 +68,9 @@ export function EmptyClipSlot({
   /** The listbox's one tab stop. */
   focusable: boolean;
   mode: ClipBoxMode;
+  /** In its row: Track's clips row by default, a Stacked row's box otherwise. */
+  top?: number;
+  height?: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
 }) {
@@ -83,7 +93,7 @@ export function EmptyClipSlot({
         mode === "dimmed" && "opacity-40",
         mode === "rest" && selected && "ring-2 ring-selection",
       )}
-      style={{ left: x, top: GEOMETRY.clipTop, width, height: GEOMETRY.clipHeight }}
+      style={{ left: x, top, width, height }}
     >
       {reason === "loading" ? (
         <Spinner size={13} className="shrink-0" />

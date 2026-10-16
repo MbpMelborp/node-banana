@@ -405,4 +405,24 @@ describe("applyAgentGraphOps", () => {
     ).toHaveLength(1);
     expect(restored.canUndo).toBe(false);
   });
+
+  it("keeps a Stitch node's stacked layout through the real applier's merge of an unrelated setting", async () => {
+    const actual = await vi.importActual<typeof import("@/lib/agent/graph/applyOps")>("@/lib/agent/graph/applyOps");
+    applyGraphOpsMock.mockImplementation(actual.applyGraphOps);
+    const sequenceLayout = { mode: "stacked", overlapSec: 1, crossfade: true };
+    seed([
+      {
+        id: "videoStitch-1",
+        type: "videoStitch",
+        position: { x: 0, y: 0 },
+        data: { clipOrder: [], timeline: [], loopCount: 1, sequenceLayout } as unknown as WorkflowNodeData,
+      },
+    ]);
+
+    useWorkflowStore.getState().applyAgentGraphOps(batch([{ op: "updateNode", id: "videoStitch-1", data: { loopCount: 2 } }]));
+
+    const data = useWorkflowStore.getState().nodes[0].data as { loopCount?: number; sequenceLayout?: unknown };
+    expect(data.loopCount).toBe(2);
+    expect(data.sequenceLayout).toEqual(sequenceLayout);
+  });
 });

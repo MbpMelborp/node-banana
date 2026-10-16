@@ -1,4 +1,4 @@
-import type { TimeAxis } from "./timeAxis";
+import { EMPTY_SLOT_PX, type TimeAxis } from "./timeAxis";
 import type { ClipSpan } from "./timeline";
 import type { TrimDragResult } from "./trimDrag";
 
@@ -70,6 +70,19 @@ export function liveSpans(spans: readonly ClipSpan[], trim: LaneTrim | null): re
     if (i === at) return { ...span, length: lengthSec, end: span.start + lengthSec };
     return { ...span, start: span.start + deltaSec, end: span.end + deltaSec };
   });
+}
+
+/**
+ * Stacked rows: each clip's box on a linear axis, from its own start. Boxes overlap in x (each sits in its own row),
+ * so there are no join insets. An empty clip is drawn emptyPx wide at its instant.
+ */
+export function stackedBoxes(axis: TimeAxis, spans: readonly ClipSpan[], emptyPx: number = EMPTY_SLOT_PX): LaneBox[] {
+  return spans.map((span) => ({
+    x: axis.timeToX(span.start),
+    width: span.length > 0 ? Math.max(MIN_DRAWN_PX, span.length * axis.pxPerSec) : emptyPx,
+    inSec: span.clip.inSec,
+    lengthSec: span.length,
+  }));
 }
 
 /** The dragged edge's x on the lane, from its drawn box: the popover, the length chip and the dragged handle sit there. */

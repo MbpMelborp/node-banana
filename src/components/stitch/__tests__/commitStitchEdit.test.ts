@@ -3,8 +3,8 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { openStitchEditor } from "../openStitchEditor";
 import { commitStitchEdit } from "../commitStitchEdit";
-import { removeClip, splitClipAt, trimClip, type SourceKey } from "@/lib/stitch/timeline";
-import type { VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { createClip, removeClip, splitClipAt, trimClip, type SourceKey } from "@/lib/stitch/timeline";
+import type { StitchSequenceLayout, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
@@ -131,5 +131,59 @@ describe("commitStitchEdit", () => {
     expect(commitStitchEdit()).toBe("gone");
     expect(data().loopCount).toBe(1);
     expect(editor().isOpen).toBe(false);
+  });
+});
+
+describe("commitStitchEdit and the sequence layout", () => {
+  const trimA = () =>
+    editor().apply((d) => ({ ...d, timeline: trimClip(d.timeline, d.timeline[0].id, DURATIONS, { inSec: 1 }) }));
+  /** Reopen the editor on the stitch node with these fields stored. */
+  const reopenWith = (patch: Partial<VideoStitchNodeData>) => {
+    editor().close();
+    wf().updateNodeData("stitch", patch);
+    openStitchEditor("stitch");
+    editor().setDurations(DURATIONS);
+  };
+
+  it("writes a layout-only change", () => {
+    editor().apply((d) => ({ ...d, sequenceLayout: { ...d.sequenceLayout, mode: "stacked" } }));
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().sequenceLayout).toEqual({ mode: "stacked", overlapSec: 1, crossfade: true });
+  });
+
+  it("does not add the key for a change that leaves the layout as it reads", () => {
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect("sequenceLayout" in data()).toBe(false);
+  });
+
+  it("leaves a stored value from a newer build alone when Done did not change the layout", () => {
+    const stored = { mode: "stacked", overlapSec: 1.04, crossfade: true, future: 1 } as unknown as StitchSequenceLayout;
+    reopenWith({
+      timeline: [createClip({ kind: "edge", edgeId: "eA" }, { id: "a" }), createClip({ kind: "edge", edgeId: "eB" }, { id: "b" })],
+      sequenceLayout: stored,
+    });
+    expect(editor().draft!.sequenceLayout).toEqual({ mode: "stacked", overlapSec: 1, crossfade: true });
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().sequenceLayout).toBe(stored);
+  });
+
+  it("lets one canvas Undo after a Done that switched to Stacked take the key away again", () => {
+    const before = data();
+    editor().apply((d) => ({ ...d, sequenceLayout: { ...d.sequenceLayout, mode: "stacked" } }));
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().sequenceLayout?.mode).toBe("stacked");
+    wf().undo();
+    expect("sequenceLayout" in data()).toBe(false);
+    expect(data()).toEqual(before);
+  });
+
+  it("writes the Track a legacy node with a hand-edited stacked key showed, on its first Done", () => {
+    reopenWith({ sequenceLayout: { mode: "stacked", overlapSec: 2, crossfade: false } });
+    expect(editor().draft!.sequenceLayout.mode).toBe("track");
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().sequenceLayout).toEqual({ mode: "track", overlapSec: 2, crossfade: false });
   });
 });

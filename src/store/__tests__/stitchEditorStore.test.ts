@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   STITCH_HISTORY_LIMIT,
   selectCanRedo,
@@ -7,14 +7,25 @@ import {
   useStitchEditorStore,
 } from "@/store/stitchEditorStore";
 import type { StitchDraft } from "@/lib/stitch/draft";
-import { createClip, removeClip, updateClipAudio } from "@/lib/stitch/timeline";
-import { addPoint, flat } from "@/lib/stitch/curve";
+import { createClip, removeClip, updateClipAudio, type SourceKey } from "@/lib/stitch/timeline";
+import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
+import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
+import { setCrossfade, setOverlapSec, setSequenceMode } from "@/components/stitch/editorActions";
+
+vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
 const clipA = createClip({ kind: "edge", edgeId: "e1" }, { id: "a" });
 const clipB = createClip({ kind: "asset", assetId: "x" }, { id: "b", inSec: 1 });
 
 function makeDraft(overrides: Partial<StitchDraft> = {}): StitchDraft {
-  return { timeline: [clipA, clipB], audioCurve: [], audioMuted: false, loopCount: 1, ...overrides };
+  return {
+    timeline: [clipA, clipB],
+    audioCurve: [],
+    audioMuted: false,
+    loopCount: 1,
+    sequenceLayout: TRACK_LAYOUT,
+    ...overrides,
+  };
 }
 
 const store = () => useStitchEditorStore.getState();
@@ -208,5 +219,100 @@ describe("stitchEditorStore", () => {
     openOn();
     store().setPlayhead(-2);
     expect(store().playhead).toBe(0);
+  });
+});
+
+describe("stitchEditorStore: the sequence layout", () => {
+  // a: 5 s; b: 6 s from 1 s, so 5 s. Track 0–5, 5–10; Stacked at 1.0 s 0–5, 4–9
+  const DURATIONS = new Map<SourceKey, number>([
+    ["edge:e1", 5],
+    ["asset:x", 6],
+  ]);
+  const layout = () => store().draft!.sequenceLayout;
+
+  beforeEach(() => {
+    store().close();
+    openOn();
+    store().setDurations(DURATIONS);
+  });
+
+  it("makes each setter one undo step", () => {
+    setSequenceMode("stacked");
+    expect(store().past).toHaveLength(1);
+    setOverlapSec(2);
+    expect(store().past).toHaveLength(2);
+    setCrossfade(false);
+    expect(store().past).toHaveLength(3);
+    expect(layout()).toEqual({ mode: "stacked", overlapSec: 2, crossfade: false });
+    store().undo();
+    expect(layout()).toEqual({ mode: "stacked", overlapSec: 2, crossfade: true });
+    store().undo();
+    store().undo();
+    expect(layout()).toEqual(TRACK_LAYOUT);
+  });
+
+  it("takes no step for an overlap that is already stored, rounded or clamped", () => {
+    setOverlapSec(1);
+    setOverlapSec(1.04);
+    expect(store().past).toHaveLength(0);
+    setOverlapSec(12);
+    expect(layout().overlapSec).toBe(10);
+    setOverlapSec(11);
+    expect(store().past).toHaveLength(1);
+  });
+
+  it("keeps the overlap and the crossfade when switching back to Track", () => {
+    setSequenceMode("stacked");
+    setOverlapSec(2.5);
+    setCrossfade(false);
+    setSequenceMode("track");
+    expect(layout()).toEqual({ mode: "track", overlapSec: 2.5, crossfade: false });
+  });
+
+  it("moves a fade out with the end in the same step, and undo puts both back", () => {
+    store().apply((d) => ({ ...d, audioCurve: fadeOut(d.audioCurve, 10) }));
+    const steps = store().past.length;
+    setSequenceMode("stacked");
+    expect(store().past).toHaveLength(steps + 1);
+    expect(store().draft!.audioCurve).toEqual([
+      { t: 8, gain: 1 },
+      { t: 9, gain: 0 },
+    ]);
+    store().undo();
+    expect(layout().mode).toBe("track");
+    expect(store().draft!.audioCurve).toEqual([
+      { t: 9, gain: 1 },
+      { t: 10, gain: 0 },
+    ]);
+  });
+
+  it("keeps the playhead on the same frame of the same clip", () => {
+    // 2 s into b
+    store().setPlayhead(7);
+    setSequenceMode("stacked");
+    expect(store().playhead).toBe(6);
+    setOverlapSec(2);
+    expect(store().playhead).toBe(5);
+    setSequenceMode("track");
+    expect(store().playhead).toBe(7);
+    // Undo leaves it where it is
+    store().undo();
+    expect(store().playhead).toBe(7);
+  });
+
+  it("makes a run of Overlap nudges one step, until the gesture ends", () => {
+    setSequenceMode("stacked");
+    const steps = store().past.length;
+    setOverlapSec(1.1, { gesture: true });
+    setOverlapSec(1.2, { gesture: true });
+    setOverlapSec(1.3, { gesture: true });
+    expect(store().past).toHaveLength(steps + 1);
+    expect(layout().overlapSec).toBe(1.3);
+    store().endGesture();
+    setOverlapSec(1.4, { gesture: true });
+    expect(store().past).toHaveLength(steps + 2);
+    store().undo();
+    store().undo();
+    expect(layout().overlapSec).toBe(1);
   });
 });

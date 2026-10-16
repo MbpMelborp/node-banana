@@ -1,8 +1,21 @@
 import { describe, it, expect } from "vitest";
 import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
-import { draftPatch, readStitchDraft, sameDraft, type StitchDraft } from "../draft";
-import { createClip } from "../timeline";
+import {
+  draftDuration,
+  draftPatch,
+  draftSpans,
+  readSequenceLayout,
+  readStitchDraft,
+  sameDraft,
+  sameLayout,
+  type StitchDraft,
+} from "../draft";
+import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
+import { createClip, type SourceKey } from "../timeline";
+
+const TRACK_LAYOUT = DEFAULT_SEQUENCE_LAYOUT;
+const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true } as const;
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -20,6 +33,7 @@ describe("readStitchDraft", () => {
       audioCurve: [],
       audioMuted: false,
       loopCount: 1,
+      sequenceLayout: TRACK_LAYOUT,
     });
   });
 
@@ -46,6 +60,18 @@ describe("readStitchDraft", () => {
       audioCurve: [{ t: 0, gain: 1 }, { t: 2, gain: 0.5 }],
       audioMuted: true,
       loopCount: 2,
+      sequenceLayout: TRACK_LAYOUT,
+    });
+  });
+
+  it("reads a timeline node's layout, and a legacy node's as Track with its values kept", () => {
+    const timeline = [edgeClip("a", "e1")];
+    const stacked = { mode: "stacked", overlapSec: 2, crossfade: false } as const;
+    const ctx = { liveEdgeIds: ["e1"], hasMusic: false };
+    expect(readStitchDraft(nodeData({ timeline, sequenceLayout: stacked }), ctx).sequenceLayout).toEqual(stacked);
+    expect(readStitchDraft(nodeData({ clipOrder: ["e1"], sequenceLayout: stacked }), ctx).sequenceLayout).toEqual({
+      ...stacked,
+      mode: "track",
     });
   });
 
@@ -89,12 +115,86 @@ describe("readStitchDraft", () => {
   });
 });
 
+describe("readSequenceLayout", () => {
+  it("reads absent and junk as Track, 1.0 s, crossfade on", () => {
+    for (const raw of [undefined, null, 3, "stacked", [], true]) {
+      expect(readSequenceLayout(raw, false)).toEqual({ mode: "track", overlapSec: 1, crossfade: true });
+    }
+  });
+
+  it("reads stacked only from the exact string", () => {
+    expect(readSequenceLayout({ mode: "stacked" }, false).mode).toBe("stacked");
+    expect(readSequenceLayout({ mode: "STACKED" }, false).mode).toBe("track");
+    expect(readSequenceLayout({ mode: "layers" }, false).mode).toBe("track");
+  });
+
+  it("clamps and rounds the overlap, and falls back to 1.0 s when it is not a number", () => {
+    expect(readSequenceLayout({ overlapSec: 1.04 }, false).overlapSec).toBe(1);
+    expect(readSequenceLayout({ overlapSec: 0.25 }, false).overlapSec).toBe(0.3);
+    expect(readSequenceLayout({ overlapSec: 12 }, false).overlapSec).toBe(10);
+    expect(readSequenceLayout({ overlapSec: -1 }, false).overlapSec).toBe(0);
+    expect(readSequenceLayout({ overlapSec: Number.NaN }, false).overlapSec).toBe(1);
+    expect(readSequenceLayout({ overlapSec: "2" }, false).overlapSec).toBe(1);
+  });
+
+  it("keeps the crossfade on unless it is exactly false", () => {
+    expect(readSequenceLayout({ crossfade: false }, false).crossfade).toBe(false);
+    expect(readSequenceLayout({ crossfade: 0 }, false).crossfade).toBe(true);
+    expect(readSequenceLayout({ crossfade: true }, false).crossfade).toBe(true);
+    expect(readSequenceLayout({}, false).crossfade).toBe(true);
+  });
+
+  it("forces a legacy node to Track and keeps its values", () => {
+    expect(readSequenceLayout({ mode: "stacked", overlapSec: 2, crossfade: false }, true)).toEqual({
+      mode: "track",
+      overlapSec: 2,
+      crossfade: false,
+    });
+  });
+
+  it("never hands out the shared default", () => {
+    const read = readSequenceLayout(undefined, false);
+    expect(read).not.toBe(DEFAULT_SEQUENCE_LAYOUT);
+  });
+});
+
+describe("sameLayout", () => {
+  it("compares the three fields", () => {
+    expect(sameLayout(STACKED, { ...STACKED })).toBe(true);
+    expect(sameLayout(STACKED, { ...STACKED, mode: "track" })).toBe(false);
+    expect(sameLayout(STACKED, { ...STACKED, overlapSec: 1.1 })).toBe(false);
+    expect(sameLayout(STACKED, { ...STACKED, crossfade: false })).toBe(false);
+  });
+});
+
+describe("draftSpans and draftDuration", () => {
+  const durations = new Map<SourceKey, number>([
+    ["edge:e1", 5],
+    ["edge:e2", 5],
+    ["edge:e3", 6],
+  ]);
+  const timeline = [edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")];
+
+  it("butts the clips in Track, whatever overlap is kept", () => {
+    const d = { timeline, sequenceLayout: { ...STACKED, mode: "track" as const } };
+    expect(draftSpans(d, durations).map((s) => s.start)).toEqual([0, 5, 10]);
+    expect(draftDuration(d, durations)).toBe(16);
+  });
+
+  it("overlaps them in Stacked", () => {
+    const d = { timeline, sequenceLayout: STACKED };
+    expect(draftSpans(d, durations).map((s) => s.start)).toEqual([0, 4, 8]);
+    expect(draftDuration(d, durations)).toBe(14);
+  });
+});
+
 describe("sameDraft", () => {
   const base: StitchDraft = {
     timeline: [edgeClip("a", "e1")],
     audioCurve: [{ t: 0, gain: 1 }],
     audioMuted: false,
     loopCount: 1,
+    sequenceLayout: TRACK_LAYOUT,
   };
 
   it("compares by value", () => {
@@ -113,6 +213,10 @@ describe("sameDraft", () => {
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e2")] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [createClip({ kind: "asset", assetId: "e1" }, { id: "a" })] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [] })).toBe(false);
+    expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT, mode: "stacked" } })).toBe(false);
+    expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT, overlapSec: 2 } })).toBe(false);
+    expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT, crossfade: false } })).toBe(false);
+    expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT } })).toBe(true);
   });
 });
 
@@ -124,12 +228,29 @@ describe("draftPatch", () => {
       edgeClip("a", "e1"),
       edgeClip("b2", "e2"),
     ];
-    expect(draftPatch({ timeline, audioCurve: [], audioMuted: true, loopCount: 2 })).toEqual({
+    expect(
+      draftPatch({ timeline, audioCurve: [], audioMuted: true, loopCount: 2, sequenceLayout: TRACK_LAYOUT }),
+    ).toEqual({
       timeline,
       audioCurve: [],
       audioMuted: true,
       loopCount: 2,
+      sequenceLayout: TRACK_LAYOUT,
       clipOrder: ["e2", "e1"],
     });
+  });
+
+  it("round-trips the layout through readStitchDraft, as a copy", () => {
+    const d: StitchDraft = {
+      timeline: [edgeClip("a", "e1")],
+      audioCurve: [],
+      audioMuted: false,
+      loopCount: 1,
+      sequenceLayout: { mode: "stacked", overlapSec: 2.5, crossfade: false },
+    };
+    const patch = draftPatch(d);
+    expect(patch.sequenceLayout).not.toBe(d.sequenceLayout);
+    const back = readStitchDraft({ ...nodeData(), ...patch }, { liveEdgeIds: ["e1"], hasMusic: false });
+    expect(sameDraft(back, d)).toBe(true);
   });
 });

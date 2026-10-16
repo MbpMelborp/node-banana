@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSeconds, formatTileSeconds, formatTimecode, parseTimecode } from "../timecode";
+import { formatSeconds, formatTileSeconds, formatTimecode, parseSeconds, parseTimecode } from "../timecode";
 
 describe("formatTimecode", () => {
   it("writes m:ss.cc", () => {
@@ -57,5 +57,23 @@ describe("formatTileSeconds", () => {
   it("rounds to whole seconds", () => {
     expect(formatTileSeconds(4.6)).toBe("5s");
     expect(formatTileSeconds(4.2)).toBe("4s");
+  });
+});
+
+describe("parseSeconds", () => {
+  it("reads seconds with or without a unit", () => {
+    expect(parseSeconds("1")).toBe(1);
+    expect(parseSeconds("1.0 s")).toBe(1);
+    expect(parseSeconds("2s")).toBe(2);
+    expect(parseSeconds("1,5")).toBe(1.5);
+    expect(parseSeconds("1.5 sec.")).toBe(1.5);
+    expect(parseSeconds(" 3 Seconds ")).toBe(3);
+    expect(parseSeconds("0:01.5")).toBe(1.5);
+  });
+
+  it("refuses anything else", () => {
+    expect(parseSeconds("abc")).toBeNull();
+    expect(parseSeconds("s")).toBeNull();
+    expect(parseSeconds("-1 s")).toBeNull();
   });
 });

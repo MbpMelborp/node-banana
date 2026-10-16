@@ -9,6 +9,7 @@ import {
   AudioBufferSource,
   AudioBufferSink,
   BlobSource,
+  EncodedPacketSink,
   ALL_FORMATS,
   BufferTarget,
   Mp4OutputFormat,
@@ -29,6 +30,7 @@ import {
 } from '@/lib/video-probing';
 import {
   normalizeLoopCount,
+  normalizeStack,
   normalizeStitchArgs,
   type StitchAudioData,
   type StitchClipInput,
@@ -36,7 +38,10 @@ import {
   type StitchOptions,
 } from '@/lib/stitch/engineTypes';
 import { FrameSlotter, planSequence, type PlannedClip } from '@/lib/stitch/sequencePlan';
+import { cadenceRate, clipFadeSamples, dissolveFrames, sharedCadence, soloPass, stackSequence, type Dissolve, type StackedPlan } from '@/lib/stitch/stack';
+import { createFrameBlender, encodeDissolve, type FrameBlender } from '@/lib/stitch/crossfadeFrames';
 import {
+  applyCrossfades,
   chooseMasterFormat,
   mixLoop,
   pcmFromAudioBuffer,
@@ -63,6 +68,8 @@ interface ClipProbe {
   /** The video track's own duration; an audio tail past it does not count. */
   videoDuration: number;
   firstTimestamp: number;
+  /** Frames per second over the whole track; null when unknown. */
+  frameRate: number | null;
 }
 
 /** One clip of the sequence that has frames to give. */
@@ -97,6 +104,15 @@ async function probeClip(input: Input): Promise<ClipProbe | null> {
     console.warn('Failed to read the audio track', e);
   }
 
+  const first = Number.isFinite(firstTimestamp) && firstTimestamp > 0 ? firstTimestamp : 0;
+  // The cadence places frames on first + j / rate: measure the rate from the frame intervals, not the packet span
+  let lastPacket: { timestamp: number; duration: number } | null = null;
+  try {
+    lastPacket = await new EncodedPacketSink(videoTrack).getPacket(Infinity, { metadataOnly: true });
+  } catch {
+    // The average as given
+  }
+
   return {
     videoTrack,
     audioTrack,
@@ -105,7 +121,8 @@ async function probeClip(input: Input): Promise<ClipProbe | null> {
     rotation,
     bitrate,
     videoDuration,
-    firstTimestamp: Number.isFinite(firstTimestamp) && firstTimestamp > 0 ? firstTimestamp : 0,
+    firstTimestamp: first,
+    frameRate: cadenceRate(averagePacketRate, first, lastPacket),
   };
 }
 
@@ -227,10 +244,13 @@ export async function checkEncoderSupport(): Promise<boolean> {
 
 /**
  * Stitches clips into one H.264 video. Each clip plays from In to Out (its
- * whole video track by default), butted against the one before; the sequence
- * repeats `loopCount` times. Each clip's own sound plays at its volume unless
- * muted, and the music is mixed over it with its volume curve, which repeats
- * each loop while the music itself runs on.
+ * whole video track by default), butted against the one before, or, stacked
+ * (`overlapSec`), starting that much before it ends: the picture dissolves
+ * and the sound crossfades across the overlap, or with `crossfade: false` the
+ * earlier clip stays in front while both are heard. The sequence repeats
+ * `loopCount` times, with a cut at each restart. Each clip's own sound plays
+ * at its volume unless muted, and the music is mixed over it with its volume
+ * curve, which repeats each loop while the music itself runs on.
  *
  * Bare Blobs and a bare music buffer keep their old meaning: whole clips, and
  * the music replacing their sound (see normalizeStitchArgs).
@@ -244,6 +264,7 @@ export async function stitchVideosAsync(
 ): Promise<Blob> {
   const { clips, music } = normalizeStitchArgs(videoClips, audio);
   const loopCount = normalizeLoopCount(options);
+  const stack = normalizeStack(options);
   let totalVideos = clips.length * loopCount;
 
   const updateProgress = (
@@ -310,7 +331,17 @@ export async function stitchVideosAsync(
         const probe = probes.get(clips[planned.index].blob);
         if (probe) units.push({ plan: planned, clip: clips[planned.index], probe });
       }
-      if (units.length === 0 || plan.loopLength <= 0) {
+      // Stacked only when some join really overlaps: a stack of cuts is Track, call for call
+      let sp: StackedPlan | null = stack
+        ? stackSequence(
+            units.map((unit) => unit.plan),
+            units.map((unit) => unit.clip.source ?? `#${unit.plan.index}`),
+            stack
+          )
+        : null;
+      if (sp && !sp.clips.some((clip) => clip.overlapIn > 0)) sp = null;
+      const loopLength = sp ? sp.loopLength : plan.loopLength;
+      if (units.length === 0 || loopLength <= 0) {
         throw new Error('Nothing to stitch: every clip is empty');
       }
       totalVideos = units.length * loopCount;
@@ -359,9 +390,10 @@ export async function stitchVideosAsync(
       });
 
       // The sound: every audible clip and the music, in one master format
-      const audible = units.flatMap((unit) =>
+      // Each keeps its unit's index: muted and soundless clips are left out, so a position here is not one in the sequence
+      const audible = units.flatMap((unit, unitIndex) =>
         unit.probe.audioTrack && !unit.clip.muted && unit.clip.volume > 0
-          ? [{ ...unit, audioTrack: unit.probe.audioTrack }]
+          ? [{ ...unit, unitIndex, audioTrack: unit.probe.audioTrack }]
           : []
       );
       const audibleMusic = music && !music.muted ? music : null;
@@ -371,10 +403,10 @@ export async function stitchVideosAsync(
       if (audible.length > 0 || audibleMusic) {
         // Decoded first, so the master format comes from the sound itself
         // (an HE-AAC track's container says half its rate and mono)
-        const decoded: Array<{ pcm: Pcm; seqStart: number; gain: number }> = [];
+        const decoded: Array<{ pcm: Pcm; unitIndex: number; gain: number }> = [];
         for (let k = 0; k < audible.length; k++) {
           throwIfAborted();
-          const { plan: planned, clip, audioTrack } = audible[k];
+          const { plan: planned, clip, audioTrack, unitIndex } = audible[k];
           updateProgress('processing', 'Extracting audio from source videos...', 5 + (k / audible.length) * 5);
           try {
             // From the same origin as the clip's frames, so picture and sound stay in the source's sync
@@ -385,7 +417,7 @@ export async function stitchVideosAsync(
               planned.outSec,
               signal
             );
-            if (pcm) decoded.push({ pcm, seqStart: planned.seqStart, gain: clip.volume });
+            if (pcm) decoded.push({ pcm, unitIndex, gain: clip.volume });
           } catch (err) {
             if (err instanceof DOMException && err.name === "AbortError") throw err;
             // Silence for this clip; the others keep their place
@@ -412,17 +444,37 @@ export async function stitchVideosAsync(
           // mixLoop plays loopCount loops of the music, in the master's samples: only that much of the song is
           // converted (+1 for the resampler's last neighbour), however long it is
           const musicPcm = (buffer: AudioBuffer) => {
-            const played = loopCount * Math.max(0, Math.round(plan.loopLength * chosen.format.sampleRate));
+            const played = loopCount * Math.max(0, Math.round(loopLength * chosen.format.sampleRate));
             return pcmHead(buffer, (played * buffer.sampleRate) / chosen.format.sampleRate + 1);
           };
           mix = {
             format: chosen.format,
-            loopLength: plan.loopLength,
-            clips: decoded.map(({ pcm, seqStart, gain }) => ({ pcm: toMasterFormat(pcm, chosen.format), seqStart, gain })),
+            loopLength,
+            clips: decoded.map(({ pcm, unitIndex, gain }) => {
+              const master = toMasterFormat(pcm, chosen.format);
+              if (!sp) return { pcm: master, seqStart: units[unitIndex].plan.seqStart, gain };
+              const placed = sp.clips[unitIndex];
+              if (stack?.crossfade) {
+                // Faded against the next planned clip, sounding or not: a silent partner still fades this side
+                const next = sp.clips[unitIndex + 1];
+                applyCrossfades(
+                  master.channels,
+                  clipFadeSamples(placed, next ? next.seqStart : null, chosen.format.sampleRate)
+                );
+              }
+              return { pcm: master, seqStart: placed.seqStart, gain };
+            }),
             music: audibleMusic
               ? { pcm: toMasterFormat(musicPcm(audibleMusic.audio.buffer), chosen.format), curve: audibleMusic.curve }
               : null,
           };
+          if (sp) {
+            const stacked = sp;
+            const sounding = new Set(decoded.map(({ unitIndex }) => unitIndex));
+            mix.clipsOverlap = decoded.some(
+              ({ unitIndex }) => sounding.has(unitIndex + 1) && stacked.clips[unitIndex + 1].overlapIn > 0
+            );
+          }
         }
       }
 
@@ -481,95 +533,218 @@ export async function stitchVideosAsync(
       // each clip starts exactly where the one before ends, so nothing drifts.
       const slotter = new FrameSlotter(MAX_OUTPUT_FPS);
       const frameInterval = 1 / MAX_OUTPUT_FPS;
+      // Stacked: mediabunny's reference size (the first frame added), which every blended frame is made at
+      let ref: { width: number; height: number } | null = null;
+      const addToEncoder = async (sample: VideoSample) => {
+        if (sp && !ref) ref = { width: sample.codedWidth, height: sample.codedHeight };
+        await encoderSource.add(sample);
+      };
 
-      for (let loop = 0; loop < loopCount; loop++) {
-        for (let k = 0; k < units.length; k++) {
-          throwIfAborted();
-          const { plan: planned, probe } = units[k];
-          const unitIndex = loop * units.length + k;
-          const videoNumber = unitIndex + 1;
+      /**
+       * One clip's frames from `from` to `to` (source seconds), straight through to the encoder at the slots
+       * startSlotAt opens; the frame before `holdBefore` is held back for the first slot.
+       */
+      const encodeRun = async (run: {
+        unit: StitchUnit;
+        unitIndex: number;
+        startSlotAt: () => void;
+        from: number;
+        to: number;
+        holdBefore: number;
+        /** Where the run lands in the output, for the progress. */
+        window: { startSec: number; length: number };
+      }) => {
+        throwIfAborted();
+        const { probe } = run.unit;
+        const videoNumber = run.unitIndex + 1;
 
-          updateProgress(
-            'processing',
-            `Processing video ${videoNumber}/${totalVideos}...`,
-            12 + (unitIndex / totalVideos) * 85,
-            videoNumber
-          );
+        updateProgress(
+          'processing',
+          `Processing video ${videoNumber}/${totalVideos}...`,
+          12 + (run.unitIndex / totalVideos) * 85,
+          videoNumber
+        );
 
-          const windowStart = loop * plan.loopLength + planned.seqStart;
-          slotter.begin({ origin: planned.origin, startSec: windowStart, length: planned.length });
+        run.startSlotAt();
 
-          let samplesFromThisVideo = 0;
-          const encodeFrame = async (sample: VideoSample) => {
-            const timestamp = slotter.place(sample.timestamp ?? 0);
-            if (timestamp === null) {
-              sample.close();
-              return;
-            }
+        let samplesFromThisVideo = 0;
+        const encodeFrame = async (sample: VideoSample) => {
+          const timestamp = slotter.place(sample.timestamp ?? 0);
+          if (timestamp === null) {
+            sample.close();
+            return;
+          }
 
-            sample.setTimestamp(timestamp);
-            sample.setDuration(frameInterval);
-            try {
-              await encoderSource.add(sample);
-            } finally {
-              sample.close();
-            }
-            samplesFromThisVideo++;
-
-            if (samplesFromThisVideo % 10 === 0) {
-              // By where the frame landed, so a 24 fps clip fills its share as a 60 fps one does
-              const withinClip = Math.min(1, Math.max(0, (timestamp - windowStart) / planned.length));
-              updateProgress(
-                'processing',
-                `Processing video ${videoNumber}/${totalVideos}: ${samplesFromThisVideo} frames...`,
-                12 + ((unitIndex + withinClip) / totalVideos) * 85,
-                videoNumber
-              );
-            }
-          };
-
-          // The frame in effect at In starts before it. It is held back and
-          // takes the join only when no frame at or after In lands there: a
-          // frame the trim cut away must not push out the first one it kept.
-          let heldBeforeIn: VideoSample | null = null;
+          sample.setTimestamp(timestamp);
+          sample.setDuration(frameInterval);
           try {
-            // Decodes only the clip's range, from the key frame before In
-            const sink = new VideoSampleSink(probe.videoTrack);
-            for await (const sample of sink.samples(planned.inSec, planned.outSec)) {
-              if (signal?.aborted) {
-                sample.close();
-                throw new DOMException("Aborted", "AbortError");
-              }
-              const sourceTimestamp = sample.timestamp ?? 0;
-              if (sourceTimestamp < planned.origin) {
-                heldBeforeIn?.close();
-                heldBeforeIn = sample;
-                continue;
-              }
-              if (heldBeforeIn) {
-                const before = heldBeforeIn;
-                heldBeforeIn = null;
-                if (slotter.takesFirstSlot(sourceTimestamp)) before.close();
-                else await encodeFrame(before);
-              }
-              await encodeFrame(sample);
+            await addToEncoder(sample);
+          } finally {
+            sample.close();
+          }
+          samplesFromThisVideo++;
+
+          if (samplesFromThisVideo % 10 === 0) {
+            // By where the frame landed, so a 24 fps clip fills its share as a 60 fps one does
+            const withinClip = Math.min(1, Math.max(0, (timestamp - run.window.startSec) / run.window.length));
+            updateProgress(
+              'processing',
+              `Processing video ${videoNumber}/${totalVideos}: ${samplesFromThisVideo} frames...`,
+              12 + ((run.unitIndex + withinClip) / totalVideos) * 85,
+              videoNumber
+            );
+          }
+        };
+
+        // The frame in effect at In starts before it. It is held back and
+        // takes the join only when no frame at or after In lands there: a
+        // frame the trim cut away must not push out the first one it kept.
+        let heldBeforeIn: VideoSample | null = null;
+        try {
+          // Decodes only the clip's range, from the key frame before In
+          const sink = new VideoSampleSink(probe.videoTrack);
+          for await (const sample of sink.samples(run.from, run.to)) {
+            if (signal?.aborted) {
+              sample.close();
+              throw new DOMException("Aborted", "AbortError");
+            }
+            const sourceTimestamp = sample.timestamp ?? 0;
+            if (sourceTimestamp < run.holdBefore) {
+              heldBeforeIn?.close();
+              heldBeforeIn = sample;
+              continue;
             }
             if (heldBeforeIn) {
               const before = heldBeforeIn;
               heldBeforeIn = null;
-              await encodeFrame(before);
+              if (slotter.takesFirstSlot(sourceTimestamp)) before.close();
+              else await encodeFrame(before);
             }
-          } catch (videoError) {
-            // A user Stop must propagate as an AbortError, not a per-video failure.
-            if (videoError instanceof DOMException && videoError.name === "AbortError") throw videoError;
-            const errorMsg =
-              videoError instanceof Error
-                ? videoError.message
-                : `Failed to process video ${videoNumber}`;
-            console.error(`Error processing video ${videoNumber}:`, videoError);
-            throw new Error(errorMsg);
-          } finally {
-            heldBeforeIn?.close();
+            await encodeFrame(sample);
+          }
+          if (heldBeforeIn) {
+            const before = heldBeforeIn;
+            heldBeforeIn = null;
+            await encodeFrame(before);
+          }
+        } catch (videoError) {
+          // A user Stop must propagate as an AbortError, not a per-video failure.
+          if (videoError instanceof DOMException && videoError.name === "AbortError") throw videoError;
+          const errorMsg =
+            videoError instanceof Error
+              ? videoError.message
+              : `Failed to process video ${videoNumber}`;
+          console.error(`Error processing video ${videoNumber}:`, videoError);
+          throw new Error(errorMsg);
+        } finally {
+          heldBeforeIn?.close();
+        }
+      };
+
+      if (!sp) {
+        for (let loop = 0; loop < loopCount; loop++) {
+          for (let k = 0; k < units.length; k++) {
+            const unit = units[k];
+            const { plan: planned } = unit;
+            const windowStart = loop * loopLength + planned.seqStart;
+            await encodeRun({
+              unit,
+              unitIndex: loop * units.length + k,
+              startSlotAt: () => slotter.begin({ origin: planned.origin, startSec: windowStart, length: planned.length }),
+              from: planned.inSec,
+              to: planned.outSec,
+              holdBefore: planned.origin,
+              window: { startSec: windowStart, length: planned.length },
+            });
+          }
+        }
+      } else {
+        const stacked = sp;
+        let blender: FrameBlender | null = null;
+        const blenderFor = (firstOutgoing: VideoSample | null): FrameBlender => {
+          if (!blender) {
+            const size = ref ?? {
+              width: firstOutgoing?.codedWidth || safeWidth,
+              height: firstOutgoing?.codedHeight || safeHeight,
+            };
+            ref ??= size;
+            blender = createFrameBlender(size);
+          }
+          return blender;
+        };
+        const dissolveFrom = new Map<number, Dissolve>(stacked.dissolves.map((d) => [d.outgoing, d]));
+
+        // A dissolve's slots, claimed after the outgoing clip's solo frames and before the incoming clip's
+        const blendJoin = async (d: Dissolve, loopOffset: number, unitIndex: number) => {
+          throwIfAborted();
+          const videoNumber = unitIndex + 1;
+          updateProgress(
+            'processing',
+            `Blending video ${videoNumber} into ${videoNumber + 1}...`,
+            12 + ((unitIndex + 1) / totalVideos) * 85,
+            videoNumber
+          );
+          const outgoing = units[d.outgoing].probe;
+          const incoming = units[d.incoming].probe;
+          const frames = dissolveFrames(stacked, d, loopOffset, {
+            fps: MAX_OUTPUT_FPS,
+            cadence: sharedCadence(outgoing, incoming),
+          });
+          const timestamps: number[] = [];
+          const outgoingTimes: number[] = [];
+          const incomingTimes: number[] = [];
+          const alphas: number[] = [];
+          frames.slots.forEach((slot, i) => {
+            const timestamp = slotter.claim(slot);
+            if (timestamp === null) return;
+            timestamps.push(timestamp);
+            outgoingTimes.push(frames.outgoingTimes[i]);
+            incomingTimes.push(frames.incomingTimes[i]);
+            alphas.push(frames.alphas[i]);
+          });
+          try {
+            await encodeDissolve(
+              {
+                outgoing: outgoing.videoTrack,
+                incoming: incoming.videoTrack,
+                timestamps,
+                outgoingTimes,
+                incomingTimes,
+                alphas,
+                frameDuration: frameInterval,
+                signal,
+              },
+              blenderFor,
+              addToEncoder
+            );
+          } catch (blendError) {
+            if (blendError instanceof DOMException && blendError.name === "AbortError") throw blendError;
+            console.error(`Error processing video ${videoNumber}:`, blendError);
+            throw new Error(blendError instanceof Error ? blendError.message : `Failed to process video ${videoNumber}`);
+          }
+        };
+
+        for (let loop = 0; loop < loopCount; loop++) {
+          const loopOffset = loop * loopLength;
+          for (let k = 0; k < units.length; k++) {
+            const unit = units[k];
+            const placed = stacked.clips[k];
+            const unitIndex = loop * units.length + k;
+            const solo = soloPass(placed, loopOffset, MAX_OUTPUT_FPS);
+            if (solo) {
+              await encodeRun({
+                unit,
+                unitIndex,
+                startSlotAt: () => slotter.beginRange({ origin: placed.soloOrigin, fromSec: solo.fromSec, toSec: solo.toSec }),
+                // A head the clip before covers or dissolves over is not decoded again here
+                from: solo.decodeFrom,
+                to: solo.decodeTo,
+                holdBefore: placed.soloOrigin,
+                window: { startSec: solo.fromSec, length: solo.toSec - solo.fromSec },
+              });
+            }
+            const join = dissolveFrom.get(k);
+            if (join) await blendJoin(join, loopOffset, unitIndex);
           }
         }
       }

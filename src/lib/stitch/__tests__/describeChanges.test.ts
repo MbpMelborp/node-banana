@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StitchTimelineClip } from "@/types";
 import { describeDraftChanges, type StitchDraft } from "../draft";
+import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import { createClip, splitClipAt, type SourceKey } from "../timeline";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
@@ -11,6 +12,7 @@ const draft = (timeline: StitchTimelineClip[], rest: Partial<StitchDraft> = {}):
   audioCurve: [],
   audioMuted: false,
   loopCount: 1,
+  sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
   ...rest,
 });
 
@@ -75,6 +77,28 @@ describe("describeDraftChanges", () => {
   it("writes counts of ten and more as digits", () => {
     const many = Array.from({ length: 10 }, (_, i) => clip(`c${i}`, `e${i}`));
     expect(describeDraftChanges(draft(many), draft([]))).toBe(`10 removed clips${LOST}`);
+  });
+
+  it("names a layout change and which way it went, after the loop count", () => {
+    const stacked = { mode: "stacked" as const, overlapSec: 2, crossfade: true };
+    expect(describeDraftChanges(base, draft(base.timeline, { sequenceLayout: stacked }))).toBe(
+      `The switch to Stacked and the overlap${LOST}`,
+    );
+    expect(
+      describeDraftChanges(
+        draft(base.timeline, { sequenceLayout: stacked }),
+        draft(base.timeline, { sequenceLayout: { ...stacked, crossfade: false } }),
+      ),
+    ).toBe(`Turning the crossfade off${LOST}`);
+    expect(
+      describeDraftChanges(
+        draft(base.timeline, { sequenceLayout: { ...stacked, crossfade: false } }),
+        draft(base.timeline, { sequenceLayout: { ...stacked, mode: "track" } }),
+      ),
+    ).toBe(`The switch to Track and turning the crossfade on${LOST}`);
+    expect(describeDraftChanges(base, draft(base.timeline, { loopCount: 2, sequenceLayout: stacked }))).toBe(
+      `The loop count, the switch to Stacked and the overlap${LOST}`,
+    );
   });
 
   it("falls back when no change can be named", () => {

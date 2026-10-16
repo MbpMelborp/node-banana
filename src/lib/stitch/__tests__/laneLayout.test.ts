@@ -2,7 +2,15 @@ import { describe, it, expect } from "vitest";
 import type { StitchTimelineClip } from "@/types";
 import { clipSpans, createClip, type SourceDurations, type SourceKey } from "../timeline";
 import { buildTimeAxis } from "../timeAxis";
-import { insetBox, laneBoxes, liveSpans, MIN_DRAWN_PX, trimEdgeX, type LaneTrim } from "../laneLayout";
+import {
+  insetBox,
+  laneBoxes,
+  liveSpans,
+  MIN_DRAWN_PX,
+  stackedBoxes,
+  trimEdgeX,
+  type LaneTrim,
+} from "../laneLayout";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -12,7 +20,7 @@ const durations = (entries: Record<string, number>): SourceDurations =>
 // 64 px/s from x 16: Clip 1 (0–5, out 5 of a 6 s source), Clip 2 (5–9, In 1 of 5), Clip 3 (9–12)
 const PPS = 64;
 const timeline = [clip("c1", "e1", { outSec: 5 }), clip("c2", "e2", { inSec: 1 }), clip("c3", "e3")];
-const spans = clipSpans(timeline, durations({ "edge:e1": 6, "edge:e2": 5, "edge:e3": 3 }));
+const spans = clipSpans(timeline, durations({ "edge:e1": 6, "edge:e2": 5, "edge:e3": 3 }), 0);
 const axis = buildTimeAxis(spans, PPS);
 const trim = (clipId: string, edge: "in" | "out", result: LaneTrim["result"]): LaneTrim => ({ clipId, edge, result });
 
@@ -87,9 +95,27 @@ describe("liveSpans", () => {
       [9.5, 12.5, 3],
     ]);
     // A slot after the edge moves with the clips: the axis built from them puts a time past it further right
-    const withSlot = clipSpans([clip("a", "e1", { outSec: 3 }), clip("b", "none"), clip("c", "e3")], durations({ "edge:e1": 6, "edge:e3": 3 }));
+    const withSlot = clipSpans([clip("a", "e1", { outSec: 3 }), clip("b", "none"), clip("c", "e3")], durations({ "edge:e1": 6, "edge:e3": 3 }), 0);
     const pushed = liveSpans(withSlot, trim("a", "out", { inSec: 0, lengthSec: 4, deltaSec: 1, edgeSeqTime: 4 }));
     expect(buildTimeAxis(pushed, PPS).timeToX(4)).toBe(16 + 4 * PPS);
     expect(buildTimeAxis(withSlot, PPS).timeToX(4)).toBe(16 + 4 * PPS + 160);
+  });
+});
+
+describe("stackedBoxes", () => {
+  it("draws each clip from its own start on a linear axis, empty clips as a slot", () => {
+    // Clip 1 0–5, an empty clip at 5, Clip 2 4–8 (In 1 of 5), Clip 3 0.02 s at 8 (too short to overlap)
+    const stackedTimeline = [clip("c1", "e1"), clip("x", "missing"), clip("c2", "e2", { inSec: 1 }), clip("c3", "e4")];
+    const stacked = clipSpans(stackedTimeline, durations({ "edge:e1": 5, "edge:e2": 5, "edge:e4": 0.02 }), 1);
+    const linear = buildTimeAxis(stacked, PPS, 16, 0);
+    const boxes = stackedBoxes(linear, stacked);
+    expect(boxes.map((b) => [b.x, b.width])).toEqual([
+      [16, 320],
+      [16 + 5 * PPS, 160],
+      [16 + 4 * PPS, 4 * PPS],
+      [16 + 8 * PPS, MIN_DRAWN_PX],
+    ]);
+    expect(boxes[2]).toMatchObject({ inSec: 1, lengthSec: 4 });
+    expect(stackedBoxes(linear, stacked, 100)[1].width).toBe(100);
   });
 });
