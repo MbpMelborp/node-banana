@@ -218,6 +218,37 @@ describe("executeVideoStitch", () => {
     }));
   });
 
+  it("passes the loop count to the stitch instead of repeating the clips", async () => {
+    mockFetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(["v"], { type: "video/mp4" })) });
+    mockStitchVideosAsync.mockResolvedValue({ size: 21 * 1024 * 1024, type: "video/mp4" } as Blob);
+    const node = makeStitchNode({ loopCount: 3 });
+    const ctx = makeCtx(node, {
+      getConnectedInputs: vi.fn().mockReturnValue({ images: [], videos: ["v1", "v2"], audio: [], text: null, dynamicInputs: {}, easeCurve: null }),
+    });
+
+    await executeVideoStitch(ctx);
+
+    const [clips, music, , , options] = mockStitchVideosAsync.mock.calls[0];
+    expect(clips).toHaveLength(2);
+    expect(clips[0]).toMatchObject({ inSec: 0, outSec: null, muted: false, volume: 1 });
+    expect(music).toBeNull();
+    expect(options).toEqual({ loopCount: 3 });
+  });
+
+  it("reads the node's current data, not the run's copy", async () => {
+    mockFetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(["v"], { type: "video/mp4" })) });
+    mockStitchVideosAsync.mockResolvedValue({ size: 21 * 1024 * 1024, type: "video/mp4" } as Blob);
+    const node = makeStitchNode({ loopCount: 1 });
+    const ctx = makeCtx(node, {
+      getFreshNode: vi.fn().mockReturnValue(makeStitchNode({ loopCount: 2 })),
+      getConnectedInputs: vi.fn().mockReturnValue({ images: [], videos: ["v1", "v2"], audio: [], text: null, dynamicInputs: {}, easeCurve: null }),
+    });
+
+    await executeVideoStitch(ctx);
+
+    expect(mockStitchVideosAsync.mock.calls[0][4]).toEqual({ loopCount: 2 });
+  });
+
   it("should set loading status with 0 progress", async () => {
     const node = makeStitchNode();
     const ctx = makeCtx(node, {

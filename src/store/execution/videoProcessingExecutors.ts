@@ -9,6 +9,7 @@ import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFr
 import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
 import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
+import { gatherStitchInputs } from "./stitchInputs";
 
 const FINGERPRINT_SAMPLES = 8;
 const FINGERPRINT_SAMPLE_BYTES = 4096;
@@ -133,8 +134,9 @@ async function recordEditedVideo(
  * VideoStitch: combines multiple video clips into a single output.
  */
 export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<void> {
-  const { node, getConnectedInputs, updateNodeData, getNodes, signal } = ctx;
-  const nodeData = node.data as VideoStitchNodeData;
+  const { node, updateNodeData, getNodes, signal } = ctx;
+  // Fresh, so the encoder check and the timeline are the node's current ones
+  const nodeData = (ctx.getFreshNode(node.id) ?? node).data as VideoStitchNodeData;
 
   if (nodeData.encoderSupported === false) {
     updateNodeData(node.id, {
@@ -148,61 +150,19 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
   updateNodeData(node.id, { status: "loading", progress: 0, error: null });
 
   try {
-    const inputs = getConnectedInputs(node.id);
-
-    if (inputs.videos.length < 2) {
-      updateNodeData(node.id, {
-        status: "error",
-        error: "Need at least 2 video clips to stitch",
-        progress: 0,
-      });
-      throw new Error("Need at least 2 video clips to stitch");
-    }
-
-    if (signal?.aborted) {
-      throw new DOMException("Aborted", "AbortError");
-    }
-
-    const videoBlobs = await Promise.all(
-      inputs.videos.map((v) => fetch(v).then((r) => r.blob()))
-    );
-
-    // Duplicate blobs based on loopCount (2x or 3x repeats the sequence)
-    const loopCount = nodeData.loopCount || 1;
-    const loopedBlobs =
-      loopCount > 1
-        ? Array.from({ length: loopCount }, () =>
-            videoBlobs.map((b) => new Blob([b], { type: b.type }))
-          ).flat()
-        : videoBlobs;
-
-    // Prepare audio if connected
-    let audioData = null;
-    if (inputs.audio.length > 0 && inputs.audio[0]) {
-      const { prepareAudioAsync } = await import("@/hooks/useAudioMixing");
-      const audioUrl = inputs.audio[0];
-      const audioResponse = await fetch(audioUrl);
-      const rawBlob = await audioResponse.blob();
-      const audioMime =
-        rawBlob.type ||
-        (audioUrl.startsWith("data:")
-          ? audioUrl.split(";")[0].split(":")[1]
-          : "audio/mpeg");
-      const audioBlob = rawBlob.type
-        ? rawBlob
-        : new Blob([rawBlob], { type: audioMime });
-      audioData = await prepareAudioAsync(audioBlob, 0);
-    }
+    // The timeline, resolved to Blobs: trims, clip sound, library clips and the music's curve
+    const gathered = await gatherStitchInputs(ctx, nodeData);
 
     const { stitchVideosAsync } = await import("@/hooks/useStitchVideos");
     const outputBlob = await stitchVideosAsync(
-      loopedBlobs,
-      audioData,
+      gathered.clips,
+      gathered.music,
       (progress) => {
         if (signal?.aborted) return;
         updateNodeData(node.id, { progress: progress.progress });
       },
-      signal
+      signal,
+      { loopCount: gathered.loopCount }
     );
 
     if (signal?.aborted) {
@@ -239,9 +199,9 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
     ctx.releaseMediaUrl?.(previousOutput as string | undefined);
 
     await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
-      clips: inputs.videos.length,
-      loopCount,
-      withAudio: audioData !== null,
+      clips: gathered.clipCount,
+      loopCount: gathered.loopCount,
+      withAudio: gathered.music !== null,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
