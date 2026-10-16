@@ -212,6 +212,24 @@ export interface ModelInputDef {
 }
 
 /**
+ * A request the provider is running for a node, kept on the node while the
+ * app waits for it and after the app stops waiting (the poll safety net, a
+ * reload, a crash), so the run can be picked up again. Saved with the
+ * workflow as node data. See docs/generation-polling.md.
+ */
+export interface PendingGenerationTask {
+  /** The poll provider ("comfy", "kie"). */
+  provider: string;
+  /** The provider's request id. */
+  taskId: string;
+  modelId: string;
+  modelName: string;
+  mediaType: string;
+  /** When the provider accepted the request (ms). */
+  submittedAt: number;
+}
+
+/**
  * Nano Banana node - AI image generation
  */
 export interface NanoBananaNodeData extends BaseNodeData {
@@ -232,6 +250,7 @@ export interface NanoBananaNodeData extends BaseNodeData {
   parametersExpanded?: boolean; // Collapse state for inline parameter display
   status: NodeStatus;
   error: string | null;
+  pendingTask?: PendingGenerationTask; // The provider's request while it runs, or after the app stopped waiting
   imageHistory: CarouselImageItem[]; // Carousel history (IDs only)
   selectedHistoryIndex: number; // Currently selected image in carousel
   fallbackModel?: SelectedModel; // JSON-compatible with Node Banana Pro
@@ -256,6 +275,7 @@ export interface GenerateVideoNodeData extends BaseNodeData {
   parametersExpanded?: boolean; // Collapse state for inline parameter display
   status: NodeStatus;
   error: string | null;
+  pendingTask?: PendingGenerationTask; // The provider's request while it runs, or after the app stopped waiting
   videoHistory: CarouselVideoItem[]; // Carousel history (IDs only)
   selectedVideoHistoryIndex: number; // Currently selected video in carousel
   fallbackModel?: SelectedModel; // JSON-compatible with Node Banana Pro
@@ -281,6 +301,7 @@ export interface Generate3DNodeData extends BaseNodeData {
   parametersExpanded?: boolean; // Collapse state for inline parameter display
   status: NodeStatus;
   error: string | null;
+  pendingTask?: PendingGenerationTask; // The provider's request while it runs, or after the app stopped waiting
   fallbackModel?: SelectedModel; // JSON-compatible with Node Banana Pro
   __usedFallback?: boolean; // Set by runWithFallback on successful fallback
   __fallbackModelUsed?: string; // Display name of fallback model that succeeded
@@ -314,6 +335,7 @@ export interface GenerateAudioNodeData extends BaseNodeData {
   parametersExpanded?: boolean; // Collapse state for inline parameter display
   status: NodeStatus;
   error: string | null;
+  pendingTask?: PendingGenerationTask; // The provider's request while it runs, or after the app stopped waiting
   audioHistory: CarouselAudioItem[]; // Carousel history (IDs only)
   selectedAudioHistoryIndex: number; // Currently selected audio in carousel
   duration: number | null; // Duration in seconds

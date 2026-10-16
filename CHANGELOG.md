@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Pick a run up again** — A generate node keeps the provider's request while it waits on a Kie or Comfy Router run, and keeps it when the app stops waiting (the safety net, a lost connection) or is cut off. The request is saved with the workflow and in the desktop app's crash checkpoint. The node then says the run may still be going, shows the request id to copy, and offers **Pick up**, which collects the result into the carousel and the asset library like a normal run. Comfy Router keeps a result for 24 hours.
+
 ### Fixed
 
+- **Long runs no longer time out at ten minutes** — A Kie or Comfy Router generation is polled for as long as the provider says it is running. A 90-minute safety net remains, takes one last look before it gives up, and then says the run may still be going rather than that it failed.
+- **A provider's refusal says why** — When Comfy Router refuses a run (a content-policy refusal, say), the node shows the provider's own explanation instead of a bare code, and at once, rather than after ten more checks and as raw JSON.
 - **Annotate's Cancel and Done took no clicks on the desktop** — The annotation editor laid its header across the top of the window, where the desktop's tab strip is the window's drag region, so clicking Cancel or Done dragged the window instead. The editor is now a near-full-screen dialog below that band.
 
 ## [2.1.1] - 2026-10-15
