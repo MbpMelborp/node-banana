@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Magnet } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { CHROME_SURFACE } from "@/components/chromeStyles";
@@ -80,20 +80,33 @@ function EdgeFrame({ src, time, fallback }: { src: string | null; time: number; 
 /**
  * The frame popover over a dragged edge (Trim.png). It sits above the clips
  * row, over the ruler and the transport, so it is a fixed layer outside the
- * timeline's clipping, placed from the lane's position on screen.
+ * timeline's clipping, placed from the lane's position on screen. Its top
+ * is measured again after each layout: a press that selects the clip
+ * collapses an expanded audio lane, which moves the lanes down after the
+ * press measured them.
  */
 export function TrimOverlay({
   trim,
   edgeX: laneEdgeX,
   view,
   src,
+  contentRef,
 }: {
   trim: TrimLive;
   /** The dragged edge on the lane (trimEdgeX). */
   edgeX: number;
   view: ClipMediaView | undefined;
   src: string | null;
+  /** The lane content, whose top the popover stands on. */
+  contentRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const content = contentRef?.current;
+    if (!el || !content) return;
+    el.style.top = `${content.getBoundingClientRect().top + GEOMETRY.ruler - POPOVER_HEIGHT}px`;
+  });
   const edgeX = trim.laneLeft + laneEdgeX;
   // Kept over the visible lanes when the edge is near or past their sides; the arrow still points at the edge
   const room = trim.viewRight - trim.viewLeft >= POPOVER_WIDTH;
@@ -105,6 +118,7 @@ export function TrimOverlay({
   const fallback = view ? nearestFrame(view, time) : null;
   return (
     <div
+      ref={ref}
       aria-hidden="true"
       data-testid="stitch-trim-popover"
       className="pointer-events-none fixed z-100 flex flex-col items-center"

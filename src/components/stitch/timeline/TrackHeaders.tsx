@@ -1,13 +1,24 @@
 "use client";
 
 import { GEOMETRY } from "../editorStyles";
+import { AudioTrackHeader } from "./AudioTrackHeader";
 
 /**
  * The 132px column left of the lanes: a spacer beside the ruler, then the
- * Clips track (its dot and count) and the Audio track's name (its controls
- * come with the audio lane).
+ * Clips track (its dot and count) and the Audio track (its mute, and its dB
+ * labels while it is selected).
  */
-export function TrackHeaders({ clipCount }: { clipCount: number }) {
+export function TrackHeaders({
+  clipCount,
+  audioExpanded,
+  audioMuted,
+  canMuteAudio,
+}: {
+  clipCount: number;
+  audioExpanded: boolean;
+  audioMuted: boolean;
+  canMuteAudio: boolean;
+}) {
   return (
     <div
       className="relative z-2 flex shrink-0 flex-col border-r border-chrome-border/50 bg-editor-chrome"
@@ -21,10 +32,7 @@ export function TrackHeaders({ clipCount }: { clipCount: number }) {
           {clipCount}
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/6 pl-3 pr-2" style={{ height: GEOMETRY.audioRow }}>
-        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-handle-audio" />
-        <span className="text-xs text-neutral-300">Audio</span>
-      </div>
+      <AudioTrackHeader expanded={audioExpanded} muted={audioMuted} canMute={canMuteAudio} />
     </div>
   );
 }

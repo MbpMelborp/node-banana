@@ -9,6 +9,7 @@ import { AssetApiError, fetchAssetBlob } from "@/lib/assets/client/api";
 import type { StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes";
 import { readStitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
+import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
 import { resolveEdgeVideo, resolveEdgeVideos } from "@/lib/stitch/sources";
 import type { NodeExecutionContext } from "./types";
 
@@ -106,17 +107,7 @@ export async function gatherStitchInputs(
   let music: StitchMusicInput | null = null;
   if (musicUrl && !draft.audioMuted) {
     const { prepareAudioAsync } = await import("@/hooks/useAudioMixing");
-    const audioResponse = await fetch(musicUrl);
-    const rawBlob = await audioResponse.blob();
-    const audioMime =
-      rawBlob.type ||
-      (musicUrl.startsWith("data:")
-        ? musicUrl.split(";")[0].split(":")[1]
-        : "audio/mpeg");
-    const audioBlob = rawBlob.type
-      ? rawBlob
-      : new Blob([rawBlob], { type: audioMime });
-    const audio = await prepareAudioAsync(audioBlob, 0);
+    const audio = await prepareAudioAsync(await fetchMusicBlob(musicUrl), 0);
     if (audio) {
       music = { audio, curve: draft.audioCurve, muted: false };
     } else if (legacy || fromInputs) {

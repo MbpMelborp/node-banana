@@ -278,9 +278,23 @@ describe("mediaInfo", () => {
 
   it("keys data: URLs by a fingerprint and anything else by itself", () => {
     const data = `data:video/mp4;base64,${"A".repeat(100)}xyz`;
-    expect(mediaKeyOf(data)).toBe(`d:${data.length}:${data.slice(-40)}`);
+    expect(mediaKeyOf(data)).toMatch(new RegExp(`^d:${data.length}:[0-9a-z]+$`));
+    expect(mediaKeyOf(data)).toBe(mediaKeyOf(`${data}`));
     expect(mediaKeyOf("http://example.com/v.mp4")).toBe("http://example.com/v.mp4");
     expect(mediaKeyOf("blob:abc")).toBe("blob:abc");
     expect(assetMediaKey("x1")).toBe("a:x1");
+  });
+
+  it("tells apart two data: URLs of one length and one tail that differ in the middle", () => {
+    // Two takes of fixed-length audio: same size, both ending in the same silence
+    const take = (fill: string) => `data:audio/wav;base64,UklGR${fill.repeat(200_000)}${"A".repeat(2_000)}`;
+    const a = take("q83");
+    const b = take("x7Z");
+    expect(a.length).toBe(b.length);
+    expect(a.slice(-1_000)).toBe(b.slice(-1_000));
+    expect(mediaKeyOf(a)).not.toBe(mediaKeyOf(b));
+    // A stretch of 2000 characters changed in the middle (the sampling reads one in about 73)
+    const c = a.slice(0, 300_000) + "Z".repeat(2_000) + a.slice(302_000);
+    expect(mediaKeyOf(c)).not.toBe(mediaKeyOf(a));
   });
 });

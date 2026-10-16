@@ -92,9 +92,29 @@ let running = false;
 /** Bumped by the test reset, so a job still in flight from before stops there. */
 let generation = 0;
 
-/** data: URLs are keyed by a fingerprint (length and tail), anything else by itself. */
+/** Characters of a data: URL the fingerprint reads, spread across all of it, besides its last DATA_KEY_TAIL. */
+const DATA_KEY_SAMPLES = 8192;
+const DATA_KEY_TAIL = 256;
+
+/**
+ * data: URLs are keyed by a fingerprint, anything else by itself. The fingerprint is the length and an FNV-1a hash
+ * of characters spread over the whole payload plus its tail: two takes of fixed-length audio or video have the same
+ * length and often the same tail (silence, a tag), but differ all through. Sampling keeps it cheap enough to compute
+ * on a render for a payload of megabytes.
+ */
 export function mediaKeyOf(src: string): string {
-  return src.startsWith("data:") ? `d:${src.length}:${src.slice(-40)}` : src;
+  if (!src.startsWith("data:")) return src;
+  const n = src.length;
+  let hash = 0x811c9dc5;
+  const mix = (code: number) => {
+    hash ^= code;
+    hash = Math.imul(hash, 0x01000193);
+  };
+  const body = Math.max(0, n - DATA_KEY_TAIL);
+  const stride = Math.max(1, body / DATA_KEY_SAMPLES);
+  for (let i = 0; i < body; i += stride) mix(src.charCodeAt(Math.floor(i)));
+  for (let i = body; i < n; i++) mix(src.charCodeAt(i));
+  return `d:${n}:${(hash >>> 0).toString(36)}`;
 }
 
 export function assetMediaKey(assetId: string): string {

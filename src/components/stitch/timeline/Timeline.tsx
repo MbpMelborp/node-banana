@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import type { ClipSpan } from "@/lib/stitch/timeline";
+import type { VolumePoint } from "@/types";
 import { buildTimeAxis } from "@/lib/stitch/timeAxis";
 import { laneBoxes, liveSpans, trimEdgeX } from "@/lib/stitch/laneLayout";
 import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
-import type { ClipMediaView } from "../useStitchEditorMedia";
+import type { ClipMediaView, MusicView } from "../useStitchEditorMedia";
+import { AudioLane } from "./AudioLane";
 import { ClipContextMenu } from "./ClipContextMenu";
 import { ClipsLane } from "./ClipsLane";
 import { Playhead } from "./Playhead";
@@ -21,29 +23,38 @@ import { useTrimDrag } from "./useTrimDrag";
 const OVERSCAN = 120;
 /** ⌘ wheel / pinch: zoom by e^(−deltaY / this). */
 const WHEEL_ZOOM_SCALE = 200;
+const NO_CURVE: VolumePoint[] = [];
 
 /**
  * The 200px timeline under the stage: the track headers, then the lanes,
  * which scroll sideways under a fixed header column. The lanes hold the
  * ruler, the clips row, the audio row and the playhead. The zoom comes from
  * useTimelineZoom (shared with the transport); ⌘ wheel or a pinch zooms
- * around the pointer, any other wheel scrolls.
+ * around the pointer, any other wheel scrolls. While the audio track is
+ * selected its row grows, and the timeline with it (272px), taking the room
+ * from the stage above.
  */
 export function Timeline({
   spans,
   media,
   zoom,
   srcFor,
+  music,
 }: {
   spans: readonly ClipSpan[];
   media: ReadonlyMap<string, ClipMediaView>;
   zoom: TimelineZoom;
+  /** The connected music, or null. */
+  music: MusicView | null;
   /** The playable URL of a clip's source, for the frame under a dragged handle. */
   srcFor: (clipId: string) => string | null;
 }) {
   const { axis, axisNow, scroller, scrollerRef, laneWidth, scrollPosition } = zoom;
   const contentRef = useRef<HTMLDivElement>(null);
   const selectedId = useStitchEditorStore((s) => (s.selection?.kind === "clip" ? s.selection.clipId : null));
+  const audioSelected = useStitchEditorStore((s) => s.selection?.kind === "audio");
+  const curve = useStitchEditorStore((s) => s.draft?.audioCurve ?? NO_CURVE);
+  const audioMuted = useStitchEditorStore((s) => s.draft?.audioMuted ?? false);
   // The lanes' scroll position, for virtualising ticks and frames: the zoom publishes its own scrolls in the same
   // tick, so the drawn range never lags them. Their width is the zoom's own measurement.
   const scrollLeft = useSyncExternalStore(scrollPosition.subscribe, scrollPosition.get, scrollPosition.get);
@@ -98,13 +109,20 @@ export function Timeline({
   const trimIndex = trim ? spans.findIndex((s) => s.clip.id === trim.clipId) : -1;
   const trimBox = trimIndex === -1 ? null : boxes[trimIndex];
   const edgeX = trim && trimBox ? trimEdgeX(trimBox, trim.edge) : 0;
+  // Only a block there is to edit grows: music connected, under a sequence with some length
+  const audioExpanded = audioSelected && music !== null && axis.total > 0;
 
   return (
     <div
       className="relative flex shrink-0 overflow-hidden border-t border-chrome-border bg-editor-lanes"
-      style={{ height: GEOMETRY.timeline }}
+      style={{ height: audioExpanded ? GEOMETRY.timelineExpanded : GEOMETRY.timeline }}
     >
-      <TrackHeaders clipCount={spans.length} />
+      <TrackHeaders
+        clipCount={spans.length}
+        audioExpanded={audioExpanded}
+        audioMuted={audioMuted}
+        canMuteAudio={music !== null || audioMuted}
+      />
       <div
         ref={scrollerRef}
         data-testid="stitch-lanes"
@@ -134,10 +152,17 @@ export function Timeline({
             onBodyPointerDown={onBodyPointerDown}
             onHandlePointerDown={onHandlePointerDown}
           />
-          {/* The audio row; the audio lane fills it */}
-          <div
-            className="absolute inset-x-0 border-b border-white/6"
-            style={{ top: GEOMETRY.ruler + GEOMETRY.clipRow, height: GEOMETRY.audioRow }}
+          <AudioLane
+            axis={axis}
+            music={music}
+            curve={curve}
+            muted={audioMuted}
+            expanded={audioExpanded}
+            viewLeft={viewLeft}
+            viewRight={viewRight}
+            visibleRight={laneWidth > 0 ? scrollLeft + laneWidth : contentWidth}
+            contentWidth={contentWidth}
+            contentRef={contentRef}
           />
           {trim && trimBox && <TrimMarks trim={trim} axis={playheadAxis} edgeX={edgeX} scrollLeft={scrollLeft} />}
           {/* Snapped to the playhead, the dashed guide stands in for its line */}
@@ -152,6 +177,7 @@ export function Timeline({
           edgeX={edgeX}
           view={trimView}
           src={srcFor(trim.clipId)}
+          contentRef={contentRef}
         />
       )}
       <ClipContextMenu media={media} />

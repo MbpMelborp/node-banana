@@ -1,6 +1,6 @@
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { removePoint } from "@/lib/stitch/curve";
+import { fadeIn, fadeOut, flat, removePoint } from "@/lib/stitch/curve";
 import { stitchHasMusicEdge } from "@/lib/stitch/sources";
 import {
   clipAtTime,
@@ -13,7 +13,7 @@ import {
   trimClip,
   updateClipAudio,
 } from "@/lib/stitch/timeline";
-import type { StitchTimelineClip } from "@/types";
+import type { StitchTimelineClip, VolumePoint } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 
 /**
@@ -99,11 +99,7 @@ export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
 export function removeSelection(): void {
   const s = editor();
   if (!s.draft) return;
-  if (s.selection?.kind === "audio") {
-    const point = s.selection.point;
-    if (point !== null) s.apply((d) => ({ ...d, audioCurve: removePoint(d.audioCurve, point) }));
-    return;
-  }
+  if (s.selection?.kind === "audio") return removeSelectedPoint();
   const clipId = selectedClipId(s);
   if (!clipId) return;
   const index = s.draft.timeline.findIndex((c) => c.id === clipId);
@@ -112,6 +108,40 @@ export function removeSelection(): void {
   s.apply((d) => ({ ...d, timeline }));
   const neighbour = timeline[Math.min(index, timeline.length - 1)];
   editor().select(neighbour ? { kind: "clip", clipId: neighbour.id } : null);
+}
+
+/**
+ * ⌫ on the audio track: the selected curve point, if one is (the store forgets it when the curve changes). Not
+ * while the track is muted: the lane draws no curve then.
+ */
+export function removeSelectedPoint(): void {
+  const s = editor();
+  const point = s.selection?.kind === "audio" ? s.selection.point : null;
+  if (point === null || s.draft?.audioMuted) return;
+  s.apply((d) => ({ ...d, audioCurve: removePoint(d.audioCurve, point) }));
+}
+
+/** One curve gesture's result (a point added, moved or removed, the line moved), as one undo step. */
+export function setCurve(curve: VolumePoint[]): void {
+  editor().apply((d) => ({ ...d, audioCurve: curve }));
+}
+
+/** The quick buttons place a fade over one loop of the sequence as it is now. */
+export function applyFadeIn(): void {
+  const s = editor();
+  const total = editorTotal(s);
+  s.apply((d) => ({ ...d, audioCurve: fadeIn(d.audioCurve, total) }));
+}
+
+export function applyFadeOut(): void {
+  const s = editor();
+  const total = editorTotal(s);
+  s.apply((d) => ({ ...d, audioCurve: fadeOut(d.audioCurve, total) }));
+}
+
+/** Flat: back to 0 dB all through. */
+export function flattenCurve(): void {
+  editor().apply((d) => ({ ...d, audioCurve: flat() }));
 }
 
 /** ⌥M. */
@@ -139,6 +169,11 @@ export function toggleMusicMute(): void {
     if (!stitchHasMusicEdge(s.nodeId, wf.edges, wf.dimmedNodeIds, wf.nodes)) return;
   }
   s.apply((d) => ({ ...d, audioMuted: !d.audioMuted }));
+  // A muted track draws no curve, so no point of it stays selected
+  const after = editor();
+  if (after.draft?.audioMuted && after.selection?.kind === "audio" && after.selection.point !== null) {
+    after.select({ kind: "audio", point: null });
+  }
 }
 
 /** Clamped by trimClip; an unchanged value is no step. */

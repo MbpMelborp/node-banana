@@ -5,7 +5,6 @@ import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
 import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
-import { Kbd } from "@/components/ui/Kbd";
 import { MenuShortcut } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { clipName } from "@/lib/stitch/labels";
@@ -23,9 +22,11 @@ import {
   splitAtPlayhead,
   trimSelected,
 } from "./editorActions";
+import { AudioTrackRail } from "./AudioTrackRail";
+import { KeyHints, RailRow } from "./railParts";
 import { RAIL_BUTTON } from "./editorStyles";
 import { TimecodeField } from "./TimecodeField";
-import type { ClipMediaView } from "./useStitchEditorMedia";
+import type { ClipMediaView, MusicView } from "./useStitchEditorMedia";
 
 const LOOP_OPTIONS = [
   { value: "1", label: "1×" },
@@ -38,17 +39,6 @@ const TRIM_HINTS = [
   { key: "O", text: "Out at the playhead" },
   { key: "⇧", text: "Hold to trim without snapping" },
 ] as const;
-
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="h-7 flex items-center justify-between gap-3">
-      <span className="text-xs text-neutral-400">
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
 
 function RailButton({
   icon,
@@ -82,9 +72,19 @@ function RailButton({
 /**
  * The 280px rail beside the stage: the selected clip's name and source,
  * its trim as In and Out wells, its own sound, the clip actions with the
- * trim keys, and the loop count in the footer.
+ * trim keys, and the loop count in the footer. With the audio track
+ * selected it shows the track instead (AudioTrackRail).
  */
-export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView> }) {
+export function EditorRail({
+  media,
+  music,
+  total,
+}: {
+  media: ReadonlyMap<string, ClipMediaView>;
+  music: MusicView | null;
+  /** One loop of the sequence, seconds. */
+  total: number;
+}) {
   const draft = useStitchEditorStore((s) => s.draft);
   const empty = !draft || draft.timeline.length === 0;
   const selection = useStitchEditorStore((s) => s.selection);
@@ -98,22 +98,26 @@ export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView
   const view = clip ? media.get(clip.id) : undefined;
   const duration = view?.duration ?? null;
   const hasClip = clip !== null;
+  // The lane's rule (Timeline): the track shows only with music under a sequence with some length
+  const audio = selection?.kind === "audio" && music !== null && total > 0;
 
-  // Removing the last clip unmounts the focused Remove button: focus the dialog, not <body>, so Tab stays inside
+  // A swap of the rail's body (the last clip removed, the track for a clip or back) unmounts a focused control:
+  // focus the dialog, not <body>, so Tab stays inside
   useEffect(() => {
-    if (hasClip) return;
     const active = document.activeElement;
     if (active === null || active === document.body) railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus();
-  }, [hasClip]);
+  }, [hasClip, audio]);
 
   return (
     <aside
       ref={railRef}
-      aria-label="Clip"
+      aria-label={audio ? "Audio track" : "Clip"}
       className="w-[280px] shrink-0 flex flex-col border-l border-chrome-border/50 bg-editor-chrome"
     >
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-        {!clip ? (
+        {audio ? (
+          <AudioTrackRail music={music} total={total} />
+        ) : !clip ? (
           // An empty editor has nothing to select; the stage says why
           draft && draft.timeline.length > 0 && (
             <p className="px-5 pt-4 text-xs text-neutral-500">Select a clip to trim it.</p>
@@ -132,29 +136,32 @@ export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView
 
             <section className="flex flex-col gap-0.5 px-5">
               <DialogSectionHeader className="mb-1 leading-[13px]">Trim</DialogSectionHeader>
-              <Row label="In">
+              <RailRow label="In">
                 <TimecodeField
                   label="In"
                   value={clip.inSec}
                   disabled={duration === null}
                   onCommit={(inSec) => trimSelected({ inSec })}
                 />
-              </Row>
-              <Row label="Out">
+              </RailRow>
+              <RailRow label="Out">
                 <TimecodeField
                   label="Out"
                   value={duration !== null ? Math.min(clip.outSec ?? duration, duration) : (clip.outSec ?? 0)}
                   disabled={duration === null}
                   onCommit={(outSec) => trimSelected({ outSec })}
                 />
-              </Row>
-              <Row label="Length">
+              </RailRow>
+              <RailRow label="Length">
                 <span className="w-[88px] pr-2 text-right font-mono text-xs tabular-nums text-neutral-400">
                   {duration === null ? "–" : formatSeconds(clipLength(clip, duration))}
                 </span>
-              </Row>
+              </RailRow>
               {duration !== null && clip.inSec >= duration && (
                 <p className="text-[11px] text-neutral-500">The trim starts past the end of this video.</p>
+              )}
+              {duration !== null && duration > 0 && clip.inSec < duration && clipLength(clip, duration) === 0 && (
+                <p className="text-[11px] text-neutral-500">The trim is shorter than a frame, so this clip is left out.</p>
               )}
             </section>
 
@@ -162,9 +169,9 @@ export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView
 
             <section className="flex flex-col gap-0.5 px-5">
               <DialogSectionHeader className="mb-1 leading-[13px]">Audio</DialogSectionHeader>
-              <Row label="Clip audio">
+              <RailRow label="Clip audio">
                 <Switch label="Clip audio" checked={!clip.muted} onChange={(on) => setClipMuted(clip.id, !on)} />
-              </Row>
+              </RailRow>
               <div className="h-7 flex items-center gap-3">
                 <span className="w-[52px] shrink-0 text-xs text-neutral-400">Volume</span>
                 <div
@@ -215,17 +222,7 @@ export function EditorRail({ media }: { media: ReadonlyMap<string, ClipMediaView
                 danger
                 onClick={removeSelection}
               />
-              <div className="mt-4 flex flex-col gap-1.5 text-[11px] text-neutral-500">
-                {TRIM_HINTS.map((hint) => (
-                  <div key={hint.key} className="flex items-center gap-1.5">
-                    {/* One cap width, so the three texts start in one column (⇧ is wider than I and O) */}
-                    <Kbd size="sm" className="w-[22px] px-0">
-                      {hint.key}
-                    </Kbd>
-                    <span>{hint.text}</span>
-                  </div>
-                ))}
-              </div>
+              <KeyHints hints={TRIM_HINTS} />
             </div>
           </>
         )}

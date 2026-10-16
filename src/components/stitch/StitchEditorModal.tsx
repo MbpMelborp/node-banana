@@ -151,9 +151,9 @@ function StitchEditor() {
             />
             <EditorTransport total={total} empty={empty} zoom={zoom} />
           </div>
-          <EditorRail media={byClip} />
+          <EditorRail media={byClip} music={music} total={total} />
         </div>
-        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} />
+        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} />
       </div>
       <DiscardSheet />
     </Dialog>
