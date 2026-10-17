@@ -1,7 +1,10 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { cn } from "@/components/nodes/ui/cn";
 import { Kbd } from "@/components/ui/Kbd";
+import { MenuShortcut } from "@/components/ui/Menu";
+import { RAIL_BUTTON } from "./editorStyles";
 
 /** A rail row: its label at the left, its control at the right. */
 export function RailRow({ label, children }: { label: string; children: ReactNode }) {
@@ -28,5 +31,45 @@ export function KeyHints({ hints }: { hints: ReadonlyArray<{ key: string; text: 
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * A rail action. Busy keeps the button focusable (aria-disabled, not disabled, which would drop focus) and ignores
+ * its clicks until the work it started ends.
+ */
+export function RailButton({
+  icon,
+  label,
+  shortcut,
+  danger,
+  disabled,
+  busy,
+  title,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  shortcut?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  busy?: boolean;
+  title?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(RAIL_BUTTON, danger && "text-red-400", busy && "cursor-progress")}
+      disabled={disabled}
+      aria-busy={busy || undefined}
+      aria-disabled={busy || undefined}
+      title={title}
+      onClick={busy ? undefined : onClick}
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+      {shortcut && <MenuShortcut>{shortcut}</MenuShortcut>}
+    </button>
   );
 }

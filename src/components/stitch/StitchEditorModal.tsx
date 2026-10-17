@@ -72,7 +72,7 @@ function StitchEditor() {
 
   // What the encode will produce: the largest ready size, and the shared rate when the clips agree.
   // Read from the spans, so a clip the encode drops (nothing left after its trim) does not count.
-  const { size, fps, aspect } = useMemo(() => {
+  const { size, frameSize, fps, aspect } = useMemo(() => {
     let width = 0;
     let height = 0;
     const rates: (number | null)[] = [];
@@ -87,6 +87,8 @@ function StitchEditor() {
     const known = width > 0 && height > 0;
     return {
       size: known ? `${width} × ${height}` : null,
+      // Frame to canvas makes its PNG at this size, so the two never disagree
+      frameSize: known ? { width, height } : null,
       fps: formatFps(rates),
       aspect: known ? width / height : DEFAULT_ASPECT,
     };
@@ -189,7 +191,7 @@ function StitchEditor() {
             />
             <EditorTransport total={total} empty={empty} zoom={zoom} />
           </div>
-          <EditorRail media={byClip} music={music} total={total} />
+          <EditorRail media={byClip} music={music} total={total} spans={spans} frameSize={frameSize} />
         </div>
         <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} stacked={stacked} />
       </div>

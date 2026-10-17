@@ -9,14 +9,13 @@ import {
   AudioBufferSource,
   AudioBufferSink,
   BlobSource,
-  EncodedPacketSink,
   ALL_FORMATS,
   BufferTarget,
   Mp4OutputFormat,
   getFirstEncodableAudioCodec,
   canEncodeVideo,
 } from 'mediabunny';
-import type { AudioCodec, InputAudioTrack, InputVideoTrack, Rotation, VideoSample } from 'mediabunny';
+import type { AudioCodec, InputAudioTrack, Rotation, VideoSample } from 'mediabunny';
 import { createAvcEncodingConfig, AVC_LEVEL_4_0, AVC_LEVEL_5_1 } from '@/lib/video-encoding';
 import {
   DEFAULT_BITRATE,
@@ -25,12 +24,9 @@ import {
   FALLBACK_HEIGHT,
   BASELINE_PIXEL_LIMIT,
   ensureEvenDimension,
-  measureVideoTrackDuration,
-  readVideoTrackMetadata,
 } from '@/lib/video-probing';
 import {
   normalizeLoopCount,
-  normalizePlacement,
   normalizeStack,
   normalizeStitchArgs,
   type StitchAudioData,
@@ -38,12 +34,14 @@ import {
   type StitchMusicInput,
   type StitchOptions,
 } from '@/lib/stitch/engineTypes';
-import { FrameSlotter, planSequence, secToSlot, type PlannedClip } from '@/lib/stitch/sequencePlan';
-import { cadenceRate, clipFadeSamples, dissolveFrames, sharedCadence, soloPass, stackSequence, type Dissolve, type StackedPlan } from '@/lib/stitch/stack';
+import { FrameSlotter, secToSlot, type PlannedClip } from '@/lib/stitch/sequencePlan';
+import { clipFadeSamples, dissolveFrames, sharedCadence, soloPass, type Dissolve } from '@/lib/stitch/stack';
 import { createFrameBlender, encodeDissolve, type FrameBlender } from '@/lib/stitch/crossfadeFrames';
 import { encodePlacedLoop, openClipReader, type ClipReaderWindow, type PlacedEncodeState } from '@/lib/stitch/clipReader';
-import { buildEnvelope, gainPieces, LAYER_WARNING, SLOT_SEC, TIME_EPS, type StackEnvelope } from '@/lib/stitch/placement';
-import { maxVisibleLayers, pictureSegments, routePlacement, segmentsInLoop } from '@/lib/stitch/placedSchedule';
+import { gainPieces, LAYER_WARNING, SLOT_SEC, TIME_EPS } from '@/lib/stitch/placement';
+import { maxVisibleLayers, pictureSegments, segmentsInLoop } from '@/lib/stitch/placedSchedule';
+import { planPicture } from '@/lib/stitch/picturePlan';
+import { probeClip, type ClipProbe } from '@/lib/stitch/clipProbe';
 import {
   applyCrossfades,
   applyGainPieces,
@@ -61,74 +59,11 @@ import {
 
 const AUDIO_BITRATE = 128000;
 
-/** What the encode needs from one source. Its Input stays open until the stitch ends. */
-interface ClipProbe {
-  videoTrack: InputVideoTrack;
-  /** Null when the source has no sound this browser can decode. */
-  audioTrack: InputAudioTrack | null;
-  width: number;
-  height: number;
-  rotation: Rotation;
-  bitrate: number;
-  /** The video track's own duration; an audio tail past it does not count. */
-  videoDuration: number;
-  firstTimestamp: number;
-  /** Frames per second over the whole track; null when unknown. */
-  frameRate: number | null;
-}
-
 /** One clip of the sequence that has frames to give. */
 interface StitchUnit {
   plan: PlannedClip;
   clip: StitchClipInput;
   probe: ClipProbe;
-}
-
-/** Reads one source; null when it has no video track. */
-async function probeClip(input: Input): Promise<ClipProbe | null> {
-  const videoTrack = (await input.getVideoTracks())[0];
-  if (!videoTrack) return null;
-
-  const { width, height, rotation, bitrate, averagePacketRate } = await readVideoTrackMetadata(videoTrack);
-
-  // The same length the editor measures, so a clip lasts what the timeline shows
-  const videoDuration = await measureVideoTrackDuration(input, videoTrack, averagePacketRate);
-
-  let firstTimestamp = 0;
-  try {
-    firstTimestamp = await videoTrack.getFirstTimestamp();
-  } catch {
-    // Read from 0
-  }
-
-  let audioTrack: InputAudioTrack | null = null;
-  try {
-    const track = (await input.getAudioTracks())[0];
-    if (track && (await track.canDecode())) audioTrack = track;
-  } catch (e) {
-    console.warn('Failed to read the audio track', e);
-  }
-
-  const first = Number.isFinite(firstTimestamp) && firstTimestamp > 0 ? firstTimestamp : 0;
-  // The cadence places frames on first + j / rate: measure the rate from the frame intervals, not the packet span
-  let lastPacket: { timestamp: number; duration: number } | null = null;
-  try {
-    lastPacket = await new EncodedPacketSink(videoTrack).getPacket(Infinity, { metadataOnly: true });
-  } catch {
-    // The average as given
-  }
-
-  return {
-    videoTrack,
-    audioTrack,
-    width,
-    height,
-    rotation,
-    bitrate,
-    videoDuration,
-    firstTimestamp: first,
-    frameRate: cadenceRate(averagePacketRate, first, lastPacket),
-  };
 }
 
 const determineEncodeParameters = (
@@ -323,7 +258,7 @@ export async function stitchVideosAsync(
       }
 
       // A source without a video track counts 0 s, and planSequence drops it
-      const plan = planSequence(
+      const picture = planPicture(
         clips.map((clip) => {
           const probe = probes.get(clip.blob);
           return {
@@ -331,49 +266,18 @@ export async function stitchVideosAsync(
             outSec: clip.outSec,
             sourceDuration: probe?.videoDuration ?? 0,
             firstTimestamp: probe?.firstTimestamp,
+            source: clip.source,
+            startSec: clip.startSec,
           };
-        })
+        }),
+        options
       );
       const units: StitchUnit[] = [];
-      for (const planned of plan.clips) {
+      for (const planned of picture.planned) {
         const probe = probes.get(clips[planned.index].blob);
         if (probe) units.push({ plan: planned, clip: clips[planned.index], probe });
       }
-      const unitSources = units.map((unit) => unit.clip.source ?? `#${unit.plan.index}`);
-      const placement = normalizePlacement(options);
-      // A placed node whose clips sit where Track or a lined-up stack puts them encodes as that branch, byte for byte
-      const route = routePlacement(
-        units.map((unit) => unit.plan),
-        unitSources,
-        units.map((unit) => unit.clip.startSec),
-        placement,
-        stack
-      );
-      // Stacked only when some join really overlaps: a stack of cuts is Track, call for call
-      let sp: StackedPlan | null =
-        stack && route.kind === 'derived'
-          ? stackSequence(
-              units.map((unit) => unit.plan),
-              unitSources,
-              stack
-            )
-          : null;
-      if (sp && !sp.clips.some((clip) => clip.overlapIn > 0)) sp = null;
-      // Placed: unit k is the envelope's unit k (every planned clip is non-empty, and rows follow the clip order)
-      const env: StackEnvelope | null =
-        route.kind === 'placed'
-          ? buildEnvelope(
-              units.map((unit, k) => ({
-                start: route.starts[k],
-                length: unit.plan.length,
-                row: k,
-                source: unitSources[k],
-                inSec: unit.plan.inSec,
-              })),
-              placement?.crossfade ?? true
-            )
-          : null;
-      const loopLength = env ? env.loopLength : sp ? sp.loopLength : plan.loopLength;
+      const { sp, env, loopLength } = picture;
       if (units.length === 0 || loopLength <= 0) {
         throw new Error('Nothing to render: every clip is empty');
       }

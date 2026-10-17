@@ -395,7 +395,7 @@ async function readMetadata(src: string): Promise<Partial<StitchMediaInfo>> {
 /**
  * The engine's measurement: measureVideoTrackDuration over the full-track
  * packet rate from readVideoTrackMetadata, both shared with probeClip in
- * useStitchVideos. A URL is read without retries, so a source that cannot be
+ * clipProbe.ts. A URL is read without retries, so a source that cannot be
  * fetched fails at once and falls back to the element.
  */
 async function probeWithMediabunny(src: string, signal?: AbortSignal): Promise<MediaProbe> {

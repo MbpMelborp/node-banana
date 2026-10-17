@@ -31,8 +31,9 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   the quick curve buttons (Fade in, Fade out, Flat). With several clips
   selected the rail shows how many, and what applies to all of them: Clip
   audio (On or Off, with neither pressed while some are muted and some
-  not), Split at playhead, Reset trim and Remove. The footer holds Loop
-  sequence (1×, 2×, 3×).
+  not), Split at playhead, Reset trim and Remove. At the foot of the
+  rail, whatever is selected, sits **Frame to canvas** (see "Frame to
+  canvas"); under it the footer holds Loop sequence (1×, 2×, 3×).
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the Audio lane (the music's waveform and its
@@ -791,6 +792,35 @@ socket, so they never disconnect anything. **This workflow** means assets
 recorded under the current workflow's id only, not under an earlier copy of
 it.
 
+## Frame to canvas
+
+**Frame to canvas**, at the foot of the editor's right-hand rail, puts the
+picture under the playhead on the canvas as an image node. It is there
+whatever is selected.
+
+- It shows the clips the preview shows at the playhead, with the same
+  source frames and blend as Render: in Stacked, the same mix of the clips
+  that overlap there.
+- The image is the sequence's frame size (the largest clip, as the header
+  shows), as PNG.
+- The new image node goes to the right of the Edit Video node, selected.
+  More frames from the same node go in a column under it.
+- The frame is kept in the asset library as an edited image ("Frame grab"),
+  with the playhead time and the clips it shows. The workflow kept with it
+  is the canvas as it was, not the unsaved edit.
+- One undo on the canvas removes the node. The editor stays open, and its
+  own undo history is not touched.
+- While the preview plays, the button pauses it and takes the frame where it
+  stopped.
+- The button is off when there are no clips, while clips are still loading,
+  when no clip has a video yet, and when the playhead is in a gap (black).
+
+The frame is decoded from the clips' files, not copied from the preview, so
+it is exact even while the preview is still seeking. A clip whose site does
+not let the app read its file, or whose file is gone, cannot be copied: the
+message says which clip, and Render cannot use that clip either. A frame
+that takes more than 30 seconds to read is given up.
+
 ## Keys
 
 None of these fire while a timecode field has focus, apart from the Overlap
@@ -874,6 +904,13 @@ snaps its start only.
   videos at once.
 - **Mixed aspect ratios crop.** The encode keeps the old behaviour: the
   largest coded size, each clip scaled to cover it. The preview letterboxes.
+- Frame to canvas draws each clip as Render does where Render and the
+  preview differ: clips of another shape fill the frame (cropped) where the
+  preview letterboxes them, and each clip is drawn upright by its own
+  rotation, where Render keeps the first clip's rotation for all. Its source
+  frames and blend are Render's too, so at the very start of a lined-up
+  dissolve it can show the outgoing clip alone where the preview has begun
+  to fade the next one in.
 - Clip sound is resampled linearly, and a mix of clip sound and music above
   full scale is hard-clipped. So is clip sound where stacked clips overlap,
   which adds up: with Crossfade off every clip that plays is heard at its

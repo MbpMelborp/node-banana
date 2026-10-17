@@ -1,16 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
 import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
-import { MenuShortcut } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { clipIdsOf } from "@/lib/stitch/selection";
-import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
+import { clipLength, isTrimmed, type ClipSpan } from "@/lib/stitch/timeline";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { StitchTimelineClip } from "@/types";
 import {
@@ -30,8 +29,8 @@ import {
   trimSelected,
 } from "./editorActions";
 import { AudioTrackRail } from "./AudioTrackRail";
-import { KeyHints, RailRow } from "./railParts";
-import { RAIL_BUTTON } from "./editorStyles";
+import { FrameToCanvasButton } from "./FrameToCanvasButton";
+import { KeyHints, RailButton, RailRow } from "./railParts";
 import { TimecodeField } from "./TimecodeField";
 import type { ClipMediaView, MusicView } from "./useStitchEditorMedia";
 
@@ -76,55 +75,29 @@ function clipNamesLine(indices: readonly number[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-function RailButton({
-  icon,
-  label,
-  shortcut,
-  danger,
-  disabled,
-  title,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  shortcut?: string;
-  danger?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(RAIL_BUTTON, danger && "text-red-400")}
-      disabled={disabled}
-      title={title}
-      onClick={onClick}
-    >
-      {icon}
-      <span className="flex-1">{label}</span>
-      {shortcut && <MenuShortcut>{shortcut}</MenuShortcut>}
-    </button>
-  );
-}
-
 /**
  * The 280px rail beside the stage: the selected clip's name and source,
  * in Stacked where it starts on the timeline, its trim as In and Out
  * wells, its own sound, the clip actions with the trim keys, and the loop
  * count in the footer. With the audio track selected it shows the track
  * instead (AudioTrackRail), and with several clips what applies to all of
- * them (MultiClipRail).
+ * them (MultiClipRail). Frame to canvas sits under the body, whatever is
+ * selected, so it never moves when the body swaps or scrolls.
  */
 export function EditorRail({
   media,
   music,
   total,
+  spans,
+  frameSize,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   music: MusicView | null;
   /** One loop of the sequence, seconds. */
   total: number;
+  spans: readonly ClipSpan[];
+  /** The header's size; null while no clip is ready with one. */
+  frameSize: { width: number; height: number } | null;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
   const durations = useStitchEditorStore((s) => s.durations);
@@ -306,6 +279,10 @@ export function EditorRail({
             </div>
           </>
         )}
+      </div>
+
+      <div className="shrink-0 border-t border-chrome-border/50 px-5 py-2.5">
+        <FrameToCanvasButton media={media} spans={spans} frameSize={frameSize} />
       </div>
 
       {/* Inert with nothing to loop, like the transport beside it */}
