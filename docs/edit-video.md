@@ -1,21 +1,21 @@
-# Stitch editor
+# Edit video
 
-The Video Stitch node (`videoStitch`) joins the videos connected to its
+The Edit Video node (`videoStitch`, called Video Stitch before) joins the videos connected to its
 `video-*` sockets into one clip, with the music on its `audio` socket under
 them. The editor is where that sequence is finished: the clips' order, a
 trim for each clip, each clip's own sound, the music's volume over time,
 and the layout (Track, clips end to end, or Stacked, one row per clip,
-placed anywhere). What the editor shows is what Stitch encodes.
+placed anywhere). What the editor shows is what Render encodes.
 
 ## What the editor does
 
 It opens from **Expand** in the node's floating header (beside Run and the
-menu) or from **Open editor** on the card, beside Stitch. It is a
+menu) or from **Open editor** on the card, beside Render. It is a
 near-full-screen `Dialog`, 24 px from every edge of the window like the
 annotation editor (so nothing in it sits in the desktop app's drag region),
 with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
-- **Header**: "Stitch", then "N clips · length · W × H · F fps" (the frame
+- **Header**: "Edit video", then "N clips · length · W × H · F fps" (the frame
   rate only when the clips agree; in Stacked the length runs to the end of
   the clip that ends last); Undo, Redo, Cancel, Save and Done.
 - **Stage**: the sequence previewed at the playhead, letterboxed. In
@@ -27,7 +27,7 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 - **Rail**: the selected clip's name and source, in Stacked its Start (where
   it starts on the timeline), Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
-  node, Remove from stitch; with the audio track selected, Track sound and
+  node, Remove clip; with the audio track selected, Track sound and
   the quick curve buttons (Fade in, Fade out, Flat). The footer holds Loop
   sequence (1×, 2×, 3×).
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
@@ -40,7 +40,7 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
 Edits stay inside the editor, with their own undo history (100 steps), until
 **Done**. Done writes the node in one `updateNodeData` call and does not
-encode; Stitch, or a workflow run, does that. **Save** (⌘S) writes the
+encode; Render, or a workflow run, does that. **Save** (⌘S) writes the
 node the same way and saves the workflow, but keeps the editor open: what
 it wrote becomes the editor's starting point, so Cancel then asks only
 about edits made since, and the undo history stays. Save is off while
@@ -90,7 +90,7 @@ records live in module caches in the browser (`src/lib/stitch/mediaInfo.ts`,
 `waveformCache.ts`, `assetInfo.ts`), never in node data or saved workflows.
 
 **A node without `timeline` is "legacy"**: the editor's Done has never run
-on it. That includes every workflow saved before the editor and every Stitch
+on it. That includes every workflow saved before the editor and every Edit Video
 node created since (`createDefaultNodeData` adds no `timeline`, so the
 canvas, the connection menus, the agent and templates all make legacy nodes).
 Such a node is read through `migrateStitchTimeline`: one clip per entry of
@@ -110,7 +110,7 @@ writes the field, and only when the editor's layout differs from what the
 stored value reads as: a trim does not add it to a node that has none, and
 a stored value with keys this build does not know survives a Done that left
 the layout alone. A build that does not know the field ignores it (its
-stitch plays the clips end to end) and keeps it when it saves.
+render plays the clips end to end) and keeps it when it saves.
 
 **`startSec` places a clip in Stacked.** It is where the trimmed clip
 starts on the timeline, in sequence seconds. A clip without it is laid out
@@ -126,7 +126,7 @@ Done writes it with the rest of the timeline, in the same single
 paste and the agent's edits keep it. A build from before clips could be
 placed drops it on its next card write.
 
-**Clips are muted under music on a legacy node.** The stitch has always
+**Clips are muted under music on a legacy node.** The node has always
 replaced the clips' sound with the music when music was connected. To keep
 that, the migration sets `muted: true` on every clip when music is
 connected, and `muted: false` when it is not. The editor and the card's mute
@@ -138,8 +138,8 @@ badges show it. Two readings of "music is connected" exist:
   disabled Switch outputs and dimmed sources do not).
   The badges therefore do not flip while the music's source runs.
 - The executor reads it from output (`getConnectedInputs(...).audio[0]`),
-  as the stitch always did. In a workflow run the music's source runs first,
-  so the two agree. Stitch on its own (the card's button) before a music
+  as the node always did. In a workflow run the music's source runs first,
+  so the two agree. Render on its own (the card's button) before a music
   generator has produced anything, or with music that will not decode, has
   no music: a legacy node then plays its clips' own sound although the
   badges show them muted, and a node the editor wrote, whose clips are
@@ -167,7 +167,7 @@ The node's sockets keep driving the sequence:
   reconnect, removing a node, the agent's edits), so one Undo brings back
   the connection with its clips and trims.
 - Removing the last clip of a connection disconnects it: the card's ✕, and
-  "Remove from stitch" in the editor (on Done). Removing one piece of a split
+  "Remove clip" in the editor (on Done). Removing one piece of a split
   clip removes only that piece. On Done, the disconnection and the data
   write are one canvas undo step.
 - The card, the editor and the executor all read the node through
@@ -175,7 +175,7 @@ The node's sockets keep driving the sequence:
   match against the live connections. None of them relies on the card having
   run, so a node at low detail, pasted, or restored by Undo reads the same.
 - Paste rewrites the timeline's edge ids to the pasted connections, so a
-  copied Stitch keeps its trims.
+  copied Edit Video node keeps its trims.
 - The editor works on a snapshot taken when it opens. On Done it matches the
   snapshot against the connections once more, so a video connected while it
   was open is added.
@@ -204,13 +204,13 @@ agree. A library clip
 whose asset is gone, or a file mediabunny cannot open, stops the run instead
 (see Library clips and Limits).
 
-Stitch needs at least two clips with a video ("Need at least 2 video clips to
-stitch"); the two pieces of a split clip count as two. The check runs before
+Render needs at least two clips with a video ("Need at least 2 video clips to
+render"); the two pieces of a split clip count as two. The check runs before
 the files are read, so a clip trimmed past its end or a file with no video
 track still counts, and the output can then hold a single clip.
 
 A Router or Switch connection can carry several videos. A legacy node
-stitches every video on it, in order, as it always did. Once the editor has
+renders every video on it, in order, as it always did. Once the editor has
 written a timeline, that connection's clip plays its first video only.
 
 ## Stacked
@@ -220,7 +220,7 @@ sequence is laid out. Track, the default, is the single Clips row: each
 clip starts where the one before it ends. Stacked gives each clip its own
 row, like a layer in After Effects, and a clip can start at any time. It is
 a setting of the node, not a view: a switch is one step in the editor's
-undo history, Done writes it, and Stitch encodes it. Switching back to
+undo history, Done writes it, and Render encodes it. Switching back to
 Track keeps Overlap, Crossfade and every clip's place for the next switch;
 Track itself never overlaps. The switch is inert while the editor has no
 clips, and any switch (Undo and Redo included) pauses the preview. Cancel's
@@ -608,9 +608,9 @@ any video. When clip sound and music play together, or clips' sound
 overlaps in Stacked, the sum is hard-clipped to full scale; one source on
 its own passes through as decoded.
 
-### "Stitches as before"
+### "Renders as before"
 
-A node the editor never wrote stitches the same clips in the order the card
+A node the editor never wrote renders the same clips in the order the card
 shows (see Card reorders below), whole, at the same size and codecs, repeated `loopCount` times, with the
 same sound rule: the clips' own sound without music, the music alone with
 it. It is not bit-identical, by design:
@@ -621,9 +621,9 @@ it. It is not bit-identical, by design:
   length ends, so every later join comes `t0 + 1/fps − 1/60` s later than
   before, where t0 is the video track's first timestamp (usually 0): 25 ms
   per join at 24 fps, 17 ms at 30 fps, none at 60 fps. It stays with its
-  sound. When the stitch's sound is at least as long as its video, the sound
+  sound. When the render's sound is at least as long as its video, the sound
   sets the file's length: about the same as before, or slightly shorter
-  where a clip's sound or container ran past its video. A stitch with no
+  where a clip's sound or container ran past its video. A render with no
   sound, or with sound shorter than the video (music is now padded with
   silence, and so is clip sound that ends before its video), gets longer by
   that amount per join.
@@ -650,7 +650,7 @@ it. It is not bit-identical, by design:
 - Each source is probed once.
 
 **Card reorders now count.** Dragging clips into a new order on the card
-always changed the filmstrip, but the stitch kept connection order. It now
+always changed the filmstrip, but the render kept connection order. It now
 follows the card, on legacy nodes too.
 
 **Stacked changes none of this.** A node in Track, a stacked node whose
@@ -818,7 +818,7 @@ snaps its start only.
   about 250 MB at 1080p"). When a decoder fails while 3 or more clips blend,
   the run stops with "Could not decode 3 clips at once at 0:12. Move some
   apart or turn Crossfade off." (the time is where that blend starts in the
-  stitched video). With Crossfade off only the clip in front has its picture
+  rendered video). With Crossfade off only the clip in front has its picture
   decoded.
 - A placed blend writes a frame whenever one of its clips' frames changes:
   up to 60 a second for clips at different rates, so each frame gets fewer
@@ -840,10 +840,10 @@ snaps its start only.
   no time, and they stay there once it loads. Undo of that edit puts the
   stack back.
 - A file mediabunny cannot open is shown at the `<video>` element's
-  duration (an unreadable slot if that is not finite either), but Stitch
+  duration (an unreadable slot if that is not finite either), but Render
   reads files with mediabunny and stops on it. A file mediabunny opens with
   no video track is an unreadable slot and is left out of the encode.
-- Stitch needs at least two clips with a video. A clip trimmed past its end
+- Render needs at least two clips with a video. A clip trimmed past its end
   or a file with no video track still counts, so the output can hold a
   single clip.
 - A Done made while a workflow runs cannot be undone on the canvas unless it

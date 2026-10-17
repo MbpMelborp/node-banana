@@ -87,7 +87,7 @@ function openEditor(onRender?: ProfilerOnRenderCallback) {
     openStitchEditor("stitch");
     editor().setZoom(PPS);
   });
-  return screen.getByRole("dialog", { name: "Edit stitch" });
+  return screen.getByRole("dialog", { name: "Edit video" });
 }
 
 const lane = () => screen.getByRole("listbox", { name: "Clips" });
@@ -176,19 +176,19 @@ describe("Timeline", () => {
     expect(editor().past).toHaveLength(0);
   });
 
-  it("opens the clip menu on a right-click, and Remove from stitch removes the clip", () => {
+  it("opens the clip menu on a right-click, and Remove clip removes the clip", () => {
     seed();
     openEditor();
     fireEvent.contextMenu(clipBox("Clip 2"), { clientX: 400, clientY: 500 });
     const menu = screen.getByRole("menu", { name: "Clip 2" });
     expect(within(rail()).getByText("2 / 2")).toBeInTheDocument();
-    for (const name of ["Mute clip audio", "Split at playhead", "Reset trim", "Reveal source node", "Remove from stitch"]) {
+    for (const name of ["Mute clip audio", "Split at playhead", "Reset trim", "Reveal source node", "Remove clip"]) {
       expect(within(menu).getByRole("menuitem", { name: new RegExp(name) })).toBeInTheDocument();
     }
     expect(within(menu).getByText("⌥M")).toBeInTheDocument();
     // Untrimmed: nothing to reset
     expect(within(menu).getByRole("menuitem", { name: /Reset trim/ })).toBeDisabled();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: /Remove from stitch/ }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Remove clip/ }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["clip:eA"]);
     expect(within(lane()).queryByRole("option", { name: "Clip 2" })).toBeNull();
@@ -438,7 +438,7 @@ describe("Timeline", () => {
   it("lets a focused In/Out field go when a handle is pressed, so Escape cancels the drag", () => {
     seed();
     openEditor();
-    const dialog = screen.getByRole("dialog", { name: "Edit stitch" });
+    const dialog = screen.getByRole("dialog", { name: "Edit video" });
     const out = within(rail()).getByRole("textbox", { name: "Out" });
     act(() => out.focus());
     expect(document.activeElement).toBe(out);
@@ -476,7 +476,7 @@ describe("Timeline", () => {
   it("closes the clip menu on any press outside it, and an item acts on the menu's own clip", () => {
     seed();
     openEditor();
-    const dialog = screen.getByRole("dialog", { name: "Edit stitch" });
+    const dialog = screen.getByRole("dialog", { name: "Edit video" });
     fireEvent.contextMenu(clipBox("Clip 2"), { clientX: 400, clientY: 500 });
     expect(screen.getByRole("menu", { name: "Clip 2" })).toBeInTheDocument();
     // A handle press cancels its pointerdown (no mousedown follows): the menu still closes
@@ -488,14 +488,14 @@ describe("Timeline", () => {
 
     fireEvent.contextMenu(clipBox("Clip 2"), { clientX: 400, clientY: 500 });
     act(() => editor().select({ kind: "clip", clipId: "clip:eA" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Remove from stitch/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Remove clip/ }));
     expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["clip:eA"]);
   });
 
   it("returns focus to the panel when the menu closes on Escape", () => {
     seed();
     openEditor();
-    const dialog = screen.getByRole("dialog", { name: "Edit stitch" });
+    const dialog = screen.getByRole("dialog", { name: "Edit video" });
     fireEvent.contextMenu(clipBox("Clip 1"), { clientX: 100, clientY: 500 });
     expect(document.activeElement).toHaveAttribute("role", "menuitem");
     press("Escape");

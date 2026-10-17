@@ -285,7 +285,7 @@ describe("useStitchVideos", () => {
     });
 
     it("throws when given empty array", async () => {
-      await expect(stitchVideosAsync([])).rejects.toThrow("No videos to stitch");
+      await expect(stitchVideosAsync([])).rejects.toThrow("No videos to render");
     });
 
     it("reports progress updates", async () => {
@@ -709,7 +709,7 @@ describe("useStitchVideos", () => {
 
       it("refuses a sequence in which every clip is empty", async () => {
         const a = source("a", { duration: 2 });
-        await expect(stitchVideosAsync([clip(a, { inSec: 3 })])).rejects.toThrow("Nothing to stitch: every clip is empty");
+        await expect(stitchVideosAsync([clip(a, { inSec: 3 })])).rejects.toThrow("Nothing to render: every clip is empty");
       });
 
       describe("stacked", () => {

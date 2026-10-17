@@ -38,7 +38,7 @@ export interface ClipMediaView {
   sourceNodeId: string | null;
   /**
    * Label bar: the model ("Veo 3.1"), else the node's kind ("Ease curve"). A library clip: the model it was made
-   * with, else what made it ("Stitched"), else "Library".
+   * with, else what made it ("Video edit"), else "Library".
    */
   sourceLabel: string;
   /** "Generate video · Veo 3.1 · 5.00 s"; "Library · Veo 3.1 · 5.00 s" for a library clip. */

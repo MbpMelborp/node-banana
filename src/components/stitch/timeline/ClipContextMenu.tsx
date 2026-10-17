@@ -211,7 +211,7 @@ function OpenMenu({
         {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !isTrimmed(clip) })}
         <MenuDivider role="separator" className="my-1" />
         {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, { disabled: !canRevealSource(clip, view) })}
-        {item("Remove from stitch", <Trash {...ICON} />, removeSelection, { shortcut: "⌫", danger: true })}
+        {item("Remove clip", <Trash {...ICON} />, removeSelection, { shortcut: "⌫", danger: true })}
       </MenuList>
     </MenuSurface>
   );

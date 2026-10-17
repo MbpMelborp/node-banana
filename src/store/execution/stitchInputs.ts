@@ -35,7 +35,7 @@ interface PendingClip extends Omit<StitchClipInput, "blob"> {
   media: ClipMedia;
 }
 
-const TOO_FEW_CLIPS = "Need at least 2 video clips to stitch";
+const TOO_FEW_CLIPS = "Need at least 2 video clips to render";
 
 /** Everything a stitch needs, in timeline order. Throws before any fetch when fewer than 2 clips can play. */
 export async function gatherStitchInputs(

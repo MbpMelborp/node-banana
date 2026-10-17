@@ -380,7 +380,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
             <button
               onClick={() => handleRemoveClip(clip)}
               className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-600/80 hover:bg-red-500 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-              title={isLastPiece ? "Disconnect" : "Remove from stitch"}
+              title={isLastPiece ? "Disconnect" : "Remove clip"}
             >
               <X size={10} strokeWidth={2} />
             </button>
@@ -444,7 +444,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
               onClick={handleStitch}
               disabled={clipCount < 2 || nodeData.status === "loading" || isRunning}
             >
-              {nodeData.status === "loading" ? "Processing..." : "Stitch"}
+              {nodeData.status === "loading" ? "Rendering…" : "Render"}
             </PanelButton>
           </FieldRow>
         </ControlsCard>
@@ -493,7 +493,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
           </button>
         </>
       ) : (
-        <EmptyState message={clipCount === 0 ? "Connect videos to stitch" : "Stitch to preview"} />
+        <EmptyState message={clipCount === 0 ? "Connect videos to edit" : "Render to preview"} />
       )}
 
       {encoderReady && nodeData.status === "loading" && (

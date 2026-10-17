@@ -210,11 +210,11 @@ describe("executeVideoStitch", () => {
       }),
     });
 
-    await expect(executeVideoStitch(ctx)).rejects.toThrow("Need at least 2 video clips to stitch");
+    await expect(executeVideoStitch(ctx)).rejects.toThrow("Need at least 2 video clips to render");
 
     expect(ctx.updateNodeData).toHaveBeenCalledWith("vs-1", expect.objectContaining({
       status: "error",
-      error: "Need at least 2 video clips to stitch",
+      error: "Need at least 2 video clips to render",
     }));
   });
 

@@ -260,7 +260,7 @@ export function EditorRail({
               />
               <RailButton
                 icon={<Trash size={14} strokeWidth={1.75} />}
-                label="Remove from stitch"
+                label="Remove clip"
                 shortcut="⌫"
                 danger
                 onClick={removeSelection}

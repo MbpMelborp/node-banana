@@ -191,8 +191,8 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       const reader = new FileReader();
       outputVideo = await new Promise<string>((resolve, reject) => {
         reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error("FileReader error while reading stitched video"));
-        reader.onabort = () => reject(new Error("FileReader aborted while reading stitched video"));
+        reader.onerror = () => reject(new Error("FileReader error while reading the rendered video"));
+        reader.onabort = () => reject(new Error("FileReader aborted while reading the rendered video"));
         reader.readAsDataURL(outputBlob);
       });
     }
@@ -225,7 +225,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
       throw err;
     }
-    const errorMessage = err instanceof Error ? err.message : "Stitch failed";
+    const errorMessage = err instanceof Error ? err.message : "Render failed";
     updateNodeData(node.id, {
       status: "error",
       error: errorMessage,

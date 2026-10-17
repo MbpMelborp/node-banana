@@ -102,7 +102,7 @@ function openEditor() {
   act(() => {
     openStitchEditor("stitch");
   });
-  return screen.getByRole("dialog", { name: "Edit stitch" });
+  return screen.getByRole("dialog", { name: "Edit video" });
 }
 
 const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =>
@@ -256,7 +256,7 @@ describe("StitchEditorModal", () => {
     fireEvent.click(save);
     expect(write).toHaveBeenCalledTimes(1);
     expect(stitchData().timeline![0].muted).toBe(true);
-    expect(screen.getByRole("dialog", { name: "Edit stitch" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
     expect(save).toBeDisabled();
     // The workflow file is the floating menu's to write: Save asked for it
     expect(useSaveRequestStore.getState().request).toMatchObject({ reason: "button" });
@@ -287,7 +287,7 @@ describe("StitchEditorModal", () => {
 
     fireEvent.click(within(sheet).getByRole("button", { name: "Keep editing" }));
     expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Edit stitch" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -310,7 +310,7 @@ describe("StitchEditorModal", () => {
     expect(screen.getByRole("dialog", { name: "Discard changes?" })).toBeInTheDocument();
     press(document.body, "Escape");
     expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Edit stitch" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
     expect(editor().isOpen).toBe(true);
   });
 
@@ -544,7 +544,7 @@ describe("StitchEditorModal", () => {
   it("lets every clip be removed, and Done then disconnects their videos", () => {
     seed();
     openEditor();
-    const remove = () => fireEvent.click(screen.getByRole("button", { name: /Remove from stitch/ }));
+    const remove = () => fireEvent.click(screen.getByRole("button", { name: /Remove clip/ }));
     remove();
     remove();
     expect(screen.getByText("0 clips")).toBeInTheDocument();
@@ -578,7 +578,7 @@ describe("StitchEditorModal", () => {
     expect(rail.getByText("Library · Veo 3.1 · 5.00 s")).toBeInTheDocument();
     // The second clip names what made it
     act(() => editor().select({ kind: "clip", clipId: "lib2" }));
-    expect(rail.getByText("Library · Stitched · 3.00 s")).toBeInTheDocument();
+    expect(rail.getByText("Library · Video edit · 3.00 s")).toBeInTheDocument();
     toggleClipAudio();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(stitchData().timeline).toEqual([

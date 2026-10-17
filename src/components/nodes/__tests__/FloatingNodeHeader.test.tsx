@@ -136,7 +136,7 @@ describe("FloatingNodeHeader", () => {
       type: "videoStitch",
       onBrowse: undefined,
       canFallback: false,
-      title: "Video Stitch",
+      title: "Edit Video",
     });
     expect(screen.getByRole("button", { name: "Expand editor" }).closest(".opacity-0")).not.toBeNull();
     hoveredNodeId = "n1";
@@ -145,7 +145,7 @@ describe("FloatingNodeHeader", () => {
         <FloatingNodeHeader
           {...base}
           type="videoStitch"
-          title="Video Stitch"
+          title="Edit Video"
           onExpandNode={onExpandNode}
           onRunNode={onRunNode}
         />

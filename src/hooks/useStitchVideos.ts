@@ -294,10 +294,10 @@ export async function stitchVideosAsync(
   let outputStarted = false;
 
   try {
-    updateProgress('processing', 'Initializing stitching...', 0);
+    updateProgress('processing', 'Starting the render...', 0);
 
     if (clips.length === 0) {
-      throw new Error('No videos to stitch');
+      throw new Error('No videos to render');
     }
 
     try {
@@ -375,7 +375,7 @@ export async function stitchVideosAsync(
           : null;
       const loopLength = env ? env.loopLength : sp ? sp.loopLength : plan.loopLength;
       if (units.length === 0 || loopLength <= 0) {
-        throw new Error('Nothing to stitch: every clip is empty');
+        throw new Error('Nothing to render: every clip is empty');
       }
       totalVideos = units.length * loopCount;
 
@@ -856,7 +856,7 @@ export async function stitchVideosAsync(
       // Flush encoder before finalizing container
       await encoderSource.close();
       videoSource = null; // Already closed, prevent double-close in finally
-      updateProgress('processing', 'Finalizing stitched video...', 97);
+      updateProgress('processing', 'Finishing the video...', 97);
 
       // Finalize output
       await muxer.finalize();
@@ -872,7 +872,7 @@ export async function stitchVideosAsync(
 
       updateProgress(
         'complete',
-        `Successfully stitched ${totalVideos} videos into ${(outputBlob.size / 1024 / 1024).toFixed(2)}MB file`,
+        `Rendered ${totalVideos} videos into ${(outputBlob.size / 1024 / 1024).toFixed(2)}MB file`,
         100
       );
 
@@ -963,7 +963,7 @@ export const useStitchVideos = (): UseStitchVideosReturn => {
 
         return result;
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Video stitching failed';
+        const errorMessage = error instanceof Error ? error.message : 'Render failed';
         setProgress({
           status: 'error',
           message: errorMessage,

@@ -397,7 +397,7 @@ export type StitchClipSource =
   | { kind: "edge"; edgeId: string }
   | { kind: "asset"; assetId: string };
 
-/** One clip of the Video Stitch sequence. See docs/stitch-editor.md. */
+/** One clip of the Edit Video sequence. See docs/edit-video.md. */
 export interface StitchTimelineClip {
   id: string;                 // Stable within the node; generated once
   source: StitchClipSource;
@@ -415,7 +415,7 @@ export interface VolumePoint {
   gain: number;
 }
 
-/** How a Stitch sequence is laid out. See docs/stitch-editor.md. */
+/** How a Stitch sequence is laid out. See docs/edit-video.md. */
 export interface StitchSequenceLayout {
   /**
    * "track": one row, clips end to end. "stacked": one row per clip, placed anywhere in time; a clip never placed starts
@@ -432,7 +432,7 @@ export interface StitchSequenceLayout {
 }
 
 /**
- * Video Stitch node - concatenates multiple videos into a single output
+ * Edit Video node (videoStitch) - joins videos on a timeline into a single output
  */
 export interface VideoStitchNodeData extends BaseNodeData {
   clips: VideoStitchClip[];       // Ordered clip sequence for filmstrip
@@ -445,7 +445,7 @@ export interface VideoStitchNodeData extends BaseNodeData {
   audioMuted?: boolean;
   /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
   sequenceLayout?: StitchSequenceLayout;
-  outputVideo: string | null;     // Stitched video blob URL or data URL
+  outputVideo: string | null;     // Rendered video blob URL or data URL
   loopCount: 1 | 2 | 3;          // How many times to repeat the clip sequence (1 = no loop)
   status: NodeStatus;
   error: string | null;

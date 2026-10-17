@@ -160,7 +160,7 @@ function StitchEditor() {
       closeOnBackdrop={false}
       closeOnEscape={false}
       stopWheel={false}
-      label="Edit stitch"
+      label="Edit video"
       panelProps={EDITOR_PANEL_PROPS}
       className="w-[calc(100vw-48px)] max-w-none h-[calc(100vh-48px)] max-h-none bg-editor-chrome"
     >

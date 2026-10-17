@@ -9,7 +9,7 @@ import { formatTimecode } from "@/lib/stitch/timecode";
 import { TEXT_GHOST } from "./editorStyles";
 
 /**
- * The editor's 48px header: the mark, "Stitch" and what the sequence is
+ * The editor's 48px header: the mark, "Edit video" and what the sequence is
  * (clips, length, size, rate); Undo and Redo over the editor's own history;
  * Cancel, Save (keeps the editor open) and Done. Nothing clickable sits in the top 12px of the left
  * 60px, where the desktop's window controls draw over the panel's corner.
@@ -46,7 +46,7 @@ export function EditorHeader({
     <div className="h-12 shrink-0 flex items-center justify-between gap-4 px-3 border-b border-chrome-border bg-editor-chrome">
       <div className="flex min-w-0 items-center gap-2.5 pl-2">
         <Film size={16} strokeWidth={1.75} className="shrink-0 text-neutral-400" aria-hidden="true" />
-        <span className="text-[13px] font-semibold text-neutral-100">Stitch</span>
+        <span className="text-[13px] font-semibold text-neutral-100">Edit video</span>
         <MenuDivider variant="bar" className="mx-0.5 shrink-0" aria-hidden="true" />
         <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-neutral-500">
           <span>{`${clipCount} clip${clipCount === 1 ? "" : "s"}`}</span>

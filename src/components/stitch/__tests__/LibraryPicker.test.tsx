@@ -598,7 +598,7 @@ describe("LibraryPicker over the editor", () => {
     act(() => {
       openStitchEditor("stitch");
     });
-    const editorDialog = screen.getByRole("dialog", { name: "Edit stitch" });
+    const editorDialog = screen.getByRole("dialog", { name: "Edit video" });
     // The Clips track's + (the slot after the last clip has the same name)
     const [headerAdd, slotAdd] = within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" });
     expect(slotAdd).toBe(screen.getByTestId("stitch-add-slot"));
@@ -618,7 +618,7 @@ describe("LibraryPicker over the editor", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add from library" })).toBeNull());
     expect(editor().isOpen).toBe(true);
     expect(editor().discardOpen).toBe(false);
-    expect(screen.getByRole("dialog", { name: "Edit stitch" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
     // Focus goes back to the + that opened it
     await waitFor(() => expect(document.activeElement).toBe(headerAdd));
 

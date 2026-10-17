@@ -151,7 +151,7 @@ describe("gatherStitchInputs", () => {
     const edges = [edge("e1", "g1", "s", "video-0"), edge("e2", "g2", "s", "video-1")];
     const stitch = stitchNode();
     await expect(gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never)).rejects.toThrow(
-      "Need at least 2 video clips to stitch",
+      "Need at least 2 video clips to render",
     );
     expect(mockFetch).not.toHaveBeenCalled();
   });

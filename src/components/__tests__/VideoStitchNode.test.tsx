@@ -225,7 +225,7 @@ describe("VideoStitchNode", () => {
   describe("Empty State", () => {
     it("should show placeholder when no clips connected", () => {
       render(<VideoStitchNode {...createNodeProps()} />);
-      expect(screen.getByText("Connect videos to stitch")).toBeInTheDocument();
+      expect(screen.getByText("Connect videos to edit")).toBeInTheDocument();
     });
   });
 
@@ -536,17 +536,17 @@ describe("VideoStitchNode", () => {
       );
       expect(screen.getByText("2 clips")).toBeInTheDocument();
       expect(screen.getByText("0:04")).toBeInTheDocument();
-      expect(screen.getByText("Stitch")).not.toBeDisabled();
+      expect(screen.getByText("Render")).not.toBeDisabled();
     });
 
-    it("shows a library clip's tile, and Stitch to preview with no socket in use", () => {
+    it("shows a library clip's tile, and Render to preview with no socket in use", () => {
       __setMediaInfoForTests("a:alibrary00001", { duration: 3 });
       renderCard(
         { edges: [], nodes: [] },
         { clipOrder: [], timeline: [createClip({ kind: "asset", assetId: "alibrary00001" }, { id: "lib" })] }
       );
       expect(document.querySelector('[data-clip-id="lib"]')).toHaveTextContent("3s");
-      expect(screen.getByText("Stitch to preview")).toBeInTheDocument();
+      expect(screen.getByText("Render to preview")).toBeInTheDocument();
       expect(screen.queryByText("No clips connected")).toBeNull();
     });
 
@@ -556,7 +556,7 @@ describe("VideoStitchNode", () => {
       const other = createClip({ kind: "edge", edgeId: "e2" }, { id: "other" });
       renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [left, right, other] });
       const remove = document.querySelector('[data-clip-id="right"] button') as HTMLElement;
-      expect(remove).toHaveAttribute("title", "Remove from stitch");
+      expect(remove).toHaveAttribute("title", "Remove clip");
       fireEvent.click(remove);
       expect(mockRemoveEdge).not.toHaveBeenCalled();
       expect(mockUpdateNodeData).toHaveBeenCalledWith(STITCH_ID, { timeline: [left, other], clipOrder: ["e1", "e2"] });
@@ -585,9 +585,9 @@ describe("VideoStitchNode", () => {
       expect(handles).toEqual(["video-0", "video-1", "video-2", "video-3", "video-4"]);
     });
 
-    it("has exactly one Stitch button", () => {
+    it("has exactly one Render button", () => {
       renderCard(twoClips, { clipOrder: ["e1", "e2"] });
-      expect(screen.getAllByText("Stitch")).toHaveLength(1);
+      expect(screen.getAllByText("Render")).toHaveLength(1);
     });
 
     it("sums one loop in the summary and shows the loop apart", () => {
@@ -693,7 +693,7 @@ describe("VideoStitchNode", () => {
       const b = createClip({ kind: "edge", edgeId: "e2" }, { id: "b" });
       renderCard(twoClips, { clipOrder: ["e1", "e2"], timeline: [a, lib, b] });
       const remove = document.querySelector('[data-clip-id="lib"] button') as HTMLElement;
-      expect(remove).toHaveAttribute("title", "Remove from stitch");
+      expect(remove).toHaveAttribute("title", "Remove clip");
       fireEvent.click(remove);
       expect(mockRemoveEdge).not.toHaveBeenCalled();
       expect(mockUpdateNodeData).toHaveBeenCalledWith(STITCH_ID, { timeline: [a, b], clipOrder: ["e1", "e2"] });
@@ -764,10 +764,10 @@ describe("VideoStitchNode", () => {
       );
       expect(document.querySelectorAll("[data-clip-id]")).toHaveLength(2);
       expect(screen.getAllByTitle("From the library")).toHaveLength(2);
-      expect(screen.getByText("Stitch to preview")).toBeInTheDocument();
+      expect(screen.getByText("Render to preview")).toBeInTheDocument();
       expect(screen.queryByText("No clips connected")).toBeNull();
-      expect(screen.queryByText("Connect videos to stitch")).toBeNull();
-      const stitch = screen.getByText("Stitch");
+      expect(screen.queryByText("Connect videos to edit")).toBeNull();
+      const stitch = screen.getByText("Render");
       expect(stitch).not.toBeDisabled();
       fireEvent.click(stitch);
       expect(mockRegenerateNode).toHaveBeenCalledWith(STITCH_ID);
@@ -898,8 +898,8 @@ describe("VideoStitchNode", () => {
     });
   });
 
-  describe("Stitch Button", () => {
-    it("should call regenerateNode when stitch button clicked", () => {
+  describe("Render Button", () => {
+    it("should call regenerateNode when Render is clicked", () => {
       setMockStoreState({
         edges: [
           { id: "e1", source: "gen1", target: "test-stitch-1", targetHandle: "video-0", data: { createdAt: 1 } },
@@ -913,13 +913,13 @@ describe("VideoStitchNode", () => {
 
       render(<VideoStitchNode {...createNodeProps({ clipOrder: ["e1", "e2"] })} />);
 
-      const stitchButton = screen.getByText("Stitch");
+      const stitchButton = screen.getByText("Render");
       expect(stitchButton).not.toBeDisabled();
       fireEvent.click(stitchButton);
       expect(mockRegenerateNode).toHaveBeenCalledWith("test-stitch-1");
     });
 
-    it("should disable stitch button when less than 2 clips", () => {
+    it("should disable Render when less than 2 clips", () => {
       setMockStoreState({
         edges: [
           { id: "e1", source: "gen1", target: "test-stitch-1", targetHandle: "video-0", data: { createdAt: 1 } },
@@ -930,7 +930,7 @@ describe("VideoStitchNode", () => {
       });
 
       render(<VideoStitchNode {...createNodeProps({ clipOrder: ["e1"] })} />);
-      expect(screen.getByText("Stitch")).toBeDisabled();
+      expect(screen.getByText("Render")).toBeDisabled();
     });
   });
 });
