@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { openStitchEditor } from "../openStitchEditor";
-import { commitStitchEdit } from "../commitStitchEdit";
+import { commitStitchEdit, saveStitchEdit } from "../commitStitchEdit";
 import { createClip, removeClip, splitClipAt, trimClip, type SourceKey } from "@/lib/stitch/timeline";
 import type { StitchSequenceLayout, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
@@ -185,5 +185,50 @@ describe("commitStitchEdit and the sequence layout", () => {
     trimA();
     expect(commitStitchEdit()).toBe("written");
     expect(data().sequenceLayout).toEqual({ mode: "track", overlapSec: 2, crossfade: false });
+  });
+});
+
+describe("saveStitchEdit", () => {
+  const trimA = (inSec: number) =>
+    editor().apply((d) => ({ ...d, timeline: trimClip(d.timeline, "clip:eA", DURATIONS, { inSec }) }));
+
+  it("writes the draft as Done does and keeps the editor open, no longer dirty, with its undo history", () => {
+    trimA(1);
+    expect(saveStitchEdit()).toBe("saved");
+    expect(data().timeline).toEqual([expect.objectContaining({ id: "clip:eA", inSec: 1 }), expect.objectContaining({ id: "clip:eB" })]);
+    expect(editor().isOpen).toBe(true);
+    expect(selectIsDirty(editor())).toBe(false);
+    expect(editor().past).toHaveLength(1);
+  });
+
+  it("writes nothing when nothing changed since it opened or since the last save", () => {
+    const before = wf().nodes;
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(wf().nodes).toBe(before);
+    expect("timeline" in data()).toBe(false);
+    trimA(1);
+    saveStitchEdit();
+    const saved = wf().nodes;
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(wf().nodes).toBe(saved);
+  });
+
+  it("counts later edits from the save: Done writes them, and undoing back to the save leaves nothing to write", () => {
+    trimA(1);
+    saveStitchEdit();
+    trimA(2);
+    expect(selectIsDirty(editor())).toBe(true);
+    editor().undo();
+    expect(selectIsDirty(editor())).toBe(false);
+    editor().redo();
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().timeline[0]).toMatchObject({ inSec: 2 });
+  });
+
+  it("closes, writing nothing, when the node is gone", () => {
+    trimA(1);
+    wf().onNodesChange([{ type: "remove", id: "stitch" }]);
+    expect(saveStitchEdit()).toBe("gone");
+    expect(editor().isOpen).toBe(false);
   });
 });

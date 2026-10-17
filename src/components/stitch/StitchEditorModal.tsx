@@ -2,6 +2,7 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type HTMLAttributes } from "react";
 import { Dialog } from "@/components/ui/Dialog";
+import { requestSave } from "@/store/saveRequestStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
@@ -41,7 +42,7 @@ const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLD
  * the node's Expand or Open editor. On the Dialog primitive inset 24px, like
  * the annotation editor, so it sits under the desktop's drag regions rather
  * than in them. Everything it edits is the editor store's draft until Done
- * writes it to the node in one step.
+ * (or Save, which keeps it open) writes it to the node in one step.
  */
 export function StitchEditorModal() {
   const isOpen = useStitchEditorStore((s) => s.isOpen);
@@ -170,6 +171,8 @@ function StitchEditor() {
           size={size}
           fps={fps}
           onCancel={requestClose}
+          // The editor's lifecycle answers every save request by writing the edit first
+          onSave={() => requestSave("button")}
           onDone={commitStitchEdit}
         />
         <div className="flex min-h-0 flex-1">

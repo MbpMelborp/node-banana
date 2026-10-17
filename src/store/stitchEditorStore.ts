@@ -26,7 +26,7 @@ export interface StitchEditorState {
   isOpen: boolean;
   nodeId: string | null;
   canvasGeneration: number | null;
-  /** As opened; the editor is dirty while the draft differs from it. */
+  /** As opened or last saved; the editor is dirty while the draft differs from it. */
   initial: StitchDraft | null;
   draft: StitchDraft | null;
   past: StitchDraft[];
@@ -54,6 +54,8 @@ export interface StitchEditorState {
   open(payload: { nodeId: string; draft: StitchDraft; canvasGeneration: number }): void;
   /** Resets all but snap and soundOn. Asks nothing: the UI confirms first. */
   close(): void;
+  /** Save wrote this to the node: Cancel and the discard sheet count from it now. The undo history stays. */
+  markSaved(saved: StitchDraft): void;
   apply(recipe: (draft: StitchDraft) => StitchDraft, opts?: { gestureKey?: string }): void;
   endGesture(): void;
   undo(): void;
@@ -149,6 +151,8 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     },
 
     close: () => set(closedSession()),
+
+    markSaved: (saved) => set({ initial: saved }),
 
     apply: (recipe, opts) => {
       const { draft, gestureKey, past, selection } = get();

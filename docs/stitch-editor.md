@@ -17,7 +17,7 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
 - **Header**: "Stitch", then "N clips · length · W × H · F fps" (the frame
   rate only when the clips agree; in Stacked the length runs to the end of
-  the clip that ends last); Undo, Redo, Cancel and Done.
+  the clip that ends last); Undo, Redo, Cancel, Save and Done.
 - **Stage**: the sequence previewed at the playhead, letterboxed. In
   Stacked it blends or covers clips where they overlap, by row, and shows
   black in a gap. While you drag a clip, the preview keeps showing the
@@ -40,9 +40,15 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
 Edits stay inside the editor, with their own undo history (100 steps), until
 **Done**. Done writes the node in one `updateNodeData` call and does not
-encode; Stitch, or a workflow run, does that. **Cancel** or Escape with
-changes asks first ("Discard changes?", which says what would be lost);
-without changes it closes. If the canvas is replaced while the editor is
+encode; Stitch, or a workflow run, does that. **Save** (⌘S) writes the
+node the same way and saves the workflow, but keeps the editor open: what
+it wrote becomes the editor's starting point, so Cancel then asks only
+about edits made since, and the undo history stays. Save is off while
+there is nothing new to write. Every save of the workflow while the editor
+is open (⌘S, File › Save) takes the open edit with it; a workflow never
+saved asks for its name and folder first, above the editor. **Cancel** or
+Escape with changes asks first ("Discard changes?", which says what would
+be lost); without changes it closes. If the canvas is replaced while the editor is
 open (a load, a clear, a tab switch) or the node is deleted, the editor
 closes and writes nothing.
 
@@ -743,7 +749,7 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | ⇧ while dragging a clip or an edge | No snapping (in Stacked, pressing or releasing ⇧ while the pointer rests takes effect at once) |
 | ⌥ while dragging the curve | Move the whole line |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
-| ⌘S | Saves the workflow, as everywhere |
+| ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open |
 
 In Track, ⌥ with an arrow, [ and ] do nothing, and ⌥← never reaches the
 browser (on Windows it would go Back). Keys the canvas would act on (⌘Z,

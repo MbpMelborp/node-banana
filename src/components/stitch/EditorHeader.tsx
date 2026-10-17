@@ -4,14 +4,14 @@ import { Film } from "lucide-react";
 import { DialogButton } from "@/components/ui/Dialog";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { MenuDivider } from "@/components/ui/Menu";
-import { selectCanRedo, selectCanUndo, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { selectCanRedo, selectCanUndo, selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { TEXT_GHOST } from "./editorStyles";
 
 /**
  * The editor's 48px header: the mark, "Stitch" and what the sequence is
  * (clips, length, size, rate); Undo and Redo over the editor's own history;
- * Cancel and Done. Nothing clickable sits in the top 12px of the left
+ * Cancel, Save (keeps the editor open) and Done. Nothing clickable sits in the top 12px of the left
  * 60px, where the desktop's window controls draw over the panel's corner.
  */
 export function EditorHeader({
@@ -20,6 +20,7 @@ export function EditorHeader({
   size,
   fps,
   onCancel,
+  onSave,
   onDone,
 }: {
   clipCount: number;
@@ -29,10 +30,12 @@ export function EditorHeader({
   /** "24 fps", or null (mixed or unknown rates). */
   fps: string | null;
   onCancel: () => void;
+  onSave: () => void;
   onDone: () => void;
 }) {
   const canUndo = useStitchEditorStore(selectCanUndo);
   const canRedo = useStitchEditorStore(selectCanRedo);
+  const dirty = useStitchEditorStore(selectIsDirty);
   const initialClipCount = useStitchEditorStore((s) => s.initial?.timeline.length ?? 0);
   const undo = useStitchEditorStore((s) => s.undo);
   const redo = useStitchEditorStore((s) => s.redo);
@@ -79,6 +82,17 @@ export function EditorHeader({
         <DialogButton variant="ghost" className="focus-visible:ring-offset-editor-chrome" onClick={onCancel}>
           Cancel
         </DialogButton>
+        <div className="group relative flex">
+          <DialogButton
+            variant="ghost"
+            className="focus-visible:ring-offset-editor-chrome"
+            disabled={!dirty}
+            onClick={onSave}
+          >
+            Save
+          </DialogButton>
+          <Tooltip label="Save and keep editing" shortcut="⌘S" placement="bottom" />
+        </div>
         <DialogButton
           variant="primary"
           className="focus-visible:ring-offset-editor-chrome"

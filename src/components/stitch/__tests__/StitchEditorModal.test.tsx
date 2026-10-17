@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { requestSave, useSaveRequestStore } from "@/store/saveRequestStore";
 import {
   __resetMediaInfoForTests,
   __setMediaExtractorForTests,
@@ -240,6 +241,40 @@ describe("StitchEditorModal", () => {
       clipOrder: ["eA", "eB"],
     });
     expect(stitchData().timeline![0].muted).toBe(true);
+  });
+
+  it("saves with Save and stays open: one write, Save off again, and Cancel then closes without asking", () => {
+    seed();
+    openEditor();
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    toggleClipAudio();
+    expect(save).toBeEnabled();
+    // A spy an earlier test left on the store's state rides into this one's state: count from here
+    const write = vi.spyOn(wf(), "updateNodeData");
+    write.mockClear();
+    fireEvent.click(save);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(stitchData().timeline![0].muted).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Edit stitch" })).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    // The workflow file is the floating menu's to write: Save asked for it
+    expect(useSaveRequestStore.getState().request).toMatchObject({ reason: "button" });
+    act(() => useSaveRequestStore.getState().consumeRequest());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();
+    expect(editor().isOpen).toBe(false);
+    expect(stitchData().timeline![0].muted).toBe(true);
+  });
+
+  it("puts the open edit in the node when the workflow is saved some other way (⌘S, File › Save)", () => {
+    seed();
+    openEditor();
+    toggleClipAudio();
+    act(() => requestSave("shortcut"));
+    expect(stitchData().timeline![0].muted).toBe(true);
+    expect(editor().isOpen).toBe(true);
+    act(() => useSaveRequestStore.getState().consumeRequest());
   });
 
   it("asks before Cancel drops changes; Keep editing goes back, Discard leaves the node as it was", () => {
