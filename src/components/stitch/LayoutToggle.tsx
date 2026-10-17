@@ -41,13 +41,13 @@ const OPTIONS: ReadonlyArray<{ mode: Mode; label: string; tip: string }> = [
 ];
 
 /**
- * Track | Stacked, in the editor's header before Undo. A switch changes the
- * timeline's height, and the timeline grows up from the panel's bottom. The
- * header's right-hand group is anchored right and keeps its width, so a
- * switch never moves the toggle: the other option stays where it was.
- * A node setting, so a switch is one undo step and Done writes it; the
- * editor pauses on any switch (the modal's own effect). Inert, like the
- * rail's footer, while the draft has no clips.
+ * Track | Stacked, at the transport's right end after Fit. A switch changes
+ * the timeline's height, and the timeline grows up from the panel's bottom,
+ * so with three or more clips the transport, and the toggle in it, moves up
+ * or down by the difference. A node setting, so a switch is one undo step
+ * and Done writes it; the editor pauses on any switch (the modal's own
+ * effect). Inert, like the rest of the transport, while the draft has no
+ * clips.
  */
 export function LayoutToggle() {
   const mode = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode ?? "track");
@@ -57,12 +57,12 @@ export function LayoutToggle() {
       role="group"
       aria-label="Timeline layout"
       inert={empty}
-      className={cn("flex h-7 shrink-0 gap-0.5 rounded-lg bg-editor-well px-0.5", empty && "opacity-50")}
+      className="flex h-7 shrink-0 gap-0.5 rounded-lg bg-editor-well px-0.5"
     >
       {OPTIONS.map((option) => {
         const pressed = option.mode === mode;
         return (
-          // The header's tooltips, below like Undo's and Redo's: the wrapper is the well's height, so they line up
+          // The tooltips open up, into the stage: the wrapper is the well's height, so they line up
           <div key={option.mode} className="group relative flex py-0.5">
             <button
               type="button"
@@ -82,7 +82,7 @@ export function LayoutToggle() {
             >
               <LayoutGlyph mode={option.mode} />
             </button>
-            <Tooltip label={option.tip} placement="bottom" />
+            <Tooltip label={option.tip} placement="top" />
           </div>
         );
       })}

@@ -17,20 +17,20 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
 - **Header**: "Stitch", then "N clips · length · W × H · F fps" (the frame
   rate only when the clips agree; in Stacked the length runs to the end of
-  the clip that ends last); Track | Stacked, Undo, Redo, Cancel and Done.
+  the clip that ends last); Undo, Redo, Cancel and Done.
 - **Stage**: the sequence previewed at the playhead, letterboxed. In
   Stacked it blends or covers clips where they overlap, by row, and shows
   black in a gap. While you drag a clip, the preview keeps showing the
   clips where they were; it updates when you let go.
 - **Transport**: go to start, play, go to end, the timecode, Snap, Sound,
-  the zoom slider and Fit.
+  Crossfade (in Stacked), the zoom slider, Fit and Track | Stacked.
 - **Rail**: the selected clip's name and source, in Stacked its Start (where
   it starts on the timeline), Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
   node, Remove from stitch; with the audio track selected, Track sound and
   the quick curve buttons (Fade in, Fade out, Flat). The footer holds Loop
   sequence (1×, 2×, 3×); in Stacked, a line saying what Overlap and
-  Crossfade do, then Overlap and Crossfade, sit above it.
+  Crossfade do, then Overlap, sit above it.
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the Audio lane (the music's waveform and its
@@ -210,21 +210,21 @@ written a timeline, that connection's clip plays its first video only.
 
 ## Stacked
 
-**Track | Stacked**, in the header before Undo, sets how the sequence is
-laid out. Track, the default, is the single Clips row: each clip starts
-where the one before it ends. Stacked gives each clip its own row, like a
-layer in After Effects, and a clip can start at any time. It is a setting
-of the node, not a view: a switch is one step in the editor's undo history,
-Done writes it, and Stitch encodes it. Switching back to Track keeps
-Overlap, Crossfade and every clip's place for the next switch; Track itself
-never overlaps. The switch is inert while the editor has no clips, and any
-switch (Undo and Redo included) pauses the preview. Cancel's discard sheet
-names what would be lost ("The switch to Stacked and the overlap will be
-lost.", "A trim and a moved clip will be lost.", or "lining up the clips"
-after Line up). The switch changes the timeline's height, and the timeline
-grows up from the bottom of the editor; the header's right side keeps its
-width, so the toggle never moves: to switch back, the other option is
-where it was.
+**Track | Stacked**, at the transport's right end after Fit, sets how the
+sequence is laid out. Track, the default, is the single Clips row: each
+clip starts where the one before it ends. Stacked gives each clip its own
+row, like a layer in After Effects, and a clip can start at any time. It is
+a setting of the node, not a view: a switch is one step in the editor's
+undo history, Done writes it, and Stitch encodes it. Switching back to
+Track keeps Overlap, Crossfade and every clip's place for the next switch;
+Track itself never overlaps. The switch is inert while the editor has no
+clips, and any switch (Undo and Redo included) pauses the preview. Cancel's
+discard sheet names what would be lost ("The switch to Stacked and the
+overlap will be lost.", "A trim and a moved clip will be lost.", or "lining
+up the clips" after Line up). The switch changes the timeline's height, and
+the timeline grows up from the bottom of the editor, so with three or more
+clips the transport, and the toggle in it, moves up or down when the layout
+switches.
 
 **Lined up and placed.** A Stacked node starts **lined up**: no clip has a
 start of its own, and each starts a set time (Overlap) before the clip
@@ -259,9 +259,10 @@ rows above it, with the same limits as Line up (see Each join's overlap),
 so several new clips chain. It has no start of its own until the next edit
 that places, which writes the one it shows.
 
-In Stacked the rail's footer adds, above Loop sequence, a line saying what
-Overlap and Crossfade do, then one row with the two of them. The row sits
-on Loop sequence, so it stays put when the line grows or shrinks: the rail
+In Stacked the transport shows Crossfade beside Sound, and the rail's
+footer adds, above Loop sequence, a line saying what Overlap and Crossfade
+do, then the Overlap row. The row sits on Loop sequence, so it stays put
+when the line grows or shrinks: the rail
 above gives or takes the room, and scrolls. In a window too short for the
 whole line it is cut a text line at a time, with its full text on hover.
 A press in the rail can commit a
@@ -277,8 +278,8 @@ the line keeps its height, so nothing under the pointer moves.
   moves nothing: it then sets where new clips go, how Line up spaces the
   clips, and the overlap snap target. The label's title says so: "How far
   each clip overlaps the one above when lined up, and where new clips go."
-- **Crossfade**: on by default.
-- The line above them says what they do to this sequence. Lined up: "Each
+- **Crossfade**: on by default; a toggle in the transport, beside Sound.
+- The line above Overlap says what they do to this sequence. Lined up: "Each
   join blends over 1.0 s." (Crossfade on), "Each clip starts 1.0 s early,
   under the clip above. Both are heard." (off), or "Clips play end to end,
   as in Track." (no join overlaps). Then, when they apply: a join that gets

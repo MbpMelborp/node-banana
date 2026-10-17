@@ -970,14 +970,14 @@ describe("Timeline, Stacked", () => {
     const stacked = within(toggle()).getByRole("button", { name: "Stacked" });
     expect(track).toHaveAttribute("aria-pressed", "true");
     expect(stacked).toHaveAttribute("aria-pressed", "false");
-    // The header's own tooltips, as Undo and Redo beside them have, not the system's
+    // The app's own tooltips, as the editor's other controls have, not the system's
     expect(track).not.toHaveAttribute("title");
     expect(within(track.parentElement!).getByText("Track: clips end to end on one row")).toHaveAttribute("aria-hidden", "true");
     expect(within(stacked.parentElement!).getByText("Stacked: one row per clip, placed anywhere in time")).toHaveAttribute(
       "aria-hidden",
       "true",
     );
-    // The timeline grows and shrinks with the layout, so the toggle is not in it (it is in the editor's header)
+    // Not in the timeline: it is at the transport's right end
     expect(timelineEl().contains(toggle())).toBe(false);
     // Track keeps its Clips header, under an empty corner
     const clipsHeader = screen.getByTestId("stitch-clip-count").parentElement!;

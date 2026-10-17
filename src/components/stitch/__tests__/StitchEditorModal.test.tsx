@@ -705,27 +705,26 @@ describe("StitchEditorModal", () => {
     // Clip 1 is 5 s and clip 2 is 4 s: 9 s end to end, 8 s overlapping by 1 s
     const totalShown = (text: string) => screen.getAllByText(text).length > 0;
     const overlapField = () => screen.getByRole("textbox", { name: "Overlap" }) as HTMLInputElement;
-    // The header's toggle, as a user switches
+    // The transport's toggle, as a user switches
     const layoutButton = (name: "Track" | "Stacked") =>
       within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name });
     const stack = () => fireEvent.click(layoutButton("Stacked"));
 
-    it("puts Track | Stacked in the header's right-hand group, before Undo and a divider", () => {
+    it("puts Track | Stacked at the transport's right end, after Fit and a divider", () => {
       seed();
       openEditor();
       const toggle = screen.getByRole("group", { name: "Timeline layout" });
-      const undo = screen.getByRole("button", { name: "Undo" });
-      const done = screen.getByRole("button", { name: "Done" });
-      // One group with Undo and Done: the header's right side, which keeps its width
-      const group = toggle.parentElement!;
-      expect(group.contains(undo)).toBe(true);
-      expect(group.contains(done)).toBe(true);
-      expect(group.firstElementChild).toBe(toggle);
-      const divider = toggle.nextElementSibling!;
+      const fit = screen.getByRole("button", { name: "Fit" });
+      // The transport's last control, after a divider and Fit
+      const transport = toggle.parentElement!;
+      expect(transport.contains(fit)).toBe(true);
+      expect(transport.lastElementChild).toBe(toggle);
+      const divider = toggle.previousElementSibling!;
       expect(divider).toHaveAttribute("aria-hidden", "true");
       expect(divider).toHaveClass("w-px");
-      expect(divider.nextElementSibling!.contains(undo)).toBe(true);
-      // Not in the timeline, whose height a switch changes
+      expect(divider.previousElementSibling).toBe(fit);
+      // Not in the header, nor in the timeline
+      expect(screen.getByRole("button", { name: "Undo" }).parentElement!.parentElement!.contains(toggle)).toBe(false);
       expect(screen.getByRole("listbox", { name: "Clips" }).closest(".bg-editor-lanes")!.contains(toggle)).toBe(false);
       // It switches from there, and back
       stack();
@@ -737,19 +736,20 @@ describe("StitchEditorModal", () => {
       expect(editor().past).toHaveLength(2);
     });
 
-    it("switches to Stacked from the header, which shows Overlap, Crossfade and what they do; Track hides them", () => {
+    it("switches to Stacked from the transport, which shows Overlap, Crossfade and what they do; Track hides them", () => {
       seed();
       openEditor();
       expect(screen.queryByRole("textbox", { name: "Overlap" })).toBeNull();
-      expect(screen.queryByRole("switch", { name: "Crossfade" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Crossfade" })).toBeNull();
       stack();
       expect(overlapField().value).toBe("1.0 s");
-      expect(screen.getByRole("switch", { name: "Crossfade" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("button", { name: "Crossfade" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByText("Each join blends over 1.0 s.")).toBeInTheDocument();
       expect(screen.getByText("Loop sequence")).toBeInTheDocument();
       expect(totalShown("0:08.00")).toBe(true);
-      fireEvent.click(screen.getByRole("switch", { name: "Crossfade" }));
+      fireEvent.click(screen.getByRole("button", { name: "Crossfade" }));
       expect(editor().draft!.sequenceLayout.crossfade).toBe(false);
+      expect(screen.getByRole("button", { name: "Crossfade" })).toHaveAttribute("aria-pressed", "false");
       expect(screen.getByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeInTheDocument();
       expect(layoutButton("Stacked")).toHaveAttribute("aria-pressed", "true");
       fireEvent.click(layoutButton("Track"));
@@ -759,14 +759,16 @@ describe("StitchEditorModal", () => {
       expect(totalShown("0:09.00")).toBe(true);
     });
 
-    it("keeps Crossfade under the pointer: the summary sits above the Overlap and Crossfade row, which rests on Loop", () => {
+    it("puts Crossfade in the transport beside Sound, and the summary above the Overlap row, which rests on Loop", () => {
       seed();
       openEditor();
       stack();
-      const crossfade = screen.getByRole("switch", { name: "Crossfade" });
-      const row = crossfade.closest(".h-9")!;
+      const crossfade = screen.getByRole("button", { name: "Crossfade" });
+      // In the transport, after Sound: out of the rail, so nothing the summary says can move it
+      expect(crossfade.previousElementSibling).toBe(screen.getByRole("button", { name: "Sound" }));
+      expect(screen.getByRole("complementary", { name: "Clip" }).contains(crossfade)).toBe(false);
+      const row = overlapField().closest(".h-9")!;
       const footer = row.parentElement!;
-      expect(row.contains(overlapField())).toBe(true);
       // The line first, the row last, then Loop sequence: what the line says changes the height above the row only
       const line = screen.getByText("Each join blends over 1.0 s.");
       expect(footer.firstElementChild).toBe(line);
@@ -777,7 +779,7 @@ describe("StitchEditorModal", () => {
       expect(screen.queryByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeNull();
       // In a short window the line is cut before the row moves; its full text is on hover
       expect(line).toHaveAttribute("title", "Each join blends over 1.0 s.");
-      // Pressing the switch blurs a typed Overlap, which commits: the line follows at once, with no hold, and the row
+      // Pressing Crossfade blurs a typed Overlap, which commits: the line follows at once, with no hold, and the row
       // stays the footer's last element
       fireEvent.pointerDown(crossfade);
       act(() => setOverlapSec(3));
@@ -792,7 +794,7 @@ describe("StitchEditorModal", () => {
       expect(footer.lastElementChild).toBe(row);
     });
 
-    it("leaves the header's toggle inert while there are no clips", () => {
+    it("leaves the transport's toggle inert while there are no clips", () => {
       seed({ clips: false });
       openEditor();
       expect(screen.getByRole("group", { name: "Timeline layout", hidden: true })).toHaveAttribute("inert");
@@ -903,11 +905,11 @@ describe("StitchEditorModal", () => {
       expect(dialog.contains(document.activeElement)).toBe(true);
     });
 
-    it("keeps focus in the dialog when Track takes away the focused Crossfade switch", () => {
+    it("keeps focus in the dialog when Track takes away the focused Crossfade button", () => {
       seed();
       const dialog = openEditor();
       stack();
-      const crossfade = screen.getByRole("switch", { name: "Crossfade" });
+      const crossfade = screen.getByRole("button", { name: "Crossfade" });
       act(() => crossfade.focus());
       fireEvent.click(crossfade);
       pressLayout("Track");

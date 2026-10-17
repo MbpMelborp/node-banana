@@ -85,7 +85,7 @@ function LineUpButton() {
  * header naming it and its source; the headers scroll with the rows and are
  * handles to drag a clip up or down (outside the listbox, as an option holds
  * no controls). A right press on one opens its clip's menu. Line up sits in
- * Stacked's corner, left of the +. Track | Stacked is in the editor's header
+ * Stacked's corner, left of the +. Track | Stacked is in the transport
  * (LayoutToggle).
  */
 export function TrackHeaders({

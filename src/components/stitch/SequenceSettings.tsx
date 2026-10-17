@@ -2,13 +2,12 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/components/nodes/ui/cn";
-import { Switch } from "@/components/ui/Controls";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { placedSummary } from "@/lib/stitch/placement";
 import { OVERLAP_STEP_SEC, stackSummary } from "@/lib/stitch/stack";
 import { clipLength, isPlaced, layoutSpans, sourceKey, spansEnvelope } from "@/lib/stitch/timeline";
 import { formatSeconds, parseSeconds } from "@/lib/stitch/timecode";
-import { setCrossfade, setOverlapSec } from "./editorActions";
+import { setOverlapSec } from "./editorActions";
 import { SECONDS_WELL } from "./editorStyles";
 import { TimecodeField } from "./TimecodeField";
 
@@ -27,9 +26,9 @@ function nudgeOverlap(direction: 1 | -1, big: boolean): number | null {
 
 /**
  * The rail footer's Stacked block, above Loop sequence: a live line saying
- * what Overlap and Crossfade do to this sequence (stackSummary; once a clip
- * is placed, placedSummary), then the row with the Overlap well and the
- * Crossfade switch. Inert, like the loop row under it, while the draft has
+ * what Overlap and Crossfade (in the transport) do to this sequence
+ * (stackSummary; once a clip is placed, placedSummary), then the row with
+ * the Overlap well. Inert, like the loop row under it, while the draft has
  * no clips.
  *
  * The line sits above the row so that nothing the line says can move the
@@ -118,7 +117,7 @@ export function SequenceSettings({
       >
         {summary}
       </p>
-      <div className="h-9 shrink-0 flex items-center justify-between">
+      <div className="h-9 shrink-0 flex items-center">
         {/* Leaving the well ends a run of ↑/↓ nudges: the next one is a new undo step */}
         <div className="flex items-center gap-2" onBlur={endGesture}>
           <span
@@ -136,10 +135,6 @@ export function SequenceSettings({
             onCommit={(seconds) => setOverlapSec(seconds)}
             onNudge={nudgeOverlap}
           />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-neutral-400">Crossfade</span>
-          <Switch label="Crossfade" checked={layout.crossfade} onChange={setCrossfade} />
         </div>
       </div>
     </div>

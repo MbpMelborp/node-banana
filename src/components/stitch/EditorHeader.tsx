@@ -7,15 +7,12 @@ import { MenuDivider } from "@/components/ui/Menu";
 import { selectCanRedo, selectCanUndo, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { TEXT_GHOST } from "./editorStyles";
-import { LayoutToggle } from "./LayoutToggle";
 
 /**
  * The editor's 48px header: the mark, "Stitch" and what the sequence is
- * (clips, length, size, rate); Track | Stacked; Undo and Redo over the
- * editor's own history; Cancel and Done. The right-hand group keeps its
- * width whatever the editor shows, so its controls never move. Nothing
- * clickable sits in the top 12px of the left 60px, where the desktop's
- * window controls draw over the panel's corner.
+ * (clips, length, size, rate); Undo and Redo over the editor's own history;
+ * Cancel and Done. Nothing clickable sits in the top 12px of the left
+ * 60px, where the desktop's window controls draw over the panel's corner.
  */
 export function EditorHeader({
   clipCount,
@@ -65,8 +62,6 @@ export function EditorHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <LayoutToggle />
-        <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
         {/* The tooltips open downward, into the stage, inside the panel */}
         <div className="group relative flex">
           <button type="button" className={TEXT_GHOST} disabled={!canUndo} onClick={undo}>

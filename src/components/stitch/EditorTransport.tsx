@@ -1,15 +1,16 @@
 "use client";
 
 import type { CSSProperties, MouseEvent } from "react";
-import { Magnet, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
+import { Blend, Magnet, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuDivider } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
-import { goToEnd, goToStart, togglePlay } from "./editorActions";
+import { goToEnd, goToStart, setCrossfade, togglePlay } from "./editorActions";
 import { isTypingTarget } from "./editorKeys";
 import { ICON_BUTTON, TEXT_GHOST, TOGGLE_ON } from "./editorStyles";
+import { LayoutToggle } from "./LayoutToggle";
 import type { TimelineZoom } from "./timeline/useTimelineZoom";
 
 /**
@@ -28,8 +29,9 @@ const keepFocus = (event: MouseEvent<HTMLElement>) => {
 
 /**
  * The 44px transport under the stage: start, play, end, the timecode, then
- * Snap, preview Sound and the timeline's zoom (out, the slider, in, Fit).
- * Inert while the editor has no clips.
+ * Snap, preview Sound, Crossfade (Stacked only), the timeline's zoom (out,
+ * the slider, in, Fit) and Track | Stacked. Inert while the editor has no
+ * clips.
  */
 export function EditorTransport({
   total,
@@ -46,6 +48,8 @@ export function EditorTransport({
   const soundOn = useStitchEditorStore((s) => s.soundOn);
   const setSnap = useStitchEditorStore((s) => s.setSnap);
   const setSoundOn = useStitchEditorStore((s) => s.setSoundOn);
+  const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
+  const crossfade = useStitchEditorStore((s) => s.draft?.sequenceLayout.crossfade ?? false);
 
   return (
     <div
@@ -101,6 +105,19 @@ export function EditorTransport({
       >
         {soundOn ? <Volume2 size={16} strokeWidth={1.75} /> : <VolumeX size={16} strokeWidth={1.75} />}
       </button>
+      {/* The row's right end is fixed, so showing this moves Snap and Sound left, never the zoom or the toggle */}
+      {stacked && (
+        <button
+          type="button"
+          aria-pressed={crossfade}
+          className={cn(TEXT_GHOST, crossfade && TOGGLE_ON)}
+          onMouseDown={keepFocus}
+          onClick={() => setCrossfade(!crossfade)}
+        >
+          <Blend size={14} strokeWidth={1.75} />
+          Crossfade
+        </button>
+      )}
       <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
       {/* -mx-[7px]: each takes its 14px icon's room in the row, as drawn, and keeps the 28px hit area */}
       <button
@@ -137,6 +154,8 @@ export function EditorTransport({
       <button type="button" className={cn(TEXT_GHOST, "ml-1")} onMouseDown={keepFocus} onClick={zoom.fit}>
         Fit
       </button>
+      <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
+      <LayoutToggle />
     </div>
   );
 }
