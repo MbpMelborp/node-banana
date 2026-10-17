@@ -28,7 +28,13 @@ export type EditorKeyAction =
   | "escape"
   | "back"
   | "pause"
-  | "play";
+  | "play"
+  | "nudgeEarlier"
+  | "nudgeLater"
+  | "rowUp"
+  | "rowDown"
+  | "startAtPlayhead"
+  | "endAtPlayhead";
 
 /** Inputs that take no typing: a focused slider or switch leaves the editor's keys working. */
 const NON_TEXT_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset"]);
@@ -62,18 +68,33 @@ export function isCanvasKey(e: KeyLike): boolean {
   return !mod && !e.altKey && !e.shiftKey && (key === "a" || key === "c");
 }
 
-/** The editor action a key means, or null. Repeat is the caller's to check. */
+/**
+ * The editor action a key means, or null. Repeat is the caller's to check, and so is ⇧ on the nudges (a big step).
+ * [ and ] are read by the character typed, before any modifier rule: on a German Mac it is ⌥5 and ⌥6, on German
+ * Windows AltGr+8 and AltGr+9 (Ctrl+Alt). ⌘ and a plain Ctrl stay the browser's.
+ */
 export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
   const mod = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
   if (e.key === "Escape") return "escape";
+  if ((e.key === "[" || e.key === "]") && !e.metaKey && !(e.ctrlKey && !e.altKey)) {
+    return e.key === "[" ? "startAtPlayhead" : "endAtPlayhead";
+  }
   if (mod && !e.altKey) {
     if (key === "z") return e.shiftKey ? "redo" : "undo";
     if (key === "y" && !e.shiftKey) return "redo";
     return null;
   }
-  // ⌥M: on a Mac e.key is "µ", so read the physical key
-  if (e.altKey) return e.code === "KeyM" && !e.shiftKey ? "toggleClipMute" : null;
+  if (e.altKey) {
+    // The selected clip's modifier: ⌥← ⌥→ nudge it (⇧ further), ⌥↑ ⌥↓ change its row
+    if (e.key === "ArrowLeft") return "nudgeEarlier";
+    if (e.key === "ArrowRight") return "nudgeLater";
+    if (e.shiftKey) return null;
+    if (e.key === "ArrowUp") return "rowUp";
+    if (e.key === "ArrowDown") return "rowDown";
+    // ⌥M: on a Mac e.key is "µ", so read the physical key
+    return e.code === "KeyM" ? "toggleClipMute" : null;
+  }
   if (e.key === "Backspace" || e.key === "Delete") return "remove";
   if (e.shiftKey) return null;
   switch (key) {
@@ -98,7 +119,10 @@ export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
   }
 }
 
-/** Actions a held key must not repeat: a toggle would flicker, a split would cut again. */
+/**
+ * Actions a held key must not repeat: a toggle would flicker, a split would cut again, a row move would run away.
+ * The nudges repeat, as one undo step.
+ */
 export const NO_REPEAT: ReadonlySet<EditorKeyAction> = new Set([
   "togglePlay",
   "split",
@@ -106,4 +130,8 @@ export const NO_REPEAT: ReadonlySet<EditorKeyAction> = new Set([
   "toggleClipMute",
   "escape",
   "remove",
+  "rowUp",
+  "rowDown",
+  "startAtPlayhead",
+  "endAtPlayhead",
 ]);

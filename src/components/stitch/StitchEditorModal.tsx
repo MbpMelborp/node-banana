@@ -4,8 +4,8 @@ import { useCallback, useLayoutEffect, useMemo, useRef, type HTMLAttributes } fr
 import { Dialog } from "@/components/ui/Dialog";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
-import { DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "@/lib/stitch/stack";
-import { clipSpans } from "@/lib/stitch/timeline";
+import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
+import { isPlaced, layoutSpans, spansEnd } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { DiscardSheet } from "./DiscardSheet";
@@ -62,11 +62,12 @@ function StitchEditor() {
   useStitchEditorKeys(rootRef, requestClose);
   const { byClip, music } = useStitchEditorMedia();
 
-  const overlapSec = effectiveOverlapSec(layout);
   const stacked = layout.mode === "stacked";
   const crossfade = layout.crossfade;
-  const spans = useMemo(() => clipSpans(timeline, durations, overlapSec), [timeline, durations, overlapSec]);
-  const total = spans.length > 0 ? spans[spans.length - 1].end : 0;
+  const placed = stacked && isPlaced(timeline);
+  const spans = useMemo(() => layoutSpans(timeline, durations, layout), [timeline, durations, layout]);
+  // The latest end of a clip with some length: an empty clip placed past it adds nothing to the encode
+  const total = spansEnd(spans);
 
   // What the encode will produce: the largest ready size, and the shared rate when the clips agree.
   // Read from the spans, so a clip the encode drops (nothing left after its trim) does not count.
@@ -128,7 +129,7 @@ function StitchEditor() {
     () => ({ src: musicUrl, curve: curve ?? [], muted: audioMuted }),
     [musicUrl, curve, audioMuted],
   );
-  const stack = useMemo(() => (stacked ? { crossfade } : null), [stacked, crossfade]);
+  const stack = useMemo(() => (stacked ? { crossfade, placed } : null), [stacked, crossfade, placed]);
   const { registerVideo, registerAudio, activeSrc } = useSequencePlayback({
     spans,
     total,

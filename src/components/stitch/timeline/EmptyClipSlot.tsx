@@ -5,8 +5,9 @@ import { CircleAlert } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Spinner } from "@/components/nodes/ui/Spinner";
 import { clipName } from "@/lib/stitch/labels";
+import { formatTimecode } from "@/lib/stitch/timecode";
 import { clipLength, type ClipSpan } from "@/lib/stitch/timeline";
-import { GEOMETRY, LIFTED_CLIP } from "../editorStyles";
+import { GEOMETRY, LIFTED_CLIP, MOVING_CLIP } from "../editorStyles";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { keepFocus, type ClipBoxMode } from "./ClipBox";
 
@@ -46,6 +47,7 @@ export function emptyCopy(span: ClipSpan, view: ClipMediaView | undefined): stri
  * trim that starts past the source's end or leaves less than a frame. It
  * keeps its place in the order as a fixed 160px slot that counts 0 s, and
  * can be selected like a clip (so Reset trim fixes a trim past the end).
+ * In Stacked its whole slot is a body that drags it in time and across rows.
  */
 export function EmptyClipSlot({
   span,
@@ -57,6 +59,7 @@ export function EmptyClipSlot({
   mode,
   top = GEOMETRY.clipTop,
   height = GEOMETRY.clipHeight,
+  stacked = false,
   onBodyPointerDown,
   onContextMenu,
 }: {
@@ -71,6 +74,8 @@ export function EmptyClipSlot({
   /** In its row: Track's clips row by default, a Stacked row's box otherwise. */
   top?: number;
   height?: number;
+  /** In a Stacked row: its accessible name says where it starts. */
+  stacked?: boolean;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
 }) {
@@ -80,7 +85,7 @@ export function EmptyClipSlot({
     <div
       data-clip-id={span.clip.id}
       data-empty-reason={reason}
-      aria-label={name}
+      aria-label={stacked ? `${name}, starts ${formatTimecode(span.start)}` : name}
       aria-selected={selected}
       role="option"
       tabIndex={focusable ? 0 : -1}
@@ -90,6 +95,8 @@ export function EmptyClipSlot({
       className={cn(
         "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-media border border-dashed border-white/20 bg-white/2 text-[11px] text-neutral-500 select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
         mode === "lifted" && cn(LIFTED_CLIP, "bg-editor-chrome"),
+        mode === "moving" && cn(MOVING_CLIP, "bg-editor-chrome"),
+        stacked && mode === "rest" && "cursor-grab",
         mode === "dimmed" && "opacity-40",
         mode === "rest" && selected && "ring-2 ring-selection",
       )}

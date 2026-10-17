@@ -3,10 +3,12 @@
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { Plus, VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { clipName } from "@/lib/stitch/labels";
+import { formatSeconds } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
-import { openLibraryPicker } from "../editorActions";
-import { GEOMETRY } from "../editorStyles";
+import { canLineUp, lineUpClips, openLibraryPicker } from "../editorActions";
+import { GEOMETRY, TEXT_GHOST } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { AudioTrackHeader } from "./AudioTrackHeader";
@@ -21,7 +23,7 @@ export interface StackedHeaderRows {
   selectedId: string | null;
   /** The rows' inner block: the timeline writes its translateY as the lanes scroll, with no render. */
   rowsRef: RefObject<HTMLDivElement | null>;
-  /** The insertion line while a clip is dragged, in rows px; null when it would not move. */
+  /** The insertion line while a clip is dragged (by its header or its box), in rows px; null when it would not move. */
   insertionY: number | null;
   /** The lanes' horizontal scrollbar, px (0 without one): the audio header stays level with its row. */
   hBar: number;
@@ -48,6 +50,33 @@ function AddButton({ libraryOn, className }: { libraryOn: boolean; className?: s
   );
 }
 
+/** Stacked's corner: Line up puts every clip back where Overlap lays it out, once some clip has been placed by hand. */
+function LineUpButton() {
+  const enabled = useStitchEditorStore(canLineUp);
+  const overlapSec = useStitchEditorStore((s) => s.draft?.sequenceLayout.overlapSec ?? 0);
+  const title = !enabled
+    ? "The clips are lined up"
+    : overlapSec > 0
+      ? `Line up: each clip starts ${formatSeconds(overlapSec, 1)} before the one above ends`
+      : "Line up: each clip starts where the one above ends";
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={!enabled}
+      onClick={(event) => {
+        // It is disabled once the clips are lined up: focus on it goes to the panel, never <body>
+        const button = event.currentTarget;
+        lineUpClips();
+        if (document.activeElement === button) button.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+      }}
+      className={cn(TEXT_GHOST, "-ml-1.5 h-5 px-1.5 text-[11px]")}
+    >
+      Line up
+    </button>
+  );
+}
+
 /**
  * The 132px column left of the lanes. In Track: an empty corner beside the
  * ruler, the Clips track (its dot, count and the + that adds from the
@@ -55,8 +84,9 @@ function AddButton({ libraryOn, className }: { libraryOn: boolean; className?: s
  * selected). In Stacked the + moves to the corner and each clip has a 52px
  * header naming it and its source; the headers scroll with the rows and are
  * handles to drag a clip up or down (outside the listbox, as an option holds
- * no controls). A right press on one opens its clip's menu. Track | Stacked
- * is in the editor's header (LayoutToggle).
+ * no controls). A right press on one opens its clip's menu. Line up sits in
+ * Stacked's corner, left of the +. Track | Stacked is in the editor's header
+ * (LayoutToggle).
  */
 export function TrackHeaders({
   clipCount,
@@ -79,7 +109,12 @@ export function TrackHeaders({
       style={{ width: GEOMETRY.trackHeader }}
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-white/6 px-3" style={{ height: GEOMETRY.ruler }}>
-        {stackedRows && <AddButton libraryOn={libraryOn} className="ml-auto" />}
+        {stackedRows && (
+          <>
+            <LineUpButton />
+            <AddButton libraryOn={libraryOn} className="ml-auto" />
+          </>
+        )}
       </div>
       {stackedRows ? (
         <StackedRows rows={stackedRows} />

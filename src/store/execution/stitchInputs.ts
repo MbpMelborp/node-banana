@@ -10,7 +10,7 @@ import type { StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes
 import { requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { readStitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
-import { sourceKey } from "@/lib/stitch/timeline";
+import { isPlaced, sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
 import { resolveEdgeVideo, resolveEdgeVideos } from "@/lib/stitch/sources";
 import type { NodeExecutionContext } from "./types";
@@ -25,6 +25,8 @@ export interface GatheredStitch {
   clipCount: number;
   /** Stacked with an overlap; null for Track, every legacy node, and inputs gathered without edges. */
   stack: { overlapSec: number; crossfade: boolean } | null;
+  /** Stacked with a stored start; null for Track, lined-up stacks, legacy nodes and inputs gathered without edges. */
+  placed: { crossfade: boolean; overlapSec: number } | null;
 }
 
 type ClipMedia = { kind: "url"; url: string } | { kind: "asset"; assetId: string; position: number };
@@ -55,6 +57,13 @@ export async function gatherStitchInputs(
 
   const pending: PendingClip[] = [];
   const fromInputs = liveEdgeIds.length === 0 && !draft.timeline.some((c) => c.source.kind === "asset");
+  const layout = draft.sequenceLayout;
+  // Every clip of the timeline counts, one whose edge has no video yet included: the engine routes by this, not by
+  // which starts reach it
+  const placed =
+    layout.mode === "stacked" && !legacy && !fromInputs && isPlaced(draft.timeline)
+      ? { crossfade: layout.crossfade, overlapSec: layout.overlapSec }
+      : null;
   if (fromInputs) {
     // No video edges to read (a context without edges): the connected videos, whole, in order
     for (const url of inputs.videos) {
@@ -62,7 +71,14 @@ export async function gatherStitchInputs(
     }
   } else {
     draft.timeline.forEach((clip, index) => {
-      const trim = { inSec: clip.inSec, outSec: clip.outSec, muted: clip.muted, volume: clip.volume };
+      const trim = {
+        inSec: clip.inSec,
+        outSec: clip.outSec,
+        muted: clip.muted,
+        volume: clip.volume,
+        // A clip dropped below takes its start with it; no other clip moves
+        ...(placed && clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+      };
       if (clip.source.kind === "asset") {
         pending.push({
           media: { kind: "asset", assetId: clip.source.assetId, position: index + 1 },
@@ -114,6 +130,7 @@ export async function gatherStitchInputs(
     muted: clip.muted,
     volume: clip.volume,
     ...(clip.source !== undefined ? { source: clip.source } : {}),
+    ...(clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
   }));
 
   let music: StitchMusicInput | null = null;
@@ -129,11 +146,10 @@ export async function gatherStitchInputs(
   }
 
   // Without edges the clips play whole and carry no source keys: stacking them would dissolve where the editor shows cuts
-  const layout = draft.sequenceLayout;
   const stack =
     layout.mode === "stacked" && layout.overlapSec > 0 && !fromInputs
       ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
       : null;
 
-  return { clips, music, loopCount: draft.loopCount, clipCount: clips.length, stack };
+  return { clips, music, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
 }

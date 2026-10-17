@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { trimDragAt, trimTargets, type TrimDragResult, type TrimDragStart } from "@/lib/stitch/trimDrag";
 import { draftSpans } from "@/lib/stitch/draft";
-import { sourceKey, trimClip, type ClipSpan } from "@/lib/stitch/timeline";
+import { sourceKey, trimClip, trimClipInPlace, type ClipSpan } from "@/lib/stitch/timeline";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
+import type { StitchTimelineClip } from "@/types";
 import { pause } from "../editorActions";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 
@@ -15,6 +16,11 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * is held on; Escape cancels. The editor's other keys and the ⌘ wheel zoom
  * wait while it runs (useStitchEditorKeys, Timeline), and a release onto a
  * draft that changed under the drag anyway is dropped.
+ *
+ * In Stacked a trim keeps the frames where they are in time: an In edge
+ * moves the clip's start with it (never before 0:00), and no other clip
+ * moves. The drag carries the timeline release applies, every clip pinned,
+ * and Shift pressed or let go while the pointer rests re-places the edge.
  */
 
 export interface TrimLive {
@@ -27,12 +33,16 @@ export interface TrimLive {
   laneTop: number;
   viewLeft: number;
   viewRight: number;
+  /** Stacked: what release applies, the trim with its frames fixed in time; null in Track. */
+  timeline: StitchTimelineClip[] | null;
 }
 
 /** axisNow: the lane's axis for the editor's state at the press (useTimelineZoom), after the field's blur. */
 export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLDivElement | null>) {
   const [trim, setTrim] = useState<TrimLive | null>(null);
   const live = useRef<TrimLive | null>(null);
+  /** The clip a release just trimmed, until the lane has drawn it: the lane's reveal of a moved clip leaves it alone. */
+  const released = useRef<string | null>(null);
   const stop = useRef<(() => void) | null>(null);
 
   useEffect(() => () => stop.current?.(), []);
@@ -54,7 +64,8 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
       const draftAtStart = editor.draft;
       if (!draftAtStart) return;
       const timelineAtStart = draftAtStart.timeline;
-      const spans = draftSpans(draftAtStart, editor.durations);
+      const durationsAtStart = editor.durations;
+      const spans = draftSpans(draftAtStart, durationsAtStart);
       const span = spans.find((s) => s.clip.id === pressed.clip.id);
       if (!span) return;
       // In Fit, a length the blur changed changes the zoom the lane re-renders at: measure with that one
@@ -66,18 +77,6 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
 
       const laneX = (clientX: number) => clientX - (contentRef.current?.getBoundingClientRect().left ?? 0);
       const stacked = draftAtStart.sequenceLayout.mode === "stacked";
-      const durations = editor.durations;
-      // Stacked draws the trim as release lays it out (Timeline): the edge there is the one a snap must meet
-      const liveEdgeTime = stacked
-        ? (trim: { inSec: number; outSec: number | null }) => {
-            // The patch release applies
-            const patch = edge === "out" ? { outSec: trim.outSec } : { inSec: trim.inSec };
-            const timeline = trimClip(timelineAtStart, span.clip.id, durations, patch);
-            const laidOut = draftSpans({ ...draftAtStart, timeline }, durations);
-            const moved = laidOut.find((s) => s.clip.id === span.clip.id);
-            return moved ? (edge === "out" ? moved.end : moved.start) : Number.NaN;
-          }
-        : undefined;
       const start: TrimDragStart = {
         span,
         edge,
@@ -86,25 +85,34 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
         pxPerSec: axis.pxPerSec,
         xToTime: axis.xToTime,
         // The playhead as drawn: one left past a sequence that got shorter sits at its end
-        targets: trimTargets(spans, span.clip.id, edge, Math.min(editor.playhead, axis.total), stacked),
-        liveEdgeTime,
+        targets: trimTargets(spans, span.clip.id, edge, Math.min(editor.playhead, axis.total), stacked ? "stacked" : "track"),
+        // Stacked: an In that lengthens the head moves the start earlier, and it stops at 0:00
+        minInSec: stacked ? span.clip.inSec - span.start : undefined,
       };
+      const overlapSec = draftAtStart.sequenceLayout.overlapSec;
       let moved = false;
+      let lastClientX = startClientX;
+      let lastShift = event.shiftKey;
       const update = (clientX: number, shiftKey: boolean) => {
         const content = contentRef.current;
         const rect = content?.getBoundingClientRect();
         const visible = content?.parentElement?.getBoundingClientRect();
         // Until the pointer moves, the edge stays where it is (no snap on the press)
         const snap = moved && useStitchEditorStore.getState().snap && !shiftKey;
+        const result = trimDragAt(start, moved ? laneX(clientX) : start.pointerX, { snap });
+        const patch = edge === "out" ? { outSec: result.outSec } : { inSec: result.inSec };
         const next: TrimLive = {
           clipId: span.clip.id,
           edge,
           start,
-          result: trimDragAt(start, moved ? laneX(clientX) : start.pointerX, { snap }),
+          result,
           laneLeft: rect?.left ?? 0,
           laneTop: rect?.top ?? 0,
           viewLeft: visible?.left ?? 0,
           viewRight: visible?.right ?? 0,
+          timeline: stacked
+            ? trimClipInPlace(timelineAtStart, span.clip.id, durationsAtStart, patch, overlapSec)
+            : null,
         };
         live.current = next;
         setTrim(next);
@@ -114,6 +122,8 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", end);
+        window.removeEventListener("keydown", onShift);
+        window.removeEventListener("keyup", onShift);
         if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
         live.current = null;
         stop.current = null;
@@ -124,15 +134,31 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
       const onMove = (e: PointerEvent) => {
         if (!moved && Math.abs(e.clientX - startClientX) < 1) return;
         moved = true;
+        lastClientX = e.clientX;
+        lastShift = e.shiftKey;
         update(e.clientX, e.shiftKey);
+      };
+      // ⇧ pressed or let go while the pointer rests: the edge snaps or lets go where it is
+      const onShift = (e: KeyboardEvent) => {
+        if (e.key !== "Shift" || e.shiftKey === lastShift) return;
+        lastShift = e.shiftKey;
+        if (moved) update(lastClientX, lastShift);
       };
       const onUp = (e: PointerEvent) => {
         onMove(e);
-        const result = live.current?.result;
+        const drawn = live.current;
         end();
-        if (!moved || !result) return;
+        if (!moved || !drawn) return;
         const s = useStitchEditorStore.getState();
         if (s.draft?.timeline !== timelineAtStart) return;
+        const { timeline, result } = drawn;
+        if (timeline) {
+          if (timeline === timelineAtStart) return;
+          released.current = span.clip.id;
+          s.apply((d) => ({ ...d, timeline }));
+          return;
+        }
+        released.current = span.clip.id;
         const patch = edge === "out" ? { outSec: result.outSec } : { inSec: result.inSec };
         s.apply((d) => ({ ...d, timeline: trimClip(d.timeline, span.clip.id, s.durations, patch) }));
       };
@@ -140,6 +166,10 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", end);
+      if (stacked) {
+        window.addEventListener("keydown", onShift);
+        window.addEventListener("keyup", onShift);
+      }
       stop.current = end;
       useStitchEditorStore.getState().setCancelGesture(end);
       update(startClientX, event.shiftKey);
@@ -147,5 +177,12 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
     [axisNow, contentRef],
   );
 
-  return { trim, onHandlePointerDown };
+  /** The clip the last release trimmed, once (see useClipMove's). */
+  const takeReleased = useCallback(() => {
+    const clipId = released.current;
+    released.current = null;
+    return clipId;
+  }, []);
+
+  return { trim, onHandlePointerDown, takeReleased };
 }

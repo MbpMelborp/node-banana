@@ -795,29 +795,29 @@ describe("VideoStitchNode", () => {
 
       it("sums the stacked length and names the crossfade", () => {
         renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: stacked(1) });
-        expect(summaryText()).toBe("0:14·1.0 s crossfade·loop 1×");
+        expect(summaryText()).toBe("0:14 · 1.0 s crossfade · loop 1×");
       });
 
       it("names the overlap when the crossfade is off", () => {
         renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: stacked(1, false) });
-        expect(summaryText()).toBe("0:14·1.0 s overlap·loop 1×");
+        expect(summaryText()).toBe("0:14 · 1.0 s overlap · loop 1×");
       });
 
       it("adds nothing when every join is a cut", () => {
         renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: stacked(0) });
-        expect(summaryText()).toBe("0:16·loop 1×");
+        expect(summaryText()).toBe("0:16 · loop 1×");
         cleanup();
         // Pieces of one video meet with a cut
         const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "left", outSec: 2 });
         const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "right", inSec: 2 });
         const oneVideo = { edges: [threeClips.edges[0]], nodes: [threeClips.nodes[0]] };
         renderCard(oneVideo, { clipOrder: ["e1"], timeline: [left, right], sequenceLayout: stacked(1) });
-        expect(summaryText()).toBe("0:05·loop 1×");
+        expect(summaryText()).toBe("0:05 · loop 1×");
       });
 
       it("reads Track whatever the overlap", () => {
         renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: { ...stacked(1), mode: "track" } });
-        expect(summaryText()).toBe("0:16·loop 1×");
+        expect(summaryText()).toBe("0:16 · loop 1×");
       });
 
       it("keeps the layout through a removal and a reorder: their writes leave it out", () => {
@@ -844,6 +844,56 @@ describe("VideoStitchNode", () => {
         );
         expect(writes).toHaveLength(2);
         for (const [, patch] of writes) expect(patch).not.toHaveProperty("sequenceLayout");
+      });
+
+      /** placed-board: A 0–5; B (In 0.8) 6–10.2; C 9.2–15.2; A again (Out 3.2) 11–14.2, wholly under C. */
+      const placedBoard = () => [
+        createClip({ kind: "edge", edgeId: "e1" }, { id: "a", startSec: 0 }),
+        createClip({ kind: "edge", edgeId: "e2" }, { id: "b", inSec: 0.8, startSec: 6 }),
+        createClip({ kind: "edge", edgeId: "e3" }, { id: "c", startSec: 9.2 }),
+        createClip({ kind: "edge", edgeId: "e1" }, { id: "a2", outSec: 3.2, startSec: 11 }),
+      ];
+
+      it("counts a placed stack's crossfades and gaps", () => {
+        renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: placedBoard(), sequenceLayout: stacked(1) });
+        // Clip 2 fades out over Clip 3; Clip 4 is hidden under Clip 3 and makes none
+        expect(summaryText()).toBe("0:15 · 1 crossfade · 1 gap · loop 1×");
+      });
+
+      it("counts a placed stack's overlaps with the crossfade off", () => {
+        renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: placedBoard(), sequenceLayout: stacked(1, false) });
+        expect(summaryText()).toBe("0:15 · 2 overlaps · 1 gap · loop 1×");
+      });
+
+      it("keeps every stored start through the card's removal and reorder", () => {
+        const { container } = renderCard(threeClips, {
+          clipOrder: ["e1", "e2", "e3"],
+          timeline: placedBoard(),
+          sequenceLayout: stacked(1),
+        });
+        fireEvent.click(container.querySelector('[data-clip-id="a2"] button') as HTMLElement);
+        HTMLElement.prototype.setPointerCapture ??= () => {};
+        HTMLElement.prototype.releasePointerCapture ??= () => {};
+        const original = document.elementsFromPoint;
+        const target = container.querySelector('[data-clip-id="c"]') as HTMLElement;
+        document.elementsFromPoint = () => [target];
+        const source = container.querySelector('[data-clip-id="a"]') as HTMLElement;
+        fireEvent.pointerDown(source, { button: 0, pointerId: 1 });
+        fireEvent.pointerMove(source, { pointerId: 1, clientX: 10, clientY: 10 });
+        fireEvent.pointerUp(source, { pointerId: 1 });
+        document.elementsFromPoint = original;
+        const writes = mockUpdateNodeData.mock.calls.filter(([id, patch]) => id === STITCH_ID && "timeline" in patch);
+        // The removal's write, then the reorder's: a after c
+        expect(writes).toHaveLength(2);
+        const ids = (n: number) => (writes[n][1] as { timeline: Array<{ id: string }> }).timeline.map((clip) => clip.id);
+        expect(ids(0)).toEqual(["a", "b", "c"]);
+        expect(ids(1).indexOf("a")).toBeGreaterThan(ids(1).indexOf("c"));
+        const starts = { a: 0, b: 6, c: 9.2, a2: 11 } as Record<string, number>;
+        for (const [, patch] of writes) {
+          for (const clip of (patch as { timeline: Array<{ id: string; startSec?: number }> }).timeline) {
+            expect(clip.startSec).toBe(starts[clip.id]);
+          }
+        }
       });
     });
   });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   applyCrossfades,
   applyCurveGain,
+  applyGainPieces,
   chooseMasterFormat,
   clampSamples,
   mixInto,
@@ -16,6 +17,7 @@ import {
   type Pcm,
   type PcmChunk,
 } from "../audioMix";
+import { buildEnvelope, gainPieceAt, gainPieces, type GainPiece } from "../placement";
 import { crossfadeGain } from "../stack";
 
 const SR = 1000;
@@ -397,5 +399,95 @@ describe("mixLoop with overlapping clips", () => {
     expect(out[10]).toBeCloseTo(1.2, 6);
     const [flagged] = mixLoop({ format, loopLength: 1, clips: [loud], music: null, clipsOverlap: false }, 0);
     expect(flagged[10]).toBeCloseTo(1.2, 6);
+  });
+});
+
+describe("applyGainPieces", () => {
+  it("multiplies constant pieces, fills 0 and leaves gain 1 alone, by the pieces' whole samples", () => {
+    const channels = [filled(10, 1), filled(10, 2)];
+    // The clip starts at loop sample 3 (0.003 s at 1 kHz)
+    const pieces: GainPiece[] = [
+      { fromSec: 0.003, toSec: 0.006, gain: 1 },
+      { fromSec: 0.006, toSec: 0.009, gain: 0.5 },
+      { fromSec: 0.009, toSec: 0.013, gain: 0 },
+    ];
+    applyGainPieces(channels, SR, 3, pieces);
+    expect([...channels[0]]).toEqual([1, 1, 1, 0.5, 0.5, 0.5, 0, 0, 0, 0]);
+    expect([...channels[1]]).toEqual([2, 2, 2, 1, 1, 1, 0, 0, 0, 0]);
+  });
+
+  it("reads a varying piece at each sample's middle in loop time, within 1e-9 of the formula", () => {
+    const n = 400;
+    const channels = [filled(n, 1)];
+    const startSample = 1500;
+    const piece: GainPiece = { fromSec: 1.5, toSec: 1.9, own: { at: 0.1, slope: 2 }, above: [{ at: 0.8, slope: -1.5 }] };
+    applyGainPieces(channels, SR, startSample, [piece]);
+    for (let i = 0; i < n; i++) {
+      const t = (startSample + i + 0.5) / SR;
+      const own = Math.min(1, Math.max(0, 0.1 + 2 * (t - 1.5)));
+      const above = Math.min(1, Math.max(0, 0.8 - 1.5 * (t - 1.5)));
+      expect(Math.abs(channels[0][i] - Math.sin((own * Math.PI) / 2) * Math.cos((above * Math.PI) / 2))).toBeLessThan(1e-6);
+      expect(Math.abs(channels[0][i] - gainPieceAt(piece, t))).toBeLessThan(1e-6);
+    }
+  });
+
+  it("follows an envelope's pieces: a front clip fading out over the clip below crossfades at equal power", () => {
+    // A [0,5) in front fades out over B [4,9) across [4,5)
+    const env = buildEnvelope(
+      [
+        { start: 0, length: 5, row: 0, source: "a", inSec: 0 },
+        { start: 4, length: 5, row: 1, source: "b", inSec: 0 },
+      ],
+      true,
+    );
+    const a = [filled(5 * SR, 1)];
+    const b = [filled(5 * SR, 1)];
+    applyGainPieces(a, SR, 0, gainPieces(env, 0));
+    applyGainPieces(b, SR, 4 * SR, gainPieces(env, 1));
+    for (const i of [0, 250, 500, 999]) {
+      const x = (i + 0.5) / SR;
+      expect(a[0][4 * SR + i]).toBeCloseTo(crossfadeGain(x, "out"), 6);
+      expect(b[0][i]).toBeCloseTo(crossfadeGain(x, "in"), 6);
+    }
+    expect(a[0][3999]).toBe(1);
+    expect(b[0][1000]).toBe(1);
+  });
+
+  it("makes a clip hidden under a higher row exactly silent", () => {
+    const env = buildEnvelope(
+      [
+        { start: 0, length: 10, row: 0, source: "a", inSec: 0 },
+        { start: 3, length: 2, row: 1, source: "b", inSec: 0 },
+      ],
+      true,
+    );
+    const b = [filled(2 * SR, 0.7)];
+    applyGainPieces(b, SR, 3 * SR, gainPieces(env, 1));
+    expect(b[0].every((v) => v === 0)).toBe(true);
+  });
+
+  it("stops on an abort, checked per piece and every 65,536 samples inside one", () => {
+    const controller = new AbortController();
+    controller.abort();
+    const channels = [filled(10, 1)];
+    expect(() => applyGainPieces(channels, SR, 0, [{ fromSec: 0, toSec: 0.01, gain: 0.5 }], controller.signal)).toThrow(
+      expect.objectContaining({ name: "AbortError" }),
+    );
+    expect(channels[0][0]).toBe(1);
+    // Mid-piece: the signal goes off while the piece runs
+    const long = [filled(200000, 1)];
+    const late = new AbortController();
+    const piece = { fromSec: 0, toSec: 200, own: { at: 0, slope: 0.01 }, above: [] };
+    let reads = 0;
+    Object.defineProperty(piece.own, "slope", {
+      get() {
+        if (++reads === 70000) late.abort();
+        return 0.01;
+      },
+    });
+    expect(() => applyGainPieces(long, SR, 0, [piece], late.signal)).toThrow(expect.objectContaining({ name: "AbortError" }));
+    // It stopped at the next check, before the piece's end
+    expect(long[0][199999]).toBe(1);
+    expect(long[0][65535]).not.toBe(1);
   });
 });

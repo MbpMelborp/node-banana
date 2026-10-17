@@ -49,10 +49,11 @@ function PreviewVideo({
 /**
  * The preview: the sequence letterboxed on the stage, contain-fitted to the
  * output's aspect. In Track one <video> per source is mounted and the one
- * under the playhead is shown; in Stacked one per clip, later clips later
- * in the DOM so they blend over the earlier ones. useSequencePlayback
- * drives them. The music plays from a hidden <audio>. An editor with no
- * clips shows the empty state instead.
+ * under the playhead is shown; in Stacked one per clip, in row order, and
+ * the playback works their opacities out in that order (each clip's share
+ * of the picture does not depend on which one paints last).
+ * useSequencePlayback drives them. The music plays from a hidden <audio>.
+ * An editor with no clips shows the empty state instead.
  */
 export function EditorStage({
   empty,

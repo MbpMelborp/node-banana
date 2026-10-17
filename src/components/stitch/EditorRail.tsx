@@ -1,22 +1,25 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
 import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
 import { MenuShortcut } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import {
   canRevealSource,
   canSplitSelectedAtPlayhead,
+  nudgeStartWell,
   removeSelection,
   resetSelectedTrim,
   revealSelectedSource,
   setClipMuted,
+  setClipStart,
   setClipVolume,
   setLoopCount,
   splitAtPlayhead,
@@ -40,6 +43,16 @@ const TRIM_HINTS = [
   { key: "I", text: "In at the playhead" },
   { key: "O", text: "Out at the playhead" },
   { key: "⇧", text: "Hold to trim without snapping" },
+] as const;
+
+/** Stacked places clips in time and in rows too. */
+const STACKED_HINTS = [
+  { key: "I", text: "In at the playhead" },
+  { key: "O", text: "Out at the playhead" },
+  { key: "[", text: "Start at the playhead" },
+  { key: "]", text: "End at the playhead" },
+  { key: "⌥", text: "With ← → nudge a frame, with ↑ ↓ change row" },
+  { key: "⇧", text: "Hold to move or trim without snapping" },
 ] as const;
 
 function RailButton({
@@ -76,10 +89,11 @@ function RailButton({
 
 /**
  * The 280px rail beside the stage: the selected clip's name and source,
- * its trim as In and Out wells, its own sound, the clip actions with the
- * trim keys, and the loop count in the footer, with Overlap and Crossfade
- * above it in Stacked. With the audio track selected it shows the track
- * instead (AudioTrackRail).
+ * in Stacked where it starts on the timeline, its trim as In and Out
+ * wells, its own sound, the clip actions with the trim keys, and the loop
+ * count in the footer, with Overlap and Crossfade above it in Stacked.
+ * With the audio track selected it shows the track instead
+ * (AudioTrackRail).
  */
 export function EditorRail({
   media,
@@ -92,6 +106,7 @@ export function EditorRail({
   total: number;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
+  const durations = useStitchEditorStore((s) => s.durations);
   const empty = !draft || draft.timeline.length === 0;
   const selection = useStitchEditorStore((s) => s.selection);
   const canSplit = useStitchEditorStore(canSplitSelectedAtPlayhead);
@@ -106,6 +121,11 @@ export function EditorRail({
   const view = clip ? media.get(clip.id) : undefined;
   const duration = view?.duration ?? null;
   const hasClip = clip !== null;
+  // A timeline time, beside the source times In and Out: where the trimmed clip starts (an empty clip's slot too)
+  const start = useMemo(() => {
+    if (!stacked || !draft || !clipId) return null;
+    return draftSpans(draft, durations).find((span) => span.clip.id === clipId)?.start ?? null;
+  }, [stacked, draft, durations, clipId]);
   // The lane's rule (Timeline): the track shows only with music under a sequence with some length
   const audio = selection?.kind === "audio" && music !== null && total > 0;
 
@@ -143,6 +163,20 @@ export function EditorRail({
             </div>
 
             <DialogPaneRule className="mx-5 mt-3.5 mb-2.5" />
+
+            {start !== null && (
+              // Leaving the well ends a run of ↑/↓ steps: the next one is a new undo step
+              <div className="mb-2 px-5" onBlur={endGesture}>
+                <RailRow label="Start">
+                  <TimecodeField
+                    label="Start on the timeline"
+                    value={start}
+                    onCommit={(sec) => setClipStart(clip.id, sec)}
+                    onNudge={nudgeStartWell}
+                  />
+                </RailRow>
+              </div>
+            )}
 
             <section className="flex flex-col gap-0.5 px-5">
               <DialogSectionHeader className="mb-1 leading-[13px]">Trim</DialogSectionHeader>
@@ -233,13 +267,13 @@ export function EditorRail({
                 danger
                 onClick={removeSelection}
               />
-              <KeyHints hints={TRIM_HINTS} />
+              <KeyHints hints={stacked ? STACKED_HINTS : TRIM_HINTS} />
             </div>
           </>
         )}
       </div>
 
-      {stacked && <SequenceSettings empty={empty} />}
+      {stacked && <SequenceSettings empty={empty} hasMusic={music !== null && !draft?.audioMuted} />}
       {/* Inert with nothing to loop, like the transport beside it */}
       <div
         className={cn(

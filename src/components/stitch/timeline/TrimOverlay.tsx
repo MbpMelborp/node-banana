@@ -187,22 +187,32 @@ export function TrimMarks({
         {formatSeconds(trim.result.deltaSec, 2, { signed: true })}
       </div>
       {snapped && (
-        <>
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute z-4 border-l border-dashed border-neutral-200/70"
-            style={{ left: snapX, top: 13, height: clipsBottom - 13 + 1 }}
-          />
-          <div
-            data-testid="stitch-snap-chip"
-            className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex items-center gap-1.5 whitespace-nowrap text-neutral-300")}
-            style={{ left: snapX + 9, top: clipsBottom + 12 }}
-          >
-            <Magnet size={11} strokeWidth={1.75} />
-            {`Snapped to ${snapped.label}`}
-          </div>
-        </>
+        <SnapGuide x={snapX} bottom={clipsBottom} chipTop={clipsBottom + 12} text={`Snapped to ${snapped.label}`} />
       )}
+    </>
+  );
+}
+
+/**
+ * A snap, inside the lanes: the dashed guide from the ruler down to `bottom` at the snapped time, and the chip
+ * naming what it snapped to, 9px right of the guide. A trim and a body drag both draw it.
+ */
+export function SnapGuide({ x, bottom, chipTop, text }: { x: number; bottom: number; chipTop: number; text: string }) {
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute z-4 border-l border-dashed border-neutral-200/70"
+        style={{ left: x, top: 13, height: bottom - 13 + 1 }}
+      />
+      <div
+        data-testid="stitch-snap-chip"
+        className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex items-center gap-1.5 whitespace-nowrap text-neutral-300")}
+        style={{ left: x + 9, top: chipTop }}
+      >
+        <Magnet size={11} strokeWidth={1.75} />
+        {text}
+      </div>
     </>
   );
 }

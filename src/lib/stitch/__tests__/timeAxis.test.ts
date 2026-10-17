@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { StitchTimelineClip } from "@/types";
-import { clipSpans, createClip, type SourceDurations, type SourceKey } from "../timeline";
+import { clipSpans, createClip, placedSpans, type SourceDurations, type SourceKey } from "../timeline";
 import {
   EMPTY_SLOT_PX,
   MAX_PX_PER_SEC,
@@ -60,6 +60,20 @@ describe("buildTimeAxis", () => {
     expect(axis.clipBox(1)).toEqual({ x: 176, width: 200 });
     expect(axis.timeToX(0)).toBe(16);
     expect(axis.xToTime(176 + 100)).toBeCloseTo(1);
+  });
+});
+
+describe("buildTimeAxis on placed spans", () => {
+  it("ends at the latest end of a clip with frames", () => {
+    const spans = placedSpans(
+      [clip("a", "e1", { startSec: 6 }), clip("b", "e2", { startSec: 0 }), clip("x", "e9", { startSec: 20 })],
+      durations({ "edge:e1": 5, "edge:e2": 4 }),
+      1,
+    );
+    const axis = buildTimeAxis(spans, 64, 16, 0);
+    expect(axis.total).toBe(11);
+    expect(axis.endX).toBe(16 + 11 * 64);
+    expect(axis.clipBox(0)).toEqual({ x: 16 + 6 * 64, width: 5 * 64 });
   });
 });
 

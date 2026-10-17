@@ -1,6 +1,6 @@
 import { ASSET_ID_PATTERN } from "@/lib/assets/types";
 import type { StitchClipSource, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
-import { createClip, edgeIdsInOrder, newClipId } from "./timeline";
+import { createClip, edgeIdsInOrder, MAX_START_SEC, newClipId } from "./timeline";
 
 /**
  * Reading a Stitch node's sequence from what is saved.
@@ -47,8 +47,8 @@ const finite = (value: unknown): value is number => typeof value === "number" &&
 
 /**
  * Drop entries without a string id or valid source. Coerce in (finite, >= 0, else 0), out (finite and > in, else null),
- * muted (boolean), volume (finite, clamp 0..1, else 1). A repeated id gets a new one, derived from it so every read
- * gives the same answer.
+ * muted (boolean), volume (finite, clamp 0..1, else 1), startSec (finite, clamp 0..MAX_START_SEC, else absent). A
+ * repeated id gets a new one, derived from it so every read gives the same answer.
  */
 export function sanitizeTimeline(raw: unknown): StitchTimelineClip[] {
   if (!Array.isArray(raw)) return [];
@@ -70,6 +70,8 @@ export function sanitizeTimeline(raw: unknown): StitchTimelineClip[] {
       outSec: finite(clip.outSec) && clip.outSec > inSec ? clip.outSec : null,
       muted: clip.muted === true,
       volume: finite(clip.volume) ? Math.min(Math.max(clip.volume, 0), 1) : 1,
+      // Not rounded: runs compare starts to within a nanosecond
+      ...(finite(clip.startSec) ? { startSec: Math.min(Math.max(clip.startSec, 0), MAX_START_SEC) } : {}),
     });
   }
   return clips;

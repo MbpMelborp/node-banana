@@ -405,6 +405,8 @@ export interface StitchTimelineClip {
   outSec: number | null;      // Trim end, source seconds; null = the source's end
   muted: boolean;             // The clip's own sound
   volume: number;             // 0..1 linear gain on the clip's own sound, default 1
+  startSec?: number;          // Stacked: where the trimmed clip starts on the timeline, seconds (0–600). Absent = laid out
+                              // from Overlap. Track ignores it.
 }
 
 /** A point on the music's volume curve: t in sequence seconds (one loop), gain 0..1 (1 = 0 dB). */
@@ -415,11 +417,17 @@ export interface VolumePoint {
 
 /** How a Stitch sequence is laid out. See docs/stitch-editor.md. */
 export interface StitchSequenceLayout {
-  /** "track": one row, clips end to end. "stacked": one row per clip, each starting overlapSec before the previous one ends. */
+  /**
+   * "track": one row, clips end to end. "stacked": one row per clip, placed anywhere in time; a clip never placed starts
+   * Overlap before the clip above ends.
+   */
   mode: "track" | "stacked";
-  /** Stacked: the overlap at each join, seconds (0–10, 0.1 steps; capped per join). Kept while mode is "track". */
+  /** Stacked: how far a clip overlaps the one above when lined up (0–10 s, 0.1 steps); also where new clips go. Kept while mode is "track". */
   overlapSec: number;
-  /** Stacked: the picture dissolves and the sound crossfades across each overlap. Off: the earlier clip stays in front, both sounds play. */
+  /**
+   * Stacked: the higher row is in front; where clips overlap, it fades in or out over the rows below and the sound
+   * crossfades. Off: the higher row covers, every clip is heard.
+   */
   crossfade: boolean;
 }
 

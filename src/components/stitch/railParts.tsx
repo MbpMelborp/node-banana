@@ -18,12 +18,13 @@ export function KeyHints({ hints }: { hints: ReadonlyArray<{ key: string; text: 
   return (
     <div className="mt-4 flex flex-col gap-1.5 text-[11px] text-neutral-500">
       {hints.map((hint) => (
-        <div key={hint.key} className="flex items-center gap-1.5">
-          {/* One cap width, so the texts start in one column (⇧ and ⌥ are wider than I and O) */}
-          <Kbd size="sm" className="w-[22px] px-0">
+        <div key={hint.key} className="flex items-start gap-1.5">
+          {/* One cap width that never gives way to a long text, so the texts start in one column (⇧ and ⌥ are wider
+              than I and O); a text that wraps lines up with the cap by its first line */}
+          <Kbd size="sm" className="w-[22px] shrink-0 px-0">
             {hint.key}
           </Kbd>
-          <span>{hint.text}</span>
+          <span className="leading-[18px]">{hint.text}</span>
         </div>
       ))}
     </div>

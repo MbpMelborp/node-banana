@@ -1,19 +1,36 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Crosshair, RotateCcw, Scissors, Trash, Volume1, VolumeX } from "lucide-react";
+import {
+  AlignEndVertical,
+  AlignStartVertical,
+  ArrowDown,
+  ArrowUp,
+  Crosshair,
+  RotateCcw,
+  Scissors,
+  Trash,
+  Volume1,
+  VolumeX,
+} from "lucide-react";
 import { MenuDivider, MenuHeader, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { clipName } from "@/lib/stitch/labels";
 import { isTrimmed } from "@/lib/stitch/timeline";
 import {
+  canEndAtPlayhead,
+  canMoveRow,
   canRevealSource,
   canSplitSelectedAtPlayhead,
+  canStartAtPlayhead,
+  endSelectedAtPlayhead,
+  moveSelectedRow,
   removeSelection,
   resetSelectedTrim,
   revealSelectedSource,
   splitAtPlayhead,
   splitBlockedReason,
+  startSelectedAtPlayhead,
   toggleSelectedClipMute,
 } from "../editorActions";
 import type { ClipMediaView } from "../useStitchEditorMedia";
@@ -24,7 +41,8 @@ const ICON = { size: 11, strokeWidth: 1.75, className: "shrink-0" } as const;
 
 /**
  * A clip's right-click menu, on the app's menu skin: its sound, a split at
- * the playhead, its trim, its source node, and removing it. The clip is the
+ * the playhead, in Stacked its place (start or end at the playhead, a row up
+ * or down), its trim, its source node, and removing it. The clip is the
  * selection (the right-click selected it), so each item is the same action
  * as its key; an item selects it again before it runs, so the label and the
  * action never part. Any press outside closes it, even one that cancels its
@@ -55,6 +73,11 @@ function OpenMenu({
   const clip = useStitchEditorStore((s) => s.draft?.timeline.find((c) => c.id === clipId) ?? null);
   const canSplit = useStitchEditorStore(canSplitSelectedAtPlayhead);
   const splitBlocked = useStitchEditorStore(splitBlockedReason);
+  const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
+  const canStart = useStitchEditorStore(canStartAtPlayhead);
+  const canEnd = useStitchEditorStore(canEndAtPlayhead);
+  const canRowUp = useStitchEditorStore((s) => canMoveRow(s, -1));
+  const canRowDown = useStitchEditorStore((s) => canMoveRow(s, 1));
   const view = media.get(clipId);
 
   // Focus goes back to the panel, so the editor's keys work and Tab stays in the dialog
@@ -167,6 +190,24 @@ function OpenMenu({
           disabled: !canSplit,
           title: canSplit ? undefined : (splitBlocked ?? undefined),
         })}
+        {stacked && (
+          <>
+            {item("Start at playhead", <AlignStartVertical {...ICON} />, startSelectedAtPlayhead, {
+              shortcut: "[",
+              disabled: !canStart,
+            })}
+            {item("End at playhead", <AlignEndVertical {...ICON} />, endSelectedAtPlayhead, {
+              shortcut: "]",
+              disabled: !canEnd,
+              title: canEnd ? undefined : "The clip is longer than the time before the playhead",
+            })}
+            {item("Move up a row", <ArrowUp {...ICON} />, () => moveSelectedRow(-1), { shortcut: "⌥↑", disabled: !canRowUp })}
+            {item("Move down a row", <ArrowDown {...ICON} />, () => moveSelectedRow(1), {
+              shortcut: "⌥↓",
+              disabled: !canRowDown,
+            })}
+          </>
+        )}
         {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !isTrimmed(clip) })}
         <MenuDivider role="separator" className="my-1" />
         {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, { disabled: !canRevealSource(clip, view) })}

@@ -10,7 +10,7 @@ import {
   type TimeAxis,
 } from "@/lib/stitch/timeAxis";
 import { draftSpans } from "@/lib/stitch/draft";
-import type { ClipSpan } from "@/lib/stitch/timeline";
+import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
 import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
 
 /**
@@ -92,7 +92,8 @@ const FIT_LAYOUT = { origin: GEOMETRY.origin, slotPx: GEOMETRY.emptySlot, traili
  * the zoom is the largest at which the sequence and every slot still end inside the lane.
  */
 function fitFor(spans: readonly ClipSpan[], laneWidth: number, stacked: boolean): number {
-  const total = spans.length > 0 ? spans[spans.length - 1].end : 0;
+  // The latest end: a placed clip in a higher row can end after the last row's
+  const total = spansEnd(spans);
   if (!stacked) return fitPxPerSec(total, spans.filter((s) => s.length <= 0).length, laneWidth, FIT_LAYOUT);
   let pps = fitPxPerSec(total, 0, laneWidth, FIT_LAYOUT);
   for (const span of spans) {

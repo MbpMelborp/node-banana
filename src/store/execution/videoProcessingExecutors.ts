@@ -162,10 +162,14 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
         updateNodeData(node.id, { progress: progress.progress });
       },
       signal,
-      // A Track node passes the loop count alone, as it always did
+      // A Track node passes the loop count alone, as it always did, and a lined-up stack its overlap as before
       {
         loopCount: gathered.loopCount,
-        ...(gathered.stack ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade } : {}),
+        ...(gathered.placed
+          ? { overlapSec: gathered.placed.overlapSec, crossfade: gathered.placed.crossfade, placed: true }
+          : gathered.stack
+            ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade }
+            : {}),
       }
     );
 
@@ -206,7 +210,15 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       clips: gathered.clipCount,
       loopCount: gathered.loopCount,
       withAudio: gathered.music !== null,
-      ...(gathered.stack ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade } : {}),
+      ...(gathered.placed
+        ? {
+            crossfade: gathered.placed.crossfade,
+            overlapSec: gathered.placed.overlapSec,
+            starts: gathered.clips.map((clip) => clip.startSec ?? null),
+          }
+        : gathered.stack
+          ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade }
+          : {}),
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {

@@ -106,6 +106,16 @@ describe("sanitizeTimeline", () => {
     ]);
   });
 
+  it("keeps a finite startSec unrounded, clamped to 0–600, and drops anything else", () => {
+    const at = (startSec: unknown) => sanitizeTimeline([{ id: "a", source: { kind: "edge", edgeId: "e1" }, startSec }])[0];
+    expect(at(1 / 3).startSec).toBe(1 / 3);
+    expect(at(-1).startSec).toBe(0);
+    expect(at(700).startSec).toBe(600);
+    expect("startSec" in at(Number.NaN)).toBe(false);
+    expect("startSec" in at("3")).toBe(false);
+    expect("startSec" in at(undefined)).toBe(false);
+  });
+
   it("drops a library clip whose id is not an asset id, so no URL is ever built from it", () => {
     const raw = [
       assetClip("dots", "../browse-directory?purpose="),
@@ -185,6 +195,15 @@ describe("remapStitchEdgeIds", () => {
     ]);
     expect(remapped.timeline![0].inSec).toBe(1);
     expect(data.clipOrder).toEqual(["e1", "e2", "e9"]);
+  });
+
+  it("keeps the clips' starts", () => {
+    const data = { clipOrder: ["e1"], timeline: [edgeClip("a", "e1", { startSec: 4.5 }), assetClip("x", "alibrary00001")] };
+    const remapped = remapStitchEdgeIds(data, map);
+    expect(remapped.timeline![0].startSec).toBe(4.5);
+    expect(dropStitchEdges(remapped, new Set(["e9"])).timeline![0].startSec).toBe(4.5);
+    const placed = { clipOrder: ["e1", "e2"], timeline: [edgeClip("a", "e1"), edgeClip("b", "e2", { startSec: 7 })] };
+    expect(dropStitchEdges(placed, new Set(["e1"])).timeline).toEqual([edgeClip("b", "e2", { startSec: 7 })]);
   });
 
   it("keeps a legacy node legacy", () => {

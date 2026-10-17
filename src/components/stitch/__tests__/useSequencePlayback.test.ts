@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { clipSpans, createClip, type SourceKey } from "@/lib/stitch/timeline";
+import { clipSpans, createClip, layoutSpans, spansEnd, type SourceKey } from "@/lib/stitch/timeline";
 import { useSequencePlayback, type SequencePlaybackOptions } from "../useSequencePlayback";
 
 // The preview engine against stand-in media elements and a hand-driven frame loop.
@@ -85,11 +85,11 @@ const asVideo = (m: FakeMedia) => m as unknown as HTMLVideoElement;
 const asAudio = (m: FakeMedia) => m as unknown as HTMLAudioElement;
 
 let frames: FrameRequestCallback[] = [];
-const flushFrame = () =>
+const flushFrame = (now = 0) =>
   act(() => {
     const queue = frames;
     frames = [];
-    for (const cb of queue) cb(0);
+    for (const cb of queue) cb(now);
   });
 
 const editor = () => useStitchEditorStore.getState();
@@ -480,6 +480,192 @@ describe("useSequencePlayback", () => {
       a.currentTime = 2.5;
       flushFrame();
       expect(editor().playhead).toBe(2.5);
+    });
+
+    describe("placed", () => {
+      /** One clip per entry, in row order: [id, source length, startSec]; each from its own source "blob:<id>". */
+      function placedOptions(rows: Array<[string, number, number]>, crossfade = true): SequencePlaybackOptions {
+        const timeline = rows.map(([id, , startSec]) => createClip({ kind: "edge", edgeId: id }, { id, startSec }));
+        const durations = new Map<SourceKey, number>(rows.map(([id, length]) => [`edge:${id}` as SourceKey, length]));
+        const spans = layoutSpans(timeline, durations, { mode: "stacked", overlapSec: 1, crossfade });
+        return {
+          spans,
+          total: spansEnd(spans),
+          srcFor: (clipId) => `blob:${clipId}`,
+          music: { src: null, curve: [], muted: false },
+          soundOn: true,
+          stack: { crossfade, placed: true },
+        };
+      }
+
+      function mountRows(opts: SequencePlaybackOptions) {
+        const hook = renderHook(() => useSequencePlayback(opts));
+        const media = new Map(opts.spans.map((span) => [span.clip.id, layerMedia()]));
+        act(() => {
+          for (const [id, m] of media) hook.result.current.registerVideo(id, asVideo(m));
+        });
+        for (const m of media.values()) m.writes = 0;
+        return { ...hook, media, el: (id: string) => media.get(id)! };
+      }
+
+      const opacities = (media: Map<string, ReturnType<typeof layerMedia>>) =>
+        [...media.values()].map((m) => Number(m.style.opacity));
+
+      // placed-three: A [0,5), B [2,7), C [3.5,9.5), top to bottom
+      const placedThree = () =>
+        placedOptions([
+          ["A", 5, 0],
+          ["B", 5, 2],
+          ["C", 6, 3.5],
+        ]);
+
+      it("hides every element while paused in a gap", () => {
+        const { media } = mountRows(
+          placedOptions([
+            ["A", 2, 0],
+            ["B", 3, 4],
+          ]),
+        );
+        act(() => editor().setPlayhead(1));
+        expect(opacities(media)).toEqual([1, 0]);
+        act(() => editor().setPlayhead(3));
+        expect(opacities(media)).toEqual([0, 0]);
+      });
+
+      it("plays through a gap on the frame clock and starts the next clip at its start without stopping", () => {
+        const { el } = mountRows(
+          placedOptions([
+            ["A", 2, 0],
+            ["B", 3, 4],
+          ]),
+        );
+        act(() => editor().setPlayhead(1.5));
+        act(() => editor().setPlaying(true));
+        // A reaches its Out: nothing plays until B, so the frame clock takes over there
+        el("A").currentTime = 1.99;
+        flushFrame(1000);
+        expect(editor().playhead).toBe(2);
+        expect(editor().playing).toBe(true);
+        flushFrame(1000);
+        flushFrame(2500);
+        expect(editor().playhead).toBeCloseTo(3.5, 9);
+        expect(el("B").play).not.toHaveBeenCalled();
+        flushFrame(3100);
+        expect(editor().playing).toBe(true);
+        expect(el("B").play).toHaveBeenCalledTimes(1);
+        expect(el("B").currentTime).toBeCloseTo(0.1, 9);
+        // B is the clock now
+        el("B").currentTime = 1;
+        flushFrame(3200);
+        expect(editor().playhead).toBe(5);
+      });
+
+      it("holds the frame across a gap under a slot, paused and playing, as the encode does", () => {
+        const { el, media } = mountRows(
+          placedOptions([
+            ["A", 5, 0],
+            ["C", 5, 5.01],
+          ]),
+        );
+        act(() => editor().setPlayhead(5.005));
+        expect(opacities(media)).toEqual([1, 0]);
+        act(() => editor().setPlayhead(4.9));
+        act(() => editor().setPlaying(true));
+        // A reaches its Out: C starts 0.01 s later, so it takes over there with no frame of black
+        el("A").currentTime = 4.99;
+        flushFrame(1000);
+        expect(editor().playing).toBe(true);
+        expect(editor().playhead).toBeCloseTo(5.01, 9);
+        expect(opacities(media)).toEqual([0, 1]);
+        expect(el("C").play).toHaveBeenCalledTimes(1);
+      });
+
+      it("starts from a gap on the frame clock", () => {
+        const { el } = mountRows(
+          placedOptions([
+            ["A", 2, 0],
+            ["B", 3, 4],
+          ]),
+        );
+        act(() => editor().setPlayhead(3));
+        act(() => editor().setPlaying(true));
+        expect(editor().playing).toBe(true);
+        flushFrame(0);
+        flushFrame(500);
+        expect(editor().playhead).toBeCloseTo(3.5, 9);
+        expect(el("A").play).not.toHaveBeenCalled();
+      });
+
+      it("plays and pauses a clip inside the one below while the one below stays the clock", () => {
+        // B on the higher row, wholly inside A
+        const { el } = mountRows(
+          placedOptions([
+            ["B", 2, 3],
+            ["A", 10, 0],
+          ]),
+        );
+        act(() => editor().setPlayhead(2));
+        act(() => editor().setPlaying(true));
+        expect(el("A").play).toHaveBeenCalledTimes(1);
+        el("A").currentTime = 3.5;
+        flushFrame();
+        expect(el("B").paused).toBe(false);
+        expect(editor().playhead).toBe(3.5);
+        el("A").currentTime = 5.5;
+        flushFrame();
+        expect(el("B").paused).toBe(true);
+        expect(el("A").pause).not.toHaveBeenCalled();
+        expect(editor().playhead).toBe(5.5);
+      });
+
+      it("gives three layers their opacities in row order, the DOM's", () => {
+        const { media } = mountRows(placedThree());
+        act(() => editor().setPlayhead(4.75));
+        const [a, b, c] = opacities(media);
+        expect(a).toBeCloseTo(1, 2);
+        expect(b).toBeCloseTo(0.908, 2);
+        expect(c).toBeCloseTo(0.092, 2);
+        // C is hidden under B here
+        act(() => editor().setPlayhead(4));
+        const [a4, b4, c4] = opacities(media);
+        expect(a4).toBeCloseTo(1, 2);
+        expect(b4).toBeCloseTo(0.667, 2);
+        expect(c4).toBe(0);
+      });
+
+      it("keeps a hidden clip's element playing, at opacity 0", () => {
+        const { el } = mountRows(placedThree());
+        act(() => editor().setPlayhead(3.9));
+        act(() => editor().setPlaying(true));
+        el("A").currentTime = 4;
+        flushFrame();
+        expect(el("C").paused).toBe(false);
+        expect(el("C").style.opacity).toBe("0");
+        // Started in step when playback began at 3.9, and still within the drift it allows
+        expect(el("C").currentTime).toBeCloseTo(0.4, 9);
+      });
+
+      it("hands the clock to the clip that started first, not to the higher row", () => {
+        // C on the top row starts after B: at A's Out, B (started at 2.5) is the clock
+        const { el } = mountRows(
+          placedOptions([
+            ["C", 5, 3.5],
+            ["B", 6.5, 2.5],
+            ["A", 4, 0],
+          ]),
+        );
+        act(() => editor().setPlayhead(3.9));
+        act(() => editor().setPlaying(true));
+        el("A").currentTime = 3.99;
+        el("B").currentTime = 1.49;
+        el("C").currentTime = 0.49;
+        flushFrame();
+        expect(editor().playhead).toBeCloseTo(4, 9);
+        el("B").currentTime = 3;
+        el("C").currentTime = 0.6;
+        flushFrame();
+        expect(editor().playhead).toBeCloseTo(5.5, 9);
+      });
     });
   });
 });

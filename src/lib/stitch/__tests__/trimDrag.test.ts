@@ -4,7 +4,6 @@ import {
   clipSpans,
   createClip,
   neighbourTarget,
-  trimClip,
   type SnapTarget,
   type SourceDurations,
   type SourceKey,
@@ -188,53 +187,87 @@ describe("trimTargets", () => {
     expect(trimTargets(spans, "c2", "out", 20)).toEqual([playhead(20), neighbourTarget(spans, "c2", "out")]);
   });
 
-  it("offers the edge's own start in Stacked", () => {
+  it("offers the playhead, 0:00 (In only), the other clips' edges and the edge's own start in Stacked", () => {
     const stacked = clipSpans(timeline, lengths, 1);
-    expect(trimTargets(stacked, "c2", "out", 20, true)).toEqual([
+    const edgesOf = (index: number) => [
+      { t: stacked[index].start, kind: "edge", label: `Clip ${index + 1}'s start` },
+      { t: stacked[index].end, kind: "edge", label: `Clip ${index + 1}'s end` },
+    ];
+    expect(trimTargets(stacked, "c2", "out", 20, "stacked")).toEqual([
       playhead(20),
+      ...edgesOf(0),
+      ...edgesOf(2),
+      ...edgesOf(3),
       { t: stacked[1].end, kind: "edge", label: "the original length" },
     ]);
-    expect(trimTargets(stacked, "c2", "in", 20, true)[1]).toEqual({
-      t: stacked[1].start,
-      kind: "edge",
-      label: "the original length",
-    });
-    expect(trimTargets(stacked, "missing", "in", 20, true)).toEqual([playhead(20)]);
+    expect(trimTargets(stacked, "c2", "in", 20, "stacked")).toEqual([
+      playhead(20),
+      { t: 0, kind: "edge", label: "the start" },
+      ...edgesOf(0),
+      ...edgesOf(2),
+      ...edgesOf(3),
+      { t: stacked[1].start, kind: "edge", label: "the original length" },
+    ]);
+    expect(trimTargets(stacked, "missing", "out", 20, "stacked")).toEqual([
+      playhead(20),
+      ...edgesOf(0),
+      ...edgesOf(1),
+      ...edgesOf(2),
+      ...edgesOf(3),
+    ]);
+  });
+
+  it("leaves empty clips out of the Stacked targets", () => {
+    const withEmpty = [...timeline, clip("c5", "e-none")];
+    const stacked = clipSpans(withEmpty, lengths, 1);
+    expect(trimTargets(stacked, "c2", "out", 20, "stacked").some((t) => t.label.startsWith("Clip 5"))).toBe(false);
   });
 });
 
 describe("trimDragAt, Stacked", () => {
-  // A 5 s and B 5 s at Overlap 1: B runs 4–9
-  const pair = [clip("a", "ea"), clip("b", "eb")];
-  const pairLengths = durations({ "edge:ea": 5, "edge:eb": 5 });
+  // A 5 s and B 5 s (In 1) at Overlap 1: B runs 4–9
+  const pair = [clip("a", "ea"), clip("b", "eb", { inSec: 1 })];
+  const pairLengths = durations({ "edge:ea": 5, "edge:eb": 6 });
   const laid = clipSpans(pair, pairLengths, 1);
-  const stackedStart = (playheadAt: number): TrimDragStart => ({
+  const inStart = (playheadAt: number, minInSec?: number): TrimDragStart => ({
     span: laid[1],
-    edge: "out",
-    sourceDuration: 5,
+    edge: "in",
+    sourceDuration: 6,
     pointerX: 1000,
     pxPerSec: PPS,
-    targets: trimTargets(laid, "b", "out", playheadAt, true),
-    // As useTrimDrag lays the trim out
-    liveEdgeTime: (trim) => clipSpans(trimClip(pair, "b", pairLengths, { outSec: trim.outSec }), pairLengths, 1)[1].end,
+    targets: trimTargets(laid, "b", "in", playheadAt, "stacked"),
+    minInSec,
   });
 
-  it("keeps a playhead snap the half-clip cap would move off the playhead from claiming it", () => {
-    // B's Out 3px short of the playhead at 5.5: at 1.5 s long its join is capped at 0.75 s, so it would end at 5.75
-    const s = stackedStart(5.5);
-    const r = at(s, 5.5 - laid[1].end + 3 / PPS);
-    expect(r.snapped).toBeNull();
-    expect(r.edgeSeqTime).toBeCloseTo(5.5 + 3 / PPS, 9);
-    const laidOut = clipSpans(trimClip(pair, "b", pairLengths, { outSec: r.outSec }), pairLengths, 1)[1];
-    expect(laidOut.end).not.toBeCloseTo(5.5, 6);
+  it("puts an In edge at the new start: the frames stay where they are", () => {
+    const r = at(inStart(20), 0.5);
+    expect(r.inSec).toBeCloseTo(1.5);
+    expect(r.edgeSeqTime).toBeCloseTo(4.5);
+    const back = at(inStart(20), -0.6);
+    expect(back.inSec).toBeCloseTo(0.4);
+    expect(back.edgeSeqTime).toBeCloseTo(3.4);
   });
 
-  it("snaps to the playhead where the laid-out edge meets it", () => {
-    // Uncapped (B stays 2 s or longer): its start holds at 4, so its end meets the playhead at 7.5
-    const s = stackedStart(7.5);
-    const r = at(s, 7.5 - laid[1].end + 3 / PPS);
+  it("stops the start at 0:00 with minInSec", () => {
+    // B at 4 with In 1: the In can reach 0 (start 3) without it; with minInSec = 1 − 4 = −3 it is not what stops it
+    expect(at(inStart(20, -3), -2).inSec).toBe(0);
+    // As for a clip at 0.5 with In 1: minInSec = 1 − 0.5, so the In stops at 0.5 and the edge 0.5 s before the start
+    const r = at(inStart(20, 0.5), -0.9, false);
+    expect(r.inSec).toBeCloseTo(0.5);
+    expect(r.edgeSeqTime).toBeCloseTo(laid[1].start - 0.5);
+  });
+
+  it("snaps an In edge to the playhead", () => {
+    const r = at(inStart(4.3), 0.3 + 3 / PPS);
     expect(r.snapped?.kind).toBe("playhead");
-    const laidOut = clipSpans(trimClip(pair, "b", pairLengths, { outSec: r.outSec }), pairLengths, 1)[1];
-    expect(laidOut.end).toBeCloseTo(7.5, 9);
+    expect(r.edgeSeqTime).toBeCloseTo(4.3, 9);
+    expect(r.inSec).toBeCloseTo(1.3, 9);
+  });
+
+  it("snaps an In edge to another clip's end", () => {
+    // A ends at 5: B's In edge 2px past it
+    const r = at(inStart(20), 1 + 2 / PPS);
+    expect(r.snapped?.label).toBe("Clip 1's end");
+    expect(r.edgeSeqTime).toBeCloseTo(5, 9);
   });
 });

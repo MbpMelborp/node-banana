@@ -13,13 +13,15 @@ import {
   DialogSpinner,
   DialogTitle,
 } from "@/components/ui/Dialog";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fetchFacets } from "@/lib/assets/client/api";
 import { onPosterReady } from "@/lib/assets/client/poster";
 import type { AssetFacets, AssetView } from "@/lib/assets/types";
 import { DEFAULT_LIBRARY_QUERY, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
+import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
+import { isPlaced } from "@/lib/stitch/timeline";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { addAssetClips } from "../editorActions";
 import { STITCH_EDITOR_PANEL } from "../editorStyles";
@@ -40,6 +42,22 @@ const NO_PROJECTS: AssetFacets["projects"] = [];
 const closePicker = () => useStitchEditorStore.getState().setPickerOpen(false);
 
 /**
+ * The clip new ones go after: the last row, or in a placed stack the clip that ends last (they start Overlap before
+ * its end). -1 with no clip.
+ */
+function goesAfterIndex(s: StitchEditorState): number {
+  const draft = s.draft;
+  if (!draft || draft.timeline.length === 0) return -1;
+  const last = draft.timeline.length - 1;
+  if (draft.sequenceLayout.mode !== "stacked" || !isPlaced(draft.timeline)) return last;
+  let latest: { index: number; end: number } | null = null;
+  for (const span of draftSpans(draft, s.durations)) {
+    if (span.length > 0 && (!latest || span.end >= latest.end)) latest = { index: span.index, end: span.end };
+  }
+  return latest?.index ?? last;
+}
+
+/**
  * "Add from library", over the Stitch editor: the library's videos, searched
  * and narrowed by project, favourites and this workflow, newest or oldest
  * first. Videos are picked in order, and Add appends one clip each, in that
@@ -54,7 +72,7 @@ export function LibraryPicker() {
 
 function OpenPicker() {
   const workflowId = useWorkflowStore((s) => s.workflowId);
-  const clipCount = useStitchEditorStore((s) => s.draft?.timeline.length ?? 0);
+  const afterIndex = useStitchEditorStore(goesAfterIndex);
   const libraryOn = useLibraryAvailable();
   const [query, setQuery] = useState<LibraryVideoQuery>(DEFAULT_LIBRARY_QUERY);
   const { assets, loading, loadingMore, error, moreError, hasMore, loadMore, retry, listingKey } = useLibraryVideos(
@@ -154,7 +172,7 @@ function OpenPicker() {
 
   const pickedIds = new Set(picked.map((a) => a.id));
   const pickedSec = picked.reduce((sum, a) => sum + (a.durationSec ?? 0), 0);
-  const where = clipCount > 0 ? `goes after ${clipName(clipCount - 1)}` : "goes first";
+  const where = afterIndex >= 0 ? `goes after ${clipName(afterIndex)}` : "goes first";
   const n = picked.length;
 
   let body: ReactNode;

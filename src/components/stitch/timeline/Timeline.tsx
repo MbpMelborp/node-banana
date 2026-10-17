@@ -3,22 +3,36 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { clipName } from "@/lib/stitch/labels";
+import { gaps as envelopeGaps, weightPieces, type WeightPiece } from "@/lib/stitch/placement";
 import { stackedInsertionY } from "@/lib/stitch/reorder";
 import { DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "@/lib/stitch/stack";
-import { clipSpans, moveClip, topSpanAt, trimClip, type ClipSpan } from "@/lib/stitch/timeline";
+import {
+  clipSpans,
+  isPlaced,
+  layoutSpans,
+  moveClip,
+  pinStarts,
+  spansEnvelope,
+  topSpanAt,
+  type ClipSpan,
+} from "@/lib/stitch/timeline";
 import type { StitchTimelineClip, VolumePoint } from "@/types";
 import { buildTimeAxis } from "@/lib/stitch/timeAxis";
 import { laneBoxes, liveSpans, stackedBoxes, trimEdgeX } from "@/lib/stitch/laneLayout";
-import { EDITOR_CHIP, GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
+import { liveFitZoom } from "../liveFitZoom";
+import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
 import type { ClipMediaView, MusicView } from "../useStitchEditorMedia";
 import { AudioLane } from "./AudioLane";
 import { ClipContextMenu } from "./ClipContextMenu";
 import { ClipsLane } from "./ClipsLane";
+import { MoveOverlay } from "./MoveOverlay";
 import { Playhead } from "./Playhead";
 import { Ruler } from "./Ruler";
-import { StackedClipsLane } from "./StackedClipsLane";
+import { StackedClipsLane, type LaneMarks } from "./StackedClipsLane";
 import { TrackHeaders } from "./TrackHeaders";
 import { TrimMarks, TrimOverlay } from "./TrimOverlay";
+import { useClipMove } from "./useClipMove";
 import { useClipReorder } from "./useClipReorder";
 import type { TimelineZoom } from "./useTimelineZoom";
 import { useTrimDrag } from "./useTrimDrag";
@@ -29,12 +43,9 @@ const OVERSCAN = 120;
 const WHEEL_ZOOM_SCALE = 200;
 const NO_CURVE: VolumePoint[] = [];
 const NO_CLIPS: StitchTimelineClip[] = [];
-/** Stacked: a reorder drag this far sideways, and mostly sideways, explains why the clip will not move in time. */
-const SIDEWAYS_CHIP_PX = 24;
-/** Room for that chip, px: its one line of text measures 290 px. */
-const SIDEWAYS_CHIP_WIDTH = 300;
-/** The chip's gap from the pointer, px. */
-const SIDEWAYS_CHIP_GAP = 14;
+const NO_GAPS: ReadonlyArray<{ fromSec: number; toSec: number }> = [];
+/** A clip moved by the keys or the rail to a place out of view is scrolled to this far inside the lanes' left, px. */
+const REVEAL_INSET_PX = 64;
 
 /** The rows' scroll is the scroller's own, measured after layout; until then, what the height leaves without a scrollbar. */
 interface RowsMeasure {
@@ -51,6 +62,14 @@ function revealRow(el: HTMLElement | null, index: number, viewport: number): voi
   const bottom = top + GEOMETRY.stackRow;
   if (top < el.scrollTop) el.scrollTop = top;
   else if (bottom > el.scrollTop + viewport) el.scrollTop = bottom - viewport;
+}
+
+/** Scrolls the lanes so a box wholly out of view sits REVEAL_INSET_PX inside their left; whether they scrolled. */
+function revealBox(el: HTMLElement | null, box: { x: number; width: number }): boolean {
+  if (!el) return false;
+  if (box.x + box.width > el.scrollLeft && box.x < el.scrollLeft + el.clientWidth) return false;
+  el.scrollLeft = Math.max(0, box.x - REVEAL_INSET_PX);
+  return true;
 }
 
 /**
@@ -70,6 +89,12 @@ function revealRow(el: HTMLElement | null, index: number, viewport: number): voi
  * the rows when they overflow (⇧ wheel scrolls along the timeline), and the
  * row of the clip that drives the preview, or of a clip selected by a key,
  * is scrolled into view.
+ *
+ * In Stacked a clip's box drags it in time and across rows (useClipMove),
+ * its row header across rows only (useClipReorder). A placed stack (some
+ * clip placed by hand) marks how each clip layers and where the gaps are;
+ * every drag draws them from the timeline its release will leave. A clip
+ * moved out of view by the rail or the keys is scrolled back into view.
  */
 export function Timeline({
   spans,
@@ -86,7 +111,7 @@ export function Timeline({
   music: MusicView | null;
   /** The playable URL of a clip's source, for the frame under a dragged handle. */
   srcFor: (clipId: string) => string | null;
-  /** The draft's layout is Stacked: one row per clip, each overlapping the one before. */
+  /** The draft's layout is Stacked: one row per clip, placed anywhere in time. */
   stacked?: boolean;
 }) {
   const { axis, axisNow, scroller, scrollerRef, laneWidth, scrollPosition } = zoom;
@@ -105,17 +130,19 @@ export function Timeline({
   // tick, so the drawn range never lags them. Their width is the zoom's own measurement.
   const scrollLeft = useSyncExternalStore(scrollPosition.subscribe, scrollPosition.get, scrollPosition.get);
 
-  const { trim, onHandlePointerDown } = useTrimDrag(axisNow, contentRef);
+  const placed = stacked && isPlaced(timeline);
+
+  const { trim, onHandlePointerDown, takeReleased: takeTrimReleased } = useTrimDrag(axisNow, contentRef);
   const restBoxes = useMemo(
     () => (stacked ? stackedBoxes(axis, spans, GEOMETRY.emptySlot) : laneBoxes(axis, spans, null)),
     [stacked, axis, spans],
   );
-  // Stacked draws a trim as release leaves it: the half-clip cap can move the clip's own start and every later one
-  const drawnSpans = useMemo(() => {
-    if (!stacked || !trim) return spans;
-    const patch = trim.edge === "out" ? { outSec: trim.result.outSec } : { inSec: trim.result.inSec };
-    return clipSpans(trimClip(timeline, trim.clipId, durations, patch), durations, overlapSec);
-  }, [stacked, trim, spans, timeline, durations, overlapSec]);
+  // Stacked draws a trim as release leaves it: an In edge moves the clip's start, and nothing else moves
+  const trimTimeline = stacked ? (trim?.timeline ?? null) : null;
+  const drawnSpans = useMemo(
+    () => (trimTimeline ? layoutSpans(trimTimeline, durations, layout) : spans),
+    [trimTimeline, spans, durations, layout],
+  );
   const boxes = useMemo(() => {
     if (!stacked) return laneBoxes(axis, spans, trim);
     return drawnSpans === spans ? restBoxes : stackedBoxes(axis, drawnSpans, GEOMETRY.emptySlot);
@@ -161,33 +188,78 @@ export function Timeline({
     return () => observer.disconnect();
   }, [stacked, scroller, audioRow]);
 
-  // Latest values for the handlers bound once (the wheel, the scroll, the playback follow)
-  const latest = useRef({ zoom, stacked, rowsOverflow, rowsViewport, spans });
-  useEffect(() => {
-    latest.current = { zoom, stacked, rowsOverflow, rowsViewport, spans };
+  const rowsView = () => {
+    const el = scroller.current;
+    if (!el) return null;
+    const top = el.getBoundingClientRect().top + GEOMETRY.ruler;
+    return { top, bottom: top + latest.current.rowsViewport };
+  };
+  const reorderOptions = { stacked, rowCount: spans.length, rowsView };
+  // The lanes' content width as last drawn, for a body drag's release
+  const drawnWidth = useRef(0);
+  // Track: a clip's body reorders it. Stacked: a row header does, and a box's body moves it in time and across rows
+  const { reorder, onBodyPointerDown, takeReleased: takeRowReleased } = useClipReorder(restBoxes, contentRef, reorderOptions);
+  const { move, onMovePointerDown, pressing, takeReleased: takeMoveReleased, releasedWidth } = useClipMove(axisNow, contentRef, {
+    rowCount: spans.length,
+    rowsView,
+    drawnWidth: () => drawnWidth.current,
   });
 
-  const reorderOptions = {
-    stacked,
-    rowCount: spans.length,
-    rowsView: () => {
-      const el = scroller.current;
-      if (!el) return null;
-      const top = el.getBoundingClientRect().top + GEOMETRY.ruler;
-      return { top, bottom: top + latest.current.rowsViewport };
-    },
-  };
-  const { reorder, onBodyPointerDown } = useClipReorder(restBoxes, contentRef, reorderOptions);
-  // The lifted clip is drawn at the start it will have in the order it would drop into
+  // Latest values for the handlers bound once (the wheel, the scroll, the playback follow)
+  const latest = useRef({ zoom, stacked, rowsOverflow, rowsViewport, spans, pressing });
+  useEffect(() => {
+    latest.current = { zoom, stacked, rowsOverflow, rowsViewport, spans, pressing };
+  });
+
+  // A lined-up stack draws a header-lifted clip at the start it will have in the order it would drop into; a placed
+  // one keeps every start, so the lifted box keeps its x
   const liftId = stacked && reorder ? reorder.clipId : null;
   const liftFrom = reorder?.index ?? -1;
   const liftTo = reorder?.dropIndex ?? -1;
   const liftedX = useMemo(() => {
-    if (liftId === null) return null;
+    if (liftId === null || placed) return null;
     const moved = clipSpans(moveClip(timeline, liftFrom, liftTo), durations, overlapSec);
     const span = moved.find((s) => s.clip.id === liftId);
     return span ? axis.timeToX(span.start) : null;
-  }, [liftId, liftFrom, liftTo, timeline, durations, overlapSec, axis]);
+  }, [liftId, liftFrom, liftTo, placed, timeline, durations, overlapSec, axis]);
+
+  // The timeline the marks are drawn from: the one release would leave while a drag runs (a body drag always pins, so
+  // its marks are placed ones in a lined-up stack too), else the draft's
+  const markTimeline = useMemo(() => {
+    if (!stacked) return null;
+    if (move) return move.timeline;
+    if (trimTimeline) return trimTimeline;
+    if (liftId !== null && placed) return moveClip(pinStarts(timeline, durations, layout.overlapSec), liftFrom, liftTo);
+    return timeline;
+  }, [stacked, move, trimTimeline, liftId, placed, timeline, durations, layout.overlapSec, liftFrom, liftTo]);
+  const markSpans = useMemo(() => {
+    if (!markTimeline || markTimeline === timeline) return spans;
+    return markTimeline === trimTimeline ? drawnSpans : layoutSpans(markTimeline, durations, layout);
+  }, [markTimeline, timeline, spans, trimTimeline, drawnSpans, durations, layout]);
+  const markEnvelope = markTimeline && isPlaced(markTimeline) ? spansEnvelope(markSpans, layout.crossfade) : null;
+  const pxPerSec = axis.pxPerSec;
+  const marks = useMemo((): LaneMarks | null => {
+    if (!markEnvelope || !markTimeline) return null;
+    const pieces = new Map<string, readonly WeightPiece[]>();
+    for (const span of markSpans) {
+      const unit = markEnvelope.units.findIndex((u) => u.row === span.index);
+      if (unit !== -1) pieces.set(span.clip.id, weightPieces(markEnvelope, unit, pxPerSec));
+    }
+    // Rows keep their names until release: a covering clip is named by its row at the press
+    const coverName = (row: number) => {
+      const id = markTimeline[row]?.id;
+      const at = timeline.findIndex((clip) => clip.id === id);
+      return clipName(at === -1 ? row : at);
+    };
+    return { pieces, coverName };
+  }, [markEnvelope, markTimeline, markSpans, timeline, pxPerSec]);
+  const gapBands = useMemo(() => (markEnvelope ? envelopeGaps(markEnvelope) : NO_GAPS), [markEnvelope]);
+
+  // The rail and the keys move clips from outside the lane: in Fit they keep the zoom this lane draws at
+  useLayoutEffect(() => {
+    liveFitZoom.set(axis.pxPerSec);
+  });
+  useEffect(() => () => liveFitZoom.set(null), []);
 
   useEffect(() => {
     const el = scroller.current;
@@ -206,8 +278,8 @@ export function Timeline({
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
       event.preventDefault();
       if (event.ctrlKey || event.metaKey) {
-        // Not mid-drag: a trim or reorder measures from the zoom it started at
-        if (useStitchEditorStore.getState().cancelGesture) return;
+        // Not mid-drag: a drag measures from the zoom it started at, and a box's press from its press
+        if (useStitchEditorStore.getState().cancelGesture || latest.current.pressing.current) return;
         const z = latest.current.zoom;
         const viewX = Math.max(0, event.clientX - el.getBoundingClientRect().left);
         z.zoomAround(z.pxPerSec * Math.exp(-event.deltaY / WHEEL_ZOOM_SCALE), viewX);
@@ -268,11 +340,52 @@ export function Timeline({
     revealRow(scroller.current, selectedRow, latest.current.rowsViewport);
   }, [stacked, selectedId, selectedRow, scroller]);
 
+  // From a press anywhere in the timeline to its release. A press lets a focused field go, and a Start typed there
+  // commits then: the lanes must not scroll away from under the pointer
+  const pressDown = useRef(false);
+  const onPressCapture = () => {
+    pressDown.current = true;
+    const done = () => {
+      pressDown.current = false;
+      window.removeEventListener("pointerup", done, true);
+      window.removeEventListener("pointercancel", done, true);
+    };
+    window.addEventListener("pointerup", done, true);
+    window.addEventListener("pointercancel", done, true);
+  };
+
+  // The selected clip moved by the rail's Start, the keys or an undo to a place wholly out of view is scrolled to
+  // 64px inside the lanes. Never for a move made in the timeline: not while a press is down (a Start committed by the
+  // press), and not for what a drag's release applies (a box's body, a row header, a trim handle), which lands where
+  // it was drawn
+  const selectedStart = stacked && selectedRow !== -1 ? spans[selectedRow].start : null;
+  const selectedBox = selectedRow === -1 ? null : restBoxes[selectedRow];
+  const shownStart = useRef<{ id: string; start: number } | null>(null);
+  useEffect(() => {
+    const before = shownStart.current;
+    shownStart.current = selectedId !== null && selectedStart !== null ? { id: selectedId, start: selectedStart } : null;
+    // Each is taken, so a release that moved nothing the reveal watches is not left over for the next change
+    const released = [takeMoveReleased(), takeRowReleased(), takeTrimReleased()];
+    if (pressDown.current || released.includes(selectedId)) return;
+    if (!selectedBox || !before || before.id !== selectedId || before.start === selectedStart) return;
+    const el = scroller.current;
+    if (el && revealBox(el, selectedBox)) scrollPosition.set(el.scrollLeft);
+  }, [selectedId, selectedStart, selectedBox, scroller, scrollPosition, takeMoveReleased, takeRowReleased, takeTrimReleased]);
+
   const empty = spans.length === 0;
   const stackedRight = stacked
     ? restBoxes.reduce((right, box, i) => (spans[i].length > 0 ? right : Math.max(right, box.x + box.width)), axis.endX)
     : axis.endX;
-  const contentWidth = Math.max(stackedRight + LANE_TRAILING_PX, laneWidth);
+  const moveBox = move ? restBoxes[move.index] : undefined;
+  // A box dragged past the end widens the lanes with it, so they can scroll on under it
+  const movedRight = move && moveBox ? move.x + moveBox.width : 0;
+  // A body drag that shortens the sequence keeps the width it was drawn at until the lanes scroll back from it: the
+  // browser would otherwise pull a scroll at the end back by what was lost, and every box would jump on release
+  const heldWidth = releasedWidth && releasedWidth.pxPerSec === axis.pxPerSec ? Math.min(releasedWidth.width, scrollLeft + laneWidth) : 0;
+  const contentWidth = Math.max(Math.max(stackedRight, movedRight) + LANE_TRAILING_PX, laneWidth, heldWidth);
+  useLayoutEffect(() => {
+    drawnWidth.current = contentWidth;
+  });
   const viewLeft = scrollLeft - OVERSCAN;
   const viewRight = scrollLeft + Math.max(laneWidth, 1) + OVERSCAN;
   const trimView = trim ? media.get(trim.clipId) : undefined;
@@ -281,29 +394,25 @@ export function Timeline({
   const edgeX = trim && trimBox ? trimEdgeX(trimBox, trim.edge) : 0;
   const trimRowTop = GEOMETRY.ruler + trimIndex * GEOMETRY.stackRow + GEOMETRY.stackClipTop;
   const trimRow = stacked && trimIndex !== -1 ? { top: trimRowTop, bottom: trimRowTop + GEOMETRY.stackClipHeight } : undefined;
-  const insertionY = stacked && reorder ? stackedInsertionY(reorder.dropIndex, reorder.index, GEOMETRY.stackRow) : null;
-  const sideways =
-    stacked && reorder && Math.abs(reorder.dx) > SIDEWAYS_CHIP_PX && Math.abs(reorder.dx) > 2 * Math.abs(reorder.dy)
-      ? reorder
-      : null;
-  const snappedToPlayhead = trim?.result.snapped?.kind === "playhead";
-  // Right of the pointer, else left of it, else against the view's right edge: never past the visible lanes, where it
-  // would be cut off and widen the scroll mid-drag. A drag from a row header starts left of the lanes: the chip then
-  // sits against the view's left edge
-  const sidewaysChipX = (() => {
-    if (!sideways) return null;
-    const viewEnd = scrollLeft + laneWidth;
-    const right = sideways.x + SIDEWAYS_CHIP_GAP;
-    if (laneWidth <= 0 || right + SIDEWAYS_CHIP_WIDTH <= viewEnd) return Math.max(scrollLeft, right);
-    const left = sideways.x - SIDEWAYS_CHIP_GAP - SIDEWAYS_CHIP_WIDTH;
-    return left >= scrollLeft ? left : Math.max(scrollLeft, viewEnd - SIDEWAYS_CHIP_WIDTH);
-  })();
+  const rowDrag = stacked ? (reorder ?? move) : null;
+  const insertionY = rowDrag ? stackedInsertionY(rowDrag.dropIndex, rowDrag.index, GEOMETRY.stackRow) : null;
+  const snappedToPlayhead =
+    trim?.result.snapped?.kind === "playhead" || move?.result.snapped?.kind === "playhead";
+  // The moving box as the lane draws it: its row's top plus the travel, inside the rows
+  const moveTop = move
+    ? Math.min(
+        Math.max(move.index * GEOMETRY.stackRow + GEOMETRY.stackClipTop + move.dy, 0),
+        spans.length * GEOMETRY.stackRow - GEOMETRY.stackClipHeight,
+      )
+    : 0;
+  const moveTargetRow = move?.result.snapped?.row ?? null;
 
   return (
     <div
       ref={rootRef}
       className="relative flex shrink-0 overflow-hidden border-t border-chrome-border bg-editor-lanes"
       style={{ height }}
+      onPointerDownCapture={onPressCapture}
       onFocus={() => {
         focusInside.current = true;
       }}
@@ -343,6 +452,15 @@ export function Timeline({
                 contentRef={contentRef}
                 showLabels={!empty}
               />
+              {gapBands.map((gap) => (
+                <div
+                  key={gap.fromSec}
+                  aria-hidden="true"
+                  data-testid="stitch-ruler-gap"
+                  className="pointer-events-none absolute bottom-0 h-[3px] bg-black"
+                  style={{ left: axis.timeToX(gap.fromSec), width: axis.timeToX(gap.toSec) - axis.timeToX(gap.fromSec) }}
+                />
+              ))}
               {!empty && <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} part="head" />}
             </div>
             <div data-testid="stitch-rows" className="relative z-0" style={{ height: rowsBlock }}>
@@ -356,11 +474,15 @@ export function Timeline({
                 trim={trim}
                 reorder={reorder}
                 liftedX={liftedX}
+                move={move}
+                insertionY={insertionY}
+                marks={marks}
+                gaps={gapBands}
                 crossfade={layout.crossfade}
                 viewLeft={viewLeft}
                 viewRight={viewRight}
                 contentWidth={contentWidth}
-                onBodyPointerDown={onBodyPointerDown}
+                onBodyPointerDown={onMovePointerDown}
                 onHandlePointerDown={onHandlePointerDown}
               />
             </div>
@@ -383,15 +505,19 @@ export function Timeline({
             {trim && trimBox && (
               <TrimMarks trim={trim} axis={playheadAxis} edgeX={edgeX} scrollLeft={scrollLeft} row={trimRow} />
             )}
-            {sideways && sidewaysChipX !== null && (
-              <div
-                aria-hidden="true"
-                data-testid="stitch-reorder-chip"
-                className={cn(EDITOR_CHIP, "pointer-events-none absolute z-20 whitespace-nowrap text-neutral-300")}
-                style={{ left: sidewaysChipX, top: sideways.y + SIDEWAYS_CHIP_GAP }}
-              >
-                Clips stay in order. Overlap sets where each one starts.
-              </div>
+            {move && moveBox && (
+              <MoveOverlay
+                move={move}
+                axis={axis}
+                lengthSec={spans[move.index]?.length ?? 0}
+                boxWidth={moveBox.width}
+                boxTop={moveTop}
+                targetBoxTop={
+                  moveTargetRow === null ? null : moveTargetRow * GEOMETRY.stackRow + GEOMETRY.stackClipTop
+                }
+                scrollLeft={scrollLeft}
+                laneWidth={laneWidth}
+              />
             )}
           </div>
         ) : (

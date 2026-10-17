@@ -4,15 +4,18 @@ import type { MouseEvent, ReactNode, PointerEvent as ReactPointerEvent } from "r
 import { Volume1, VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { clipName } from "@/lib/stitch/labels";
-import { formatSeconds } from "@/lib/stitch/timecode";
+import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { setClipMuted } from "../editorActions";
-import { GEOMETRY, LABEL_BAR, LIFTED_CLIP } from "../editorStyles";
+import { GEOMETRY, LABEL_BAR, LIFTED_CLIP, MOVING_CLIP } from "../editorStyles";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { Filmstrip } from "./Filmstrip";
 
-/** At rest; "dimmed" while another clip is being dragged to a new place; "lifted" while this one is. */
-export type ClipBoxMode = "rest" | "dimmed" | "lifted";
+/**
+ * At rest; "dimmed" while another clip is being dragged to a new place; "lifted" while this one is; "moving" while
+ * Stacked's body drag carries it in time and across rows.
+ */
+export type ClipBoxMode = "rest" | "dimmed" | "lifted" | "moving";
 
 const stopPress = (event: ReactPointerEvent) => event.stopPropagation();
 /** Each handle takes at most this share of a narrow clip, so its middle third stays a body to press and drag. */
@@ -23,6 +26,11 @@ const MIN_GRIP_HANDLE_PX = 4;
 const handleWidthFor = (width: number) => Math.min(GEOMETRY.handle, width * HANDLE_SHARE);
 /** A compact box narrower than this shows no length chip. */
 const MIN_CHIP_BOX_PX = 56;
+/**
+ * A compact box narrower than this has no hover mute button, and its muted badge is a mark the press passes through:
+ * on a short box they would cover most of the body, which is what a drag holds.
+ */
+const MIN_SOUND_BUTTON_BOX_PX = 96;
 /** A mouse press takes no focus: a focused clip or button would be unmounted by its own action and drop focus out of the editor. */
 export const keepFocus = (event: MouseEvent) => event.preventDefault();
 
@@ -72,7 +80,9 @@ function Handle({
  *
  * Compact (a Stacked row's 40px box): no label bar at rest, since the row
  * header names the clip; a small length chip at the right instead, and the
- * sound badges centred at the left.
+ * sound badges centred at the left. Its accessible name says where it
+ * starts, and a box under 96px keeps its middle for the body drag: no hover
+ * mute button, and the muted badge only marks it (⌥M and the menu unmute).
  */
 export function ClipBox({
   span,
@@ -131,11 +141,12 @@ export function ClipBox({
   const inset = selected || trimEdge ? "left-2.5 right-2.5" : "left-0 right-0 group-hover:left-2.5 group-hover:right-2.5";
   const badgeLeft = selected || trimEdge ? "left-4" : "left-1.5 group-hover:left-4";
   const badgeTop = compact ? "top-[11px]" : "top-1.5";
+  const soundButtons = !compact || width >= MIN_SOUND_BUTTON_BOX_PX;
 
   return (
     <div
       data-clip-id={clip.id}
-      aria-label={name}
+      aria-label={compact ? `${name}, starts ${formatTimecode(span.start)}` : name}
       aria-selected={selected}
       role="option"
       tabIndex={focusable ? 0 : -1}
@@ -144,14 +155,18 @@ export function ClipBox({
       onContextMenu={onContextMenu}
       className={cn(
         "group absolute overflow-hidden rounded-media bg-editor-chrome select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
-        mode === "lifted"
-          ? cn(LIFTED_CLIP, "ring-1 ring-white/20")
-          : mode === "dimmed"
-            ? "opacity-40 ring-1 ring-white/10"
-            : selected || trimEdge
-              ? "ring-2 ring-selection"
-              : "ring-1 ring-white/10 hover:ring-white/24",
+        mode === "moving"
+          ? MOVING_CLIP
+          : mode === "lifted"
+            ? cn(LIFTED_CLIP, "ring-1 ring-white/20")
+            : mode === "dimmed"
+              ? "opacity-40 ring-1 ring-white/10"
+              : selected || trimEdge
+                ? "ring-2 ring-selection"
+                : "ring-1 ring-white/10 hover:ring-white/24",
         trimEdge === "in" && "z-1",
+        // Stacked: the body drags on both axes; only the row header's drag lifts a box, up or down
+        compact && mode === "rest" && "cursor-grab",
         compact && mode === "lifted" && "cursor-ns-resize",
       )}
       style={{ left: x, top, width, height }}
@@ -188,13 +203,27 @@ export function ClipBox({
           )}
         </div>
       )}
-      {compact && atRest && width >= MIN_CHIP_BOX_PX && (
+      {/* A box in motion keeps its length and its muted mark, without the buttons a press would reach */}
+      {compact && (atRest || mode === "moving") && width >= MIN_CHIP_BOX_PX && (
         <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-[4px] bg-black/60 px-1 font-mono text-[10px] tabular-nums text-neutral-300">
           {formatSeconds(lengthSec, trimEdge ? 2 : 1)}
         </span>
       )}
 
-      {atRest && clip.muted && (
+      {clip.muted && ((atRest && !soundButtons) || mode === "moving") && (
+        <span
+          aria-hidden="true"
+          data-muted-mark=""
+          className={cn(
+            "pointer-events-none absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300",
+            badgeTop,
+            badgeLeft,
+          )}
+        >
+          <VolumeX size={11} strokeWidth={2} />
+        </span>
+      )}
+      {atRest && clip.muted && soundButtons && (
         <button
           type="button"
           aria-label="Unmute clip audio"
@@ -213,7 +242,7 @@ export function ClipBox({
           <VolumeX size={11} strokeWidth={2} />
         </button>
       )}
-      {atRest && !clip.muted && !trimEdge && (
+      {atRest && !clip.muted && !trimEdge && soundButtons && (
         <button
           type="button"
           aria-label="Mute clip audio"

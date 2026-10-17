@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { StitchTimelineClip } from "@/types";
 import { describeDraftChanges, type StitchDraft } from "../draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
-import { createClip, splitClipAt, type SourceKey } from "../timeline";
+import {
+  createClip,
+  moveClipStart,
+  pinStarts,
+  resetTrimInPlace,
+  splitClipAt,
+  trimClipInPlace,
+  type SourceKey,
+} from "../timeline";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -99,6 +107,43 @@ describe("describeDraftChanges", () => {
     expect(describeDraftChanges(base, draft(base.timeline, { loopCount: 2, sequenceLayout: stacked }))).toBe(
       `The loop count, the switch to Stacked and the overlap${LOST}`,
     );
+  });
+
+  describe("placed clips (Stacked)", () => {
+    const STACKED = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+    // Lined up at Overlap 1: a 0–5, b 4–8, c 7–10
+    const lined = draft(base.timeline, { sequenceLayout: STACKED });
+    const edit = (timeline: StitchTimelineClip[]) => draft(timeline, { sequenceLayout: STACKED });
+
+    it("names a moved clip, and two", () => {
+      const once = moveClipStart(lined.timeline, durations, "b", 6, 1);
+      expect(describeDraftChanges(lined, edit(once), durations)).toBe(`A moved clip${LOST}`);
+      const twice = moveClipStart(once, durations, "c", 0, 1);
+      expect(describeDraftChanges(lined, edit(twice), durations)).toBe(`Two moved clips${LOST}`);
+    });
+
+    it("does not count pinning alone, or an In trim that keeps the frames in place, as a move", () => {
+      expect(describeDraftChanges(lined, edit(pinStarts(lined.timeline, durations, 1)), durations)).toBe(
+        "Your changes will be lost. The node keeps what it had.",
+      );
+      const trimmed = trimClipInPlace(lined.timeline, "b", durations, { inSec: 1 }, 1);
+      expect(trimmed.find((c) => c.id === "b")!.startSec).toBe(5);
+      expect(describeDraftChanges(lined, edit(trimmed), durations)).toBe(`A trim${LOST}`);
+    });
+
+    it("counts a Reset trim clamped at 0:00 as a trim and a move", () => {
+      const initial = edit([clip("a", "e1", { startSec: 0.5, inSec: 0.8 }), clip("b", "e2", { startSec: 6 })]);
+      const reset = resetTrimInPlace(initial.timeline, "a", durations, 1);
+      expect(reset[0]).toMatchObject({ startSec: 0, inSec: 0, outSec: null });
+      expect(describeDraftChanges(initial, edit(reset), durations)).toBe(`A trim and a moved clip${LOST}`);
+    });
+
+    it("names lining up the clips, right after a new order", () => {
+      const placed = edit(moveClipStart(lined.timeline, durations, "b", 6, 1));
+      expect(describeDraftChanges(placed, lined, durations)).toBe(`Lining up the clips${LOST}`);
+      const reordered = edit([lined.timeline[1], lined.timeline[0], clip("c", "e3", { inSec: 1 })]);
+      expect(describeDraftChanges(placed, reordered, durations)).toBe(`A trim, a new order and lining up the clips${LOST}`);
+    });
   });
 
   it("falls back when no change can be named", () => {

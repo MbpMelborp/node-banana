@@ -12,9 +12,10 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * step). Escape puts it back. A release onto a draft that changed under the
  * drag is dropped (the editor's keys wait while it runs).
  *
- * In Stacked the drag is vertical, from a clip's box or its row header: the
- * place comes from the lifted box's centre crossing half a row, and the
- * rows scroll by themselves while the pointer is near their top or bottom.
+ * In Stacked it serves the row headers only (a box's body moves its clip in
+ * time and across rows, useClipMove): the drag is vertical, the place comes
+ * from the lifted box's centre crossing half a row, and the rows scroll by
+ * themselves while the pointer is near their top or bottom.
  */
 
 export interface ReorderLive {
@@ -24,9 +25,6 @@ export interface ReorderLive {
   dx: number;
   /** The same down the rows (Stacked; 0 in Track). */
   dy: number;
-  /** The pointer on the lane's content, px: Stacked's sideways chip sits beside it. */
-  x: number;
-  y: number;
   dropIndex: number;
 }
 
@@ -49,6 +47,8 @@ export function useClipReorder(
   options: ReorderOptions = {},
 ) {
   const [reorder, setReorder] = useState<ReorderLive | null>(null);
+  /** The clip a release just moved, until the lane has drawn it: the lane's reveal of a moved clip leaves it alone. */
+  const released = useRef<string | null>(null);
   const latestBoxes = useRef(boxes);
   const latestOptions = useRef(options);
   const stop = useRef<(() => void) | null>(null);
@@ -87,7 +87,7 @@ export function useClipReorder(
         const dropIndex = stacked
           ? stackedDropIndex(index, dy, rowCount, GEOMETRY.stackRow)
           : dropIndexAt(x, latestBoxes.current, index);
-        current = { clipId, index, dx: x - startLaneX, dy, x, y, dropIndex };
+        current = { clipId, index, dx: x - startLaneX, dy, dropIndex };
         setReorder(current);
       };
       const onScroll = () => {
@@ -149,7 +149,10 @@ export function useClipReorder(
         const s = useStitchEditorStore.getState();
         if (s.draft?.timeline !== timelineAtStart) return;
         s.select({ kind: "clip", clipId });
-        if (moved && moved.dropIndex !== index) moveClipTo(clipId, moved.dropIndex);
+        if (moved && moved.dropIndex !== index) {
+          released.current = clipId;
+          moveClipTo(clipId, moved.dropIndex);
+        }
       };
 
       window.addEventListener("pointermove", onMove);
@@ -161,5 +164,12 @@ export function useClipReorder(
     [contentRef],
   );
 
-  return { reorder, onBodyPointerDown };
+  /** The clip the last release moved, once (see useClipMove's). */
+  const takeReleased = useCallback(() => {
+    const clipId = released.current;
+    released.current = null;
+    return clipId;
+  }, []);
+
+  return { reorder, onBodyPointerDown, takeReleased };
 }

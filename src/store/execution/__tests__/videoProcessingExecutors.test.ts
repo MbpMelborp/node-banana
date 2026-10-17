@@ -275,6 +275,44 @@ describe("executeVideoStitch", () => {
     expect(clips.map((c: { source?: string }) => c.source)).toEqual(["edge:e1", "edge:e2"]);
   });
 
+  it("passes a placed node's overlap, crossfade and placed flag, and each clip's start", async () => {
+    mockFetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(["v"], { type: "video/mp4" })) });
+    mockStitchVideosAsync.mockResolvedValue({ size: 21 * 1024 * 1024, type: "video/mp4" } as Blob);
+    const clip = (id: string, edgeId: string, startSec?: number) => ({
+      id,
+      source: { kind: "edge", edgeId },
+      inSec: 0,
+      outSec: null,
+      muted: false,
+      volume: 1,
+      ...(startSec === undefined ? {} : { startSec }),
+    });
+    const sources = [1, 2, 3].map(
+      (n) => ({ id: `g${n}`, type: "generateVideo", position: { x: 0, y: 0 }, data: { outputVideo: `v${n}` } }) as WorkflowNode
+    );
+    const edges = [1, 2, 3].map((n) => ({ id: `e${n}`, source: `g${n}`, sourceHandle: "video", target: "vs-1", targetHandle: `video-${n - 1}` }));
+    for (const overlapSec of [1, 0]) {
+      mockStitchVideosAsync.mockClear();
+      const node = makeStitchNode({
+        loopCount: 1,
+        timeline: [clip("a", "e1", 4), clip("b", "e2", 0), clip("c", "e3")],
+        sequenceLayout: { mode: "stacked", overlapSec, crossfade: true },
+      });
+      const ctx = makeCtx(node, {
+        getNodes: vi.fn().mockReturnValue([node, ...sources]),
+        getEdges: vi.fn().mockReturnValue(edges),
+        getConnectedInputs: vi.fn().mockReturnValue({ images: [], videos: ["v1", "v2", "v3"], audio: [], text: null, dynamicInputs: {}, easeCurve: null }),
+      });
+
+      await executeVideoStitch(ctx);
+
+      const [clips, , , , options] = mockStitchVideosAsync.mock.calls[0];
+      expect(options).toEqual({ loopCount: 1, overlapSec, crossfade: true, placed: true });
+      expect(clips.map((c: { startSec?: number }) => c.startSec)).toEqual([4, 0, undefined]);
+      expect("startSec" in clips[2]).toBe(false);
+    }
+  });
+
   it("should set loading status with 0 progress", async () => {
     const node = makeStitchNode();
     const ctx = makeCtx(node, {

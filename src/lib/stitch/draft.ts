@@ -1,12 +1,13 @@
 import type { StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
 import { sameCurve, sortCurve } from "./curve";
 import { isLegacyStitch, migrateStitchTimeline, reconcileTimelineWithEdges, sanitizeTimeline } from "./migrate";
-import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "./stack";
+import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT } from "./stack";
 import {
-  clipSpans,
   edgeIdsInOrder,
-  sequenceDuration,
+  isPlaced,
+  layoutSpans,
   sourceKey,
+  spansEnd,
   type ClipSpan,
   type SourceDurations,
 } from "./timeline";
@@ -55,17 +56,17 @@ export function sameLayout(a: StitchSequenceLayout, b: StitchSequenceLayout): bo
   return a.mode === b.mode && a.overlapSec === b.overlapSec && a.crossfade === b.crossfade;
 }
 
-/** The draft's spans, with its layout's effective overlap. */
+/** The draft's spans as its layout lays them out (layoutSpans: Track, lined up or placed). */
 export function draftSpans(
   d: Pick<StitchDraft, "timeline" | "sequenceLayout">,
   durations: SourceDurations,
 ): ClipSpan[] {
-  return clipSpans(d.timeline, durations, effectiveOverlapSec(d.sequenceLayout));
+  return layoutSpans(d.timeline, durations, d.sequenceLayout);
 }
 
-/** One loop of the draft, with its layout's effective overlap. */
+/** One loop of the draft: the latest end of a non-empty clip (spansEnd). */
 export function draftDuration(d: Pick<StitchDraft, "timeline" | "sequenceLayout">, durations: SourceDurations): number {
-  return sequenceDuration(d.timeline, durations, effectiveOverlapSec(d.sequenceLayout));
+  return spansEnd(draftSpans(d, durations));
 }
 
 /**
@@ -109,7 +110,8 @@ function sameClip(a: StitchTimelineClip, b: StitchTimelineClip): boolean {
     a.inSec === b.inSec &&
     a.outSec === b.outSec &&
     a.muted === b.muted &&
-    a.volume === b.volume
+    a.volume === b.volume &&
+    a.startSec === b.startSec
   );
 }
 
@@ -176,6 +178,16 @@ function onlySplit(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: re
   return true;
 }
 
+/** Clips with a start in the draft whose frames' anchor (start − In) differs from the one they had in `initial`. */
+function movedClips(initial: StitchDraft, draft: StitchDraft, durations: SourceDurations): number {
+  const spans = layoutSpans(initial.timeline, durations, { ...initial.sequenceLayout, mode: "stacked" });
+  const anchorBefore = new Map(spans.map((span) => [span.clip.id, span.start - span.clip.inSec]));
+  return draft.timeline.filter((clip) => {
+    const was = anchorBefore.get(clip.id);
+    return clip.startSec !== undefined && was !== undefined && Math.abs(clip.startSec - clip.inSec - was) > 1e-9;
+  }).length;
+}
+
 /** The layout's parts of the discard sheet's sentence, saying which way each changed. */
 function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): string[] {
   const parts: string[] = [];
@@ -191,8 +203,18 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * The node keeps what it had." A new clip of a source that was already in
  * the sequence is a split; one of a new source was added. The Out a split
  * gives its left piece is part of the split, not a trim.
+ *
+ * A clip placed in the draft whose frames moved (its start less its In, the
+ * stored start in `initial` or else where the stacked layout put it, with
+ * these durations) is a moved clip: pinning alone, and an In trim that keeps
+ * the frames where they were, are not. Dropping every placement is "lining up
+ * the clips" instead.
  */
-export function describeDraftChanges(initial: StitchDraft, draft: StitchDraft): string {
+export function describeDraftChanges(
+  initial: StitchDraft,
+  draft: StitchDraft,
+  durations: SourceDurations = new Map(),
+): string {
   const before = new Map(initial.timeline.map((c) => [c.id, c]));
   const after = new Map(draft.timeline.map((c) => [c.id, c]));
   const sourcesBefore = new Set(initial.timeline.map((c) => sourceKey(c.source)));
@@ -216,10 +238,13 @@ export function describeDraftChanges(initial: StitchDraft, draft: StitchDraft): 
   const commonBefore = initial.timeline.filter((c) => after.has(c.id)).map((c) => c.id);
   const commonAfter = draft.timeline.filter((c) => before.has(c.id)).map((c) => c.id);
   const reordered = commonBefore.some((id, i) => id !== commonAfter[i]);
+  const linedUp = isPlaced(initial.timeline) && !isPlaced(draft.timeline);
+  const moved = linedUp ? 0 : movedClips(initial, draft, durations);
 
   const parts = [
     counted(trims, "a trim", "trims"),
     reordered ? "a new order" : null,
+    linedUp ? "lining up the clips" : counted(moved, "a moved clip", "moved clips"),
     counted(splits, "a split", "splits"),
     counted(muted, "a muted clip", "muted clips"),
     counted(unmuted, "an unmuted clip", "unmuted clips"),

@@ -12,7 +12,8 @@ type Mode = StitchSequenceLayout["mode"];
 
 /** Diagrams of the two layouts rather than symbols, so they stay hand-drawn (like the canvas's connector toggle). */
 function LayoutGlyph({ mode }: { mode: Mode }) {
-  // Track: three bars end to end on one line. Stacked: one bar per line, each starting before the one above ends.
+  // Track: three bars end to end on one line. Stacked: one bar per row, here as lined up, each starting before the one
+  // above ends.
   // Each bar's ends and top sit on whole pixels (with the round caps), so the gaps stay clear at 1x.
   const d =
     mode === "track"
@@ -36,7 +37,7 @@ function LayoutGlyph({ mode }: { mode: Mode }) {
 
 const OPTIONS: ReadonlyArray<{ mode: Mode; label: string; tip: string }> = [
   { mode: "track", label: "Track", tip: "Track: clips end to end on one row" },
-  { mode: "stacked", label: "Stacked", tip: "Stacked: one row per clip, each overlapping the one before" },
+  { mode: "stacked", label: "Stacked", tip: "Stacked: one row per clip, placed anywhere in time" },
 ];
 
 /**

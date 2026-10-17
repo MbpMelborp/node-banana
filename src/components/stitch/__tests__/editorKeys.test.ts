@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { editorKeyAction, isCanvasKey, isTypingTarget, type KeyLike } from "../editorKeys";
+import { editorKeyAction, isCanvasKey, isTypingTarget, NO_REPEAT, type KeyLike } from "../editorKeys";
 
 const key = (k: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   key: k,
@@ -42,6 +42,40 @@ describe("editorKeyAction", () => {
     expect(editorKeyAction(key("Enter"))).toBeNull();
     expect(editorKeyAction(key("ArrowLeft"))).toBeNull();
     expect(editorKeyAction(key("Tab"))).toBeNull();
+  });
+
+  it.each([
+    [key("ArrowLeft", { altKey: true }), "nudgeEarlier"],
+    [key("ArrowRight", { altKey: true }), "nudgeLater"],
+    // ⇧ is the big step, read by the caller
+    [key("ArrowLeft", { altKey: true, shiftKey: true }), "nudgeEarlier"],
+    [key("ArrowRight", { altKey: true, shiftKey: true }), "nudgeLater"],
+    [key("ArrowUp", { altKey: true }), "rowUp"],
+    [key("ArrowDown", { altKey: true }), "rowDown"],
+    [key("["), "startAtPlayhead"],
+    [key("]"), "endAtPlayhead"],
+    // A German Mac types [ and ] with ⌥5 and ⌥6; German Windows with AltGr (Ctrl+Alt) 8 and 9
+    [key("[", { altKey: true, code: "Digit5" }), "startAtPlayhead"],
+    [key("]", { ctrlKey: true, altKey: true, code: "Digit9" }), "endAtPlayhead"],
+  ] as const)("the selected clip's placing keys: %o → %s", (event, action) => {
+    expect(editorKeyAction(event)).toBe(action);
+  });
+
+  it("leaves [ and ] with ⌘ or a plain Ctrl to the browser, and ⇧⌥↑ ⇧⌥↓ alone", () => {
+    expect(editorKeyAction(key("[", { metaKey: true }))).toBeNull();
+    expect(editorKeyAction(key("]", { ctrlKey: true }))).toBeNull();
+    expect(editorKeyAction(key("ArrowUp", { altKey: true, shiftKey: true }))).toBeNull();
+    expect(editorKeyAction(key("ArrowDown", { altKey: true, shiftKey: true }))).toBeNull();
+    // ⌥M still mutes the clip
+    expect(editorKeyAction(key("µ", { altKey: true, code: "KeyM" }))).toBe("toggleClipMute");
+  });
+
+  it("lets the nudges repeat and nothing else that places a clip", () => {
+    for (const action of ["rowUp", "rowDown", "startAtPlayhead", "endAtPlayhead"] as const) {
+      expect(NO_REPEAT.has(action)).toBe(true);
+    }
+    expect(NO_REPEAT.has("nudgeEarlier")).toBe(false);
+    expect(NO_REPEAT.has("nudgeLater")).toBe(false);
   });
 });
 

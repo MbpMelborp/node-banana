@@ -1,3 +1,4 @@
+import { clipName } from "./labels";
 import {
   clampTrim,
   clipLength,
@@ -17,7 +18,8 @@ import {
  * Ripple trims: a clip's start in the sequence never moves during the drag.
  * The Out edge follows the pointer at start + new length. The In edge
  * follows it at start + (new In − old In), and the clip closes up to its
- * start on release.
+ * start on release. In Stacked the start moves with an In edge (the frames
+ * stay where they are) and nothing else moves.
  */
 
 export interface TrimDragStart {
@@ -32,14 +34,10 @@ export interface TrimDragStart {
    * where it is drawn. Without it, or for an Out edge (whose later slots are pushed along), travel is pixels / pps.
    */
   xToTime?: (x: number) => number;
-  /** The playhead, and neighbourTarget(spans, clipId, edge) when not null; nothing that moves with the drag. */
+  /** trimTargets(…): nothing that moves with the drag. */
   targets: readonly SnapTarget[];
-  /**
-   * Stacked: where the dragged edge is drawn once the trim is laid out (the half-clip cap can move the clip's start, so
-   * it can differ from edgeSeqTime). A snap is kept only when this edge meets its target; otherwise the edge snaps to
-   * the other targets or follows the pointer. Track leaves it out: its edge is drawn at edgeSeqTime.
-   */
-  liveEdgeTime?: (trim: { inSec: number; outSec: number | null }) => number;
+  /** The lowest In an In edge may reach. Stacked passes clip.inSec − span.start, so the clip never starts before 0:00. */
+  minInSec?: number;
 }
 
 export interface TrimDragResult {
@@ -65,20 +63,29 @@ export const SNAP_THRESHOLD_PX = 8;
 const SNAP_HELD = 1e-6;
 
 /**
- * What a dragged edge can snap to: the playhead, and the one neighbouring edge a ripple trim can meet
- * (neighbourTarget). Nothing that moves with the drag: the clips after a lengthening edge are pushed live.
- * Stacked clips overlap rather than butt, so there the second target is the edge's own start position
- * (originalEdgeTarget, "the original length").
+ * What a dragged edge can snap to. Track: the playhead, and the one neighbouring edge a ripple trim can meet
+ * (neighbourTarget); nothing that moves with the drag, since the clips after a lengthening edge are pushed live.
+ * Stacked, where nothing else moves: the playhead; for an In edge 0:00 ("the start"); every other non-empty clip's
+ * start and end ("Clip 3's start", "Clip 3's end"); and the edge's own start position (originalEdgeTarget, "the
+ * original length").
  */
 export function trimTargets(
   spans: readonly ClipSpan[],
   clipId: string,
   edge: "in" | "out",
   playhead: number,
-  stacked: boolean = false,
+  mode: "track" | "stacked" = "track",
 ): SnapTarget[] {
   const targets: SnapTarget[] = [{ t: playhead, kind: "playhead", label: "the playhead" }];
-  if (stacked) {
+  if (mode === "stacked") {
+    if (edge === "in") targets.push({ t: 0, kind: "edge", label: "the start" });
+    for (const other of spans) {
+      if (other.clip.id === clipId || !(other.length > 0)) continue;
+      targets.push(
+        { t: other.start, kind: "edge", label: `${clipName(other.index)}'s start` },
+        { t: other.end, kind: "edge", label: `${clipName(other.index)}'s end` },
+      );
+    }
     const span = spans.find((s) => s.clip.id === clipId);
     if (span) targets.push(originalEdgeTarget(span, edge));
     return targets;
@@ -109,38 +116,23 @@ export function trimDragAt(
   // back exactly (rebuilding the Out from start + length would add float noise: (start + len) − start ≠ len)
   const known = d !== undefined && Number.isFinite(d);
   const effOut = known ? Math.min(clip.outSec ?? d, d) : (clip.outSec ?? clip.inSec + span.length);
+  const minIn = start.minInSec !== undefined && Number.isFinite(start.minInSec) ? start.minInSec : -Infinity;
   const trimAt = (edgeTime: number) =>
     edge === "out"
       ? clampTrim(clip, d, { outSec: effOut + (edgeTime - span.end) })
-      : clampTrim(clip, d, { inSec: clip.inSec + (edgeTime - span.start) });
+      : clampTrim(clip, d, { inSec: Math.max(clip.inSec + (edgeTime - span.start), minIn) });
   const edgeOf = (trim: { inSec: number; outSec: number | null }) =>
     edge === "out" ? span.start + clipLength({ ...clip, ...trim }, d) : span.start + (trim.inSec - clip.inSec);
 
-  let targets = opts.snap ? start.targets : [];
   let trim = trimAt(pointerTime);
   let target: SnapTarget | null = null;
-  while (targets.length > 0) {
-    const snapped = snapTo(pointerTime, targets, (opts.thresholdPx ?? SNAP_THRESHOLD_PX) / pps);
-    if (!snapped.target) break;
-    const candidate = trimAt(snapped.value);
-    // The trim limits pulled the edge off the target, or (Stacked) the laid-out edge is not on it: not snapped
-    const held =
-      Math.abs(edgeOf(candidate) - snapped.target.t) <= SNAP_HELD &&
-      (!start.liveEdgeTime || Math.abs(start.liveEdgeTime(candidate) - snapped.target.t) <= SNAP_HELD);
-    if (held) {
-      trim = candidate;
-      target = snapped.target;
-      break;
-    }
-    if (start.liveEdgeTime) {
-      // Try the other targets
-      const missed = snapped.target;
-      targets = targets.filter((t) => t !== missed);
-      continue;
-    }
-    // Track keeps the limited edge where the snap pulled it, as before
-    trim = candidate;
-    break;
+  const snapped = opts.snap
+    ? snapTo(pointerTime, start.targets, (opts.thresholdPx ?? SNAP_THRESHOLD_PX) / pps)
+    : { value: pointerTime, target: null };
+  if (snapped.target) {
+    // The edge stays where the snap pulled it; when the trim limits pulled it off the target, it is not snapped
+    trim = trimAt(snapped.value);
+    if (Math.abs(edgeOf(trim) - snapped.target.t) <= SNAP_HELD) target = snapped.target;
   }
 
   const lengthSec = clipLength({ ...clip, ...trim }, d);

@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { gainAt } from "@/lib/stitch/curve";
-import { layersAt, sourceTimeAt, spanAtTime, type ClipSpan } from "@/lib/stitch/timeline";
+import { isLive, SLOT_SEC, TIME_EPS } from "@/lib/stitch/placement";
+import {
+  layersAt,
+  placedLayersAt,
+  sourceTimeAt,
+  spanAtTime,
+  type ClipSpan,
+  type PreviewLayer,
+} from "@/lib/stitch/timeline";
 import type { VolumePoint } from "@/types";
 
 /**
@@ -24,6 +32,13 @@ import type { VolumePoint } from "@/types";
  * play: the earlier is the clock until its Out, then the later one, already
  * playing, takes over without a seek. Opacity and volume come from layersAt
  * and are written to the elements every frame, never through React.
+ *
+ * A placed stack (`stack.placed`) takes them from the envelope instead
+ * (placedLayersAt), for any number of clips at once; a clip hidden under a
+ * higher row keeps playing at opacity 0, in step. The clock is the live clip
+ * that started first, and at its Out the next one by start time, not by row.
+ * Where no clip plays (a gap) the frame clock drives the playhead, the stage
+ * is black and the music plays on.
  */
 
 export interface SequencePlaybackOptions {
@@ -33,8 +48,8 @@ export interface SequencePlaybackOptions {
   srcFor: (clipId: string) => string | null;
   music: { src: string | null; curve: VolumePoint[]; muted: boolean };
   soundOn: boolean;
-  /** Stacked: elements per clip, blended at overlaps. Absent or null: Track. */
-  stack?: { crossfade: boolean } | null;
+  /** Stacked: elements per clip, blended at overlaps; placed once some clip has a stored start. Absent or null: Track. */
+  stack?: { crossfade: boolean; placed?: boolean } | null;
 }
 
 /** Seconds before a clip's Out at which the next one takes over (a frame early beats a frame of the trimmed part). */
@@ -53,6 +68,32 @@ const LAYER_DRIFT = 0.15;
 function nextSpan(spans: readonly ClipSpan[], after: ClipSpan): ClipSpan | null {
   return spans.find((s) => s.index > after.index && s.length > 0) ?? null;
 }
+
+/** The earlier of two spans by start time, the higher row on a tie. */
+const startsFirst = (a: ClipSpan, b: ClipSpan) => a.start - b.start || a.index - b.index;
+
+/** Placed: the clips live at t (but `except`), the first to start first; none in a gap or outside the sequence. */
+function earliestLive(spans: readonly ClipSpan[], t: number, except?: ClipSpan): ClipSpan[] {
+  return spans
+    .filter((s) => s !== except && s.length > 0 && isLive(s.start, s.end, t))
+    .sort(startsFirst);
+}
+
+/** Placed: the next clip to start after t, by start time. */
+function nextByStart(spans: readonly ClipSpan[], t: number): ClipSpan | null {
+  let next: ClipSpan | null = null;
+  for (const span of spans) {
+    if (span.length > 0 && span.start > t && (!next || startsFirst(span, next) < 0)) next = span;
+  }
+  return next;
+}
+
+/** The clips the stacked preview plays at t: commit 9's two-layer rule while lined up, the envelope once placed. */
+function layersFor(spans: readonly ClipSpan[], t: number, stack: { crossfade: boolean; placed?: boolean }): PreviewLayer[] {
+  return stack.placed ? placedLayersAt(spans, t, stack.crossfade) : layersAt(spans, t, stack.crossfade);
+}
+
+const LINED_UP = { crossfade: true } as const;
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
@@ -105,13 +146,16 @@ interface PlaybackRefs {
  * layer gets its opacity and volume; a layer that is not playing yet is started (seeked only when its pre-seek has
  * not landed), one that drifts is put back in step; every other element is paused and hidden. At the clock's Out the
  * next clip, when it is already playing through the overlap, becomes the clock as it is; otherwise it is started at
- * its start (a cut). Returns the loop's cleanup.
+ * its start (a cut). Placed, the next clip is the one live at the Out that started first, and where none is live the
+ * frame clock carries the playhead through the gap. Returns the loop's cleanup.
  */
 function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): () => void {
   let alive = true;
   const store = useStitchEditorStore.getState();
   const music = createMusicDriver(audio, latest);
   const elementOf = (span: ClipSpan) => videos.current.get(span.clip.id) ?? null;
+  const stackNow = () => latest.current.stack ?? LINED_UP;
+  const placed = () => Boolean(latest.current.stack?.placed);
   const pauseAll = () => {
     for (const el of videos.current.values()) el.pause();
     audio.current?.pause();
@@ -121,6 +165,10 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     const s = useStitchEditorStore.getState();
     s.setPlaying(false);
     if (at !== undefined) s.setPlayhead(at);
+  };
+  const stopped = (at?: number): false => {
+    stop(at);
+    return false;
   };
 
   let t = store.playhead;
@@ -135,6 +183,9 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
   let written = t;
   let preseeked: string | null = null;
   let frame = 0;
+  // Placed, in a gap: no clip is the clock, and the playhead follows the frames' timestamps from where it was written
+  let gapSince: number | null = null;
+  let inGap = false;
 
   /** play(), where only a refusal by the clock stops the preview (an AbortError is a pause, not a refusal). */
   const play = (el: HTMLVideoElement) => {
@@ -146,9 +197,9 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
   };
 
   const applyLayers = (at: number) => {
-    const { spans, soundOn, stack } = latest.current;
+    const { spans, soundOn } = latest.current;
     const live = new Set<HTMLVideoElement>();
-    for (const layer of layersAt(spans, at, stack?.crossfade ?? true)) {
+    for (const layer of layersFor(spans, at, stackNow())) {
       const el = elementOf(layer.span);
       if (!el) continue;
       live.add(el);
@@ -172,19 +223,51 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     }
   };
 
-  /** Makes the earliest clip at `at` the clock, from its own source time. false when there is nothing to play there. */
+  /** Seeks the next clip's element to its In ahead of its start: lined up the next row, placed the next by start time. */
+  const preseek = (at: number, current: ClipSpan | null) => {
+    const { spans } = latest.current;
+    const following = placed() ? nextByStart(spans, at) : current ? nextSpan(spans, current) : null;
+    if (!following || preseeked === following.clip.id || following.start - at >= PRESEEK) return;
+    const nextEl = elementOf(following);
+    if (nextEl && nextEl !== clockEl && nextEl.paused) {
+      pendingSeeks.current.delete(nextEl);
+      nextEl.currentTime = following.clip.inSec;
+    }
+    preseeked = following.clip.id;
+  };
+
+  /** Placed, nothing to play at `at` but more to come: the frame clock carries on from there. */
+  const enterGap = (at: number) => {
+    clock = null;
+    clockEl = null;
+    inGap = true;
+    gapSince = null;
+    written = at;
+    applyLayers(at);
+    music.apply(at);
+  };
+
+  /**
+   * Makes the earliest clip at `at` the clock, from its own source time. Placed, a gap before the end goes on in the
+   * frame clock. false when there is nothing to play there.
+   */
   const startAt = (at: number): boolean => {
-    const { spans, stack } = latest.current;
-    const first = layersAt(spans, at, stack?.crossfade ?? true)[0];
-    const el = first ? elementOf(first.span) : null;
+    const { spans, total } = latest.current;
+    const first = placed() ? (earliestLive(spans, at)[0] ?? null) : (layersFor(spans, at, stackNow())[0]?.span ?? null);
+    if (!first && placed() && at >= 0 && at < total) {
+      enterGap(at);
+      return true;
+    }
+    const el = first ? elementOf(first) : null;
     if (!first || !el) return false;
-    clock = first.span;
+    inGap = false;
+    clock = first;
     clockEl = el;
     floor = 0;
     preseeked = null;
     // A paused seek still in flight would pull the playing element back when it lands
     pendingSeeks.current.delete(el);
-    const target = sourceTimeAt(first.span, at);
+    const target = sourceTimeAt(first, at);
     if (!el.paused || Math.abs(el.currentTime - target) > LANDED) el.currentTime = target;
     applyLayers(at);
     music.apply(at);
@@ -199,11 +282,85 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     };
   }
 
-  const tick = () => {
+  /** A tick in a gap: the frame clock moves the playhead until a clip starts or the sequence ends. */
+  const gapTick = (now: number) => {
     const s = useStitchEditorStore.getState();
-    const current = clock;
-    const currentEl = clockEl;
-    if (!current || !currentEl) return;
+    const { spans, total } = latest.current;
+    const at = gapSince === null ? written : written + (now - gapSince) / 1000;
+    gapSince = now;
+    if (at >= total) return stop(total);
+    written = at;
+    s.setPlayhead(at);
+    if (earliestLive(spans, at).length > 0) {
+      if (!startAt(at)) return stop();
+    } else {
+      applyLayers(at);
+      music.apply(at);
+      preseek(at, null);
+    }
+    frame = requestAnimationFrame(tick);
+  };
+
+  /**
+   * At the clock's Out: lined up, the next row, which takes over as it is when it plays through the overlap. Placed,
+   * of the clips live at the Out the first to start that is already playing takes over as it is; else the first to
+   * start there is started; else the frame clock crosses the gap; else the sequence ends. false once it has stopped.
+   */
+  const handOver = (live: ClipSpan, currentEl: HTMLVideoElement): boolean => {
+    const s = useStitchEditorStore.getState();
+    const { spans, total } = latest.current;
+    let following: ClipSpan | null;
+    let takesOver = false;
+    if (placed()) {
+      const there = earliestLive(spans, live.end, live);
+      following =
+        there.find((span) => {
+          const el = elementOf(span);
+          return el !== null && el !== currentEl && !el.paused;
+        }) ?? null;
+      takesOver = following !== null;
+      following ??= there[0] ?? null;
+      if (!following) {
+        if (live.end >= total) return stopped(total);
+        // A gap under a slot is none: the lane draws none and the encode holds the frame across it
+        const next = nextByStart(spans, live.end);
+        if (next && next.start - live.end < SLOT_SEC - TIME_EPS) {
+          written = next.start;
+          s.setPlayhead(next.start);
+          return startAt(next.start) || stopped();
+        }
+        enterGap(live.end);
+        s.setPlayhead(live.end);
+        return true;
+      }
+    } else {
+      following = nextSpan(spans, live);
+      if (!following) return stopped(total);
+      const followingEl = elementOf(following);
+      takesOver = followingEl !== null && followingEl !== currentEl && !followingEl.paused && following.start < live.end;
+    }
+    const followingEl = elementOf(following);
+    if (takesOver && followingEl) {
+      // Already playing through the overlap: it takes over as it is
+      clock = following;
+      clockEl = followingEl;
+      floor = live.end;
+      const next = following.start + (followingEl.currentTime - following.clip.inSec);
+      written = Math.min(following.end, Math.max(floor, next));
+      s.setPlayhead(written);
+      applyLayers(written);
+      music.apply(written);
+      return true;
+    }
+    // Placed, the clip is already live at the Out: it starts there, not at its own start
+    const at = placed() ? live.end : following.start;
+    written = at;
+    s.setPlayhead(at);
+    return startAt(at) || stopped();
+  };
+
+  const tick = (now: number) => {
+    const s = useStitchEditorStore.getState();
     // The playhead was moved from outside (Go to start, the ruler): carry on from there
     if (Math.abs(s.playhead - written) > 1e-6) {
       written = s.playhead;
@@ -212,7 +369,11 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
       frame = requestAnimationFrame(tick);
       return;
     }
-    const { spans, total } = latest.current;
+    if (inGap) return gapTick(now);
+    const current = clock;
+    const currentEl = clockEl;
+    if (!current || !currentEl) return;
+    const { spans } = latest.current;
     // An edit while playing can remove or reshape the clip under the playhead
     const live = spans.find((x) => x.clip.id === current.clip.id) ?? null;
     if (!live) return stop();
@@ -232,39 +393,13 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     const sourceTime = currentEl.currentTime;
     const at = Math.max(floor, Math.min(live.end, Math.max(live.start, live.start + (sourceTime - live.clip.inSec))));
     if (sourceTime >= live.clip.inSec + live.length - END_SLACK || currentEl.ended) {
-      const following = nextSpan(spans, live);
-      if (!following) return stop(total);
-      const followingEl = elementOf(following);
-      if (followingEl && followingEl !== currentEl && !followingEl.paused && following.start < live.end) {
-        // Already playing through the overlap: it takes over as it is
-        clock = following;
-        clockEl = followingEl;
-        floor = live.end;
-        const next = following.start + (followingEl.currentTime - following.clip.inSec);
-        written = Math.min(following.end, Math.max(floor, next));
-        s.setPlayhead(written);
-        applyLayers(written);
-        music.apply(written);
-      } else {
-        written = following.start;
-        s.setPlayhead(following.start);
-        if (!startAt(following.start)) return stop();
-      }
+      if (!handOver(live, currentEl)) return;
     } else {
       written = at;
       s.setPlayhead(at);
       applyLayers(at);
       music.apply(at);
-      // Seek the next clip's element to its In ahead of its start
-      const following = nextSpan(spans, live);
-      if (following && preseeked !== following.clip.id && following.start - at < PRESEEK) {
-        const nextEl = elementOf(following);
-        if (nextEl && nextEl !== currentEl && nextEl.paused) {
-          pendingSeeks.current.delete(nextEl);
-          nextEl.currentTime = following.clip.inSec;
-        }
-        preseeked = following.clip.id;
-      }
+      preseek(at, live);
     }
     frame = requestAnimationFrame(tick);
   };
@@ -299,6 +434,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   });
   const stacked = Boolean(opts.stack);
   const crossfade = opts.stack?.crossfade ?? true;
+  const placed = opts.stack?.placed ?? false;
 
   const seek = useCallback((el: HTMLVideoElement, time: number) => {
     if (el.seeking) {
@@ -325,9 +461,9 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
     if (s.playing) return;
     const { spans, srcFor, stack } = latest.current;
     if (stack) {
-      // Every clip at the playhead, at its opacity; the rest hidden
+      // Every clip at the playhead, at its opacity; the rest hidden (all of them in a gap)
       const shown = new Set<HTMLVideoElement>();
-      for (const layer of layersAt(spans, s.playhead, stack.crossfade)) {
+      for (const layer of layersFor(spans, s.playhead, stack)) {
         const el = videos.current.get(layer.span.clip.id);
         if (!el) continue;
         shown.add(el);
@@ -381,11 +517,11 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   useEffect(() => {
     seekPaused();
   }, [opts.spans, activeSrc, seekPaused]);
-  // On a switch of layout either way (the elements are new: at Overlap 0 nothing else changes), of crossfade (Stacked blends
-  // differently) and on a new URL
+  // On a switch of layout either way (the elements are new: at Overlap 0 nothing else changes), of crossfade or of
+  // placement (Stacked blends differently) and on a new URL
   useEffect(() => {
     seekPaused();
-  }, [stacked, crossfade, opts.srcFor, seekPaused]);
+  }, [stacked, crossfade, placed, opts.srcFor, seekPaused]);
 
   // Playing: the frame loop
   useEffect(() => {

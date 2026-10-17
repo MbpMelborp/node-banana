@@ -1,4 +1,4 @@
-import type { ClipSpan } from "./timeline";
+import { spansEnd, type ClipSpan } from "./timeline";
 
 /**
  * Sequence time ↔ lane pixels for the Stitch editor's timeline.
@@ -72,7 +72,8 @@ export function buildTimeAxis(
       }
     }
   }
-  const total = spans.length > 0 ? spans[spans.length - 1].end : 0;
+  // The latest end of a clip with frames: an empty clip placed past it widens nothing in time
+  const total = spansEnd(spans);
 
   const timeToX = (t: number): number => {
     let x = origin + t * pps;

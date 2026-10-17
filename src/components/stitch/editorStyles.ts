@@ -81,5 +81,8 @@ export const LABEL_BAR =
 /** A clip (or slot) lifted to be dragged to a new place (design-spec §9.1). */
 export const LIFTED_CLIP = "z-10 -translate-y-1.5 -rotate-[1.5deg] shadow-[0_12px_28px_rgba(0,0,0,0.6)]";
 
+/** A clip (or slot) Stacked's body drag carries in time and across rows: on top, ringed and raised. */
+export const MOVING_CLIP = "z-10 ring-2 ring-selection shadow-[0_8px_20px_rgba(0,0,0,0.5)] cursor-grabbing";
+
 /** The editor's panel, marked for code outside it that hands focus back (the library picker): not its label. */
 export const STITCH_EDITOR_PANEL = "data-stitch-editor";

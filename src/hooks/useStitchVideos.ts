@@ -30,6 +30,7 @@ import {
 } from '@/lib/video-probing';
 import {
   normalizeLoopCount,
+  normalizePlacement,
   normalizeStack,
   normalizeStitchArgs,
   type StitchAudioData,
@@ -37,11 +38,15 @@ import {
   type StitchMusicInput,
   type StitchOptions,
 } from '@/lib/stitch/engineTypes';
-import { FrameSlotter, planSequence, type PlannedClip } from '@/lib/stitch/sequencePlan';
+import { FrameSlotter, planSequence, secToSlot, type PlannedClip } from '@/lib/stitch/sequencePlan';
 import { cadenceRate, clipFadeSamples, dissolveFrames, sharedCadence, soloPass, stackSequence, type Dissolve, type StackedPlan } from '@/lib/stitch/stack';
 import { createFrameBlender, encodeDissolve, type FrameBlender } from '@/lib/stitch/crossfadeFrames';
+import { encodePlacedLoop, openClipReader, type ClipReaderWindow, type PlacedEncodeState } from '@/lib/stitch/clipReader';
+import { buildEnvelope, gainPieces, LAYER_WARNING, SLOT_SEC, TIME_EPS, type StackEnvelope } from '@/lib/stitch/placement';
+import { maxVisibleLayers, pictureSegments, routePlacement, segmentsInLoop } from '@/lib/stitch/placedSchedule';
 import {
   applyCrossfades,
+  applyGainPieces,
   chooseMasterFormat,
   mixLoop,
   pcmFromAudioBuffer,
@@ -247,7 +252,10 @@ export async function checkEncoderSupport(): Promise<boolean> {
  * whole video track by default), butted against the one before, or, stacked
  * (`overlapSec`), starting that much before it ends: the picture dissolves
  * and the sound crossfades across the overlap, or with `crossfade: false` the
- * earlier clip stays in front while both are heard. The sequence repeats
+ * earlier clip stays in front while both are heard. Placed (`placed`), each
+ * clip starts at its own startSec and the higher row is in front: where clips
+ * overlap it fades in or out over the rows below (placement.ts), and a gap is
+ * black. The sequence repeats
  * `loopCount` times, with a cut at each restart. Each clip's own sound plays
  * at its volume unless muted, and the music is mixed over it with its volume
  * curve, which repeats each loop while the music itself runs on.
@@ -331,16 +339,41 @@ export async function stitchVideosAsync(
         const probe = probes.get(clips[planned.index].blob);
         if (probe) units.push({ plan: planned, clip: clips[planned.index], probe });
       }
+      const unitSources = units.map((unit) => unit.clip.source ?? `#${unit.plan.index}`);
+      const placement = normalizePlacement(options);
+      // A placed node whose clips sit where Track or a lined-up stack puts them encodes as that branch, byte for byte
+      const route = routePlacement(
+        units.map((unit) => unit.plan),
+        unitSources,
+        units.map((unit) => unit.clip.startSec),
+        placement,
+        stack
+      );
       // Stacked only when some join really overlaps: a stack of cuts is Track, call for call
-      let sp: StackedPlan | null = stack
-        ? stackSequence(
-            units.map((unit) => unit.plan),
-            units.map((unit) => unit.clip.source ?? `#${unit.plan.index}`),
-            stack
-          )
-        : null;
+      let sp: StackedPlan | null =
+        stack && route.kind === 'derived'
+          ? stackSequence(
+              units.map((unit) => unit.plan),
+              unitSources,
+              stack
+            )
+          : null;
       if (sp && !sp.clips.some((clip) => clip.overlapIn > 0)) sp = null;
-      const loopLength = sp ? sp.loopLength : plan.loopLength;
+      // Placed: unit k is the envelope's unit k (every planned clip is non-empty, and rows follow the clip order)
+      const env: StackEnvelope | null =
+        route.kind === 'placed'
+          ? buildEnvelope(
+              units.map((unit, k) => ({
+                start: route.starts[k],
+                length: unit.plan.length,
+                row: k,
+                source: unitSources[k],
+                inSec: unit.plan.inSec,
+              })),
+              placement?.crossfade ?? true
+            )
+          : null;
+      const loopLength = env ? env.loopLength : sp ? sp.loopLength : plan.loopLength;
       if (units.length === 0 || loopLength <= 0) {
         throw new Error('Nothing to stitch: every clip is empty');
       }
@@ -452,6 +485,15 @@ export async function stitchVideosAsync(
             loopLength,
             clips: decoded.map(({ pcm, unitIndex, gain }) => {
               const master = toMasterFormat(pcm, chosen.format);
+              if (env) {
+                // Placed: at its own start; with Crossfade on its sound follows its share of the picture
+                const start = env.units[unitIndex].start;
+                const sampleRate = chosen.format.sampleRate;
+                if (env.crossfade) {
+                  applyGainPieces(master.channels, sampleRate, Math.round(start * sampleRate), gainPieces(env, unitIndex), signal);
+                }
+                return { pcm: master, seqStart: start, gain };
+              }
               if (!sp) return { pcm: master, seqStart: units[unitIndex].plan.seqStart, gain };
               const placed = sp.clips[unitIndex];
               if (stack?.crossfade) {
@@ -468,6 +510,17 @@ export async function stitchVideosAsync(
               ? { pcm: toMasterFormat(musicPcm(audibleMusic.audio.buffer), chosen.format), curve: audibleMusic.curve }
               : null,
           };
+          if (env) {
+            // Said from the layout, never the sample ranges: a rounding-level touch between butted clips is not an overlap
+            const spans = decoded.map(({ unitIndex }) => env.units[unitIndex]);
+            mix.clipsOverlap = spans.some((u, i) =>
+              spans.some(
+                (v, j) =>
+                  j > i &&
+                  Math.min(u.start + u.length, v.start + v.length) - Math.max(u.start, v.start) >= SLOT_SEC - TIME_EPS
+              )
+            );
+          }
           if (sp) {
             const stacked = sp;
             const sounding = new Set(decoded.map(({ unitIndex }) => unitIndex));
@@ -641,7 +694,58 @@ export async function stitchVideosAsync(
         }
       };
 
-      if (!sp) {
+      if (env) {
+        const segments = pictureSegments(env);
+        const most = maxVisibleLayers(segments);
+        if (most > LAYER_WARNING) {
+          console.warn(`[VideoStitch] ${most} clips blend at once; this takes about ${most * 50} MB at 1080p`);
+        }
+        const totalSlots = Math.max(1, secToSlot(loopCount * loopLength));
+        // One blender and one reference for the whole encode, as the other branches keep theirs
+        const state: PlacedEncodeState = { ref: null, blender: null };
+        const sources = units.map((unit) => ({
+          inSec: unit.plan.inSec,
+          outSec: unit.plan.outSec,
+          origin: unit.plan.origin,
+          frameRate: unit.probe.frameRate,
+          open: (range: { from: number; to: number }, window: ClipReaderWindow) =>
+            openClipReader(unit.probe.videoTrack, range, window, unit.plan.inSec),
+        }));
+        for (let loop = 0; loop < loopCount; loop++) {
+          const videoNumber = (unit: number) => loop * units.length + unit + 1;
+          await encodePlacedLoop({
+            env,
+            segments: segmentsInLoop(segments, loop),
+            loop,
+            sources,
+            state,
+            fallbackRef: { width: safeWidth, height: safeHeight },
+            makeBlender: (size) => createFrameBlender(size),
+            claim: (slot) => slotter.claim(slot),
+            add: (sample) => encoderSource.add(sample),
+            report: (segment, slot) => {
+              if (segment.kind === 'black') return;
+              const share = 12 + Math.min(1, slot / totalSlots) * 85;
+              if (segment.kind === 'solo') {
+                const n = videoNumber(segment.unit);
+                updateProgress('processing', `Processing video ${n}/${totalVideos}...`, share, n);
+              } else if (segment.units.length === 2) {
+                const [bottom, top] = segment.units.map(videoNumber);
+                updateProgress('processing', `Blending video ${bottom} into ${top}...`, share, bottom);
+              } else {
+                updateProgress('processing', `Blending ${segment.units.length} videos...`, share, videoNumber(segment.units[0]));
+              }
+            },
+            failure: (unit, error) => {
+              const n = videoNumber(unit);
+              console.error(`Error processing video ${n}:`, error);
+              return new Error(error instanceof Error ? error.message : `Failed to process video ${n}`);
+            },
+            signal,
+            fps: MAX_OUTPUT_FPS,
+          });
+        }
+      } else if (!sp) {
         for (let loop = 0; loop < loopCount; loop++) {
           for (let k = 0; k < units.length; k++) {
             const unit = units[k];

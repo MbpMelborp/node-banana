@@ -14,7 +14,7 @@ import { createClip } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
-import { setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
+import { setClipStart, setCrossfade, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
@@ -884,7 +884,9 @@ describe("StitchEditorModal", () => {
       fireEvent.mouseDown(layoutButton(name));
       fireEvent.click(layoutButton(name));
     };
-    const option = (name: string) => within(screen.getByRole("listbox", { name: "Clips" })).getByRole("option", { name });
+    // A Stacked box's name also says where it starts ("Clip 2, starts 0:04.00")
+    const option = (name: string) =>
+      within(screen.getByRole("listbox", { name: "Clips" })).getByRole("option", { name: new RegExp(`^${name}(,|$)`) });
 
     it("keeps focus in the dialog, on the new lane's clip, when a switch removes the focused clip", () => {
       seed();
@@ -974,6 +976,229 @@ describe("StitchEditorModal", () => {
       });
       expect(play).toHaveBeenCalledTimes(calls);
       expect(editor().playing).toBe(false);
+    });
+
+    describe("with clips placed in time", () => {
+      const startField = () => screen.getByRole("textbox", { name: "Start on the timeline" }) as HTMLInputElement;
+      const selectClip2 = () => act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
+      const summary = () => screen.getByRole("textbox", { name: "Overlap" }).closest(".h-9")!.previousElementSibling!;
+
+      it("shows Start in Stacked only, above Trim", () => {
+        seed();
+        openEditor();
+        expect(screen.queryByRole("textbox", { name: "Start on the timeline" })).toBeNull();
+        stack();
+        const rail = screen.getByRole("complementary", { name: "Clip" });
+        expect(within(rail).getByText("Start")).toBeInTheDocument();
+        expect(startField().value).toBe("0:00.00");
+        const trim = within(rail).getByText("Trim");
+        expect(startField().compareDocumentPosition(trim) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        selectClip2();
+        expect(startField().value).toBe("0:04.00");
+      });
+
+      it("moves the clip to a typed Start, the header's total with it, and Done writes it in the single write", () => {
+        seed();
+        openEditor();
+        stack();
+        selectClip2();
+        const field = startField();
+        field.focus();
+        fireEvent.focus(field);
+        fireEvent.change(field, { target: { value: "6" } });
+        fireEvent.keyDown(field, { key: "Enter" });
+        expect(editor().draft!.timeline.map((clip) => clip.startSec)).toEqual([0, 6]);
+        expect(startField().value).toBe("0:06.00");
+        expect(totalShown("0:10.00")).toBe(true);
+
+        const write = vi.spyOn(wf(), "updateNodeData");
+        write.mockClear();
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        expect(write).toHaveBeenCalledTimes(1);
+        expect((write.mock.calls[0][1] as Partial<VideoStitchNodeData>).timeline!.map((clip) => clip.startSec)).toEqual([
+          0, 6,
+        ]);
+      });
+
+      it("steps the Start well with ↑, as one undo step until it is left", () => {
+        seed();
+        openEditor();
+        stack();
+        selectClip2();
+        const field = startField();
+        field.focus();
+        fireEvent.focus(field);
+        fireEvent.keyDown(field, { key: "ArrowUp" });
+        fireEvent.keyDown(field, { key: "ArrowUp" });
+        fireEvent.keyDown(field, { key: "ArrowUp", shiftKey: true });
+        expect(editor().draft!.timeline[1].startSec).toBeCloseTo(5.2, 9);
+        const steps = editor().past.length;
+        fireEvent.blur(field);
+        act(() => editor().setPlayhead(0));
+        fireEvent.focus(startField());
+        fireEvent.keyDown(startField(), { key: "ArrowDown" });
+        expect(editor().past.length).toBe(steps + 1);
+      });
+
+      it("writes a clip moved by its box in Done's single write, the total with it on release", () => {
+        seed();
+        openEditor();
+        stack();
+        act(() => editor().setZoom(64));
+        const pointer = (type: "pointermove" | "pointerup", clientX: number) =>
+          act(() => {
+            window.dispatchEvent(new MouseEvent(type, { clientX, clientY: 78, bubbles: true }));
+          });
+        // Clip 2 (4 s) a second later, by its box
+        fireEvent.pointerDown(option("Clip 2"), { button: 0, pointerId: 1, clientX: 400, clientY: 78 });
+        pointer("pointermove", 464);
+        expect(editor().draft!.timeline.map((clip) => clip.startSec)).toEqual([undefined, undefined]);
+        expect(totalShown("0:08.00")).toBe(true);
+        pointer("pointerup", 464);
+        expect(editor().draft!.timeline.map((clip) => clip.startSec)).toEqual([0, 5]);
+        expect(totalShown("0:09.00")).toBe(true);
+        expect(option("Clip 2")).toHaveAttribute("aria-label", "Clip 2, starts 0:05.00");
+
+        const write = vi.spyOn(wf(), "updateNodeData");
+        write.mockClear();
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        expect(write).toHaveBeenCalledTimes(1);
+        expect((write.mock.calls[0][1] as Partial<VideoStitchNodeData>).timeline!.map((clip) => clip.startSec)).toEqual([
+          0, 5,
+        ]);
+      });
+
+      it("says Cancel would lose a moved clip", () => {
+        seed();
+        openEditor();
+        stack();
+        act(() => setClipStart("clip:eB", 6));
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
+        expect(
+          within(sheet).getByText("A moved clip and the switch to Stacked will be lost. The node keeps what it had."),
+        ).toBeInTheDocument();
+      });
+
+      it("splits inside a placed overlap, with no title on Split", () => {
+        seed();
+        openEditor();
+        stack();
+        act(() => setClipStart("clip:eB", 3));
+        selectClip2();
+        act(() => editor().setPlayhead(4));
+        const split = screen.getByRole("button", { name: /Split at playhead/ });
+        expect(split).toBeEnabled();
+        expect(split).not.toHaveAttribute("title");
+      });
+
+      it("says what a placed stack does: where clips sit, how they layer, a clip hidden, the gaps", () => {
+        seed({ music: true });
+        openEditor();
+        stack();
+        // Clip 2 (4 s) wholly under Clip 1 (5 s), which is the higher row
+        act(() => setClipStart("clip:eB", 0.5));
+        expect(summary()).toHaveTextContent(
+          "Clips sit where you put them. Overlap applies to new clips and to Line up. Where clips overlap, the higher " +
+            "row fades in or out over the rows below. Clip 2 is hidden under a higher row.",
+        );
+        act(() => setCrossfade(false));
+        expect(summary()).toHaveTextContent(
+          "Clips sit where you put them. Overlap applies to new clips and to Line up. Where clips overlap, the higher " +
+            "row is in front. Every clip that plays is heard. Clip 2 is hidden under a higher row.",
+        );
+        act(() => setClipStart("clip:eB", 6));
+        expect(summary()).toHaveTextContent(
+          "Clips sit where you put them. Overlap applies to new clips and to Line up. None overlap. 1 gap plays black. " +
+            "The music plays on.",
+        );
+        expect(screen.getByText("Overlap")).toHaveAttribute(
+          "title",
+          "How far each clip overlaps the one above when lined up, and where new clips go.",
+        );
+      });
+
+      it("shows the whole summary where the rail has room, and holds its height from a press in the rail until the click", async () => {
+        seed();
+        openEditor();
+        stack();
+        selectClip2();
+        const line = summary() as HTMLElement;
+        // No fixed cap: only a window too short for it cuts the line (the rail body gives its room first)
+        expect(line.className).not.toMatch(/max-h-/);
+        expect(line).toHaveAttribute("title", line.textContent);
+        vi.spyOn(line, "offsetHeight", "get").mockReturnValue(50);
+        const split = screen.getByRole("button", { name: /Split at playhead/ });
+        fireEvent.pointerDown(split, { button: 0, pointerId: 1 });
+        // A commit the press makes cannot shrink the line under the pointer
+        expect(line.style.minHeight).toBe("50px");
+        act(() => {
+          window.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+        });
+        expect(line.style.minHeight).toBe("50px");
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(line.style.minHeight).toBe("");
+      });
+
+      it("lists the placing keys under the clip actions in Stacked, and the trim keys in Track", () => {
+        seed();
+        openEditor();
+        const rail = () => within(screen.getByRole("complementary", { name: "Clip" }));
+        expect(rail().getByText("Hold to trim without snapping")).toBeInTheDocument();
+        expect(rail().queryByText("Start at the playhead")).toBeNull();
+        stack();
+        for (const text of [
+          "In at the playhead",
+          "Out at the playhead",
+          "Start at the playhead",
+          "End at the playhead",
+          "With ← → nudge a frame, with ↑ ↓ change row",
+          "Hold to move or trim without snapping",
+        ]) {
+          expect(rail().getByText(text)).toBeInTheDocument();
+        }
+      });
+
+      it("handles ⌥← in Track as a key that does nothing, so the browser does not go back", () => {
+        seed();
+        openEditor();
+        selectClip2();
+        const before = editor().draft;
+        const event = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true, cancelable: true });
+        act(() => {
+          document.body.dispatchEvent(event);
+        });
+        expect(event.defaultPrevented).toBe(true);
+        expect(editor().draft).toBe(before);
+      });
+
+      it("nudges the selected clip a frame with ⌥→ in Stacked, and moves its row with ⌥↑", () => {
+        seed();
+        openEditor();
+        stack();
+        selectClip2();
+        press(document.body, "ArrowRight", { altKey: true });
+        expect(editor().draft!.timeline[1].startSec).toBeCloseTo(4 + 1 / 60, 9);
+        press(document.body, "ArrowUp", { altKey: true });
+        expect(editor().draft!.timeline.map((clip) => clip.id)).toEqual(["clip:eB", "clip:eA"]);
+        expect(editor().draft!.timeline[0].startSec).toBeCloseTo(4 + 1 / 60, 9);
+      });
+
+      it("plays the placed layers by the envelope: hidden clips at opacity 0, black in a gap", () => {
+        seed();
+        openEditor();
+        stack();
+        act(() => setClipStart("clip:eB", 0.5));
+        act(() => editor().setPlayhead(2));
+        const videos = () => [...screen.getByTestId("stitch-preview").querySelectorAll("video")];
+        // Row order in the DOM: Clip 1 covers Clip 2
+        expect(videos().map((v) => v.style.opacity)).toEqual(["1", "0"]);
+        act(() => setClipStart("clip:eB", 6));
+        act(() => editor().setPlayhead(5.5));
+        expect(videos().map((v) => v.style.opacity)).toEqual(["0", "0"]);
+      });
     });
   });
 });

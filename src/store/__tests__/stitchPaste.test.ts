@@ -83,6 +83,23 @@ describe("pasting a Stitch node with its sources", () => {
     expect("timeline" in data).toBe(false);
   });
 
+  it("keeps every clip's start in a placed node", () => {
+    const sequenceLayout = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+    seed(true, { sequenceLayout });
+    const placed = (store().nodes[1].data as VideoStitchNodeData).timeline!.map((clip, i) => ({
+      ...clip,
+      startSec: [2.25, 0][i],
+    }));
+    useWorkflowStore.setState({
+      nodes: store().nodes.map((n) => (n.id === "stitch-1" ? { ...n, data: { ...n.data, timeline: placed } } : n)),
+    });
+    store().copySelectedNodes();
+    store().pasteNodes();
+
+    const pastedStitch = store().nodes.find((n) => n.type === "videoStitch" && n.id !== "stitch-1")!;
+    expect((pastedStitch.data as VideoStitchNodeData).timeline!.map((clip) => clip.startSec)).toEqual([2.25, 0]);
+  });
+
   it("keeps a stacked node's layout", () => {
     const sequenceLayout = { mode: "stacked" as const, overlapSec: 1.5, crossfade: false };
     seed(true, { sequenceLayout });

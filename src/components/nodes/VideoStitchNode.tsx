@@ -26,11 +26,14 @@ import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from
 import {
   clipLength,
   edgeIdsInOrder,
+  isPlaced,
   moveClip,
   sourceKey,
+  spansEnvelope,
   type SourceDurations,
   type SourceKey,
 } from "@/lib/stitch/timeline";
+import { placedCardItems } from "@/lib/stitch/placement";
 import { formatSeconds, formatTileSeconds } from "@/lib/stitch/timecode";
 import { assetMediaKey, mediaKeyOf, nearestFrame, type StitchMediaInfo } from "@/lib/stitch/mediaInfo";
 import { assetFileUrl } from "@/lib/assets/client/api";
@@ -213,10 +216,14 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     return known;
   }, [cardClips, mediaInfo, goneAssets]);
   const sequenceSec = draftDuration(draft, durations);
-  // Named only when some join really overlaps: a stack of cuts encodes as Track
+  // Lined up: named only when some join really overlaps (a stack of cuts encodes as Track). Placed: counted from the
+  // envelope, which has no one overlap value to name
   const stackedItem = useMemo(() => {
     const layout = draft.sequenceLayout;
-    if (layout.mode !== "stacked" || !draftSpans(draft, durations).some((span) => span.overlapIn > 0)) return [];
+    if (layout.mode !== "stacked") return [];
+    const spans = draftSpans(draft, durations);
+    if (isPlaced(draft.timeline)) return placedCardItems(spansEnvelope(spans, layout.crossfade));
+    if (!spans.some((span) => span.overlapIn > 0)) return [];
     return [`${formatSeconds(layout.overlapSec, 1)} ${layout.crossfade ? "crossfade" : "overlap"}`];
   }, [draft, durations]);
   // The length is shown once it is settled: every clip with a source read
@@ -403,12 +410,15 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
           summary={{
             icon: SUMMARY_ICON,
             title: `${clipCount} clip${clipCount === 1 ? "" : "s"}`,
-            // One loop, in m:ss as the scrub row reads the stitched video, so the two agree at 1×
+            // One loop, in m:ss as the scrub row reads the stitched video, so the two agree at 1×. The clip count stays
+            // whole: a placed stack's longer values give way first, cut at their end
             values: (
               <SummaryValues
+                truncate
                 items={[sequenceSettled ? formatTime(sequenceSec) : "", ...stackedItem, `loop ${draft.loopCount}×`]}
               />
             ),
+            className: "grid-cols-[16px_max-content_minmax(0,1fr)_auto]",
           }}
           expanded={expanded}
           onToggle={() => setExpanded((v) => !v)}

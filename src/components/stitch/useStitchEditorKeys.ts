@@ -3,11 +3,15 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { isSaveShortcut } from "@/utils/saveShortcut";
 import { editorKeyAction, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
 import {
+  endSelectedAtPlayhead,
+  moveSelectedRow,
+  nudgeSelectedClip,
   pause,
   play,
   removeSelection,
   setEdgeAtPlayheadForSelection,
   splitAtPlayhead,
+  startSelectedAtPlayhead,
   stepBack,
   toggleMusicMute,
   togglePlay,
@@ -23,7 +27,8 @@ function stackedDialogOpen(root: HTMLElement | null): boolean {
   return Boolean(top && root && !top.contains(root));
 }
 
-function run(action: EditorKeyAction, requestClose: () => void): void {
+/** Each action is handled in either layout; the ones that place a clip in time or change its row do nothing in Track. */
+function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repeat">, requestClose: () => void): void {
   const s = useStitchEditorStore.getState();
   switch (action) {
     case "togglePlay":
@@ -46,6 +51,18 @@ function run(action: EditorKeyAction, requestClose: () => void): void {
       return toggleMusicMute();
     case "toggleClipMute":
       return toggleSelectedClipMute();
+    case "nudgeEarlier":
+      return nudgeSelectedClip(-1, e.shiftKey, e.repeat);
+    case "nudgeLater":
+      return nudgeSelectedClip(1, e.shiftKey, e.repeat);
+    case "rowUp":
+      return moveSelectedRow(-1);
+    case "rowDown":
+      return moveSelectedRow(1);
+    case "startAtPlayhead":
+      return startSelectedAtPlayhead();
+    case "endAtPlayhead":
+      return endSelectedAtPlayhead();
     case "undo":
       return s.undo();
     case "redo":
@@ -64,8 +81,10 @@ function run(action: EditorKeyAction, requestClose: () => void): void {
  * Shift+letters, ⌘V, ?) is stopped too, without preventDefault, so nothing
  * runs behind the dialog while Tab, the arrows and Enter keep their native
  * behaviour. ⌘S still saves. A text field, a stacked dialog and the clip
- * menu each keep their own keys. While a trim or reorder drag runs, Escape
- * cancels it and the other editor keys are swallowed.
+ * menu each keep their own keys. While a trim, move or reorder drag runs,
+ * Escape cancels it and the other editor keys are swallowed. ⌥ with an
+ * arrow is an editor key in Track too, where it does nothing: Alt+← would
+ * otherwise go Back in a browser on Windows.
  */
 export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requestClose: () => void): void {
   const isOpen = useStitchEditorStore((s) => s.isOpen);
@@ -98,7 +117,7 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
         return;
       }
 
-      // A trim or reorder drag: Escape cancels it, wherever focus is
+      // A trim, move or reorder drag: Escape cancels it, wherever focus is
       if (s.cancelGesture && e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -116,7 +135,7 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
         if (e.repeat && NO_REPEAT.has(action)) return;
         // The drag applies what it measured at the press on release: nothing may edit the draft under it (K only pauses)
         if (s.cancelGesture && action !== "pause") return;
-        run(action, requestClose);
+        run(action, e, requestClose);
         return;
       }
       shield();

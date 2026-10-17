@@ -319,6 +319,23 @@ describe("LibraryPicker", () => {
     expect(within(dialog()).getByText("1 selected")).toBeInTheDocument();
   });
 
+  it("names the clip that ends last in a placed stack, where new clips start under it", async () => {
+    openPicker({ clips: 3, clipSec: 4, sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true } });
+    // Clip 1 placed at 10 s ends last (14 s); Clips 2 and 3 end at 4 s and 6 s
+    act(() =>
+      editor().apply((d) => ({
+        ...d,
+        timeline: d.timeline.map((clip, i) => ({ ...clip, startSec: [10, 0, 2][i] })),
+      })),
+    );
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    fireEvent.click(tile("a1.mp4"));
+    expect(within(dialog()).getByText("goes after Clip 1")).toBeInTheDocument();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Add 1 clip" }));
+    expect(editor().draft!.timeline[3].startSec).toBeUndefined();
+    expect(editor().playhead).toBe(13);
+  });
+
   it("says a clip goes first on an empty timeline", async () => {
     openPicker({ clips: 0 });
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });

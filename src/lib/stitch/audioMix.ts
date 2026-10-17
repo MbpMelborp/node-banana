@@ -1,5 +1,6 @@
 import type { VolumePoint } from "@/types";
 import { gainAt } from "./curve";
+import { coverGain, ownGain, type GainPiece } from "./placement";
 import { crossfadeGain } from "./stack";
 
 /**
@@ -251,6 +252,53 @@ export function applyCrossfades(
     }
     if (outEnd < n) channel.fill(0, Math.max(0, outEnd));
   }
+}
+
+/** How many samples a varying gain piece runs between abort checks. */
+const ABORT_CHECK_SAMPLES = 65536;
+
+/**
+ * A placed clip's gains (placement.ts gainPieces), in place. The clip's first sample sits at loop sample startSample;
+ * its sample i is read at loop time (startSample + i + 0.5) / sampleRate. A piece [fromSec, toSec) covers its samples
+ * round(fromSec · sr) − startSample up to round(toSec · sr) − startSample; the first and last pieces reach the PCM's
+ * ends. A constant piece multiplies (0 fills); a varying one evaluates sin(own·π/2) · Π cos(above·π/2) per sample.
+ * The PCM must belong to one clip: toMasterFormat can hand back the decoded buffer itself.
+ */
+export function applyGainPieces(
+  channels: Float32Array[],
+  sampleRate: number,
+  startSample: number,
+  pieces: readonly GainPiece[],
+  signal?: AbortSignal,
+): void {
+  const n = channels[0]?.length ?? 0;
+  const at = (sec: number) => Math.min(Math.max(Math.round(sec * sampleRate) - startSample, 0), n);
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  };
+  pieces.forEach((piece, p) => {
+    throwIfAborted();
+    const from = p === 0 ? 0 : at(piece.fromSec);
+    const to = p === pieces.length - 1 ? n : at(piece.toSec);
+    if (!(to > from)) return;
+    if ("gain" in piece) {
+      if (piece.gain === 1) return;
+      for (const channel of channels) {
+        if (piece.gain === 0) channel.fill(0, from, to);
+        else for (let i = from; i < to; i++) channel[i] *= piece.gain;
+      }
+      return;
+    }
+    const { own, above, fromSec } = piece;
+    for (let i = from; i < to; i++) {
+      if (i > from && (i - from) % ABORT_CHECK_SAMPLES === 0) throwIfAborted();
+      const dt = (startSample + i + 0.5) / sampleRate - fromSec;
+      // placement.ts's gainPieceAt, unrolled for the sample loop: a covered clip is exactly silent
+      let gain = ownGain(own.at + own.slope * dt);
+      for (let k = 0; k < above.length; k++) gain *= coverGain(above[k].at + above[k].slope * dt);
+      for (let c = 0; c < channels.length; c++) channels[c][i] *= gain;
+    }
+  });
 }
 
 export interface LoopMix {

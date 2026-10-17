@@ -64,6 +64,13 @@ describe("readStitchDraft", () => {
     });
   });
 
+  it("keeps the clips' starts", () => {
+    const timeline = [edgeClip("a", "e1", { startSec: 2.5 }), edgeClip("b", "e2")];
+    const draft = readStitchDraft(nodeData({ clipOrder: ["e1", "e2"], timeline }), { liveEdgeIds: ["e1", "e2"], hasMusic: false });
+    expect(draft.timeline.map((c) => c.startSec)).toEqual([2.5, undefined]);
+    expect("startSec" in draft.timeline[1]).toBe(false);
+  });
+
   it("reads a timeline node's layout, and a legacy node's as Track with its values kept", () => {
     const timeline = [edgeClip("a", "e1")];
     const stacked = { mode: "stacked", overlapSec: 2, crossfade: false } as const;
@@ -186,6 +193,24 @@ describe("draftSpans and draftDuration", () => {
     expect(draftSpans(d, durations).map((s) => s.start)).toEqual([0, 4, 8]);
     expect(draftDuration(d, durations)).toBe(14);
   });
+
+  it("places them where they were put once one has a start, and ignores the starts in Track", () => {
+    const placed = [edgeClip("a", "e1", { startSec: 3 }), edgeClip("b", "e2", { startSec: 0 }), edgeClip("c", "e3")];
+    const d = { timeline: placed, sequenceLayout: STACKED };
+    // c is unpinned: Overlap before the latest end above it (a's, at 8)
+    expect(draftSpans(d, durations).map((s) => s.start)).toEqual([3, 0, 7]);
+    expect(draftSpans(d, durations).every((s) => s.overlapIn === 0 && s.overlapOut === 0)).toBe(true);
+    expect(draftDuration(d, durations)).toBe(13);
+    expect(draftSpans({ ...d, sequenceLayout: { ...STACKED, mode: "track" } }, durations).map((s) => s.start)).toEqual([
+      0, 5, 10,
+    ]);
+  });
+
+  it("does not lengthen the loop for an empty clip placed past the end", () => {
+    const d = { timeline: [edgeClip("a", "e1", { startSec: 0 }), edgeClip("x", "e9", { startSec: 20 })], sequenceLayout: STACKED };
+    expect(draftSpans(d, durations)[1].start).toBe(20);
+    expect(draftDuration(d, durations)).toBe(5);
+  });
 });
 
 describe("sameDraft", () => {
@@ -209,6 +234,19 @@ describe("sameDraft", () => {
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { inSec: 1 })] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { muted: true })] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { volume: 0.5 })] })).toBe(false);
+    expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { startSec: 0 })] })).toBe(false);
+    expect(
+      sameDraft(
+        { ...base, timeline: [edgeClip("a", "e1", { startSec: 2 })] },
+        { ...base, timeline: [edgeClip("a", "e1", { startSec: 2.5 })] },
+      ),
+    ).toBe(false);
+    expect(
+      sameDraft(
+        { ...base, timeline: [edgeClip("a", "e1", { startSec: 2 })] },
+        { ...base, timeline: [edgeClip("a", "e1", { startSec: 2 })] },
+      ),
+    ).toBe(true);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("b", "e1")] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e2")] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [createClip({ kind: "asset", assetId: "e1" }, { id: "a" })] })).toBe(false);

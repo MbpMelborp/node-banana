@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InputVideoTrack, VideoSample } from "mediabunny";
-import { blendBytes, createFrameBlender, encodeDissolve, type FrameBlender } from "../crossfadeFrames";
+import { blendBytes, blendBytesWeighted, createFrameBlender, encodeDissolve, rgbaToYuv, type FrameBlender } from "../crossfadeFrames";
 
 /** Every VideoSample the module constructs: its data (copied, as mediabunny copies a buffer it is given) and init. */
 const constructed: Array<{ data: unknown; input: unknown; init: Record<string, unknown>; close: ReturnType<typeof vi.fn> }> = [];
@@ -237,6 +237,234 @@ describe("createFrameBlender", () => {
   });
 });
 
+describe("blendBytesWeighted", () => {
+  it("gives each input at its own full weight", () => {
+    const inputs = [new Uint8Array([0, 100, 255]), new Uint8Array([255, 50, 0]), new Uint8Array([7, 7, 7])];
+    const out = new Uint8Array(3);
+    blendBytesWeighted(inputs, [1, 0, 0], out);
+    expect([...out]).toEqual([0, 100, 255]);
+    blendBytesWeighted(inputs, [0, 0, 1], out);
+    expect([...out]).toEqual([7, 7, 7]);
+  });
+
+  it("rounds once, half up, on the weighted sum of three inputs", () => {
+    const out = new Uint8Array(2);
+    // 0.25·10 + 0.25·11 + 0.5·12 = 11.25 → 11; 0.25·1 + 0.25·0 + 0.5·0 = 0.25 → 0, and 0.5·1 + 0.25·0 + 0.25·0 = 0.5 → 1
+    blendBytesWeighted([new Uint8Array([10, 1]), new Uint8Array([11, 0]), new Uint8Array([12, 0])], [0.25, 0.25, 0.5], out);
+    expect([...out]).toEqual([11, 0]);
+    blendBytesWeighted([new Uint8Array([1]), new Uint8Array([0]), new Uint8Array([0])], [0.5, 0.25, 0.25], out);
+    expect(out[0]).toBe(1);
+  });
+
+  it("clamps: weights summing a hair past 1 over 255s give 255, not 0", () => {
+    const full = new Uint8Array([255, 255]);
+    const out = new Uint8Array(2);
+    blendBytesWeighted([full, full, full], [0.5, 0.25, 0.25 + 1e-12], out);
+    expect([...out]).toEqual([255, 255]);
+    blendBytesWeighted([full, full, full], [0.5, 0.5, 0.5], out);
+    expect([...out]).toEqual([255, 255]);
+  });
+});
+
+describe("createFrameBlender: composite and black", () => {
+  const ref = { width: 4, height: 2 };
+  const layer = (sample: FakeSample | null, weight: number) => ({ sample: asSample(sample), weight });
+
+  beforeEach(() => {
+    constructed.length = 0;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("composites two layers on the bytes path exactly as blend does", async () => {
+    const a = frame(100);
+    const b = frame(200);
+    const blender = createFrameBlender(ref, { context2d: vi.fn() });
+    await blender.blend(asSample(a), asSample(b), 0.3, 1, 1 / 60);
+    await blender.composite([layer(a, 0.7), layer(b, 0.3)], 1, 1 / 60);
+    const [blended, composited] = constructed;
+    expect(composited.data).toEqual(blended.data);
+    expect(composited.init).toEqual(blended.init);
+  });
+
+  it("composites three layers by weight in their bytes, in the bottom layer's colour space", async () => {
+    const [a, b, c] = [frame(100), frame(200), frame(40)];
+    const context2d = vi.fn();
+    const blender = createFrameBlender(ref, { context2d });
+    await blender.composite([layer(a, 0.5), layer(b, 0.25), layer(c, 0.25)], 2, 1 / 60);
+    expect(context2d).not.toHaveBeenCalled();
+    const [out] = constructed;
+    // 50 + 50 + 10
+    expect([...(out.data as Uint8Array)].every((v) => v === 110)).toBe(true);
+    expect(out.init).toMatchObject({ format: "NV12", codedWidth: 4, codedHeight: 2, timestamp: 2, colorSpace: a.colorSpace, rotation: 0 });
+  });
+
+  it("renormalises the weights of the layers present: a missing top keeps the bottom at full brightness", async () => {
+    const a = frame(100);
+    const blender = createFrameBlender(ref, { context2d: vi.fn() });
+    const result = (await blender.composite([layer(a, 0.4), layer(null, 0.6)], 3, 1 / 60)) as unknown as FakeSample;
+    // One layer left: a clone at the new time
+    expect(a.clone).toHaveBeenCalledTimes(1);
+    expect(result.setTimestamp).toHaveBeenCalledWith(3);
+    expect(constructed).toHaveLength(0);
+    // A missing bottom: the two above share the picture
+    const [b, c] = [frame(200), frame(40)];
+    await blender.composite([layer(null, 0.5), layer(b, 0.25), layer(c, 0.25)], 4, 1 / 60);
+    expect([...(constructed[0].data as Uint8Array)].every((v) => v === 120)).toBe(true);
+  });
+
+  it("gives the bottom layer present weight 1 when every weight is 0", async () => {
+    const [a, b] = [frame(100), frame(200)];
+    const blender = createFrameBlender(ref, { context2d: vi.fn() });
+    await blender.composite([layer(a, 0), layer(b, 0)], 0, 1 / 60);
+    expect([...(constructed[0].data as Uint8Array)].every((v) => v === 100)).toBe(true);
+  });
+
+  it("composites mixed sizes on a canvas: black, the bottom at 1, then each layer at its DOM opacity", async () => {
+    const { ctx, log } = fakeContext();
+    const context2d = vi.fn(() => ctx as unknown as CanvasRenderingContext2D);
+    const blender = createFrameBlender(ref, { context2d, isFirefox: false });
+    const [a, b, c] = [frame(100), frame(200, { width: 8, height: 4 }), frame(40)];
+    await blender.composite([layer(a, 0.5), layer(b, 0.25), layer(c, 0.25)], 5, 1 / 60);
+    // DOM opacities of (0.5, 0.25, 0.25): 1, 1/3, 1/4
+    expect(log).toEqual(["alpha 1", "fill black", "alpha 1", `alpha ${0.25 / 0.75}`, "alpha 0.25", "alpha 1"]);
+    for (const s of [a, b, c]) expect(s.drawWithFit).toHaveBeenCalledWith(ctx, { fit: "cover", rotation: 0 });
+    expect(a.drawWithFit.mock.invocationCallOrder[0]).toBeLessThan(b.drawWithFit.mock.invocationCallOrder[0]);
+    expect(b.drawWithFit.mock.invocationCallOrder[0]).toBeLessThan(c.drawWithFit.mock.invocationCallOrder[0]);
+    expect(constructed[0]).toMatchObject({ data: ctx.canvas, init: { timestamp: 5, duration: 1 / 60, rotation: 0 } });
+  });
+
+  it("returns a canvas composite in the reference's own YUV format and colour space when asked (the file's first frame)", async () => {
+    const { ctx } = fakeContext();
+    // 4 × 2 canvas: the left half white, the right half pure red
+    const pixels = new Uint8ClampedArray(4 * 2 * 4);
+    for (let y = 0; y < 2; y++) {
+      for (let x = 0; x < 4; x++) pixels.set(x < 2 ? [255, 255, 255, 255] : [255, 0, 0, 255], 4 * (y * 4 + x));
+    }
+    const getImageData = vi.fn(() => ({ data: pixels }));
+    Object.assign(ctx, { getImageData });
+    const colorSpace: VideoColorSpaceInit = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
+    const blender = createFrameBlender(
+      { width: 4, height: 2, format: "NV12", colorSpace },
+      { context2d: vi.fn(() => ctx as unknown as CanvasRenderingContext2D), isFirefox: false },
+    );
+    const [a, b] = [frame(100), frame(200, { width: 8, height: 4 })];
+    await blender.composite([layer(a, 0.5), layer(b, 0.5)], 1, 1 / 60, { inRefFormat: true });
+    expect(getImageData).toHaveBeenCalledWith(0, 0, 4, 2);
+    expect(constructed[0].init).toEqual({
+      format: "NV12",
+      codedWidth: 4,
+      codedHeight: 2,
+      colorSpace,
+      layout: [
+        { offset: 0, stride: 4 },
+        { offset: 8, stride: 4 },
+      ],
+      timestamp: 1,
+      duration: 1 / 60,
+      rotation: 0,
+    });
+    // BT.709 limited: white is Y 235, Cb Cr 128; red is Y 63, Cb 102, Cr 240
+    expect([...(constructed[0].data as Uint8Array)]).toEqual([235, 235, 63, 63, 235, 235, 63, 63, 128, 128, 102, 240]);
+    // Later frames stay on the canvas
+    await blender.composite([layer(a, 0.5), layer(b, 0.5)], 2, 1 / 60);
+    expect(constructed[1].data).toBe(ctx.canvas);
+  });
+
+  it("returns a 10-bit reference's canvas composite and black as 8-bit I420 in its colour space, so its tags hold", async () => {
+    const { ctx } = fakeContext();
+    const getImageData = vi.fn(() => ({ data: new Uint8ClampedArray(4 * 2 * 4).fill(255) }));
+    Object.assign(ctx, { getImageData });
+    const colorSpace: VideoColorSpaceInit = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
+    const blender = createFrameBlender(
+      { width: 4, height: 2, format: "I420P10", colorSpace },
+      { context2d: vi.fn(() => ctx as unknown as CanvasRenderingContext2D), isFirefox: false },
+    );
+    // 10-bit frames are not blended byte by byte: the canvas does it
+    const [a, b] = [frame(100, { format: "I420P10" }), frame(200, { format: "I420P10" })];
+    await blender.composite([layer(a, 0.5), layer(b, 0.5)], 1, 1 / 60, { inRefFormat: true });
+    expect(getImageData).toHaveBeenCalled();
+    expect(constructed[0].init).toMatchObject({ format: "I420", codedWidth: 4, codedHeight: 2, colorSpace });
+    expect([...(constructed[0].data as Uint8Array)]).toEqual([235, 235, 235, 235, 235, 235, 235, 235, 128, 128, 128, 128]);
+    blender.black(2, 1 / 60);
+    expect(constructed[1].init).toMatchObject({ format: "I420", colorSpace });
+    expect([...(constructed[1].data as Uint8Array)]).toEqual([16, 16, 16, 16, 16, 16, 16, 16, 128, 128, 128, 128]);
+  });
+
+  it("converts RGBA to Y'CbCr by the matrix and range, chroma from the pixels it covers", () => {
+    const px = (...rgb: number[][]) => new Uint8ClampedArray(rgb.flatMap((c) => [...c, 255]));
+    // Full range BT.601, I444: black and white
+    const full = rgbaToYuv(px([0, 0, 0], [255, 255, 255]), 2, 1, "I444", { matrix: "smpte170m", fullRange: true })!;
+    expect([...full.data]).toEqual([0, 255, 128, 128, 128, 128]);
+    // I420 averages a 2 × 2 block: two red and two blue pixels give magenta's chroma
+    const block = rgbaToYuv(px([255, 0, 0], [0, 0, 255], [255, 0, 0], [0, 0, 255]), 2, 2, "I420", { matrix: "bt709" })!;
+    expect(block.layout).toEqual([
+      { offset: 0, stride: 2 },
+      { offset: 4, stride: 1 },
+      { offset: 5, stride: 1 },
+    ]);
+    expect([...block.data.slice(4)]).toEqual([
+      Math.round(128 + (224 * (0.5 - (0.2126 + 0.0722) / 2)) / (2 * (1 - 0.0722))),
+      Math.round(128 + (224 * (0.5 - (0.2126 + 0.0722) / 2)) / (2 * (1 - 0.2126))),
+    ]);
+    // I420A's alpha is opaque; an RGB matrix or an RGB format has no YUV to make
+    expect([...rgbaToYuv(px([0, 0, 0], [0, 0, 0]), 2, 1, "I420A")!.data.slice(-2)]).toEqual([255, 255]);
+    expect(rgbaToYuv(px([0, 0, 0]), 1, 1, "I420", { matrix: "rgb" })).toBeNull();
+    expect(rgbaToYuv(px([0, 0, 0]), 1, 1, "BGRA")).toBeNull();
+  });
+
+  it("makes black in an NV12 reference's own format, coded size and colour space: Y 16, chroma 128", () => {
+    const colorSpace: VideoColorSpaceInit = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
+    const blender = createFrameBlender({ width: 4, height: 2, format: "NV12", colorSpace }, { context2d: vi.fn() });
+    blender.black(6, 1 / 60);
+    blender.black(7, 1 / 60);
+    const [first, second] = constructed;
+    expect([...(first.data as Uint8Array)]).toEqual([16, 16, 16, 16, 16, 16, 16, 16, 128, 128, 128, 128]);
+    expect(first.init).toEqual({
+      format: "NV12",
+      codedWidth: 4,
+      codedHeight: 2,
+      colorSpace,
+      layout: [
+        { offset: 0, stride: 4 },
+        { offset: 8, stride: 4 },
+      ],
+      rotation: 0,
+      timestamp: 6,
+      duration: 1 / 60,
+    });
+    expect(second.init.timestamp).toBe(7);
+  });
+
+  it("makes black with Y 0 in a full-range reference, and alpha 255 in I420A", () => {
+    createFrameBlender({ width: 2, height: 2, format: "I420", colorSpace: { fullRange: true } }).black(0, 1 / 60);
+    expect([...(constructed[0].data as Uint8Array)]).toEqual([0, 0, 0, 0, 128, 128]);
+    createFrameBlender({ width: 2, height: 2, format: "I420A" }).black(0, 1 / 60);
+    expect([...(constructed[1].data as Uint8Array)]).toEqual([16, 16, 16, 16, 128, 128, 255, 255, 255, 255]);
+    expect(constructed[1].init.layout).toEqual([
+      { offset: 0, stride: 2 },
+      { offset: 4, stride: 1 },
+      { offset: 5, stride: 1 },
+      { offset: 6, stride: 2 },
+    ]);
+  });
+
+  it("makes RGBX zeros at the reference's coded size when its format is RGB or unknown", () => {
+    createFrameBlender({ width: 4, height: 2, format: "BGRA" }).black(1, 1 / 60);
+    createFrameBlender({ width: 4, height: 2 }).black(2, 1 / 60);
+    for (const made of constructed) {
+      expect(made.init).toEqual({ format: "RGBX", codedWidth: 4, codedHeight: 2, rotation: 0, timestamp: made.init.timestamp, duration: 1 / 60 });
+      expect((made.data as Uint8Array).length).toBe(32);
+      expect([...(made.data as Uint8Array)].every((v) => v === 0)).toBe(true);
+    }
+  });
+
+  it("gives black when no layer has a frame", async () => {
+    const blender = createFrameBlender({ width: 4, height: 2, format: "NV12" }, { context2d: vi.fn() });
+    await blender.composite([layer(null, 1)], 8, 1 / 60);
+    expect(constructed[0].init).toMatchObject({ format: "NV12", timestamp: 8 });
+  });
+});
+
 /** An iterator that yields the given items in order, recording next() and an awaited return(). */
 function iteratorOf(items: Array<FakeSample | null>, opts: { throwAt?: number } = {}) {
   let i = 0;
@@ -285,6 +513,8 @@ describe("encodeDissolve", () => {
         results.push(result);
         return result as unknown as VideoSample;
       }),
+      composite: vi.fn(),
+      black: vi.fn(),
     };
     return { blender, calls, results };
   }

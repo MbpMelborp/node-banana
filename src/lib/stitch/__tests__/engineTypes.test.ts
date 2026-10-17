@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isMusicInput,
   normalizeLoopCount,
+  normalizePlacement,
   normalizeStack,
   normalizeStitchArgs,
   type StitchAudioData,
@@ -92,5 +93,33 @@ describe("normalizeStack", () => {
     expect(normalizeStack({ overlapSec: 12 })).toEqual({ overlapSec: 10, crossfade: true });
     expect(normalizeStack({ overlapSec: 1 })).toEqual({ overlapSec: 1, crossfade: true });
     expect(normalizeStack({ overlapSec: 1, crossfade: false })).toEqual({ overlapSec: 1, crossfade: false });
+  });
+});
+
+describe("placed stacks", () => {
+  it("keeps a finite startSec on a clip, clamped to [0, 600], and drops anything else", () => {
+    const base = { blob: a, inSec: 0, outSec: null, muted: false, volume: 1 };
+    const read = (startSec: unknown) =>
+      normalizeStitchArgs([{ ...base, startSec } as unknown as StitchClipInput], null).clips[0].startSec;
+    expect(read(4.25)).toBe(4.25);
+    expect(read(0)).toBe(0);
+    expect(read(-3)).toBe(0);
+    expect(read(700)).toBe(600);
+    for (const bad of [Number.NaN, Infinity, "4", null, undefined]) expect(read(bad)).toBeUndefined();
+    expect("startSec" in normalizeStitchArgs([base], null).clips[0]).toBe(false);
+  });
+
+  it("routes by the placed flag alone: null without it, even when clips carry starts", () => {
+    expect(normalizePlacement(undefined)).toBeNull();
+    expect(normalizePlacement({ loopCount: 1, overlapSec: 1, crossfade: true })).toBeNull();
+    expect(normalizePlacement({ placed: false, overlapSec: 1 })).toBeNull();
+  });
+
+  it("defaults Crossfade on and reads Overlap as the stack does, 0 when absent", () => {
+    expect(normalizePlacement({ placed: true })).toEqual({ crossfade: true, overlapSec: 0 });
+    expect(normalizePlacement({ placed: true, crossfade: false, overlapSec: 1.5 })).toEqual({ crossfade: false, overlapSec: 1.5 });
+    expect(normalizePlacement({ placed: true, overlapSec: 0 })).toEqual({ crossfade: true, overlapSec: 0 });
+    expect(normalizePlacement({ placed: true, overlapSec: Number.NaN })).toEqual({ crossfade: true, overlapSec: 0 });
+    expect(normalizePlacement({ placed: true, overlapSec: 12 })).toEqual({ crossfade: true, overlapSec: 10 });
   });
 });

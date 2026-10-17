@@ -1,4 +1,5 @@
 import type { VolumePoint } from "@/types";
+import { MAX_START_SEC } from "./placement";
 import { MAX_OVERLAP_SEC } from "./stack";
 
 /**
@@ -20,6 +21,8 @@ export interface StitchClipInput {
   volume: number;
   /** Which video this clip plays (the timeline's source key). Adjacent clips with the same one meet with a cut when stacked. */
   source?: string;
+  /** Stacked, placed: where this clip starts in one loop, seconds. */
+  startSec?: number;
 }
 
 /** prepareAudioAsync's result; also the engine's old AudioData shape. */
@@ -42,6 +45,11 @@ export interface StitchOptions {
   overlapSec?: number;
   /** Stacked: dissolve and crossfade across each overlap; off, the earlier clip stays in front. Default true. */
   crossfade?: boolean;
+  /**
+   * Stacked with positions: clips start at their startSec; a clip without one resolves from overlapSec (resolveStarts).
+   * Absent or false: Track or the lined-up stack, exactly as before.
+   */
+  placed?: boolean;
 }
 
 export function isMusicInput(audio: StitchAudioData | StitchMusicInput): audio is StitchMusicInput {
@@ -63,6 +71,7 @@ function readClip(clip: StitchClipInput): StitchClipInput {
     muted: clip.muted === true,
     volume: finite(clip.volume) ? Math.min(Math.max(clip.volume, 0), 1) : 1,
     ...(typeof clip.source === "string" && clip.source !== "" ? { source: clip.source } : {}),
+    ...(finite(clip.startSec) ? { startSec: Math.min(Math.max(clip.startSec, 0), MAX_START_SEC) } : {}),
   };
 }
 
@@ -104,4 +113,17 @@ export function normalizeStack(options: StitchOptions | undefined): { overlapSec
   const overlapSec = options?.overlapSec;
   if (!finite(overlapSec) || overlapSec <= 0) return null;
   return { overlapSec: Math.min(overlapSec, MAX_OVERLAP_SEC), crossfade: options?.crossfade !== false };
+}
+
+/**
+ * Non-null only when options.placed === true: { crossfade: options.crossfade !== false, overlapSec: finite and > 0 ?
+ * min(overlapSec, MAX_OVERLAP_SEC) : 0 }. Clips' startSec never decides the route.
+ */
+export function normalizePlacement(options: StitchOptions | undefined): { crossfade: boolean; overlapSec: number } | null {
+  if (options?.placed !== true) return null;
+  const overlapSec = options.overlapSec;
+  return {
+    crossfade: options.crossfade !== false,
+    overlapSec: finite(overlapSec) && overlapSec > 0 ? Math.min(overlapSec, MAX_OVERLAP_SEC) : 0,
+  };
 }

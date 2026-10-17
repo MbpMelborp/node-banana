@@ -296,4 +296,93 @@ describe("gatherStitchInputs", () => {
       expect(fromInputs.clips.every((c) => !("source" in c))).toBe(true);
     });
   });
+
+  describe("placed stacks", () => {
+    const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true };
+    const starts = (g: { clips: Array<{ startSec?: number }> }) => g.clips.map((c) => ("startSec" in c ? c.startSec : "none"));
+
+    it("passes each clip's stored start and marks the node placed, with the stack as before", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({
+        timeline: [edgeClip("a", "e1", { startSec: 4 }), edgeClip("b", "e2", { startSec: 0 })],
+        sequenceLayout: { ...STACKED, crossfade: false },
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(starts(g)).toEqual([4, 0]);
+      expect(g.placed).toEqual({ crossfade: false, overlapSec: 1 });
+      // The stack keeps its own rule: the engine's precedence decides
+      expect(g.stack).toEqual({ overlapSec: 1, crossfade: false });
+    });
+
+    it("leaves a clip that was never placed without a start, and keeps a placed node with Overlap 0", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({
+        timeline: [edgeClip("a", "e1", { startSec: 1 }), edgeClip("b", "e2")],
+        sequenceLayout: { ...STACKED, overlapSec: 0 },
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(starts(g)).toEqual([1, "none"]);
+      expect(g.placed).toEqual({ crossfade: true, overlapSec: 0 });
+      expect(g.stack).toBeNull();
+    });
+
+    it("passes no start and no placement for Track, a lined-up stack, legacy nodes and inputs gathered without edges", async () => {
+      const { nodes, edges } = twoVideos();
+      const placedTimeline = [edgeClip("a", "e1", { startSec: 4 }), edgeClip("b", "e2", { startSec: 0 })];
+      const cases: Array<{ data: Record<string, unknown>; ctx: NodeExecutionContext }> = [
+        { data: { timeline: placedTimeline, sequenceLayout: { ...STACKED, mode: "track" } }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { timeline: [edgeClip("a", "e1"), edgeClip("b", "e2")], sequenceLayout: STACKED }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        { data: { clipOrder: ["e1", "e2"], sequenceLayout: STACKED }, ctx: makeCtx(stitchNode(), nodes, edges) },
+        // A legacy node with a start written into its old clip records by hand
+        {
+          data: { clipOrder: ["e1", "e2"], clips: [{ edgeId: "e1", startSec: 3 }], sequenceLayout: STACKED },
+          ctx: makeCtx(stitchNode(), nodes, edges),
+        },
+        {
+          data: { timeline: placedTimeline, sequenceLayout: STACKED },
+          ctx: makeCtx(stitchNode(), [], [], { getConnectedInputs: vi.fn().mockReturnValue({ videos: ["v1", "v2"], audio: [] }) }),
+        },
+      ];
+      for (const { data, ctx } of cases) {
+        const stitch = stitchNode(data);
+        const g = await gatherStitchInputs({ ...ctx, node: stitch } as NodeExecutionContext, stitch.data as never);
+        expect(g.placed).toBeNull();
+        expect(g.clips.every((c) => !("startSec" in c))).toBe(true);
+      }
+    });
+
+    it("drops a clip with no video yet with its start; the others keep theirs", async () => {
+      const nodes = [video("g1", "blob:one"), video("g2", null), video("g3", "blob:three")];
+      const edges = [edge("e1", "g1", "s", "video-0"), edge("e2", "g2", "s", "video-1"), edge("e3", "g3", "s", "video-2")];
+      const stitch = stitchNode({
+        timeline: [edgeClip("a", "e1", { startSec: 2 }), edgeClip("b", "e2", { startSec: 0.5 }), edgeClip("c", "e3", { startSec: 7 })],
+        sequenceLayout: STACKED,
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(texts(g.clips.map((c) => c.blob))).toEqual(["blob:one", "blob:three"]);
+      expect(starts(g)).toEqual([2, 7]);
+    });
+
+    it("stays placed when the only pinned clip has no video yet", async () => {
+      const nodes = [video("g1", "blob:one"), video("g2", null), video("g3", "blob:three")];
+      const edges = [edge("e1", "g1", "s", "video-0"), edge("e2", "g2", "s", "video-1"), edge("e3", "g3", "s", "video-2")];
+      const stitch = stitchNode({
+        timeline: [edgeClip("a", "e1"), edgeClip("b", "e2", { startSec: 3 }), edgeClip("c", "e3")],
+        sequenceLayout: STACKED,
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(g.placed).toEqual({ crossfade: true, overlapSec: 1 });
+      expect(starts(g)).toEqual(["none", "none"]);
+    });
+
+    it("carries a library clip's start too", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({
+        timeline: [edgeClip("a", "e1", { startSec: 0 }), assetClip("x", "alibrary00001", { startSec: 2.5 }), edgeClip("b", "e2", { startSec: 6 })],
+        sequenceLayout: STACKED,
+      });
+      const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+      expect(starts(g)).toEqual([0, 2.5, 6]);
+    });
+  });
 });
