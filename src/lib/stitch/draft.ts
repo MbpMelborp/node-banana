@@ -25,6 +25,9 @@ export interface StitchDraft {
   sequenceLayout: StitchSequenceLayout;
 }
 
+/** What made a clip in this editing session, for the discard sheet: a paste, a duplicate, or (for a clip gone) a cut. */
+export type ClipOrigin = "pasted" | "duplicated" | "cut";
+
 export interface StitchReadContext {
   liveEdgeIds: readonly string[];
   hasMusic: boolean;
@@ -209,16 +212,24 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * these durations) is a moved clip: pinning alone, and an In trim that keeps
  * the frames where they were, are not. Dropping every placement is "lining up
  * the clips" instead.
+ *
+ * `origins` names clips by what made them: an added clip tagged "pasted" or
+ * "duplicated" is a pasted or duplicated clip (never a split, though its
+ * source is in the sequence), and a removed clip tagged "cut" is a cut clip.
  */
 export function describeDraftChanges(
   initial: StitchDraft,
   draft: StitchDraft,
   durations: SourceDurations = new Map(),
+  origins: ReadonlyMap<string, ClipOrigin> = new Map(),
 ): string {
   const before = new Map(initial.timeline.map((c) => [c.id, c]));
   const after = new Map(draft.timeline.map((c) => [c.id, c]));
   const sourcesBefore = new Set(initial.timeline.map((c) => sourceKey(c.source)));
-  const added = draft.timeline.filter((c) => !before.has(c.id));
+  const fresh = draft.timeline.filter((c) => !before.has(c.id));
+  const pasted = fresh.filter((c) => origins.get(c.id) === "pasted").length;
+  const duplicated = fresh.filter((c) => origins.get(c.id) === "duplicated").length;
+  const added = fresh.filter((c) => origins.get(c.id) !== "pasted" && origins.get(c.id) !== "duplicated");
   const pieces = added.filter((c) => sourcesBefore.has(sourceKey(c.source)));
 
   let trims = 0;
@@ -234,7 +245,9 @@ export function describeDraftChanges(
     if (was.volume !== clip.volume) volumes++;
   }
   const splits = pieces.length;
-  const removed = initial.timeline.filter((c) => !after.has(c.id)).length;
+  const gone = initial.timeline.filter((c) => !after.has(c.id));
+  const cut = gone.filter((c) => origins.get(c.id) === "cut").length;
+  const removed = gone.length - cut;
   const commonBefore = initial.timeline.filter((c) => after.has(c.id)).map((c) => c.id);
   const commonAfter = draft.timeline.filter((c) => before.has(c.id)).map((c) => c.id);
   const reordered = commonBefore.some((id, i) => id !== commonAfter[i]);
@@ -250,7 +263,10 @@ export function describeDraftChanges(
     counted(unmuted, "an unmuted clip", "unmuted clips"),
     counted(volumes, "a clip volume", "clip volumes"),
     counted(added.length - splits, "an added clip", "added clips"),
+    counted(pasted, "a pasted clip", "pasted clips"),
+    counted(duplicated, "a duplicated clip", "duplicated clips"),
     counted(removed, "a removed clip", "removed clips"),
+    counted(cut, "a cut clip", "cut clips"),
     sameCurve(initial.audioCurve, draft.audioCurve) ? null : "the volume curve",
     initial.audioMuted === draft.audioMuted ? null : "the music mute",
     initial.loopCount === draft.loopCount ? null : "the loop count",

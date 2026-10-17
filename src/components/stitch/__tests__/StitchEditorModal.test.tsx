@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { requestSave, useSaveRequestStore } from "@/store/saveRequestStore";
 import {
   __resetMediaInfoForTests,
@@ -1133,5 +1134,232 @@ describe("StitchEditorModal", () => {
         expect(videos().map((v) => v.style.opacity)).toEqual(["0", "0"]);
       });
     });
+  });
+});
+
+describe("StitchEditorModal, several clips", () => {
+  /** Three clips: A 5 s (trimmed to start at 1 s), B 4 s muted, C 6 s. */
+  function seedThree() {
+    useWorkflowStore.setState({
+      nodes: [
+        node("gen-a", "generateVideo", { outputVideo: "blob:a" }),
+        node("gen-b", "generateVideo", { outputVideo: "blob:b" }),
+        node("gen-c", "generateVideo", { outputVideo: "blob:c" }),
+        node("stitch", "videoStitch", {
+          clips: [],
+          clipOrder: ["eA", "eB", "eC"],
+          outputVideo: null,
+          loopCount: 1,
+          status: "idle",
+          timeline: [
+            { id: "clip:eA", source: { kind: "edge", edgeId: "eA" }, inSec: 1, outSec: null, muted: false, volume: 1 },
+            { id: "clip:eB", source: { kind: "edge", edgeId: "eB" }, inSec: 0, outSec: null, muted: true, volume: 1 },
+            { id: "clip:eC", source: { kind: "edge", edgeId: "eC" }, inSec: 0, outSec: null, muted: false, volume: 1 },
+          ],
+        }),
+      ],
+      edges: [edge("eA", "gen-a", "video-0"), edge("eB", "gen-b", "video-1"), edge("eC", "gen-c", "video-2")],
+      openModalCount: 0,
+      isModalOpen: false,
+    });
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, width: 1920, height: 1080, fps: 24 });
+    __setMediaInfoForTests(mediaKeyOf("blob:b"), { duration: 4, width: 1920, height: 1080, fps: 24 });
+    __setMediaInfoForTests(mediaKeyOf("blob:c"), { duration: 6, width: 1920, height: 1080, fps: 24 });
+  }
+  const selectAll = () =>
+    act(() => editor().select({ kind: "clip", clipId: "clip:eA", clipIds: ["clip:eA", "clip:eB", "clip:eC"] }));
+  const rail = () => screen.getByRole("complementary", { name: "Clip" });
+  const order = () => editor().draft!.timeline.map((c) => c.id);
+  const mod = { metaKey: true };
+  /**
+   * A keydown on target: whether it was prevented, and whether a bubbling listener on the document or the window
+   * (where the canvas listens), added after the editor's, heard it.
+   */
+  const keyOn = (target: EventTarget, key: string, init: KeyboardEventInit = mod) => {
+    const heard = vi.fn();
+    document.addEventListener("keydown", heard);
+    window.addEventListener("keydown", heard);
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    document.removeEventListener("keydown", heard);
+    window.removeEventListener("keydown", heard);
+    return { prevented: event.defaultPrevented, heard: heard.mock.calls.length > 0 };
+  };
+
+  beforeEach(() => {
+    useStitchClipboard.getState().setClipboard(null);
+  });
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it("shows how many and which in the rail, and what applies to all of them", () => {
+    seedThree();
+    openEditor();
+    selectAll();
+    expect(within(rail()).getByText("3 clips")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 1, Clip 2 and Clip 3")).toBeInTheDocument();
+    expect(within(rail()).getByText("3 / 3")).toBeInTheDocument();
+    // No trims, Start or Volume: they are one clip's
+    expect(screen.queryByRole("textbox", { name: "In" })).toBeNull();
+    expect(screen.queryByRole("slider", { name: "Clip volume" })).toBeNull();
+    // One muted and two not: neither On nor Off is pressed, and "Mixed" sits beside them at the row's right
+    const sound = within(rail()).getByRole("group", { name: "Clip audio" });
+    expect(within(sound).getAllByRole("button").filter((b) => b.getAttribute("aria-pressed") === "true")).toHaveLength(0);
+    const wrapper = sound.parentElement!;
+    expect(within(wrapper).getByText("Mixed")).toBeInTheDocument();
+    expect(wrapper.parentElement!.children).toHaveLength(2);
+    expect(wrapper.parentElement!.lastElementChild).toBe(wrapper);
+
+    fireEvent.click(within(sound).getByRole("button", { name: "Off" }));
+    expect(editor().draft!.timeline.every((c) => c.muted)).toBe(true);
+    expect(editor().past).toHaveLength(1);
+    expect(within(sound).getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(rail()).queryByText("Mixed")).toBeNull();
+    fireEvent.click(within(sound).getByRole("button", { name: "On" }));
+    expect(editor().draft!.timeline.every((c) => !c.muted)).toBe(true);
+    expect(editor().past).toHaveLength(2);
+
+    // Clip 1 is trimmed, so Reset trim is on
+    fireEvent.click(within(rail()).getByRole("button", { name: "Reset trim" }));
+    expect(editor().draft!.timeline[0].inSec).toBe(0);
+    expect(within(rail()).getByRole("button", { name: "Reset trim" })).toBeDisabled();
+    fireEvent.click(within(rail()).getByRole("button", { name: /Remove 3 clips/ }));
+    expect(order()).toEqual([]);
+    expect(editor().past).toHaveLength(4);
+  });
+
+  it("names past three clips by the first two and a count", () => {
+    seedThree();
+    openEditor();
+    act(() => editor().apply((d) => ({ ...d, timeline: [...d.timeline, { ...d.timeline[0], id: "clip:x" }] })));
+    act(() =>
+      editor().select({ kind: "clip", clipId: "clip:eA", clipIds: ["clip:eA", "clip:eB", "clip:eC", "clip:x"] }),
+    );
+    expect(within(rail()).getByText("Clip 1, Clip 2 and 2 more")).toBeInTheDocument();
+  });
+
+  it("opens the clip menu on a group with its items, Paste off until something is copied", () => {
+    seedThree();
+    openEditor();
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    selectAll();
+    fireEvent.contextMenu(within(screen.getByRole("listbox", { name: "Clips" })).getAllByRole("option")[1], {
+      clientX: 300,
+      clientY: 300,
+    });
+    const menu = screen.getByRole("menu", { name: "3 clips" });
+    // The group stays selected under the menu
+    expect(editor().selection).toMatchObject({ clipIds: ["clip:eA", "clip:eB", "clip:eC"] });
+    const items = within(menu).getAllByRole("menuitem").map((el) => el.textContent);
+    expect(items).toEqual([
+      "Mute clip audio⌥M",
+      "Split at playheadS",
+      "Start at playhead[",
+      "End at playhead]",
+      "Move up a row⌥↑",
+      "Move down a row⌥↓",
+      "Reset trim",
+      "Copy⌘C",
+      "Cut⌘X",
+      "Paste⌘V",
+      "Duplicate⌘D",
+      "Reveal source node",
+      "Remove 3 clips⌫",
+    ]);
+    const item = (name: string) => within(menu).getByRole("menuitem", { name: new RegExp(`^${name}`) });
+    expect(item("Start at playhead")).toBeDisabled();
+    expect(item("Start at playhead")).toHaveAttribute("title", "Select one clip");
+    expect(item("End at playhead")).toHaveAttribute("title", "Select one clip");
+    expect(item("Reveal source node")).toBeDisabled();
+    expect(item("Reveal source node")).toHaveAttribute("title", "Select one clip");
+    expect(item("Paste")).toBeDisabled();
+    // A copy made anywhere turns Paste on, with no change to the editor's store
+    act(() =>
+      useStitchClipboard.getState().setClipboard({
+        origin: { kind: "node", nodeId: "other", tabId: "t", workflowId: "w" },
+        items: [{ track: "video", source: { kind: "asset", assetId: "x" }, inSec: 0, outSec: null, muted: false, volume: 1, offsetSec: 0 }],
+      }),
+    );
+    expect(item("Paste")).toBeEnabled();
+    // The menu acts on the whole group: Duplicate adds three
+    fireEvent.click(item("Duplicate"));
+    expect(order()).toHaveLength(6);
+    expect(editor().past).toHaveLength(2);
+  });
+
+  it("selects every clip with ⌘A, and ⌘C then ⌘V pastes them, in one step, keeping them from the canvas and the browser", () => {
+    seedThree();
+    openEditor();
+    const all = keyOn(document.body, "a");
+    expect(all).toEqual({ prevented: true, heard: false });
+    expect(editor().selection).toMatchObject({ clipIds: ["clip:eA", "clip:eB", "clip:eC"] });
+    expect(keyOn(document.body, "c")).toEqual({ prevented: true, heard: false });
+    expect(useStitchClipboard.getState().clipboard?.items).toHaveLength(3);
+    act(() => editor().select({ kind: "clip", clipId: "clip:eA" }));
+    expect(keyOn(document.body, "v")).toEqual({ prevented: true, heard: false });
+    expect(order()).toHaveLength(6);
+    expect(order().slice(0, 1)).toEqual(["clip:eA"]);
+    expect(order().slice(4)).toEqual(["clip:eB", "clip:eC"]);
+    expect(editor().past).toHaveLength(1);
+    // The pasted clips are the selection
+    expect(editor().selection).toMatchObject({ clipIds: order().slice(1, 4) });
+    expect(keyOn(document.body, "x")).toEqual({ prevented: true, heard: false });
+    expect(order()).toEqual(["clip:eA", "clip:eB", "clip:eC"]);
+    expect(keyOn(document.body, "d")).toEqual({ prevented: true, heard: false });
+    expect(order()).toHaveLength(4);
+  });
+
+  it("keeps ⌘D from the browser while the clip menu is open, and leaves ⌘A to a text field", () => {
+    seedThree();
+    openEditor();
+    fireEvent.contextMenu(within(screen.getByRole("listbox", { name: "Clips" })).getAllByRole("option")[0], {
+      clientX: 100,
+      clientY: 300,
+    });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(keyOn(document.body, "d").prevented).toBe(true);
+    expect(order()).toHaveLength(3);
+    press(window, "Escape");
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    const well = screen.getByRole("textbox", { name: "Start on the timeline" });
+    act(() => well.focus());
+    const before = editor().selection;
+    expect(keyOn(well, "a").prevented).toBe(false);
+    expect(editor().selection).toBe(before);
+  });
+
+  it("leaves ⌘C and ⌘X to selected text, kept from the canvas, and copies clips once nothing is selected", () => {
+    seedThree();
+    openEditor();
+    selectAll();
+    const names = within(rail()).getByText("Clip 1, Clip 2 and Clip 3");
+    const range = document.createRange();
+    range.selectNodeContents(names);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(keyOn(document.body, "c")).toEqual({ prevented: false, heard: false });
+    expect(keyOn(document.body, "x")).toEqual({ prevented: false, heard: false });
+    expect(useStitchClipboard.getState().clipboard).toBeNull();
+    expect(order()).toHaveLength(3);
+    window.getSelection()!.removeAllRanges();
+    expect(keyOn(document.body, "c").prevented).toBe(true);
+    expect(useStitchClipboard.getState().clipboard?.items).toHaveLength(3);
+  });
+
+  it("names pasted and cut clips in the discard sheet", () => {
+    seedThree();
+    openEditor();
+    keyOn(document.body, "c");
+    keyOn(document.body, "v");
+    act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
+    keyOn(document.body, "x");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
+    expect(within(sheet).getByText("A pasted clip and a cut clip will be lost. The node keeps what it had.")).toBeInTheDocument();
   });
 });

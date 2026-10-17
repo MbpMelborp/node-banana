@@ -611,6 +611,199 @@ export function resetTrimInPlace(
   );
 }
 
+// Group operations: the same edits on several selected clips at once, each one undo step for the caller. Like the
+// others, each returns the same array when nothing changes.
+
+/** Removes every listed clip. orphanedEdgeIds: edges no remaining clip references (as removeClip). */
+export function removeClips(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+): { timeline: StitchTimelineClip[]; orphanedEdgeIds: string[] } {
+  const next = timeline.filter((c) => !ids.has(c.id));
+  if (next.length === timeline.length) return { timeline, orphanedEdgeIds: [] };
+  const kept = new Set(edgeIdsInOrder(next));
+  const orphanedEdgeIds = edgeIdsInOrder(timeline.filter((c) => ids.has(c.id))).filter((edgeId) => !kept.has(edgeId));
+  return { timeline: next, orphanedEdgeIds };
+}
+
+/** updateClipAudio for each listed clip. */
+export function updateClipsAudio(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+  patch: { muted?: boolean; volume?: number },
+): StitchTimelineClip[] {
+  let changed = false;
+  const next = timeline.map((clip) => {
+    if (!ids.has(clip.id)) return clip;
+    const muted = patch.muted ?? clip.muted;
+    const volume = clamp(finiteOr(patch.volume, clip.volume), 0, 1);
+    if (muted === clip.muted && volume === clip.volume) return clip;
+    changed = true;
+    return { ...clip, muted, volume };
+  });
+  return changed ? next : timeline;
+}
+
+/**
+ * Track block move: the listed clips are taken out (keeping their order), then put back as one run before the
+ * toIndex-th remaining clip (toIndex clamped to [0, others.length]).
+ */
+export function moveClipsBlock(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+  toIndex: number,
+): StitchTimelineClip[] {
+  const moved = timeline.filter((c) => ids.has(c.id));
+  if (moved.length === 0 || !Number.isFinite(toIndex)) return timeline;
+  const others = timeline.filter((c) => !ids.has(c.id));
+  const to = clamp(Math.trunc(toIndex), 0, others.length);
+  const next = [...others.slice(0, to), ...moved, ...others.slice(to)];
+  return next.every((c, i) => c === timeline[i]) ? timeline : next;
+}
+
+/** The row delta shiftRows applies: rowDelta (truncated) clamped so every listed row stays in range; 0 when none is listed. */
+function groupRowDelta(timeline: readonly StitchTimelineClip[], ids: ReadonlySet<string>, rowDelta: number): number {
+  if (!Number.isFinite(rowDelta)) return 0;
+  let first = -1;
+  let last = -1;
+  timeline.forEach((c, i) => {
+    if (!ids.has(c.id)) return;
+    if (first === -1) first = i;
+    last = i;
+  });
+  if (first === -1) return 0;
+  return clamp(Math.trunc(rowDelta), -first, timeline.length - 1 - last);
+}
+
+/**
+ * Row move by rowDelta, keeping the spacing: each listed clip ends at its index + d, where
+ * d = clamp(rowDelta, −minIndex, last − maxIndex). The other clips fill the free indices in their order.
+ * Non-finite or 0 → same array.
+ */
+export function shiftRows(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+  rowDelta: number,
+): StitchTimelineClip[] {
+  const d = groupRowDelta(timeline, ids, rowDelta);
+  if (d === 0) return timeline;
+  const next: Array<StitchTimelineClip | undefined> = new Array(timeline.length);
+  timeline.forEach((c, i) => {
+    if (ids.has(c.id)) next[i + d] = c;
+  });
+  const others = timeline.filter((c) => !ids.has(c.id));
+  let k = 0;
+  for (let i = 0; i < next.length; i++) if (next[i] === undefined) next[i] = others[k++];
+  return next as StitchTimelineClip[];
+}
+
+/**
+ * Stacked group drag or nudge: pinStarts; each listed start += d, where d = clamp(deltaSec, −minStart,
+ * MAX_START_SEC − maxStart) and the starts are those of the stacked layout; then shiftRows(…, rowDelta). The same
+ * array when d === 0 and the rows do not change (then nothing is pinned).
+ */
+export function placeClips(
+  timeline: StitchTimelineClip[],
+  durations: SourceDurations,
+  ids: ReadonlySet<string>,
+  deltaSec: number,
+  rowDelta: number,
+  overlapSec: number,
+): StitchTimelineClip[] {
+  const spans = layoutSpans(timeline, durations, stackedLayout(overlapSec));
+  const starts = spans.filter((span) => ids.has(span.clip.id)).map((span) => span.start);
+  if (starts.length === 0) return timeline;
+  const d = Number.isFinite(deltaSec)
+    ? clamp(deltaSec, -Math.min(...starts), MAX_START_SEC - Math.max(...starts))
+    : 0;
+  if (d === 0 && groupRowDelta(timeline, ids, rowDelta) === 0) return timeline;
+  const placed =
+    d === 0
+      ? pinStarts(timeline, durations, overlapSec)
+      : pinStarts(timeline, durations, overlapSec).map((c, i) =>
+          ids.has(c.id) ? { ...c, startSec: clampStart(spans[i].start + d) } : c,
+        );
+  return shiftRows(placed, ids, rowDelta);
+}
+
+/**
+ * S with several selected: splitClipAt with preferClipId = each listed clip, in timeline order, on the timeline as
+ * split so far. A split counts only when its leftId is that clip (splitClipAt's fallback to topSpanAt would cut an
+ * unselected clip). null when nothing splits. In a lined-up stack and in Track, inOverlap refuses as it does today.
+ * A placed stack's caller pins first: a split then moves nothing, so each split reads the positions the last left.
+ */
+export function splitClipsAt(
+  timeline: StitchTimelineClip[],
+  durations: SourceDurations,
+  t: number,
+  ids: readonly string[],
+  opts: { layout: StitchSequenceLayout; makeId?: () => string },
+): { timeline: StitchTimelineClip[]; rightIds: string[] } | null {
+  const wanted = new Set(ids);
+  const order = timeline.filter((c) => wanted.has(c.id)).map((c) => c.id);
+  let current = timeline;
+  const rightIds: string[] = [];
+  for (const clipId of order) {
+    const result = splitClipAt(current, durations, t, opts.makeId, { layout: opts.layout, preferClipId: clipId });
+    if (!result || result.leftId !== clipId) continue;
+    current = result.timeline;
+    rightIds.push(result.rightId);
+  }
+  return rightIds.length > 0 ? { timeline: current, rightIds } : null;
+}
+
+/** Reset trim for each listed trimmed clip: resetTrim in Track, resetTrimInPlace in Stacked (which pins once). */
+export function resetTrims(
+  timeline: StitchTimelineClip[],
+  durations: SourceDurations,
+  ids: ReadonlySet<string>,
+  layout: StitchSequenceLayout,
+): StitchTimelineClip[] {
+  let current = timeline;
+  for (const clip of timeline) {
+    if (!ids.has(clip.id)) continue;
+    current =
+      layout.mode === "stacked"
+        ? resetTrimInPlace(current, clip.id, durations, layout.overlapSec)
+        : resetTrim(current, clip.id);
+  }
+  return current;
+}
+
+/**
+ * The last row of the run that holds row `index`; `index` itself when that row is empty (length 0), is alone in its
+ * run, or is out of range. Runs (pieces whose frames continue, placement.ts) do not depend on the crossfade flag.
+ */
+export function runEndIndex(spans: readonly ClipSpan[], index: number): number {
+  if (index < 0 || index >= spans.length || !(spans[index].length > 0)) return index;
+  const env = spansEnvelope(spans, false);
+  const unit = env.units.findIndex((u) => u.row === index);
+  if (unit === -1) return index;
+  const run = env.runs[env.runOf[unit]];
+  return env.units[run.units[run.units.length - 1]].row;
+}
+
+/**
+ * Whether splitClipsAt would split one of these clips now, without copying the timeline (the rail and the menu ask
+ * on every playhead change): t finite; not inside an overlap unless placed; and some listed span live at t (spansAt's
+ * rule) with t at least MIN_CLIP_SEC from its head and tail, read as splitClipAt reads them.
+ */
+export function canSplitClipsAt(
+  spans: readonly ClipSpan[],
+  t: number,
+  ids: ReadonlySet<string>,
+  placed: boolean,
+): boolean {
+  if (!Number.isFinite(t)) return false;
+  if (!placed && inOverlap(spans, t)) return false;
+  return spans.some((span) => {
+    if (!ids.has(span.clip.id) || !(span.length > 0) || !(span.start <= t && t < span.end)) return false;
+    const head = placed ? span.start : span.start + span.overlapIn;
+    const tail = placed ? span.end : span.end - span.overlapOut;
+    return !(t - head < MIN_CLIP_SEC || tail - t < MIN_CLIP_SEC);
+  });
+}
+
 /**
  * The placed preview's layers at t in row order (the stage's DOM order): every live span with its gain and its DOM
  * opacity (domOpacities of the envelope's weights in that order; the shares composite the same in any order), from

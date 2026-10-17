@@ -3,11 +3,21 @@ import { flushSync } from "react-dom";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { moveDragAt, moveRowAt, moveTargets, type MoveDragResult, type MoveDragStart } from "@/lib/stitch/moveDrag";
+import { MAX_START_SEC } from "@/lib/stitch/placement";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
-import { placeClip } from "@/lib/stitch/timeline";
+import { placeClip, placeClips } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
-import { moveClipBody, pause } from "../editorActions";
+import { moveClipBody, moveClipsBody, pause } from "../editorActions";
 import { GEOMETRY } from "../editorStyles";
+import {
+  clearTextSelection,
+  clickClip,
+  isContextClick,
+  isToggleClick,
+  keepGroupSelected,
+  pressGroup,
+} from "../selectionActions";
+import { armed, DRAG_START_PX, edgeSpeed } from "./autoScroll";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 
 /**
@@ -26,11 +36,19 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * changes before the lift (a key, while the button is down) ends without a
  * drag, and a release onto a draft that changed under the drag is dropped.
  *
+ * A click applies ⌘ (Ctrl off a Mac) and ⇧ to the selection (clickClip). A
+ * press on one of several selected clips drags them all: by one time and
+ * one row delta, their spacing kept, the group stopped as a whole at 0:00,
+ * 10:00 and the first and last rows; only the pressed clip snaps.
+ *
  * The row header's drag (rows only) is useClipReorder's.
  */
 
 export interface MoveLive {
+  /** The pressed clip. */
   clipId: string;
+  /** Every clip the drag carries, the pressed one among them ([clipId] alone for one clip). */
+  clipIds: readonly string[];
   /** Its row at the press. */
   index: number;
   /** The row it lands in. */
@@ -40,7 +58,10 @@ export interface MoveLive {
   timeline: StitchTimelineClip[];
   /** The box's left on the press axis, px. */
   x: number;
-  /** Pointer travel down the rows since the press, px (a scroll of the rows counts). */
+  /**
+   * Pointer travel down the rows since the press, px (a scroll of the rows counts), clamped once for the whole group
+   * (groupTravel): the spacing drawn is the spacing release writes, and no box goes past the first or last row.
+   */
   dy: number;
 }
 
@@ -58,16 +79,16 @@ export interface ReleasedWidth {
   pxPerSec: number;
 }
 
-const DRAG_START_PX = 4;
-/** The lanes scroll while the pointer is this near their sides or the rows' top or bottom, this far each frame. */
-const AUTO_SCROLL_EDGE_PX = 20;
-const AUTO_SCROLL_STEP_PX = 6;
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-const edgeSpeed = (at: number, from: number, to: number) =>
-  at < from + AUTO_SCROLL_EDGE_PX ? -AUTO_SCROLL_STEP_PX : at > to - AUTO_SCROLL_EDGE_PX ? AUTO_SCROLL_STEP_PX : 0;
-/** An edge's scroll, only once the pointer has travelled toward that edge since the press (travel: now − press). */
-const armed = (speed: number, travel: number) =>
-  (speed > 0 && travel > DRAG_START_PX) || (speed < 0 && travel < -DRAG_START_PX) ? speed : 0;
+/**
+ * A group's travel down the rows, clamped once for all of it: its first box stops where it rests on the first row,
+ * its last where it rests on the last row, so a box dragged past the rows is drawn where release puts it. With one
+ * clip (minIdx = maxIdx) it is the clamp for a single box.
+ */
+export function groupTravel(dy: number, minIdx: number, maxIdx: number, rows: number): number {
+  return clamp(dy, -minIdx * GEOMETRY.stackRow, (rows - 1 - maxIdx) * GEOMETRY.stackRow);
+}
 
 /** axisNow: the lane's axis for the editor's state at the press (useTimelineZoom), after a field's blur. */
 export function useClipMove(
@@ -92,9 +113,15 @@ export function useClipMove(
   const onMovePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => {
       if (event.button !== 0) return;
+      // A Mac's Ctrl-press is the clip menu's: it keeps the selection
+      if (isContextClick(event)) return;
       // A focused field commits now, before the drag takes its picture of the draft
       releaseTypingFocus(event.currentTarget);
+      clearTextSelection();
       stop.current?.();
+      const mods = { toggle: isToggleClick(event), range: event.shiftKey };
+      const group = pressGroup(clipId);
+      const groupSet = new Set(group);
       const editor = useStitchEditorStore.getState();
       const draftAtStart = editor.draft;
       if (!draftAtStart) return;
@@ -125,6 +152,10 @@ export function useClipMove(
       // finds nothing new
       let placedAt = "";
       pressing.current = true;
+      // A group's rows at the press, and the row delta that keeps all of them in range
+      const groupRows = draftAtStart.timeline.flatMap((c, i) => (groupSet.has(c.id) ? [i] : []));
+      const minIdx = groupRows[0] ?? index;
+      const maxIdx = groupRows[groupRows.length - 1] ?? index;
 
       const place = () => {
         if (!start) return;
@@ -136,13 +167,18 @@ export function useClipMove(
         placedAt = at;
         const result = moveDragAt(start, x, { snap });
         const { rowCount } = latestOptions.current;
-        const dropIndex = moveRowAt(index, dy, current?.dropIndex ?? index, rowCount, GEOMETRY.stackRow);
+        const rowAt = moveRowAt(index, dy, current?.dropIndex ?? index, rowCount, GEOMETRY.stackRow);
+        const multi = group.length > 1;
+        const dropIndex = multi ? clamp(rowAt, index - minIdx, index + (rowCount - 1 - maxIdx)) : rowAt;
         // The same place gives the same timeline: the lane's marks are not built again for a pointer that moved within it
         const timeline =
           current && current.result.startSec === result.startSec && current.dropIndex === dropIndex
             ? current.timeline
-            : placeClip(draftAtStart.timeline, durationsAtStart, clipId, result.startSec, dropIndex, overlapSec);
-        current = { clipId, index, dropIndex, result, timeline, x: axis.timeToX(result.startSec), dy };
+            : multi
+              ? placeClips(draftAtStart.timeline, durationsAtStart, groupSet, result.deltaSec, dropIndex - index, overlapSec)
+              : placeClip(draftAtStart.timeline, durationsAtStart, clipId, result.startSec, dropIndex, overlapSec);
+        const drawnDy = groupTravel(dy, minIdx, maxIdx, rowCount);
+        current = { clipId, clipIds: group, index, dropIndex, result, timeline, x: axis.timeToX(result.startSec), dy: drawnDy };
         setMove(current);
       };
       const onScroll = () => place();
@@ -204,14 +240,30 @@ export function useClipMove(
         // The playhead stops before it is taken as a target, so the target is where it is drawn
         pause();
         const s = useStitchEditorStore.getState();
-        start = {
-          clipId,
-          startSec: span.start,
-          lengthSec: span.length,
-          pointerX: startLaneX,
-          pxPerSec: axis.pxPerSec,
-          targets: moveTargets(spansAtStart, clipId, Math.min(s.playhead, axis.total), overlapSec),
-        };
+        const playhead = Math.min(s.playhead, axis.total);
+        if (group.length > 1) {
+          // The others move with the pressed clip: they are no targets, and its start keeps the group inside 0–10:00
+          const groupStarts = spansAtStart.filter((other) => groupSet.has(other.clip.id)).map((other) => other.start);
+          start = {
+            clipId,
+            startSec: span.start,
+            lengthSec: span.length,
+            pointerX: startLaneX,
+            pxPerSec: axis.pxPerSec,
+            targets: moveTargets(spansAtStart, clipId, playhead, overlapSec, groupSet),
+            minStartSec: span.start - Math.min(...groupStarts),
+            maxStartSec: MAX_START_SEC - (Math.max(...groupStarts) - span.start),
+          };
+        } else {
+          start = {
+            clipId,
+            startSec: span.start,
+            lengthSec: span.length,
+            pointerX: startLaneX,
+            pxPerSec: axis.pxPerSec,
+            targets: moveTargets(spansAtStart, clipId, playhead, overlapSec),
+          };
+        }
         scroller?.addEventListener("scroll", onScroll, { passive: true });
         window.addEventListener("keydown", onShift);
         window.addEventListener("keyup", onShift);
@@ -246,8 +298,21 @@ export function useClipMove(
         end();
         const s = useStitchEditorStore.getState();
         if (s.draft?.timeline !== draftAtStart.timeline) return;
+        if (!moved) {
+          clickClip(clipId, mods);
+          return;
+        }
+        if (group.length > 1) {
+          if (moved.timeline !== draftAtStart.timeline) {
+            released.current = clipId;
+            setReleasedWidth({ width, pxPerSec: axis.pxPerSec });
+            moveClipsBody(group, moved.timeline);
+          }
+          keepGroupSelected(group, clipId);
+          return;
+        }
         s.select({ kind: "clip", clipId });
-        if (moved && moved.timeline !== draftAtStart.timeline) {
+        if (moved.timeline !== draftAtStart.timeline) {
           released.current = clipId;
           setReleasedWidth({ width, pxPerSec: axis.pxPerSec });
           moveClipBody(clipId, moved.timeline);

@@ -1,4 +1,9 @@
-import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
+import {
+  selectedClipIds,
+  selectIsMulti,
+  useStitchEditorStore,
+  type StitchEditorState,
+} from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fadeIn, fadeOut, flat, followEndFade, removePoint } from "@/lib/stitch/curve";
 import { primeAssetInfo } from "@/lib/stitch/assetInfo";
@@ -6,29 +11,39 @@ import { stitchHasMusicEdge } from "@/lib/stitch/sources";
 import { draftDuration, draftSpans, sameLayout } from "@/lib/stitch/draft";
 import { clampOverlapSec, effectiveOverlapSec } from "@/lib/stitch/stack";
 import { FRAME_RATE } from "@/lib/stitch/sequencePlan";
+import { makeSelection } from "@/lib/stitch/selection";
 import {
   appendClips,
+  canSplitClipsAt,
   clearStarts,
   createClip,
   inOverlap,
   isPlaced,
   layoutSpans,
   moveClip,
+  moveClipsBlock,
   moveClipStart,
   pinStarts,
+  placeClips,
   reanchorTime,
   removeClip,
+  removeClips,
   resetTrim,
   resetTrimInPlace,
+  resetTrims,
   setEdgeAtPlayhead,
+  shiftRows,
   sourceKey,
   sourceTimeAt,
+  spansAt,
   spansEnd,
   splitClipAt,
+  splitClipsAt,
   topSpanAt,
   trimClip,
   trimClipInPlace,
   updateClipAudio,
+  updateClipsAudio,
   type ClipSpan,
   type SourceKey,
 } from "@/lib/stitch/timeline";
@@ -50,6 +65,7 @@ function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number 
   return s.draft ? draftDuration(s.draft, s.durations) : 0;
 }
 
+/** The lead of a clip selection: the clip a single-clip action acts on. */
 function selectedClipId(s: StitchEditorState): string | null {
   return s.selection?.kind === "clip" ? s.selection.clipId : null;
 }
@@ -63,15 +79,15 @@ const overlapOf = (s: StitchEditorState) => s.draft?.sequenceLayout.overlapSec ?
 /** Stacked with a stored start: edits there pin every clip first, so none they do not edit moves. */
 const placedOf = (s: StitchEditorState) => stackedOf(s) && isPlaced(s.draft?.timeline ?? []);
 
-/** The selected clip's span as the draft lays it out, or null. */
+/** The selected clip's span as the draft lays it out, or null (also with several selected). */
 function selectedSpan(s: StitchEditorState): ClipSpan | null {
   const clipId = selectedClipId(s);
-  if (!s.draft || !clipId) return null;
+  if (!s.draft || !clipId || selectIsMulti(s)) return null;
   return draftSpans(s.draft, s.durations).find((span) => span.clip.id === clipId) ?? null;
 }
 
 /** The playhead as the lane draws it: a stored one past a sequence that got shorter sits at the end. */
-const drawnPlayhead = (s: StitchEditorState) => Math.min(s.playhead, editorTotal(s));
+export const drawnPlayhead = (s: StitchEditorState) => Math.min(s.playhead, editorTotal(s));
 
 /** What Fit's px/s depends on in a timeline: the sequence's length and where each empty clip's slot starts. */
 function fitInputs(spans: readonly ClipSpan[]): string {
@@ -84,7 +100,7 @@ function fitInputs(spans: readonly ClipSpan[]): string {
  * clip's slot) first stores the px/s the lane drew it at, so the clip lands where it was drawn instead of the lane
  * re-fitting under it. Called before the apply, in the same handler. Nothing without a mounted timeline.
  */
-function keepZoom(s: StitchEditorState, timeline: readonly StitchTimelineClip[]): void {
+export function keepZoom(s: StitchEditorState, timeline: readonly StitchTimelineClip[]): void {
   if (s.pxPerSec !== null || !s.draft) return;
   const pxPerSec = liveFitZoom.get();
   if (pxPerSec === null) return;
@@ -132,9 +148,23 @@ function splitOptions(s: StitchEditorState, layout: StitchSequenceLayout) {
   return { overlapSec: effectiveOverlapSec(layout), preferClipId: selectedClipId(s), layout };
 }
 
+/** S with several selected: whether some selected clip is under the playhead with room to split (no timeline copied). */
+function canSplitGroup(s: StitchEditorState): boolean {
+  if (!s.draft) return false;
+  return canSplitClipsAt(draftSpans(s.draft, s.durations), s.playhead, new Set(selectedClipIds(s)), placedOf(s));
+}
+
+/** Some selected clip plays at the playhead, whether or not it is far enough from its ends to split. */
+function selectedUnderPlayhead(s: StitchEditorState): boolean {
+  if (!s.draft) return false;
+  const ids = new Set(selectedClipIds(s));
+  return spansAt(draftSpans(s.draft, s.durations), s.playhead).some((span) => ids.has(span.clip.id));
+}
+
 /** Whether S would split something now. */
 export function canSplitAtPlayhead(s: StitchEditorState): boolean {
   if (!s.draft) return false;
+  if (selectIsMulti(s)) return canSplitGroup(s);
   const opts = splitOptions(s, s.draft.sequenceLayout);
   return splitClipAt(s.draft.timeline, s.durations, s.playhead, () => "probe", opts) !== null;
 }
@@ -143,6 +173,7 @@ export function canSplitAtPlayhead(s: StitchEditorState): boolean {
 export function canSplitSelectedAtPlayhead(s: StitchEditorState): boolean {
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId) return false;
+  if (selectIsMulti(s)) return canSplitGroup(s);
   return topSpanAt(draftSpans(s.draft, s.durations), s.playhead, clipId)?.clip.id === clipId && canSplitAtPlayhead(s);
 }
 
@@ -151,15 +182,31 @@ export function canSplitSelectedAtPlayhead(s: StitchEditorState): boolean {
  * split would re-sequence it. A placed stack splits there too (the pieces stay one run, so nothing changes).
  */
 export function splitBlockedReason(s: StitchEditorState): string | null {
-  if (!s.draft || !stackedOf(s) || placedOf(s)) return null;
-  return inOverlap(draftSpans(s.draft, s.durations), s.playhead) ? "Move the playhead out of the overlap to split" : null;
+  if (!s.draft) return null;
+  const overlap =
+    stackedOf(s) && !placedOf(s) && inOverlap(draftSpans(s.draft, s.durations), s.playhead)
+      ? "Move the playhead out of the overlap to split"
+      : null;
+  if (selectIsMulti(s)) return overlap ?? (selectedUnderPlayhead(s) ? null : "No selected clip is under the playhead");
+  return overlap;
 }
 
-/** S: splits the clip under the playhead and selects its right piece. A placed stack is pinned first, in the same step. */
+/**
+ * S: splits the clip under the playhead and selects its right piece. With several selected, every selected clip under
+ * it splits and the right pieces become the selection. A placed stack is pinned first, in the same step.
+ */
 export function splitAtPlayhead(): void {
   const s = editor();
   if (!s.draft) return;
   const timeline = placedOf(s) ? pinStarts(s.draft.timeline, s.durations, overlapOf(s)) : s.draft.timeline;
+  if (selectIsMulti(s)) {
+    const split = splitClipsAt(timeline, s.durations, s.playhead, selectedClipIds(s), { layout: s.draft.sequenceLayout });
+    if (!split) return;
+    s.apply((d) => ({ ...d, timeline: split.timeline }));
+    const order = split.timeline.map((c) => c.id);
+    editor().select(makeSelection(order, split.rightIds, split.rightIds[0]));
+    return;
+  }
   const result = splitClipAt(timeline, s.durations, s.playhead, undefined, splitOptions(s, s.draft.sequenceLayout));
   if (!result) return;
   s.apply((d) => ({ ...d, timeline: result.timeline }));
@@ -173,7 +220,7 @@ export function splitAtPlayhead(): void {
 export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
   const s = editor();
   const clipId = selectedClipId(s);
-  if (!s.draft || !clipId) return;
+  if (!s.draft || !clipId || selectIsMulti(s)) return;
   if (!stackedOf(s)) {
     const overlap = effectiveOverlapSec(s.draft.sequenceLayout);
     const timeline = setEdgeAtPlayhead(s.draft.timeline, s.durations, clipId, edge, s.playhead, overlap);
@@ -196,13 +243,37 @@ export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
 }
 
 /**
+ * Removes the listed clips in one step (⌫ and ⌘X with several selected): a lined-up stack closes up, a placed one is
+ * pinned first, so nothing else moves. The clip now at the first removed index takes the selection. Returns the ids
+ * removed.
+ */
+export function removeClipsById(ids: readonly string[]): string[] {
+  const s = editor();
+  if (!s.draft) return [];
+  const wanted = new Set(ids);
+  const index = s.draft.timeline.findIndex((c) => wanted.has(c.id));
+  if (index === -1) return [];
+  const removed = s.draft.timeline.filter((c) => wanted.has(c.id)).map((c) => c.id);
+  const from = placedOf(s) ? pinStarts(s.draft.timeline, s.durations, overlapOf(s)) : s.draft.timeline;
+  const { timeline } = removeClips(from, wanted);
+  s.apply((d) => ({ ...d, timeline }));
+  const neighbour = timeline[Math.min(index, timeline.length - 1)];
+  editor().select(neighbour ? { kind: "clip", clipId: neighbour.id } : null);
+  return removed;
+}
+
+/**
  * ⌫: the selected clip, or the selected curve point. The neighbour takes the clip's selection. A lined-up stack
- * closes up; a placed one is pinned first, so nothing else moves.
+ * closes up; a placed one is pinned first, so nothing else moves. With several selected, all of them.
  */
 export function removeSelection(): void {
   const s = editor();
   if (!s.draft) return;
   if (s.selection?.kind === "audio") return removeSelectedPoint();
+  if (selectIsMulti(s)) {
+    editor().untagCut(removeClipsById(selectedClipIds(s)));
+    return;
+  }
   const clipId = selectedClipId(s);
   if (!clipId) return;
   const index = s.draft.timeline.findIndex((c) => c.id === clipId);
@@ -210,8 +281,10 @@ export function removeSelection(): void {
   const from = placedOf(s) ? pinStarts(s.draft.timeline, s.durations, overlapOf(s)) : s.draft.timeline;
   const { timeline } = removeClip(from, clipId);
   s.apply((d) => ({ ...d, timeline }));
+  const after = editor();
+  after.untagCut([clipId]);
   const neighbour = timeline[Math.min(index, timeline.length - 1)];
-  editor().select(neighbour ? { kind: "clip", clipId: neighbour.id } : null);
+  after.select(neighbour ? { kind: "clip", clipId: neighbour.id } : null);
 }
 
 /**
@@ -248,9 +321,15 @@ export function flattenCurve(): void {
   editor().apply((d) => ({ ...d, audioCurve: flat() }));
 }
 
-/** ⌥M. */
+/** ⌥M. With several selected: all muted, or all unmuted when every one already is muted. */
 export function toggleSelectedClipMute(): void {
   const s = editor();
+  if (selectIsMulti(s)) {
+    const ids = new Set(selectedClipIds(s));
+    const muted = !(s.draft?.timeline.filter((c) => ids.has(c.id)).every((c) => c.muted) ?? false);
+    s.apply((d) => ({ ...d, timeline: updateClipsAudio(d.timeline, ids, { muted }) }));
+    return;
+  }
   const clipId = selectedClipId(s);
   const clip = s.draft?.timeline.find((c) => c.id === clipId);
   if (!clip) return;
@@ -259,6 +338,14 @@ export function toggleSelectedClipMute(): void {
 
 export function setClipMuted(clipId: string, muted: boolean): void {
   editor().apply((d) => ({ ...d, timeline: updateClipAudio(d.timeline, clipId, { muted }) }));
+}
+
+/** The rail's Clip audio On or Off with several selected: every selected clip, one step (none when all already are). */
+export function setSelectedClipsMuted(muted: boolean): void {
+  const s = editor();
+  const ids = new Set(selectedClipIds(s));
+  if (ids.size === 0) return;
+  s.apply((d) => ({ ...d, timeline: updateClipsAudio(d.timeline, ids, { muted }) }));
 }
 
 /**
@@ -287,7 +374,7 @@ export function toggleMusicMute(): void {
 export function trimSelected(patch: { inSec?: number; outSec?: number | null }): void {
   const s = editor();
   const clipId = selectedClipId(s);
-  if (!clipId) return;
+  if (!clipId || selectIsMulti(s)) return;
   const stacked = stackedOf(s);
   const overlapSec = overlapOf(s);
   s.apply((d) => ({
@@ -298,9 +385,17 @@ export function trimSelected(patch: { inSec?: number; outSec?: number | null }):
   }));
 }
 
-/** In Stacked the start moves back by the old In, clamped at 0:00 (resetTrimInPlace, which pins). */
+/**
+ * In Stacked the start moves back by the old In, clamped at 0:00 (resetTrimInPlace, which pins). With several
+ * selected, every trimmed one, in one step.
+ */
 export function resetSelectedTrim(): void {
   const s = editor();
+  if (selectIsMulti(s)) {
+    const ids = new Set(selectedClipIds(s));
+    s.apply((d) => ({ ...d, timeline: resetTrims(d.timeline, s.durations, ids, d.sequenceLayout) }));
+    return;
+  }
   const clipId = selectedClipId(s);
   if (!clipId) return;
   const stacked = stackedOf(s);
@@ -384,19 +479,48 @@ export function moveClipTo(clipId: string, toIndex: number): void {
   s.apply((d) => ({ ...d, timeline: moved }));
 }
 
-/** ⌥↑ / ⌥↓ and the menu: whether the selected clip has a row to go to (Stacked). */
+/**
+ * Several clips' rows by rowDelta, keeping their spacing (the Stacked header group drag, ⌥↑ ⌥↓): a placed stack is
+ * pinned first, so every clip keeps its start. One step; none when the group is already at that edge.
+ */
+export function moveClipRows(ids: readonly string[], rowDelta: number): void {
+  const s = editor();
+  if (!s.draft) return;
+  const timeline = placedOf(s) ? pinStarts(s.draft.timeline, s.durations, overlapOf(s)) : s.draft.timeline;
+  const moved = shiftRows(timeline, new Set(ids), rowDelta);
+  if (moved === timeline) return;
+  s.apply((d) => ({ ...d, timeline: moved }));
+}
+
+/** The Track block drag's release: the listed clips as one run before the toIndex-th other clip, in their order. */
+export function moveClipsTo(ids: readonly string[], toIndex: number): void {
+  const s = editor();
+  if (!s.draft) return;
+  const timeline = placedOf(s) ? pinStarts(s.draft.timeline, s.durations, overlapOf(s)) : s.draft.timeline;
+  const moved = moveClipsBlock(timeline, new Set(ids), toIndex);
+  if (moved === timeline) return;
+  s.apply((d) => ({ ...d, timeline: moved }));
+}
+
+/** ⌥↑ / ⌥↓ and the menu: whether the selected clip, or every selected one, has a row to go to (Stacked). */
 export function canMoveRow(s: StitchEditorState, dir: 1 | -1): boolean {
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId || !stackedOf(s)) return false;
+  if (selectIsMulti(s)) {
+    const ids = new Set(selectedClipIds(s));
+    const indices = s.draft.timeline.flatMap((c, i) => (ids.has(c.id) ? [i] : []));
+    return indices[0] + dir >= 0 && indices[indices.length - 1] + dir < s.draft.timeline.length;
+  }
   const index = s.draft.timeline.findIndex((c) => c.id === clipId);
   return index !== -1 && index + dir >= 0 && index + dir < s.draft.timeline.length;
 }
 
-/** ⌥↑ / ⌥↓: the selected clip one row up or down (Stacked; nothing in Track). */
+/** ⌥↑ / ⌥↓: the selected clip, or every selected one, one row up or down (Stacked; nothing in Track). */
 export function moveSelectedRow(dir: 1 | -1): void {
   const s = editor();
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId || !canMoveRow(s, dir)) return;
+  if (selectIsMulti(s)) return moveClipRows(selectedClipIds(s), dir);
   moveClipTo(clipId, s.draft.timeline.findIndex((c) => c.id === clipId) + dir);
 }
 
@@ -408,7 +532,7 @@ export function moveSelectedRow(dir: 1 | -1): void {
  */
 export function setClipStart(clipId: string, sec: number, opts?: { gestureKey?: string }): void {
   const s = editor();
-  if (!s.draft || !stackedOf(s) || !Number.isFinite(sec)) return;
+  if (!s.draft || !stackedOf(s) || !Number.isFinite(sec) || selectIsMulti(s)) return;
   const timeline = moveClipStart(s.draft.timeline, s.durations, clipId, sec, overlapOf(s));
   if (timeline === s.draft.timeline) return;
   keepZoom(s, timeline);
@@ -427,15 +551,41 @@ export function moveClipBody(clipId: string, timeline: StitchTimelineClip[]): vo
   s.apply((d) => ({ ...d, timeline }));
 }
 
+/**
+ * A group body drag's release: the timeline it drew (placeClips: every selected clip moved by one time and one row
+ * delta, every clip pinned), as one undo step.
+ */
+export function moveClipsBody(ids: readonly string[], timeline: StitchTimelineClip[]): void {
+  const s = editor();
+  if (!s.draft || !stackedOf(s) || timeline === s.draft.timeline) return;
+  if (!ids.every((id) => timeline.some((c) => c.id === id))) return;
+  keepZoom(s, timeline);
+  s.apply((d) => ({ ...d, timeline }));
+}
+
 /** One output frame: the encoder's grid. */
 const NUDGE_SEC = 1 / FRAME_RATE;
 const BIG_NUDGE_FRAMES = 10;
 const START_STEP_SEC = 0.1;
 const BIG_START_STEP_SEC = 1;
 
-/** ⌥← / ⌥→: one output frame (⇧: ten). A held key's repeats join its first press's undo step. */
+/**
+ * ⌥← / ⌥→: one output frame (⇧: ten). A held key's repeats join its first press's undo step. With several selected,
+ * all of them, their spacing kept and the group stopped at 0:00 and 10:00.
+ */
 export function nudgeSelectedClip(dir: 1 | -1, big: boolean, repeat: boolean): void {
   const s = editor();
+  if (selectIsMulti(s)) {
+    if (!s.draft || !stackedOf(s)) return;
+    if (!repeat) s.endGesture();
+    const ids = selectedClipIds(s);
+    const step = (big ? BIG_NUDGE_FRAMES : 1) * NUDGE_SEC;
+    const timeline = placeClips(s.draft.timeline, s.durations, new Set(ids), dir * step, 0, overlapOf(s));
+    if (timeline === s.draft.timeline) return;
+    keepZoom(s, timeline);
+    s.apply((d) => ({ ...d, timeline }), { gestureKey: `nudge:${ids.join(",")}` });
+    return;
+  }
   const span = stackedOf(s) ? selectedSpan(s) : null;
   if (!span) return;
   // A new press is a new undo step, even right after the last one
@@ -559,6 +709,7 @@ export function canRevealSource(
 
 /** Reveal source node: Done, then the canvas centres on the node (it leaves the editor, so the edits are kept). */
 export function revealSelectedSource(): void {
+  if (selectIsMulti(editor())) return;
   const clipId = selectedClipId(editor());
   const sourceNodeId = clipId ? clipSourceNodeId(clipId) : null;
   if (!sourceNodeId) return;

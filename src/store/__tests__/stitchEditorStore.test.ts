@@ -4,6 +4,8 @@ import {
   selectCanRedo,
   selectCanUndo,
   selectIsDirty,
+  selectIsMulti,
+  selectedClipIds,
   useStitchEditorStore,
 } from "@/store/stitchEditorStore";
 import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
@@ -24,9 +26,14 @@ import {
   canLineUp,
   canMoveRow,
   canSplitAtPlayhead,
+  canSplitSelectedAtPlayhead,
+  canStartAtPlayhead,
   endSelectedAtPlayhead,
   lineUpClips,
   moveClipBody,
+  moveClipRows,
+  moveClipsBody,
+  moveClipsTo,
   moveSelectedRow,
   nudgeSelectedClip,
   nudgeStartWell,
@@ -36,12 +43,15 @@ import {
   setCrossfade,
   setEdgeAtPlayheadForSelection,
   setOverlapSec,
+  setSelectedClipsMuted,
   setSequenceMode,
   splitAtPlayhead,
   splitBlockedReason,
   startSelectedAtPlayhead,
+  toggleSelectedClipMute,
   trimSelected,
 } from "@/components/stitch/editorActions";
+import { clearStarts, placeClips } from "@/lib/stitch/timeline";
 import { liveFitZoom } from "@/components/stitch/liveFitZoom";
 import type { AssetView } from "@/lib/assets/types";
 import type { StitchTimelineClip } from "@/types";
@@ -663,5 +673,280 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
     store().setZoom(80);
     setClipStart("c", 20);
     expect(store().pxPerSec).toBe(80);
+  });
+});
+
+describe("stitchEditorStore: several clips", () => {
+  const clipC = createClip({ kind: "edge", edgeId: "e2" }, { id: "c" });
+  const clipD = createClip({ kind: "asset", assetId: "y" }, { id: "d" });
+  const ids = () => store().draft!.timeline.map((clip) => clip.id);
+  const steps = () => store().past.length;
+  const group = (...clipIds: string[]) =>
+    store().select({ kind: "clip", clipId: clipIds[0], clipIds });
+
+  beforeEach(() => {
+    store().close();
+    openOn(makeDraft({ timeline: [clipA, clipB, clipC, clipD] }));
+  });
+
+  it("drops the clips an undo or redo takes away; the first that remains leads when the lead went", () => {
+    store().apply((d) => ({ ...d, timeline: d.timeline.slice(0, 2) }));
+    store().undo();
+    store().select({ kind: "clip", clipId: "c", clipIds: ["a", "b", "c"], anchorId: "b" });
+    store().redo();
+    expect(store().selection).toEqual({ kind: "clip", clipId: "a", clipIds: ["a", "b"], anchorId: "b" });
+    store().undo();
+    store().select({ kind: "clip", clipId: "a", clipIds: ["a", "d"], anchorId: "d" });
+    store().redo();
+    expect(store().selection).toEqual({ kind: "clip", clipId: "a" });
+    store().undo();
+    store().select({ kind: "clip", clipId: "c", clipIds: ["c", "d"] });
+    store().redo();
+    expect(store().selection).toBeNull();
+  });
+
+  it("keeps a selection that an undo leaves whole as it was", () => {
+    store().apply(mute("a"));
+    const selection = { kind: "clip", clipId: "b", clipIds: ["a", "b"], anchorId: "a" } as const;
+    store().select(selection);
+    store().undo();
+    expect(store().selection).toBe(selection);
+  });
+
+  it("lists the selected ids in timeline order, none for an audio selection", () => {
+    store().select({ kind: "clip", clipId: "b", clipIds: ["d", "b", "x"] });
+    expect(selectedClipIds(store())).toEqual(["b", "d"]);
+    expect(selectIsMulti(store())).toBe(true);
+    store().select({ kind: "clip", clipId: "b" });
+    expect(selectedClipIds(store())).toEqual(["b"]);
+    expect(selectIsMulti(store())).toBe(false);
+    store().select({ kind: "audio", point: null });
+    expect(selectedClipIds(store())).toEqual([]);
+  });
+
+  it("tags clips outside the history, each keeping its first tag, and forgets them with the session", () => {
+    const before = store().clipOrigins;
+    store().tagClips(["p1", "p2"], "pasted");
+    store().tagClips(["p1", "a"], "cut");
+    expect([...store().clipOrigins]).toEqual([
+      ["p1", "pasted"],
+      ["p2", "pasted"],
+      ["a", "cut"],
+    ]);
+    expect(store().clipOrigins).not.toBe(before);
+    const tagged = store().clipOrigins;
+    store().tagClips(["a"], "duplicated");
+    expect(store().clipOrigins).toBe(tagged);
+    store().apply(mute("b"));
+    store().undo();
+    expect(store().clipOrigins).toBe(tagged);
+    store().close();
+    expect(store().clipOrigins.size).toBe(0);
+    store().tagClips(["q"], "duplicated");
+    store().open({ nodeId: "s2", draft: makeDraft(), canvasGeneration: 4 });
+    expect(store().clipOrigins.size).toBe(0);
+  });
+
+  it("forgets a cut tag when the clip, brought back by undo, is removed another way", () => {
+    store().select({ kind: "clip", clipId: "b" });
+    store().tagClips(["b", "p"], "pasted");
+    store().tagClips(["a", "b"], "cut");
+    removeSelection();
+    expect([...store().clipOrigins]).toEqual([
+      ["b", "pasted"],
+      ["p", "pasted"],
+      ["a", "cut"],
+    ]);
+    store().select({ kind: "clip", clipId: "a" });
+    removeSelection();
+    expect(store().clipOrigins.has("a")).toBe(false);
+    store().tagClips(["c"], "cut");
+    store().select({ kind: "clip", clipId: "c", clipIds: ["c", "d"] });
+    removeSelection();
+    expect(store().clipOrigins.has("c")).toBe(false);
+  });
+
+  it("removes every selected clip in one step; the clip now at the first removed index is selected", () => {
+    group("b", "c");
+    removeSelection();
+    expect(ids()).toEqual(["a", "d"]);
+    expect(steps()).toBe(1);
+    expect(store().selection).toEqual({ kind: "clip", clipId: "d" });
+    store().undo();
+    expect(ids()).toEqual(["a", "b", "c", "d"]);
+    group("c", "d");
+    removeSelection();
+    expect(store().selection).toEqual({ kind: "clip", clipId: "b" });
+  });
+
+  it("mutes a mixed selection, and unmutes one that is all muted, each one step", () => {
+    store().apply(mute("a"));
+    group("a", "c");
+    toggleSelectedClipMute();
+    expect(store().draft!.timeline.map((c) => c.muted)).toEqual([true, false, true, false]);
+    toggleSelectedClipMute();
+    expect(store().draft!.timeline.map((c) => c.muted)).toEqual([false, false, false, false]);
+    expect(steps()).toBe(3);
+    setSelectedClipsMuted(false);
+    expect(steps()).toBe(3);
+    setSelectedClipsMuted(true);
+    expect(store().draft!.timeline.map((c) => c.muted)).toEqual([true, false, true, false]);
+    expect(steps()).toBe(4);
+  });
+
+  it("leaves trims, Start, In and Out alone with several selected", () => {
+    store().setDurations(new Map<SourceKey, number>([["edge:e1", 5]]));
+    group("a", "b");
+    const before = store().draft;
+    trimSelected({ inSec: 1 });
+    setEdgeAtPlayheadForSelection("in");
+    setSequenceMode("stacked");
+    const stacked = store().draft;
+    setClipStart("a", 3);
+    startSelectedAtPlayhead();
+    expect(canStartAtPlayhead(store())).toBe(false);
+    expect(nudgeStartWell(1, false)).toBeNull();
+    expect(store().draft).toBe(stacked);
+    expect(stacked!.timeline).toBe(before!.timeline);
+  });
+
+  it("moves a block in Track, its order kept", () => {
+    moveClipsTo(["a", "c"], 2);
+    expect(ids()).toEqual(["b", "d", "a", "c"]);
+    expect(steps()).toBe(1);
+    moveClipsTo(["a", "c"], 2);
+    expect(steps()).toBe(1);
+  });
+});
+
+describe("stitchEditorStore: several clips in Stacked", () => {
+  // Clip 1 A [0,5), Clip 2 B [6,10.2), Clip 3 C [9.2,15.2), Clip 4 D [11,14.2)
+  const DURATIONS = new Map<SourceKey, number>([
+    ["edge:a", 5],
+    ["edge:b", 5],
+    ["edge:c", 6],
+    ["edge:d", 5],
+  ]);
+  const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true } as const;
+  const board = () => [
+    createClip({ kind: "edge", edgeId: "a" }, { id: "c1", startSec: 0 }),
+    createClip({ kind: "edge", edgeId: "b" }, { id: "c2", startSec: 6, inSec: 0.8 }),
+    createClip({ kind: "edge", edgeId: "c" }, { id: "c3", startSec: 9.2 }),
+    createClip({ kind: "edge", edgeId: "d" }, { id: "c4", startSec: 11, outSec: 3.2 }),
+  ];
+  const ids = () => store().draft!.timeline.map((clip) => clip.id);
+  const steps = () => store().past.length;
+  const startOf = (clipId: string) => draftSpans(store().draft!, store().durations).find((s) => s.clip.id === clipId)!.start;
+  const group = (...clipIds: string[]) => store().select({ kind: "clip", clipId: clipIds[0], clipIds });
+  const open = (timeline: StitchTimelineClip[] = board()) => {
+    store().close();
+    openOn(makeDraft({ timeline, sequenceLayout: STACKED }));
+    store().setDurations(DURATIONS);
+  };
+
+  beforeEach(() => {
+    open();
+    liveFitZoom.set(null);
+  });
+
+  it("removes a group from a placed stack without moving the others", () => {
+    group("c2", "c3");
+    removeSelection();
+    expect(ids()).toEqual(["c1", "c4"]);
+    expect(startOf("c4")).toBe(11);
+    expect(store().selection).toEqual({ kind: "clip", clipId: "c4" });
+  });
+
+  it("nudges a group a frame per press, its offsets kept, a held key's repeats joining one step", () => {
+    group("c2", "c3");
+    nudgeSelectedClip(1, false, false);
+    nudgeSelectedClip(1, false, true);
+    expect(startOf("c2")).toBeCloseTo(6 + 2 / 60, 9);
+    expect(startOf("c3")).toBeCloseTo(9.2 + 2 / 60, 9);
+    expect(startOf("c1")).toBe(0);
+    expect(steps()).toBe(1);
+    nudgeSelectedClip(-1, true, false);
+    expect(startOf("c2")).toBeCloseTo(6 - 8 / 60, 9);
+    expect(steps()).toBe(2);
+    group("c1", "c2");
+    nudgeSelectedClip(-1, false, false);
+    expect(steps()).toBe(2);
+  });
+
+  it("splits every selected clip under the playhead and selects the right pieces, in one step", () => {
+    group("c1", "c2", "c3");
+    store().setPlayhead(10);
+    expect(canSplitAtPlayhead(store())).toBe(true);
+    expect(canSplitSelectedAtPlayhead(store())).toBe(true);
+    expect(splitBlockedReason(store())).toBeNull();
+    splitAtPlayhead();
+    expect(steps()).toBe(1);
+    expect(ids()).toHaveLength(6);
+    const selection = store().selection;
+    expect(selection?.kind === "clip" && selection.clipIds).toEqual([ids()[2], ids()[4]]);
+    expect(selection?.kind === "clip" && selection.clipId).toBe(ids()[2]);
+  });
+
+  it("says when no selected clip is under the playhead, and then splits nothing", () => {
+    group("c2", "c3");
+    store().setPlayhead(3);
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    expect(splitBlockedReason(store())).toBe("No selected clip is under the playhead");
+    splitAtPlayhead();
+    expect(steps()).toBe(0);
+  });
+
+  it("gives no reason when a selected clip is under the playhead but too near its start to split", () => {
+    group("c2", "c3");
+    store().setPlayhead(6.02);
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    expect(splitBlockedReason(store())).toBeNull();
+  });
+
+  it("gives the overlap's reason in a lined-up stack", () => {
+    open(clearStarts(board()));
+    group("c1", "c2");
+    // Lined up at Overlap 1: c1 0–5, c2 4–8.2
+    store().setPlayhead(4.5);
+    expect(splitBlockedReason(store())).toBe("Move the playhead out of the overlap to split");
+  });
+
+  it("resets every selected trim in one step, the frames in place", () => {
+    group("c2", "c3", "c4");
+    resetSelectedTrim();
+    expect(steps()).toBe(1);
+    expect(startOf("c2")).toBeCloseTo(5.2, 9);
+    expect(startOf("c4")).toBe(11);
+    expect(store().draft!.timeline.map((c) => [c.inSec, c.outSec])).toEqual([
+      [0, null],
+      [0, null],
+      [0, null],
+      [0, null],
+    ]);
+  });
+
+  it("moves a group a row with ⌥↓, keeping the starts, and stops at the bottom", () => {
+    group("c1", "c3");
+    expect(canMoveRow(store(), -1)).toBe(false);
+    expect(canMoveRow(store(), 1)).toBe(true);
+    moveSelectedRow(1);
+    expect(ids()).toEqual(["c2", "c1", "c4", "c3"]);
+    expect(startOf("c3")).toBe(9.2);
+    expect(steps()).toBe(1);
+    expect(canMoveRow(store(), 1)).toBe(false);
+    moveSelectedRow(1);
+    expect(steps()).toBe(1);
+    moveClipRows(["c1", "c3"], -5);
+    expect(ids()).toEqual(["c1", "c2", "c3", "c4"]);
+  });
+
+  it("applies a group drag's timeline as one step", () => {
+    const drawn = placeClips(store().draft!.timeline, DURATIONS, new Set(["c2", "c3"]), 2, 1, 1);
+    moveClipsBody(["c2", "c3"], drawn);
+    expect(steps()).toBe(1);
+    expect(ids()).toEqual(["c1", "c4", "c2", "c3"]);
+    expect(startOf("c2")).toBeCloseTo(8, 9);
+    moveClipsBody(["c2", "gone"], drawn);
+    expect(steps()).toBe(1);
   });
 });

@@ -9,28 +9,31 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Plus } from "lucide-react";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { selectedClipIds, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { insetBox, JOIN_INSET_PX, type LaneBox } from "@/lib/stitch/laneLayout";
-import { insertionX } from "@/lib/stitch/reorder";
+import { blockInsertionX, insertionX } from "@/lib/stitch/reorder";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { openLibraryPicker } from "../editorActions";
 import { GEOMETRY } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
-import { ClipBox, type ClipBoxMode } from "./ClipBox";
+import { ClipBox, keepFocus, type ClipBoxMode } from "./ClipBox";
 import { EmptyClipSlot } from "./EmptyClipSlot";
 import { Filmstrip } from "./Filmstrip";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 import type { ReorderLive } from "./useClipReorder";
 import type { TrimLive } from "./useTrimDrag";
 
-/** Opens the clip menu at a point, selecting the clip; not over a drag, which applies what it measured on release. */
+/**
+ * Opens the clip menu at a point, selecting the clip unless it is one of the selection (the menu then acts on all of
+ * them); not over a drag, which applies what it measured on release.
+ */
 function openMenuAt(clipId: string, x: number, y: number): void {
   const s = useStitchEditorStore.getState();
   // A drag applies what it measured at the press on release: no menu opens over it (a right press mid-trim)
   if (s.cancelGesture) return;
-  s.select({ kind: "clip", clipId });
+  if (!selectedClipIds(s).includes(clipId)) s.select({ kind: "clip", clipId });
   s.openMenu({ clipId, x, y });
 }
 
@@ -196,9 +199,11 @@ export function AddSlotButton({
  * empty sequence shows a dashed placeholder across the lane that does the
  * same (both off while the library is).
  *
- * It is a listbox: the selected clip is its one tab stop, the arrows, Home
- * and End move the selection, and the context-menu key (or ⇧F10) opens the
- * clip menu at the clip. A mouse press does not focus a clip (the selection
+ * It is a listbox: the selected clip (the lead of several) is its one tab
+ * stop, the arrows, Home and End select one clip, and the context-menu key
+ * (or ⇧F10) opens the clip menu at the clip. Every selected clip is ringed;
+ * a press on empty space in it starts the selection box (onLanePointerDown),
+ * and a drag of one of several selected clips lifts them all. A mouse press does not focus a clip (the selection
  * ring shows which one is chosen). When the focused clip goes (⌫, or an undo
  * or redo that takes it away), focus moves to the new tab stop, or to the
  * panel when no clip is left, so it never drops out of the dialog. The same
@@ -211,6 +216,8 @@ export function ClipsLane({
   boxes,
   media,
   selectedId,
+  selectedIds,
+  multi,
   trim,
   reorder,
   viewLeft,
@@ -218,12 +225,18 @@ export function ClipsLane({
   laneWidth,
   onBodyPointerDown,
   onHandlePointerDown,
+  onLanePointerDown,
 }: {
   axis: TimeAxis;
   spans: readonly ClipSpan[];
   boxes: readonly LaneBox[];
   media: ReadonlyMap<string, ClipMediaView>;
+  /** The lead: the tab stop. */
   selectedId: string | null;
+  /** Every clip drawn selected (while the selection box runs, what it would select). */
+  selectedIds: ReadonlySet<string>;
+  /** Several clips are selected: handles show on hover only. */
+  multi: boolean;
   trim: TrimLive | null;
   reorder: ReorderLive | null;
   viewLeft: number;
@@ -231,6 +244,8 @@ export function ClipsLane({
   laneWidth: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
+  /** A press on the listbox itself: the selection box. */
+  onLanePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const { rowRef, onFocus, onBlur } = useLaneFocus();
   const libraryOn = useLibraryAvailable();
@@ -279,6 +294,18 @@ export function ClipsLane({
   const last = boxes[boxes.length - 1];
   const slotX = Math.max(last ? last.x + last.width : 0, axis.endX) + GEOMETRY.addSlotGap;
 
+  const lifted = new Set(reorder?.clipIds ?? []);
+  // One clip's bar shows once it would move; a group's once the drag is armed (useClipReorder)
+  const insertionBarX = (() => {
+    if (!reorder) return null;
+    if (reorder.clipIds.length <= 1) {
+      return reorder.dropIndex !== reorder.index ? insertionX(reorder.dropIndex, boxes, reorder.index) : null;
+    }
+    if (!reorder.armed) return null;
+    const indices = new Set(spans.flatMap((span, i) => (lifted.has(span.clip.id) ? [i] : [])));
+    return blockInsertionX(reorder.dropIndex, boxes, indices);
+  })();
+
   return (
     <>
       <div
@@ -286,7 +313,10 @@ export function ClipsLane({
         role="listbox"
         aria-label="Clips"
         aria-orientation="horizontal"
+        aria-multiselectable="true"
         onKeyDown={onKeyDown}
+        onPointerDown={onLanePointerDown}
+        onMouseDown={keepFocus}
         onFocus={onFocus}
         onBlur={onBlur}
         className="absolute inset-x-0 border-b border-white/6"
@@ -296,9 +326,9 @@ export function ClipsLane({
           const view = media.get(span.clip.id);
           const box = boxes[i];
           const drawn = insetBox(box, i, spans.length);
-          const mode: ClipBoxMode = !reorder ? "rest" : reorder.clipId === span.clip.id ? "lifted" : "dimmed";
+          const mode: ClipBoxMode = !reorder ? "rest" : lifted.has(span.clip.id) ? "lifted" : "dimmed";
           const x = mode === "lifted" && reorder ? drawn.x + reorder.dx : drawn.x;
-          const selected = selectedId === span.clip.id;
+          const selected = selectedIds.has(span.clip.id);
           const focusable = tabStop === span.clip.id;
           const onBody = (event: ReactPointerEvent<HTMLElement>) => onBodyPointerDown(event, span.clip.id, i);
           const onMenu = (event: MouseEvent<HTMLElement>) => openClipMenu(event, span.clip.id);
@@ -334,6 +364,7 @@ export function ClipsLane({
               pxPerSec={axis.pxPerSec}
               viewLeft={viewLeft}
               viewRight={viewRight}
+              multi={multi}
               onBodyPointerDown={onBody}
               onHandlePointerDown={(event, edge) => onHandlePointerDown(event, span, edge)}
               onContextMenu={onMenu}
@@ -363,13 +394,13 @@ export function ClipsLane({
           </div>
         )}
 
-        {reorder && reorder.dropIndex !== reorder.index && (
+        {insertionBarX !== null && (
           <div
             aria-hidden="true"
             data-testid="stitch-insertion-bar"
             className="absolute w-[3px] rounded-[2px] bg-selection"
             style={{
-              left: insertionX(reorder.dropIndex, boxes, reorder.index) - 1.5,
+              left: insertionBarX - 1.5,
               top: GEOMETRY.clipTop - 4,
               height: GEOMETRY.clipHeight + 8,
             }}

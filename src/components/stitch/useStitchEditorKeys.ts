@@ -1,7 +1,9 @@
 import { useEffect, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { isSaveShortcut } from "@/utils/saveShortcut";
-import { editorKeyAction, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
+import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
+import { copySelection, cutSelection, duplicateSelection, pasteClipboard } from "./clipboardActions";
+import { hasTextSelection, selectAllClips } from "./selectionActions";
 import {
   endSelectedAtPlayhead,
   moveSelectedRow,
@@ -63,6 +65,17 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
       return startSelectedAtPlayhead();
     case "endAtPlayhead":
       return endSelectedAtPlayhead();
+    case "copy":
+      copySelection();
+      return;
+    case "cut":
+      return cutSelection();
+    case "paste":
+      return pasteClipboard();
+    case "duplicate":
+      return duplicateSelection();
+    case "selectAll":
+      return selectAllClips();
     case "undo":
       return s.undo();
     case "redo":
@@ -81,10 +94,12 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
  * Shift+letters, ⌘V, ?) is stopped too, without preventDefault, so nothing
  * runs behind the dialog while Tab, the arrows and Enter keep their native
  * behaviour. ⌘S still saves. A text field, a stacked dialog and the clip
- * menu each keep their own keys. While a trim, move or reorder drag runs,
- * Escape cancels it and the other editor keys are swallowed. ⌥ with an
- * arrow is an editor key in Track too, where it does nothing: Alt+← would
- * otherwise go Back in a browser on Windows.
+ * menu each keep their own keys, though ⌘D and ⌘A still never reach the
+ * browser there. While a trim, move or reorder drag runs, Escape cancels it
+ * and the other editor keys are swallowed. ⌥ with an arrow is an editor key
+ * in Track too, where it does nothing: Alt+← would otherwise go Back in a
+ * browser on Windows. ⌘C, ⌘X, ⌘V, ⌘D and ⌘A act on clips, except that with
+ * text selected on the page ⌘C and ⌘X copy the text, natively.
  */
 export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requestClose: () => void): void {
   const isOpen = useStitchEditorStore((s) => s.isOpen);
@@ -100,6 +115,7 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
 
       // A stacked dialog hears its own Escape (its Dialog listener); canvas keys stay off
       if (stackedDialogOpen(rootRef.current)) {
+        if (isBrowserKey(e)) e.preventDefault();
         if (e.key !== "Escape") shield();
         return;
       }
@@ -113,6 +129,7 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
           s.openMenu(null);
           return;
         }
+        if (isBrowserKey(e)) e.preventDefault();
         shield();
         return;
       }
@@ -129,6 +146,11 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
       if (isTypingTarget(e.target)) return;
 
       const action = editorKeyAction(e);
+      // Rail text selected with the mouse: the browser copies it, and nothing behind the dialog hears the key
+      if ((action === "copy" || action === "cut") && hasTextSelection()) {
+        e.stopImmediatePropagation();
+        return;
+      }
       if (action) {
         e.preventDefault();
         e.stopImmediatePropagation();

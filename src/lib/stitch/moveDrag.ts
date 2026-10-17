@@ -28,12 +28,14 @@ export const WHERE_IT_WAS = "where it was";
  * (both; "Clip 3's start", "Clip 3's end"), and per other non-empty span c with o = pairOverlap(c, self, overlapSec)
  * > 0: { t: c.end − o, edge: "start", label: "a 1.0 s overlap with Clip 3" } (o with 1 decimal when it equals
  * overlapSec, else 2). Names are the press's (the row headers keep them until release). [] when clipId is not in spans.
+ * Spans whose clip is in `exclude` give no targets: a group drag's other clips move with the one held.
  */
 export function moveTargets(
   spans: readonly ClipSpan[],
   clipId: string,
   playhead: number,
   overlapSec: number,
+  exclude?: ReadonlySet<string>,
 ): MoveTarget[] {
   const self = spans.find((s) => s.clip.id === clipId);
   if (!self) return [];
@@ -44,7 +46,7 @@ export function moveTargets(
   ];
   const item = (span: ClipSpan) => ({ length: span.length, source: sourceKey(span.clip.source) });
   for (const other of spans) {
-    if (other === self || !(other.length > 0)) continue;
+    if (other === self || !(other.length > 0) || exclude?.has(other.clip.id)) continue;
     const name = clipName(other.index);
     targets.push(
       { t: other.start, kind: "edge", label: `${name}'s start`, edge: "both", row: other.index },
@@ -91,6 +93,10 @@ export interface MoveDragStart {
   pointerX: number;
   pxPerSec: number;
   targets: readonly MoveTarget[];
+  /** The lowest start the drag may land on (default 0): a group's earliest clip stops at 0:00. */
+  minStartSec?: number;
+  /** The highest (default MAX_START_SEC): a group's latest clip stops at 10:00. */
+  maxStartSec?: number;
 }
 
 export interface MoveDragResult {
@@ -112,9 +118,10 @@ function tieRank(target: MoveTarget, edge: "start" | "end"): number {
 
 /**
  * raw = startSec + (pointerX − start.pointerX) / pps. With opts.snap: each target gives a candidate start (t for the
- * start edge, t − lengthSec for the end edge; an empty clip tests the start edge only); a candidate below 0 is skipped;
- * the nearest within thresholdPx / pps (default 8) wins; ties: "where it was", then the playhead, then the start edge.
- * Then clamped to [0, MAX_START_SEC]. deltaSec = result − startSec.
+ * start edge, t − lengthSec for the end edge; an empty clip tests the start edge only); a candidate below minStartSec
+ * (default 0), or above a given maxStartSec, is skipped; the nearest within thresholdPx / pps (default 8) wins; ties:
+ * "where it was", then the playhead, then the start edge. Then clamped to [minStartSec, maxStartSec ?? MAX_START_SEC].
+ * deltaSec = result − startSec.
  */
 export function moveDragAt(
   start: MoveDragStart,
@@ -122,6 +129,8 @@ export function moveDragAt(
   opts: { snap: boolean; thresholdPx?: number },
 ): MoveDragResult {
   const pps = start.pxPerSec > 0 ? start.pxPerSec : 1;
+  const minStart = start.minStartSec ?? 0;
+  const maxStart = start.maxStartSec;
   const measurable = Number.isFinite(pointerX) && Number.isFinite(start.pointerX);
   const raw = start.startSec + (measurable ? (pointerX - start.pointerX) / pps : 0);
 
@@ -134,7 +143,8 @@ export function moveDragAt(
         target.edge === "both" ? (hasLength ? ["start", "end"] : ["start"]) : target.edge === "end" && !hasLength ? [] : [target.edge];
       for (const edge of edges) {
         const value = edge === "start" ? target.t : target.t - start.lengthSec;
-        if (!Number.isFinite(value) || value < -TIE_SEC) continue;
+        if (!Number.isFinite(value) || value < minStart - TIE_SEC) continue;
+        if (maxStart !== undefined && value > maxStart + TIE_SEC) continue;
         const distance = Math.abs(value - raw);
         if (distance > threshold) continue;
         const better =
@@ -147,7 +157,7 @@ export function moveDragAt(
   }
 
   const value = best ? best.value : raw;
-  const startSec = clamp(value, 0, MAX_START_SEC);
+  const startSec = clamp(value, minStart, maxStart ?? MAX_START_SEC);
   // A snap the clamp pulled off its target is no snap
   const held = best !== null && Math.abs(startSec - best.value) <= TIE_SEC;
   return {

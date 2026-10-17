@@ -21,7 +21,9 @@ const boxBottom = (rowTop: number) => GEOMETRY.ruler + rowTop + GEOMETRY.stackCl
  * chip with where the clip will play and how far it moved ("0:11.00–0:14.20
  * · −1.00 s"), right of the moving box (left of it, and inside the visible
  * lanes, when the right has no room), and when its start or end has
- * snapped, the dashed guide and the chip naming what it snapped to.
+ * snapped, the dashed guide and the chip naming what it snapped to. For a
+ * group the chip counts the clips and spans them all ("3 clips ·
+ * 0:11.00–0:20.40 · −1.00 s"); the guide stays the pressed clip's.
  */
 export function MoveOverlay({
   move,
@@ -32,6 +34,7 @@ export function MoveOverlay({
   targetBoxTop,
   scrollLeft,
   laneWidth,
+  group = null,
 }: {
   move: MoveLive;
   axis: TimeAxis;
@@ -45,6 +48,8 @@ export function MoveOverlay({
   /** The visible lanes' left in the content, and their width, px. */
   scrollLeft: number;
   laneWidth: number;
+  /** A group drag: from the earliest moved start to the latest moved end, sequence seconds; null for one clip. */
+  group?: { fromSec: number; toSec: number } | null;
 }) {
   const chipRef = useRef<HTMLDivElement>(null);
   const { startSec, deltaSec } = move.result;
@@ -66,7 +71,11 @@ export function MoveOverlay({
     el.style.left = `${x}px`;
   });
 
-  const span = lengthSec > 0 ? `${formatTimecode(startSec)}–${formatTimecode(startSec + lengthSec)}` : formatTimecode(startSec);
+  const span = group
+    ? `${move.clipIds.length} clips · ${formatTimecode(group.fromSec)}–${formatTimecode(group.toSec)}`
+    : lengthSec > 0
+      ? `${formatTimecode(startSec)}–${formatTimecode(startSec + lengthSec)}`
+      : formatTimecode(startSec);
   const text = moveSnapText(move.result);
   const bottom = boxBottom(boxTop);
   return (

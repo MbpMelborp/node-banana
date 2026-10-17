@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { dropIndexAt, insertionX, stackedDropIndex, stackedInsertionY } from "../reorder";
+import {
+  blockDropIndexAt,
+  blockInsertionX,
+  dropIndexAt,
+  insertionX,
+  stackedDropIndex,
+  stackedInsertionY,
+} from "../reorder";
 
 // Three boxes: 16–336, 336–604, 604–988
 const boxes = [
@@ -61,5 +68,34 @@ describe("stackedInsertionY", () => {
     expect(stackedInsertionY(0, 2, 52)).toBe(0);
     expect(stackedInsertionY(3, 1, 52)).toBe(208);
     expect(stackedInsertionY(1, 1, 52)).toBeNull();
+  });
+});
+
+describe("blockDropIndexAt and blockInsertionX", () => {
+  it("equal dropIndexAt and insertionX for one dragged clip", () => {
+    for (let dragged = 0; dragged < boxes.length; dragged++) {
+      for (let x = 0; x <= 1000; x += 7) {
+        const index = dropIndexAt(x, boxes, dragged);
+        expect(blockDropIndexAt(x, boxes, new Set([dragged]))).toBe(index);
+        expect(blockInsertionX(index, boxes, new Set([dragged]))).toBe(insertionX(index, boxes, dragged));
+      }
+    }
+  });
+
+  it("counts only the clips outside the block", () => {
+    const four = [...boxes, { x: 988, width: 200 }];
+    const block = new Set([0, 2]);
+    expect(blockDropIndexAt(20, four, block)).toBe(0);
+    // Past Clip 2's middle (470): after it
+    expect(blockDropIndexAt(480, four, block)).toBe(1);
+    // Past Clip 4's middle (1088): at the end
+    expect(blockDropIndexAt(1100, four, block)).toBe(2);
+    expect(blockInsertionX(0, four, block)).toBe(334);
+    expect(blockInsertionX(1, four, block)).toBe((604 + 988) / 2);
+    expect(blockInsertionX(2, four, block)).toBe(1190);
+  });
+
+  it("marks the first box when every box is in the block", () => {
+    expect(blockInsertionX(0, boxes, new Set([0, 1, 2]))).toBe(16);
   });
 });

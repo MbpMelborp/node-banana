@@ -5,6 +5,7 @@ import {
   END_EPSILON_SEC,
   MIN_CLIP_SEC,
   appendClips,
+  canSplitClipsAt,
   clampTrim,
   clearStarts,
   clipAtTime,
@@ -18,19 +19,25 @@ import {
   layoutSpans,
   MAX_START_SEC,
   moveClip,
+  moveClipsBlock,
   moveClipStart,
   neighbourTarget,
   originalEdgeTarget,
   pinStarts,
   placeClip,
+  placeClips,
   placedLayersAt,
   placedSpans,
   reanchorTime,
   removeClip,
+  removeClips,
   resetTrim,
   resetTrimInPlace,
+  resetTrims,
+  runEndIndex,
   sequenceDuration,
   setEdgeAtPlayhead,
+  shiftRows,
   snapTo,
   sourceKey,
   spanAtTime,
@@ -38,10 +45,12 @@ import {
   spansEnd,
   spansEnvelope,
   splitClipAt,
+  splitClipsAt,
   topSpanAt,
   trimClip,
   trimClipInPlace,
   updateClipAudio,
+  updateClipsAudio,
   type ClipSpan,
   type SourceDurations,
   type SourceKey,
@@ -654,5 +663,202 @@ describe("Stacked: placed clips", () => {
   it("keeps a start through createClip", () => {
     expect(edgeClip("a", "e1", { startSec: 3 }).startSec).toBe(3);
     expect("startSec" in edgeClip("a", "e1")).toBe(false);
+  });
+});
+
+describe("group operations", () => {
+  const ids = (timeline: readonly StitchTimelineClip[]) => timeline.map((c) => c.id);
+  const set = (...clipIds: string[]) => new Set(clipIds);
+  const five = () => ["a", "b", "c", "d", "e"].map((id) => edgeClip(id, `e-${id}`));
+
+  const STACKED = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+  const TRACK = { ...STACKED, mode: "track" as const };
+  // Clip 1 A [0,5), Clip 2 B [6,10.2), Clip 3 C [9.2,15.2), Clip 4 D [11,14.2)
+  const board = () => [
+    edgeClip("c1", "a", { startSec: 0 }),
+    edgeClip("c2", "b", { startSec: 6, inSec: 0.8 }),
+    edgeClip("c3", "c", { startSec: 9.2 }),
+    edgeClip("c4", "d", { startSec: 11, outSec: 3.2 }),
+  ];
+  const boardDurations = durations({ "edge:a": 5, "edge:b": 5, "edge:c": 6, "edge:d": 5 });
+  const startsOf = (timeline: StitchTimelineClip[]) =>
+    Object.fromEntries(layoutSpans(timeline, boardDurations, STACKED).map((span) => [span.clip.id, span.start]));
+
+  it("removeClips removes every listed clip and reports edges no clip references any more", () => {
+    const timeline = [edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("a2", "e1"), assetClip("x", "asset1")];
+    const first = removeClips(timeline, set("a", "b", "x"));
+    expect(ids(first.timeline)).toEqual(["a2"]);
+    expect(first.orphanedEdgeIds).toEqual(["e2"]);
+    expect(removeClips(timeline, set("a", "a2")).orphanedEdgeIds).toEqual(["e1"]);
+    const none = removeClips(timeline, set("nope"));
+    expect(none.timeline).toBe(timeline);
+    expect(none.orphanedEdgeIds).toEqual([]);
+  });
+
+  it("updateClipsAudio changes every listed clip, and nothing else", () => {
+    const timeline = three();
+    const muted = updateClipsAudio(timeline, set("a", "c"), { muted: true });
+    expect(muted.map((c) => c.muted)).toEqual([true, false, true]);
+    expect(muted[1]).toBe(timeline[1]);
+    expect(updateClipsAudio(timeline, set("a", "b"), { volume: 3 }).map((c) => c.volume)).toEqual([1, 1, 1]);
+    expect(updateClipsAudio(timeline, set("a", "b"), { muted: false })).toBe(timeline);
+  });
+
+  it("moveClipsBlock equals moveClip for one clip", () => {
+    const timeline = five();
+    for (let from = 0; from < 5; from++) {
+      for (let to = -1; to <= 5; to++) {
+        expect(ids(moveClipsBlock(timeline, set(timeline[from].id), to))).toEqual(ids(moveClip(timeline, from, to)));
+      }
+    }
+  });
+
+  it("moveClipsBlock moves a non-contiguous selection as one run, in its order", () => {
+    const timeline = five().slice(0, 4);
+    expect(ids(moveClipsBlock(timeline, set("c", "a"), 0))).toEqual(["a", "c", "b", "d"]);
+    expect(ids(moveClipsBlock(timeline, set("a", "c"), 1))).toEqual(["b", "a", "c", "d"]);
+    expect(ids(moveClipsBlock(timeline, set("a", "c"), 2))).toEqual(["b", "d", "a", "c"]);
+    expect(ids(moveClipsBlock(timeline, set("a", "c"), 9))).toEqual(["b", "d", "a", "c"]);
+    expect(moveClipsBlock(timeline, set("a", "b"), 0)).toBe(timeline);
+    expect(moveClipsBlock(timeline, set("a", "c"), NaN)).toBe(timeline);
+    expect(moveClipsBlock(timeline, set("nope"), 1)).toBe(timeline);
+  });
+
+  it("shiftRows keeps the spacing, stops at both ends and keeps the others' order", () => {
+    const timeline = five();
+    expect(ids(shiftRows(timeline, set("a", "c"), 1))).toEqual(["b", "a", "d", "c", "e"]);
+    expect(ids(shiftRows(timeline, set("a", "c"), 5))).toEqual(["b", "d", "a", "e", "c"]);
+    expect(ids(shiftRows(timeline, set("b", "e"), -1))).toEqual(["b", "a", "c", "e", "d"]);
+    expect(shiftRows(timeline, set("a", "c"), -1)).toBe(timeline);
+    expect(shiftRows(timeline, set("c", "e"), 2)).toBe(timeline);
+    expect(shiftRows(timeline, set("a", "c"), 0)).toBe(timeline);
+    expect(shiftRows(timeline, set("a", "c"), NaN)).toBe(timeline);
+  });
+
+  it("placeClips moves the group by one time and one row delta, keeping its offsets", () => {
+    const moved = placeClips(board(), boardDurations, set("c2", "c3"), 2, 1, 1);
+    expect(ids(moved)).toEqual(["c1", "c4", "c2", "c3"]);
+    const starts = startsOf(moved);
+    expect(starts.c1).toBe(0);
+    expect(starts.c4).toBe(11);
+    expect(starts.c2).toBeCloseTo(8, 9);
+    expect(starts.c3).toBeCloseTo(11.2, 9);
+  });
+
+  it("placeClips stops the group at 0:00 and 10:00 as a whole", () => {
+    const early = startsOf(placeClips(board(), boardDurations, set("c2", "c3"), -100, 0, 1));
+    expect(early.c2).toBe(0);
+    expect(early.c3).toBeCloseTo(3.2, 9);
+    const late = startsOf(placeClips(board(), boardDurations, set("c2", "c3"), 1000, 0, 1));
+    expect(late.c3).toBe(MAX_START_SEC);
+    expect(late.c2).toBeCloseTo(MAX_START_SEC - 3.2, 9);
+  });
+
+  it("placeClips pins a lined-up stack, so the clips it does not move keep their starts", () => {
+    const lined = [edgeClip("a", "a"), edgeClip("b", "b"), edgeClip("c", "c")];
+    const before = startsOf(lined);
+    const moved = placeClips(lined, boardDurations, set("b"), 1, 0, 1);
+    expect(moved.every((c) => c.startSec !== undefined)).toBe(true);
+    const after = startsOf(moved);
+    expect(after.a).toBe(before.a);
+    expect(after.c).toBe(before.c);
+    expect(after.b).toBeCloseTo(before.b + 1, 9);
+  });
+
+  it("placeClips returns the same array, unpinned, when neither time nor row changes", () => {
+    const lined = [edgeClip("a", "a"), edgeClip("b", "b")];
+    expect(placeClips(lined, boardDurations, set("a", "b"), 0, 0, 1)).toBe(lined);
+    expect(placeClips(lined, boardDurations, set("a", "b"), 0, 1, 1)).toBe(lined);
+    expect(placeClips(lined, boardDurations, set("a"), -3, 0, 1)).toBe(lined);
+    expect(placeClips(lined, boardDurations, set("nope"), 2, 1, 1)).toBe(lined);
+    // A row change alone still pins
+    const rows = placeClips([...lined, edgeClip("c", "c")], boardDurations, set("a"), 0, 1, 1);
+    expect(ids(rows)).toEqual(["b", "a", "c"]);
+    expect(rows.every((c) => c.startSec !== undefined)).toBe(true);
+  });
+
+  it("splitClipsAt splits every selected clip under the playhead in a placed stack", () => {
+    let n = 0;
+    const result = splitClipsAt(board(), boardDurations, 10, ["c3", "c2"], { layout: STACKED, makeId: () => `r${++n}` });
+    expect(result).not.toBeNull();
+    expect(result!.rightIds).toEqual(["r1", "r2"]);
+    expect(ids(result!.timeline)).toEqual(["c1", "c2", "r1", "c3", "r2", "c4"]);
+  });
+
+  it("splitClipsAt never cuts an unselected clip in front", () => {
+    const result = splitClipsAt(board(), boardDurations, 10, ["c3", "c4"], { layout: STACKED, makeId: () => "r" });
+    expect(ids(result!.timeline)).toEqual(["c1", "c2", "c3", "r", "c4"]);
+    expect(result!.rightIds).toEqual(["r"]);
+    expect(splitClipsAt(board(), boardDurations, 10, ["c1", "c4"], { layout: STACKED })).toBeNull();
+  });
+
+  it("splitClipsAt refuses inside a lined-up overlap", () => {
+    // Lined up at Overlap 1: a 0–5, b 4–9, c 8–14
+    const lined = [edgeClip("a", "a"), edgeClip("b", "b"), edgeClip("c", "c")];
+    expect(splitClipsAt(lined, boardDurations, 4.5, ["a", "b"], { layout: STACKED })).toBeNull();
+    const outside = splitClipsAt(lined, boardDurations, 6, ["a", "b", "c"], { layout: STACKED, makeId: () => "r" });
+    expect(outside!.rightIds).toEqual(["r"]);
+    expect(ids(outside!.timeline)).toEqual(["a", "b", "r", "c"]);
+  });
+
+  it("canSplitClipsAt agrees with splitClipsAt", () => {
+    const cases: Array<{ name: string; timeline: StitchTimelineClip[]; layout: typeof STACKED | typeof TRACK }> = [
+      { name: "track", timeline: board().map((c) => ({ ...c, startSec: undefined })), layout: TRACK },
+      { name: "lined up", timeline: [edgeClip("c1", "a"), edgeClip("c2", "b"), edgeClip("c3", "c")], layout: STACKED },
+      { name: "placed", timeline: board(), layout: STACKED },
+    ];
+    const selections = [["c1"], ["c2"], ["c1", "c3"], ["c2", "c3"], ["c3", "c4"], ["c1", "c2", "c3", "c4"]];
+    const times = [-1, 0, 0.05, 0.1, 2.5, 4, 4.5, 4.95, 5, 5.05, 6, 6.05, 8.5, 9.2, 9.25, 10, 10.15, 11, 12, 14.2, 15.15, 15.2, 20];
+    for (const { name, timeline, layout } of cases) {
+      const spans = layoutSpans(timeline, boardDurations, layout);
+      const placed = layout.mode === "stacked" && isPlaced(timeline);
+      for (const selection of selections) {
+        for (const t of [...times, NaN, Infinity]) {
+          const can = canSplitClipsAt(spans, t, new Set(selection), placed);
+          const did = splitClipsAt(timeline, boardDurations, t, selection, { layout }) !== null;
+          expect({ name, selection, t, can }).toEqual({ name, selection, t, can: did });
+        }
+      }
+    }
+  });
+
+  it("resetTrims resets every selected trimmed clip, in place in Stacked", () => {
+    const track = [edgeClip("a", "e1", { inSec: 1 }), edgeClip("b", "e2", { outSec: 2 }), edgeClip("c", "e3", { inSec: 2 })];
+    const reset = resetTrims(track, threeDurations, set("a", "b"), TRACK);
+    expect(reset.map((c) => [c.inSec, c.outSec])).toEqual([
+      [0, null],
+      [0, null],
+      [2, null],
+    ]);
+    const untouched = three();
+    expect(resetTrims(untouched, threeDurations, set("a", "b"), TRACK)).toBe(untouched);
+    const stacked = resetTrims(board(), boardDurations, set("c2", "c4"), STACKED);
+    const starts = startsOf(stacked);
+    expect(starts.c2).toBeCloseTo(5.2, 9);
+    expect(starts.c4).toBe(11);
+    expect(starts.c3).toBe(9.2);
+    expect(stacked.find((c) => c.id === "c4")).toMatchObject({ inSec: 0, outSec: null });
+    const untrimmed = board().filter((c) => c.id === "c1" || c.id === "c3");
+    expect(resetTrims(untrimmed, boardDurations, set("c1", "c3"), STACKED)).toBe(untrimmed);
+  });
+
+  it("runEndIndex finds the last row of a split's run", () => {
+    const d = durations({ "edge:e1": 5, "edge:e2": 5 });
+    const split = [
+      edgeClip("a1", "e1", { startSec: 0, outSec: 3 }),
+      edgeClip("a2", "e1", { startSec: 3, inSec: 3 }),
+      edgeClip("b", "e2", { startSec: 1.5 }),
+    ];
+    const spans = layoutSpans(split, d, STACKED);
+    expect(runEndIndex(spans, 0)).toBe(1);
+    expect(runEndIndex(spans, 1)).toBe(1);
+    expect(runEndIndex(spans, 2)).toBe(2);
+    expect(runEndIndex(spans, -1)).toBe(-1);
+    expect(runEndIndex(spans, 3)).toBe(3);
+    // An empty clip's row is its own; one between the pieces does not end the run
+    const gapped = [split[0], edgeClip("x", "missing", { startSec: 2 }), split[1], split[2]];
+    const gappedSpans = layoutSpans(gapped, d, STACKED);
+    expect(runEndIndex(gappedSpans, 1)).toBe(1);
+    expect(runEndIndex(gappedSpans, 0)).toBe(2);
   });
 });

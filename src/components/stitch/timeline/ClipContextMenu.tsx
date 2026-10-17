@@ -1,22 +1,37 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   AlignEndVertical,
   AlignStartVertical,
   ArrowDown,
   ArrowUp,
+  ClipboardPaste,
+  Copy,
+  CopyPlus,
   Crosshair,
   RotateCcw,
   Scissors,
+  ScissorsLineDashed,
   Trash,
   Volume1,
   VolumeX,
 } from "lucide-react";
 import { MenuDivider, MenuHeader, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { clipName } from "@/lib/stitch/labels";
+import { clipIdsOf } from "@/lib/stitch/selection";
 import { isTrimmed } from "@/lib/stitch/timeline";
+import { canPaste, copySelection, cutSelection, duplicateSelection, pasteClipboard } from "../clipboardActions";
 import {
   canEndAtPlayhead,
   canMoveRow,
@@ -42,10 +57,12 @@ const ICON = { size: 11, strokeWidth: 1.75, className: "shrink-0" } as const;
 /**
  * A clip's right-click menu, on the app's menu skin: its sound, a split at
  * the playhead, in Stacked its place (start or end at the playhead, a row up
- * or down), its trim, its source node, and removing it. The clip is the
- * selection (the right-click selected it), so each item is the same action
- * as its key; an item selects it again before it runs, so the label and the
- * action never part. Any press outside closes it, even one that cancels its
+ * or down), its trim, copy, cut, paste and duplicate, its source node, and
+ * removing it. The clip is the selection (the right-click selected it), so
+ * each item is the same action as its key; an item selects it again before
+ * it runs, so the label and the action never part. Opened on one of several
+ * selected clips it acts on all of them ("3 clips"); the place items that
+ * are one clip's are off then. Any press outside closes it, even one that cancels its
  * pointerdown (a trim handle, the ruler). Escape belongs to the editor's key
  * handler, which closes it. However it closes, focus that was in it goes
  * back to the panel, so the editor's keys and its Tab trap keep working.
@@ -78,7 +95,18 @@ function OpenMenu({
   const canEnd = useStitchEditorStore(canEndAtPlayhead);
   const canRowUp = useStitchEditorStore((s) => canMoveRow(s, -1));
   const canRowDown = useStitchEditorStore((s) => canMoveRow(s, 1));
+  const selection = useStitchEditorStore((s) => s.selection);
+  const timeline = useStitchEditorStore((s) => s.draft?.timeline);
+  // Its own subscription: a copy made elsewhere turns Paste on with no change to the editor's store
+  const hasClipboard = useStitchClipboard((c) => c.clipboard !== null);
+  const pasteOn = useStitchEditorStore((s) => canPaste(hasClipboard, s));
   const view = media.get(clipId);
+  const group = useMemo(() => {
+    if (selection?.kind !== "clip" || !timeline) return [];
+    const ids = new Set(clipIdsOf(selection, timeline.map((c) => c.id)));
+    return timeline.filter((c) => ids.has(c.id));
+  }, [selection, timeline]);
+  const multi = group.length > 1 && group.some((c) => c.id === clipId);
 
   // Focus goes back to the panel, so the editor's keys work and Tab stays in the dialog
   const close = (run?: () => void) => {
@@ -89,7 +117,8 @@ function OpenMenu({
   };
   const act = (run: () => void) => () =>
     close(() => {
-      useStitchEditorStore.getState().select({ kind: "clip", clipId });
+      // A group's menu acts on the group, which nothing can change while it is open
+      if (!multi) useStitchEditorStore.getState().select({ kind: "clip", clipId });
       run();
     });
 
@@ -155,6 +184,9 @@ function OpenMenu({
   if (!clip) return null;
   const name = clipName(index);
   const source = view?.sourceLabel;
+  const muted = multi ? group.every((c) => c.muted) : clip.muted;
+  const trimmed = multi ? group.some(isTrimmed) : isTrimmed(clip);
+  const header = multi ? `${group.length} clips` : source ? `${name} · ${source}` : name;
   const item = (label: string, icon: ReactNode, run: () => void, opts: { shortcut?: string; disabled?: boolean; danger?: boolean; title?: string } = {}) => (
     <MenuItem
       role="menuitem"
@@ -173,16 +205,16 @@ function OpenMenu({
     <MenuSurface
       ref={ref}
       role="menu"
-      aria-label={name}
+      aria-label={multi ? header : name}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => event.preventDefault()}
       style={{ left: position.left, top: position.top, width: MENU_WIDTH }}
     >
       <MenuHeader className="px-2.5">
-        <MenuSectionLabel>{source ? `${name} · ${source}` : name}</MenuSectionLabel>
+        <MenuSectionLabel>{header}</MenuSectionLabel>
       </MenuHeader>
       <MenuList>
-        {clip.muted
+        {muted
           ? item("Unmute clip audio", <Volume1 {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })
           : item("Mute clip audio", <VolumeX {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })}
         {item("Split at playhead", <Scissors {...ICON} />, splitAtPlayhead, {
@@ -194,12 +226,13 @@ function OpenMenu({
           <>
             {item("Start at playhead", <AlignStartVertical {...ICON} />, startSelectedAtPlayhead, {
               shortcut: "[",
-              disabled: !canStart,
+              disabled: multi || !canStart,
+              title: multi ? "Select one clip" : undefined,
             })}
             {item("End at playhead", <AlignEndVertical {...ICON} />, endSelectedAtPlayhead, {
               shortcut: "]",
-              disabled: !canEnd,
-              title: canEnd ? undefined : "The clip is longer than the time before the playhead",
+              disabled: multi || !canEnd,
+              title: multi ? "Select one clip" : canEnd ? undefined : "The clip is longer than the time before the playhead",
             })}
             {item("Move up a row", <ArrowUp {...ICON} />, () => moveSelectedRow(-1), { shortcut: "⌥↑", disabled: !canRowUp })}
             {item("Move down a row", <ArrowDown {...ICON} />, () => moveSelectedRow(1), {
@@ -208,10 +241,24 @@ function OpenMenu({
             })}
           </>
         )}
-        {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !isTrimmed(clip) })}
+        {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !trimmed })}
         <MenuDivider role="separator" className="my-1" />
-        {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, { disabled: !canRevealSource(clip, view) })}
-        {item("Remove clip", <Trash {...ICON} />, removeSelection, { shortcut: "⌫", danger: true })}
+        {item("Copy", <Copy {...ICON} />, copySelection, { shortcut: "⌘C" })}
+        {item("Cut", <ScissorsLineDashed {...ICON} />, cutSelection, { shortcut: "⌘X" })}
+        {item("Paste", <ClipboardPaste {...ICON} />, pasteClipboard, {
+          shortcut: "⌘V",
+          disabled: !pasteOn,
+        })}
+        {item("Duplicate", <CopyPlus {...ICON} />, duplicateSelection, { shortcut: "⌘D" })}
+        <MenuDivider role="separator" className="my-1" />
+        {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, {
+          disabled: multi || !canRevealSource(clip, view),
+          title: multi ? "Select one clip" : undefined,
+        })}
+        {item(multi ? `Remove ${group.length} clips` : "Remove clip", <Trash {...ICON} />, removeSelection, {
+          shortcut: "⌫",
+          danger: true,
+        })}
       </MenuList>
     </MenuSurface>
   );

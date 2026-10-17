@@ -20,14 +20,18 @@ import { emptyCopy } from "./EmptyClipSlot";
 export interface StackedHeaderRows {
   spans: readonly ClipSpan[];
   media: ReadonlyMap<string, ClipMediaView>;
-  selectedId: string | null;
+  /** Every clip drawn selected: its header is tinted. */
+  selectedIds: ReadonlySet<string>;
   /** The rows' inner block: the timeline writes its translateY as the lanes scroll, with no render. */
   rowsRef: RefObject<HTMLDivElement | null>;
   /** The insertion line while a clip is dragged (by its header or its box), in rows px; null when it would not move. */
   insertionY: number | null;
   /** The lanes' horizontal scrollbar, px (0 without one): the audio header stays level with its row. */
   hBar: number;
-  /** A press on a header is a press on its clip: a click selects it, a drag moves it up or down. */
+  /**
+   * A press on a header is a press on its clip: a click selects it (⌘ and ⇧ as on its box), a drag moves it up or down,
+   * with the rest of the selection when it is one of several.
+   */
   onRowPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
 }
 
@@ -135,7 +139,7 @@ export function TrackHeaders({
 }
 
 function StackedRows({ rows }: { rows: StackedHeaderRows }) {
-  const { spans, media, selectedId, rowsRef, insertionY, onRowPointerDown } = rows;
+  const { spans, media, selectedIds, rowsRef, insertionY, onRowPointerDown } = rows;
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
       <div
@@ -146,7 +150,7 @@ function StackedRows({ rows }: { rows: StackedHeaderRows }) {
       >
         {spans.map((span, i) => {
           const view = media.get(span.clip.id);
-          const selected = span.clip.id === selectedId;
+          const selected = selectedIds.has(span.clip.id);
           const empty = span.length <= 0;
           return (
             <div

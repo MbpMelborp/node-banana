@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StitchTimelineClip } from "@/types";
-import { describeDraftChanges, type StitchDraft } from "../draft";
+import { describeDraftChanges, type ClipOrigin, type StitchDraft } from "../draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import {
   createClip,
@@ -148,5 +148,52 @@ describe("describeDraftChanges", () => {
 
   it("falls back when no change can be named", () => {
     expect(describeDraftChanges(base, base)).toBe("Your changes will be lost. The node keeps what it had.");
+  });
+
+  describe("pasted, duplicated and cut clips", () => {
+    const origins = (entries: Record<string, ClipOrigin>) => new Map(Object.entries(entries));
+
+    it("calls a pasted copy of a clip already in the sequence a pasted clip, not a split", () => {
+      const edited = draft([...base.timeline, clip("p1", "e1", { inSec: 1 })]);
+      expect(describeDraftChanges(base, edited)).toBe(`A split${LOST}`);
+      expect(describeDraftChanges(base, edited, durations, origins({ p1: "pasted" }))).toBe(`A pasted clip${LOST}`);
+    });
+
+    it("counts duplicated clips", () => {
+      const edited = draft([...base.timeline, clip("d1", "e2"), clip("d2", "e3")]);
+      expect(describeDraftChanges(base, edited, durations, origins({ d1: "duplicated", d2: "duplicated" }))).toBe(
+        `Two duplicated clips${LOST}`,
+      );
+    });
+
+    it("calls a removed clip tagged cut a cut clip", () => {
+      const edited = draft(base.timeline.slice(1));
+      expect(describeDraftChanges(base, edited, durations, origins({ a: "cut" }))).toBe(`A cut clip${LOST}`);
+    });
+
+    it("names a cut and a paste together, each after its own kind", () => {
+      const edited = draft([clip("b", "e2"), clip("c", "e3"), clip("x", "e9"), clip("p1", "e1"), clip("p2", "e1")]);
+      expect(describeDraftChanges(base, edited, durations, origins({ a: "cut", p1: "pasted", p2: "pasted" }))).toBe(
+        `An added clip, two pasted clips and a cut clip${LOST}`,
+      );
+    });
+
+    it("leaves a tag alone where it does not apply: a pasted clip that is gone, a cut clip that is back", () => {
+      const tags = origins({ a: "cut", gone: "pasted" });
+      expect(describeDraftChanges(base, base, durations, tags)).toBe("Your changes will be lost. The node keeps what it had.");
+    });
+
+    it("says exactly what it said before with no tags", () => {
+      const fixtures: Array<[StitchDraft, StitchDraft]> = [
+        [base, draft([clip("b", "e2", { inSec: 1 }), clip("a", "e1", { outSec: 3 }), clip("c", "e3")])],
+        [base, draft(splitClipAt(base.timeline, durations, 2, () => "a2")!.timeline)],
+        [base, draft([clip("a", "e1", { outSec: 2 }), clip("a2", "e1", { inSec: 2 }), clip("x", "e9")])],
+        [base, draft([], { loopCount: 3, audioMuted: true })],
+        [base, base],
+      ];
+      for (const [initial, edited] of fixtures) {
+        expect(describeDraftChanges(initial, edited, durations, new Map())).toBe(describeDraftChanges(initial, edited, durations));
+      }
+    });
   });
 });

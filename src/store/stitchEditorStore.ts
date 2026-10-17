@@ -1,6 +1,7 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { sameCurve } from "@/lib/stitch/curve";
-import { sameDraft, type StitchDraft } from "@/lib/stitch/draft";
+import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
+import { clipIdsOf, makeSelection, type ClipSelection } from "@/lib/stitch/selection";
 import type { SourceDurations } from "@/lib/stitch/timeline";
 
 /**
@@ -14,7 +15,7 @@ import type { SourceDurations } from "@/lib/stitch/timeline";
  * coalesces into one step until endGesture.
  */
 
-export type StitchSelection = { kind: "clip"; clipId: string } | { kind: "audio"; point: number | null } | null;
+export type StitchSelection = ClipSelection | { kind: "audio"; point: number | null } | null;
 
 export interface StitchContextMenu {
   clipId: string;
@@ -50,6 +51,11 @@ export interface StitchEditorState {
   pickerOpen: boolean;
   /** Set by a drag hook while a pointer gesture runs; Escape calls it. */
   cancelGesture: (() => void) | null;
+  /**
+   * The clips a paste or duplicate made and the ones a cut took, by id, for the discard sheet. Outside the history:
+   * an undo or redo brings back the same ids, so their tags stay true.
+   */
+  clipOrigins: ReadonlyMap<string, ClipOrigin>;
 
   open(payload: { nodeId: string; draft: StitchDraft; canvasGeneration: number }): void;
   /** Resets all but snap and soundOn. Asks nothing: the UI confirms first. */
@@ -72,11 +78,16 @@ export interface StitchEditorState {
   setDiscardOpen(open: boolean): void;
   setPickerOpen(open: boolean): void;
   setCancelGesture(cancel: (() => void) | null): void;
+  /** A clip keeps the first tag it gets: a pasted clip cut and brought back by undo is still a pasted clip. */
+  tagClips(ids: readonly string[], origin: ClipOrigin): void;
+  /** A clip removed without ⌘X loses its "cut" tag: the tag names how a clip last left, and it left another way. */
+  untagCut(ids: readonly string[]): void;
 }
 
 export const STITCH_HISTORY_LIMIT = 100;
 
 const EMPTY_DURATIONS: SourceDurations = new Map();
+const NO_ORIGINS: ReadonlyMap<string, ClipOrigin> = new Map();
 
 type SessionState = Pick<
   StitchEditorState,
@@ -97,6 +108,7 @@ type SessionState = Pick<
   | "discardOpen"
   | "pickerOpen"
   | "cancelGesture"
+  | "clipOrigins"
 >;
 
 /** Everything one editing session owns; snap and soundOn outlive it. */
@@ -118,15 +130,25 @@ const closedSession = (): SessionState => ({
   discardOpen: false,
   pickerOpen: false,
   cancelGesture: null,
+  clipOrigins: NO_ORIGINS,
 });
 
 /**
- * After a history move: a clip selection whose clip is gone is dropped, and an
- * audio selection forgets its point, so ⌫ never removes a point by a stale index.
+ * After a history move: a clip selection drops the clips that are gone (the
+ * first that remains leads when the lead went; none left, none selected), and
+ * an audio selection forgets its point, so ⌫ never removes a point by a stale
+ * index.
  */
 function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
   if (selection?.kind === "clip") {
-    return draft.timeline.some((c) => c.id === selection.clipId) ? selection : null;
+    const order = draft.timeline.map((c) => c.id);
+    const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
+    const same =
+      next !== null &&
+      next.clipId === selection.clipId &&
+      next.anchorId === selection.anchorId &&
+      (next.clipIds ?? []).join("\n") === (selection.clipIds ?? []).join("\n");
+    return same ? selection : next;
   }
   if (selection?.kind === "audio" && selection.point !== null) return { kind: "audio", point: null };
   return selection;
@@ -217,6 +239,22 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     setDiscardOpen: (open) => set({ discardOpen: open }),
     setPickerOpen: (open) => set({ pickerOpen: open }),
     setCancelGesture: (cancel) => set({ cancelGesture: cancel }),
+    tagClips: (ids, origin) => {
+      const current = get().clipOrigins;
+      const fresh = ids.filter((id) => !current.has(id));
+      if (fresh.length === 0) return;
+      const next = new Map(current);
+      for (const id of fresh) next.set(id, origin);
+      set({ clipOrigins: next });
+    },
+    untagCut: (ids) => {
+      const current = get().clipOrigins;
+      const cut = ids.filter((id) => current.get(id) === "cut");
+      if (cut.length === 0) return;
+      const next = new Map(current);
+      for (const id of cut) next.delete(id);
+      set({ clipOrigins: next });
+    },
   }),
 );
 
@@ -224,3 +262,15 @@ export const selectIsDirty = (s: StitchEditorState): boolean =>
   s.initial !== null && s.draft !== null && !sameDraft(s.initial, s.draft);
 export const selectCanUndo = (s: StitchEditorState): boolean => s.past.length > 0;
 export const selectCanRedo = (s: StitchEditorState): boolean => s.future.length > 0;
+
+/**
+ * The selected clips' ids in timeline order ([] for an audio selection or none). A new array per call: components
+ * subscribe to s.selection and derive this in a useMemo, never through a selector.
+ */
+export function selectedClipIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
+  if (s.selection?.kind !== "clip" || !s.draft) return [];
+  return clipIdsOf(s.selection, s.draft.timeline.map((c) => c.id));
+}
+
+/** Several clips selected: group actions act on all of them, single-clip ones (trims, Start, In, Out) do nothing. */
+export const selectIsMulti = (s: StitchEditorState): boolean => selectedClipIds(s).length > 1;

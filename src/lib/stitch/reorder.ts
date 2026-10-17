@@ -29,6 +29,29 @@ export function insertionX(dropIndex: number, boxes: ReadonlyArray<Box>, dragged
   return (before.x + before.width + after.x) / 2;
 }
 
+/** How many boxes outside `dragged` have their midpoint left of x: the toIndex for moveClipsBlock. */
+export function blockDropIndexAt(x: number, boxes: ReadonlyArray<Box>, dragged: ReadonlySet<number>): number {
+  let index = 0;
+  boxes.forEach((box, i) => {
+    if (!dragged.has(i) && box.x + box.width / 2 < x) index++;
+  });
+  return index;
+}
+
+/** insertionX for a block: the gap among the boxes outside `dragged`. */
+export function blockInsertionX(dropIndex: number, boxes: ReadonlyArray<Box>, dragged: ReadonlySet<number>): number {
+  const others = boxes.filter((_, i) => !dragged.has(i));
+  if (others.length === 0) return boxes[0]?.x ?? 0;
+  if (dropIndex <= 0) return others[0].x - 2;
+  if (dropIndex >= others.length) {
+    const last = others[others.length - 1];
+    return last.x + last.width + 2;
+  }
+  const before = others[dropIndex - 1];
+  const after = others[dropIndex];
+  return (before.x + before.width + after.x) / 2;
+}
+
 /**
  * Stacked rows: the final index for moveClip from the lifted box's centre, dy pixels from its row. A row's centre
  * crossing half a row moves it one place.

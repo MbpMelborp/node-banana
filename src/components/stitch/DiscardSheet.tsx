@@ -20,6 +20,8 @@ export function DiscardSheet() {
   const draft = useStitchEditorStore((s) => s.draft);
   // Moved clips are told from the stacked layout these lengths give
   const durations = useStitchEditorStore((s) => s.durations);
+  // Pasted, duplicated and cut clips are named as such, not as splits and removals
+  const clipOrigins = useStitchEditorStore((s) => s.clipOrigins);
   const setDiscardOpen = useStitchEditorStore((s) => s.setDiscardOpen);
   const close = useStitchEditorStore((s) => s.close);
   const keepEditingRef = useRef<HTMLButtonElement>(null);
@@ -30,7 +32,7 @@ export function DiscardSheet() {
     <Dialog open onClose={keepEditing} size="xs" portal label="Discard changes?" initialFocusRef={keepEditingRef}>
       <DialogHeader compact closeButton={false} className="pt-3.5 pb-1.5">
         <DialogTitle compact>Discard changes?</DialogTitle>
-        <DialogDescription className="mt-0.5">{describeDraftChanges(initial, draft, durations)}</DialogDescription>
+        <DialogDescription className="mt-0.5">{describeDraftChanges(initial, draft, durations, clipOrigins)}</DialogDescription>
       </DialogHeader>
       <DialogFooter compact className="mt-1.5 pb-3">
         <DialogButton compact variant="danger" onClick={close}>

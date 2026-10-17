@@ -187,3 +187,49 @@ describe("moveRowAt", () => {
     expect(moveRowAt(1, Infinity, 1, 4, ROW)).toBe(1);
   });
 });
+
+describe("moveTargets with a group, and moveDragAt's bounds", () => {
+  it("gives no targets for the excluded clips", () => {
+    const all = moveTargets(spans, "c4", 3, 1);
+    const without = moveTargets(spans, "c4", 3, 1, new Set(["c4", "c3"]));
+    expect(all.some((t) => t.row === 2)).toBe(true);
+    expect(without.some((t) => t.row === 2)).toBe(false);
+    expect(without).toEqual(all.filter((t) => t.row !== 2));
+  });
+
+  it("gives today's targets with no exclusions", () => {
+    for (const id of ["c1", "c2", "c3", "c4"]) {
+      expect(moveTargets(spans, id, 7, 1, new Set())).toEqual(moveTargets(spans, id, 7, 1));
+    }
+  });
+
+  it("skips a candidate outside the bounds and clamps to them", () => {
+    const edge = target(9, "Clip 3's start", "start");
+    const bounded: MoveDragStart = { ...start([edge]), minStartSec: 9.5, maxStartSec: 12 };
+    // Without bounds the start snaps to 9; with them that candidate is skipped and the start clamps to 9.5
+    expect(at(start([edge]), -2 + 2 / PPS).startSec).toBe(9);
+    const low = at(bounded, -2 + 2 / PPS);
+    expect(low.startSec).toBe(9.5);
+    expect(low.snapped).toBeNull();
+    expect(at(bounded, 5).startSec).toBe(12);
+    const high = target(13, "Clip 2's end", "start");
+    expect(at({ ...start([high]), maxStartSec: 12.5 }, 2 - 2 / PPS).snapped).toBeNull();
+    expect(at({ ...start([high]), maxStartSec: 13 }, 2 - 2 / PPS).snapped).toBe(high);
+  });
+
+  it("gives today's results without bounds", () => {
+    const targets = moveTargets(spans, "c4", 14, 1);
+    for (let dx = -12; dx <= 12; dx += 0.37) {
+      for (const snap of [true, false]) {
+        const plain = start(targets);
+        const defaults: MoveDragStart = { ...plain, minStartSec: undefined, maxStartSec: undefined };
+        expect(moveDragAt(defaults, plain.pointerX + dx * PPS, { snap })).toEqual(
+          moveDragAt(plain, plain.pointerX + dx * PPS, { snap }),
+        );
+        expect(moveDragAt({ ...plain, minStartSec: 0 }, plain.pointerX + dx * PPS, { snap })).toEqual(
+          moveDragAt(plain, plain.pointerX + dx * PPS, { snap }),
+        );
+      }
+    }
+  });
+});

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { editorKeyAction, isCanvasKey, isTypingTarget, NO_REPEAT, type KeyLike } from "../editorKeys";
+import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type KeyLike } from "../editorKeys";
 
 const key = (k: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   key: k,
@@ -76,6 +76,56 @@ describe("editorKeyAction", () => {
     }
     expect(NO_REPEAT.has("nudgeEarlier")).toBe(false);
     expect(NO_REPEAT.has("nudgeLater")).toBe(false);
+  });
+});
+
+describe("the clip keys", () => {
+  const CLIP_KEYS = [
+    ["c", "copy"],
+    ["x", "cut"],
+    ["v", "paste"],
+    ["d", "duplicate"],
+    ["a", "selectAll"],
+  ] as const;
+
+  it.each(CLIP_KEYS)("⌘%s and Ctrl+%s → %s", (k, action) => {
+    expect(editorKeyAction(key(k, { metaKey: true }))).toBe(action);
+    expect(editorKeyAction(key(k, { ctrlKey: true }))).toBe(action);
+    // Caps Lock or a layout that sends the capital
+    expect(editorKeyAction(key(k.toUpperCase(), { metaKey: true }))).toBe(action);
+  });
+
+  it("leaves them with ⇧ or ⌥ alone, and the bare letters as they were", () => {
+    for (const [k] of CLIP_KEYS) {
+      expect(editorKeyAction(key(k.toUpperCase(), { metaKey: true, shiftKey: true }))).toBeNull();
+      expect(editorKeyAction(key(k, { metaKey: true, altKey: true }))).toBeNull();
+      expect(editorKeyAction(key(k, { ctrlKey: true, altKey: true }))).toBeNull();
+    }
+    expect(editorKeyAction(key("c"))).toBeNull();
+    expect(editorKeyAction(key("x"))).toBeNull();
+    expect(editorKeyAction(key("a"))).toBeNull();
+    expect(editorKeyAction(key("d"))).toBeNull();
+  });
+
+  it("does not repeat any of them", () => {
+    for (const [, action] of CLIP_KEYS) expect(NO_REPEAT.has(action)).toBe(true);
+  });
+
+  it("keeps ⌘D always and ⌘A outside a text field from the browser", () => {
+    const field = document.createElement("input");
+    const button = document.createElement("button");
+    const on = (target: EventTarget | null, k: string, mods: Partial<KeyLike> = { metaKey: true }) =>
+      isBrowserKey({ ...key(k, mods), target });
+    expect(on(button, "d")).toBe(true);
+    expect(on(field, "d")).toBe(true);
+    expect(on(button, "a")).toBe(true);
+    expect(on(button, "a", { ctrlKey: true })).toBe(true);
+    // A text field's ⌘A selects its text
+    expect(on(field, "a")).toBe(false);
+    expect(on(button, "c")).toBe(false);
+    expect(on(button, "d", { metaKey: true, shiftKey: true })).toBe(false);
+    expect(on(button, "d", { metaKey: true, altKey: true })).toBe(false);
+    expect(on(button, "d", {})).toBe(false);
   });
 });
 

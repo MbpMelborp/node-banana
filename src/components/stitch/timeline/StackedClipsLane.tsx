@@ -11,7 +11,7 @@ import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
 import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
-import { ClipBox, type ClipBoxMode } from "./ClipBox";
+import { ClipBox, keepFocus, type ClipBoxMode } from "./ClipBox";
 import { AddSlotButton, EmptyLaneButton, laneTabStop, onLaneKeyDown, openClipMenu, useLaneFocus } from "./ClipsLane";
 import { CrossfadeMarks, LayerMarks } from "./CrossfadeMark";
 import { EmptyClipSlot } from "./EmptyClipSlot";
@@ -55,10 +55,14 @@ export interface LaneMarks {
  * rows, with a line where it will land; the others keep their places. While
  * a row header is dragged its box is lifted, at the start it will have in
  * its new place (lined up) or at its own (placed). Either way every box is
- * marked as release will leave it.
+ * marked as release will leave it. A drag of one of several selected clips
+ * carries them all: each box at its own start plus the one time delta, and
+ * its own row plus the one travel, clamped for the group as a whole.
  *
  * The same listbox as Track's (one tab stop, focus kept in the lane, the
- * clip menu from the keyboard), running down: ↑/↓ as well as ←/→.
+ * clip menu from the keyboard, every selected clip ringed and its row
+ * tinted, the selection box on empty space), running down: ↑/↓ as well as
+ * ←/→.
  */
 export function StackedClipsLane({
   axis,
@@ -67,6 +71,8 @@ export function StackedClipsLane({
   restBoxes,
   media,
   selectedId,
+  selectedIds,
+  multi,
   trim,
   reorder,
   liftedX,
@@ -80,6 +86,7 @@ export function StackedClipsLane({
   contentWidth,
   onBodyPointerDown,
   onHandlePointerDown,
+  onLanePointerDown,
 }: {
   axis: TimeAxis;
   /** As drawn: while a trim runs, the spans it gives. */
@@ -88,11 +95,19 @@ export function StackedClipsLane({
   /** The boxes at rest, for the trim ghost. */
   restBoxes: readonly LaneBox[];
   media: ReadonlyMap<string, ClipMediaView>;
+  /** The lead: the tab stop. */
   selectedId: string | null;
+  /** Every clip drawn selected (while the selection box runs, what it would select). */
+  selectedIds: ReadonlySet<string>;
+  /** Several clips are selected: handles show on hover only. */
+  multi: boolean;
   trim: TrimLive | null;
   reorder: ReorderLive | null;
-  /** A row header's drag: the lifted clip's x at its start in the order it would drop into (lined up); null keeps its x. */
-  liftedX: number | null;
+  /**
+   * A row header's drag: each lifted clip's x at its start in the order it would drop into (lined up); null, or a clip
+   * not in it, keeps its x.
+   */
+  liftedX: ReadonlyMap<string, number> | null;
   /** A box's drag, in time and across rows. */
   move: MoveLive | null;
   /** The insertion line of either drag, in rows px; null when the clip would keep its row. */
@@ -107,6 +122,8 @@ export function StackedClipsLane({
   contentWidth: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
+  /** A press on the listbox itself (a row's free time): the selection box. */
+  onLanePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const { rowRef, onFocus, onBlur } = useLaneFocus();
   const libraryOn = useLibraryAvailable();
@@ -149,7 +166,6 @@ export function StackedClipsLane({
   // After the latest end, and after the last row's own box (an empty slot can reach past the end)
   const last = boxes[boxes.length - 1];
   const slotX = Math.max(axis.timeToX(spansEnd(spans)), last ? last.x + last.width : axis.endX) + GEOMETRY.addSlotGap;
-  const rowsBottom = spans.length * ROW;
 
   // Each clip's name for the one above it: the previous clip with a length (an empty clip covers nothing)
   const above: (string | null)[] = [];
@@ -164,7 +180,7 @@ export function StackedClipsLane({
         <div
           key={span.clip.id}
           aria-hidden="true"
-          className={cn("absolute inset-x-0 border-b border-white/4", span.clip.id === selectedId && "bg-white/4")}
+          className={cn("absolute inset-x-0 border-b border-white/4", selectedIds.has(span.clip.id) && "bg-white/4")}
           style={{ top: i * ROW, height: ROW }}
         />
       ))}
@@ -198,7 +214,10 @@ export function StackedClipsLane({
         role="listbox"
         aria-label="Clips"
         aria-orientation="vertical"
+        aria-multiselectable="true"
         onKeyDown={onKeyDown}
+        onPointerDown={onLanePointerDown}
+        onMouseDown={keepFocus}
         onFocus={onFocus}
         onBlur={onBlur}
         className="absolute inset-0"
@@ -206,20 +225,26 @@ export function StackedClipsLane({
         {spans.map((span, i) => {
           const view = media.get(span.clip.id);
           const box = boxes[i];
-          const moving = move?.clipId === span.clip.id ? move : null;
+          const moving = move?.clipIds.includes(span.clip.id) ? move : null;
           const mode: ClipBoxMode = moving
             ? "moving"
             : !reorder
               ? "rest"
-              : reorder.clipId === span.clip.id
+              : reorder.clipIds.includes(span.clip.id)
                 ? "lifted"
                 : "dimmed";
           const lifted = mode === "lifted" && reorder;
-          const x = moving ? moving.x : lifted ? (liftedX ?? box.x) : box.x;
-          const top = moving
-            ? Math.min(Math.max(i * ROW + BOX_TOP + moving.dy, 0), rowsBottom - BOX_HEIGHT)
-            : i * ROW + BOX_TOP + (lifted ? reorder.dy : 0);
-          const selected = selectedId === span.clip.id;
+          // A group's other boxes: their own start plus the pressed clip's delta, their own row plus the group's travel
+          const groupMove = moving !== null && moving.clipIds.length > 1;
+          const x = moving
+            ? groupMove
+              ? axis.timeToX(span.start + moving.result.deltaSec)
+              : moving.x
+            : lifted
+              ? (liftedX?.get(span.clip.id) ?? box.x)
+              : box.x;
+          const top = moving ? i * ROW + BOX_TOP + moving.dy : i * ROW + BOX_TOP + (lifted ? reorder.dy : 0);
+          const selected = selectedIds.has(span.clip.id);
           const focusable = tabStop === span.clip.id;
           const onBody = (event: ReactPointerEvent<HTMLElement>) => onBodyPointerDown(event, span.clip.id, i);
           const onMenu = (event: MouseEvent<HTMLElement>) => openClipMenu(event, span.clip.id);
@@ -261,6 +286,7 @@ export function StackedClipsLane({
               top={top}
               height={BOX_HEIGHT}
               compact
+              multi={multi}
               overlay={
                 marks ? (
                   <LayerMarks

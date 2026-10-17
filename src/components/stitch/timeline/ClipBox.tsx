@@ -8,6 +8,7 @@ import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { setClipMuted } from "../editorActions";
 import { GEOMETRY, LABEL_BAR, LIFTED_CLIP, MOVING_CLIP } from "../editorStyles";
+import { isToggleClick } from "../selectionActions";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { Filmstrip } from "./Filmstrip";
 
@@ -17,7 +18,12 @@ import { Filmstrip } from "./Filmstrip";
  */
 export type ClipBoxMode = "rest" | "dimmed" | "lifted" | "moving";
 
-const stopPress = (event: ReactPointerEvent) => event.stopPropagation();
+/** ⌘ (Ctrl off a Mac) or ⇧: a click on the box under the sound button, which then selects instead of muting. */
+const selectsClip = (event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) =>
+  isToggleClick(event) || event.shiftKey;
+const stopPress = (event: ReactPointerEvent) => {
+  if (!selectsClip(event)) event.stopPropagation();
+};
 /** Each handle takes at most this share of a narrow clip, so its middle third stays a body to press and drag. */
 const HANDLE_SHARE = 1 / 3;
 /** A handle narrower than this shows no grip. */
@@ -101,6 +107,7 @@ export function ClipBox({
   top = GEOMETRY.clipTop,
   height = GEOMETRY.clipHeight,
   compact = false,
+  multi = false,
   overlay,
   onBodyPointerDown,
   onHandlePointerDown,
@@ -126,6 +133,8 @@ export function ClipBox({
   top?: number;
   height?: number;
   compact?: boolean;
+  /** One of several selected clips: its handles show on hover only, since a trim acts on one clip. */
+  multi?: boolean;
   /** Drawn over the frames, under the badges and handles (Stacked's crossfade marks). */
   overlay?: ReactNode;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -137,9 +146,10 @@ export function ClipBox({
   const atRest = mode === "rest";
   const showHandles = atRest;
   const handleWidth = handleWidthFor(width);
+  const handlesShown = (selected && !multi) || trimEdge !== null;
   // The label bar and badges make room for handles while they show
-  const inset = selected || trimEdge ? "left-2.5 right-2.5" : "left-0 right-0 group-hover:left-2.5 group-hover:right-2.5";
-  const badgeLeft = selected || trimEdge ? "left-4" : "left-1.5 group-hover:left-4";
+  const inset = handlesShown ? "left-2.5 right-2.5" : "left-0 right-0 group-hover:left-2.5 group-hover:right-2.5";
+  const badgeLeft = handlesShown ? "left-4" : "left-1.5 group-hover:left-4";
   const badgeTop = compact ? "top-[11px]" : "top-1.5";
   const soundButtons = !compact || width >= MIN_SOUND_BUTTON_BOX_PX;
 
@@ -154,7 +164,8 @@ export function ClipBox({
       onMouseDown={keepFocus}
       onContextMenu={onContextMenu}
       className={cn(
-        "group absolute overflow-hidden rounded-media bg-editor-chrome select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
+        // The outline marks the focused clip apart from the others a group selection rings
+        "group absolute overflow-hidden rounded-media bg-editor-chrome select-none outline-none focus-visible:ring-2 focus-visible:ring-selection focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70",
         mode === "moving"
           ? MOVING_CLIP
           : mode === "lifted"
@@ -232,7 +243,9 @@ export function ClipBox({
           title="Clip audio muted"
           onPointerDown={stopPress}
           onMouseDown={keepFocus}
-          onClick={() => setClipMuted(clip.id, false)}
+          onClick={(event) => {
+            if (!selectsClip(event)) setClipMuted(clip.id, false);
+          }}
           className={cn(
             "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300 hover:text-neutral-100",
             badgeTop,
@@ -250,7 +263,9 @@ export function ClipBox({
           tabIndex={-1}
           onPointerDown={stopPress}
           onMouseDown={keepFocus}
-          onClick={() => setClipMuted(clip.id, true)}
+          onClick={(event) => {
+            if (!selectsClip(event)) setClipMuted(clip.id, true);
+          }}
           className={cn(
             "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-100 opacity-0 group-hover:opacity-100",
             badgeTop,
@@ -266,14 +281,14 @@ export function ClipBox({
           <Handle
             side="in"
             width={handleWidth}
-            selected={selected || trimEdge !== null}
+            selected={handlesShown}
             active={trimEdge === "in"}
             onPointerDown={(event) => onHandlePointerDown(event, "in")}
           />
           <Handle
             side="out"
             width={handleWidth}
-            selected={selected || trimEdge !== null}
+            selected={handlesShown}
             active={trimEdge === "out"}
             onPointerDown={(event) => onHandlePointerDown(event, "out")}
           />

@@ -28,7 +28,10 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   it starts on the timeline), Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
   node, Remove clip; with the audio track selected, Track sound and
-  the quick curve buttons (Fade in, Fade out, Flat). The footer holds Loop
+  the quick curve buttons (Fade in, Fade out, Flat). With several clips
+  selected the rail shows how many, and what applies to all of them: Clip
+  audio (On or Off, with neither pressed while some are muted and some
+  not), Split at playhead, Reset trim and Remove. The footer holds Loop
   sequence (1×, 2×, 3×).
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
@@ -36,7 +39,9 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   volume line, taller while it is selected). In Stacked the Clips lane is
   one row per clip; the rows scroll between a fixed ruler and a fixed audio
   row. A clip's box drags in time and up or down to another row in one
-  move; its row header drags it up or down only (see Stacked).
+  move; its row header drags it up or down only (see Stacked). Click,
+  ⌘-click, ⇧-click or drag a box around clips to select several (see
+  Several clips).
 
 Edits stay inside the editor, with their own undo history (100 steps), until
 **Done**. Done writes the node in one `updateNodeData` call and does not
@@ -240,12 +245,13 @@ the same undo step, so the clips it does not edit stay where they are. From
 then on an edit moves only the clip it edits.
 
 - Always placing, in Stacked: dragging a clip's box (in time, to another
-  row, or both), a nudge, a typed Start, [ and ], and every trim (a drag,
-  I, O, a typed In or Out, Reset trim).
+  row, or both), a nudge, a typed Start, [ and ], every trim (a drag,
+  I, O, a typed In or Out, Reset trim), a paste, a duplicate, and a drag
+  or nudge of several clips.
 - Placing only in a stack that is already placed: a row move by the row
-  header, ⌥↑ / ⌥↓ or the clip menu, a split and a removal. In a lined-up
-  stack these work as before: a row move or a removal re-sequences the
-  clips, and a split is refused inside an overlap.
+  header, ⌥↑ / ⌥↓ or the clip menu, a split, a removal and a cut. In a
+  lined-up stack these work as before: a row move or a removal
+  re-sequences the clips, and a split is refused inside an overlap.
 - Never placing: adding from the library, Crossfade, the layout switch,
   loops, clip sound and the curve. Edits in Track, and the card's reorder
   and ✕, keep every stored start.
@@ -502,6 +508,69 @@ long for the card they are cut at their end, with their full text on
 hover. The card has no layout control, and its own edits (a reorder, ✕)
 keep the layout and every clip's start.
 
+## Several clips
+
+**Selecting.** A click on a clip selects it alone. ⌘-click (Ctrl-click on
+Windows) adds a clip to the selection or takes it out. ⇧-click selects
+every clip from the last clip you clicked to this one: in Track in their
+order, in Stacked by row (the same thing, since rows are the order). A
+⌘-click or ⇧-click that lands on a clip's trim handle selects too; drag
+from a handle to trim. A drag on empty space in the lane draws a box and
+selects the clips it touches (in Track every clip it crosses sideways, in
+Stacked every box it touches); with ⇧ or ⌘ held when you press, they are
+added to the selection. In Track the clips fill most of their row, so
+press just above or below them (or past the last one when zoomed in) to
+start a box; it covers the whole row and grows sideways. A click on empty
+space clears the selection. ⌘A selects every
+clip. A selection change is not an undo step. On a Mac, Ctrl-click opens
+the clip menu and keeps the selection when the clip is in it. The arrow
+keys on the lane and a plain press on a trim handle work on one clip: they
+select it alone. I, O, [ and ] do nothing while several clips are
+selected.
+
+**With several selected.** Drag any of them and they all move. In Stacked
+they move by the same time and the same number of rows, keeping their
+spacing; only the clip you hold snaps, and the others keep their place
+relative to it. The group stops when its first clip reaches 0:00 or its
+last reaches 10:00, and at the top and bottom rows. In Track they move as
+one block to where you drop them, in their order; the block moves only once
+the insertion bar has shown, so a small wobble never gathers clips that
+were apart. ⌫ removes them all; ⌥M mutes them all, or unmutes them all when
+every one is muted; ⌥← and ⌥→ nudge them all (in Stacked); ⌥↑ and ⌥↓ move
+them all a row; S splits every selected clip the playhead is inside. Each
+is one undo step. Trims, Start, In and Out stay one clip's: the rail hides
+them, and their keys do nothing.
+
+**Copy and paste.** ⌘C copies the selected clips: each one's video, trim,
+sound and volume, and where it starts relative to the first. ⌘X does the
+same and removes them, as one undo step. ⌘V pastes. In Track the clips go
+after the last selected clip, or at the end. In Stacked they go on new rows
+below the lowest selected row (after the last piece, when that row is a
+piece of a split, so the split still changes nothing), or at the bottom,
+and the first starts at the playhead with the others at the same distances
+as before; like any placing edit, this first fixes every clip's start. ⌘D
+duplicates the selection without touching what you copied: in Track right
+after it, in Stacked on new rows starting where the selection ends. Pasted
+and duplicated clips become the selection, and each paste, cut or
+duplicate is one undo step. The clip menu has Copy, Cut, Paste and
+Duplicate too.
+
+What you copy stays until you copy again or reload the app, so it can be
+pasted into another Edit video node, in this workflow or another. A library
+clip pastes anywhere. A clip from a connected video pastes only into the
+node it is connected to, in the same workflow and tab, while it is still
+connected; any other is left out, and a notice says how many and why.
+Cutting every clip of a connected video and then pressing Done or Save
+disconnects that video, as Remove clip does, so those clips can no longer
+be pasted, not even back into their own node: paste them back before Done.
+In a text field (a timecode), ⌘C, ⌘V, ⌘X and ⌘A are the field's own, and
+with text selected in the editor ⌘C and ⌘X copy the text. In the editor
+none of these keys reach the canvas or the browser (⌘D does not bookmark
+the page).
+
+Cancel's discard sheet names them: "Two pasted clips and a cut clip will be
+lost."
+
 ## How it is encoded
 
 `stitchVideosAsync` (`src/hooks/useStitchVideos.ts`) takes one input per
@@ -732,12 +801,12 @@ point is being dragged, only Escape (cancels the drag) and K work.
 |---|---|
 | Space | Play or pause |
 | I / O | Set the selected clip's In / Out at the playhead (the playhead must be inside it) |
-| S | Split the clip under the playhead (in a lined-up stack, not where two clips play) |
-| ⌫ / Delete | Remove the selected clip, or the selected curve point |
+| S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play) |
+| ⌫ / Delete | Remove the selected clips, or the selected curve point |
 | M | Mute or unmute the music track |
-| ⌥M | Mute or unmute the selected clip's sound |
-| ⌥← / ⌥→ | Stacked: move the selected clip a frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
-| ⌥↑ / ⌥↓ | Stacked: move the selected clip up / down a row |
+| ⌥M | Mute or unmute the selected clips' sound |
+| ⌥← / ⌥→ | Stacked: move the selected clips a frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
+| ⌥↑ / ⌥↓ | Stacked: move the selected clips up / down a row |
 | [ / ] | Stacked: start / end the selected clip at the playhead (also ⌥5 / ⌥6 and AltGr+8 / AltGr+9 where the keyboard types brackets that way) |
 | ⌘Z / Ctrl+Z | Undo, in the editor only |
 | ⇧⌘Z / Ctrl+Y | Redo |
@@ -750,10 +819,16 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | ⌥ while dragging the curve | Move the whole line |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
 | ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open |
+| ⌘C / ⌘X / ⌘V | Copy, cut, paste clips |
+| ⌘D | Duplicate the selected clips |
+| ⌘A | Select every clip |
+| ⌘-click / ⇧-click | Add or remove a clip / select a range |
+| Drag on empty lane space | Select with a box (⇧ or ⌘ adds) |
 
 In Track, ⌥ with an arrow, [ and ] do nothing, and ⌥← never reaches the
-browser (on Windows it would go Back). Keys the canvas would act on (⌘Z,
-⌘V, Shift+letters, ⌘↵ and so on) never reach it while the editor is open.
+browser (on Windows it would go Back). Keys the canvas or the browser
+would act on (⌘Z, ⌘C, ⌘V, ⌘X, ⌘A, ⌘D, Shift+letters, ⌘↵ and so on) never
+reach them while the editor is open, except in a text field.
 
 **Snapping.** With Snap on, a dragged edge snaps within 8 px. In Track the
 targets are the playhead and the neighbouring clip's edge where the drag
@@ -793,6 +868,10 @@ snaps its start only.
   apart by up to 0.15 s before they are seeked back together. In a gap the
   playhead runs on the frame clock, and the music can drift from it by up
   to 0.25 s before it is seeked back.
+- Pasting and duplicating add elements the same way: ⌘A then ⌘D doubles
+  them each time. Past 24 clips in Stacked a notice says so; nothing is
+  refused, but the preview slows down and a browser plays only so many
+  videos at once.
 - **Mixed aspect ratios crop.** The encode keeps the old behaviour: the
   largest coded size, each clip scaled to cover it. The preview letterboxes.
 - Clip sound is resampled linearly, and a mix of clip sound and music above
@@ -854,8 +933,10 @@ snaps its start only.
 - Not built: ducking the music under clips with sound, roll edits,
   transitions other than the crossfade where stacked clips overlap, a
   crossfade at the loop's restart, an overlap set per join, fade lengths
-  set per clip, moving several clips at once (closing a leading gap takes
-  one drag per clip, or Line up), selecting or deleting a gap, a slip edit,
+  set per clip, selecting or deleting a gap, a slip edit,
   a start before 0:00, a lock to one axis while dragging a clip, speed
   changes, titles, a second video or music track (Stacked's rows are still
-  one sequence and one output track).
+  one sequence and one output track), extending a selection with ⇧ and
+  the arrow keys, copying clips to the system clipboard (the copy lives in
+  the app until it reloads), snapping every clip of a group drag (only the
+  clip you hold snaps).

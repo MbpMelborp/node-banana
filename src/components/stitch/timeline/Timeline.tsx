@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { clipName } from "@/lib/stitch/labels";
 import { gaps as envelopeGaps, weightPieces, type WeightPiece } from "@/lib/stitch/placement";
 import { stackedInsertionY } from "@/lib/stitch/reorder";
+import { clipIdsOf, type HitBox } from "@/lib/stitch/selection";
 import { DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "@/lib/stitch/stack";
 import {
   clipSpans,
@@ -13,13 +14,14 @@ import {
   layoutSpans,
   moveClip,
   pinStarts,
+  shiftRows,
   spansEnvelope,
   topSpanAt,
   type ClipSpan,
 } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip, VolumePoint } from "@/types";
 import { buildTimeAxis } from "@/lib/stitch/timeAxis";
-import { laneBoxes, liveSpans, stackedBoxes, trimEdgeX } from "@/lib/stitch/laneLayout";
+import { insetBox, laneBoxes, liveSpans, stackedBoxes, trimEdgeX } from "@/lib/stitch/laneLayout";
 import { liveFitZoom } from "../liveFitZoom";
 import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
 import type { ClipMediaView, MusicView } from "../useStitchEditorMedia";
@@ -34,6 +36,7 @@ import { TrackHeaders } from "./TrackHeaders";
 import { TrimMarks, TrimOverlay } from "./TrimOverlay";
 import { useClipMove } from "./useClipMove";
 import { useClipReorder } from "./useClipReorder";
+import { useMarqueeSelect } from "./useMarqueeSelect";
 import type { TimelineZoom } from "./useTimelineZoom";
 import { useTrimDrag } from "./useTrimDrag";
 
@@ -94,7 +97,11 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
  * its row header across rows only (useClipReorder). A placed stack (some
  * clip placed by hand) marks how each clip layers and where the gaps are;
  * every drag draws them from the timeline its release will leave. A clip
- * moved out of view by the rail or the keys is scrolled back into view.
+ * moved out of view by the rail or the keys is scrolled back into view, and
+ * so is a new clip that becomes the selection (a paste, a duplicate).
+ *
+ * Several clips can be selected (a ⌘- or ⇧-click, the selection box drawn
+ * on empty lane space, ⌘A); a drag of one of them carries them all.
  */
 export function Timeline({
   spans,
@@ -119,6 +126,7 @@ export function Timeline({
   const contentRef = useRef<HTMLDivElement>(null);
   const headerRowsRef = useRef<HTMLDivElement>(null);
   const selectedId = useStitchEditorStore((s) => (s.selection?.kind === "clip" ? s.selection.clipId : null));
+  const selection = useStitchEditorStore((s) => s.selection);
   const audioSelected = useStitchEditorStore((s) => s.selection?.kind === "audio");
   const curve = useStitchEditorStore((s) => s.draft?.audioCurve ?? NO_CURVE);
   const audioMuted = useStitchEditorStore((s) => s.draft?.audioMuted ?? false);
@@ -131,6 +139,11 @@ export function Timeline({
   const scrollLeft = useSyncExternalStore(scrollPosition.subscribe, scrollPosition.get, scrollPosition.get);
 
   const placed = stacked && isPlaced(timeline);
+  const order = useMemo(() => timeline.map((c) => c.id), [timeline]);
+  const selectedIds = useMemo(
+    (): ReadonlySet<string> => new Set(selection?.kind === "clip" ? clipIdsOf(selection, order) : []),
+    [selection, order],
+  );
 
   const { trim, onHandlePointerDown, takeReleased: takeTrimReleased } = useTrimDrag(axisNow, contentRef);
   const restBoxes = useMemo(
@@ -204,24 +217,61 @@ export function Timeline({
     rowsView,
     drawnWidth: () => drawnWidth.current,
   });
+  // The selection box hits the boxes as drawn: Track's inset at their joins, Stacked's in their rows
+  const hitBoxes = (): HitBox[] => {
+    const { stacked: inStacked, restBoxes: rest } = latest.current;
+    return rest.map((box, i) =>
+      inStacked
+        ? {
+            x: box.x,
+            width: box.width,
+            top: GEOMETRY.ruler + i * GEOMETRY.stackRow + GEOMETRY.stackClipTop,
+            height: GEOMETRY.stackClipHeight,
+          }
+        : { ...insetBox(box, i, rest.length), top: GEOMETRY.ruler + GEOMETRY.clipTop, height: GEOMETRY.clipHeight },
+    );
+  };
+  const { marquee, onLanePointerDown, pressing: marqueePressing } = useMarqueeSelect(contentRef, {
+    stacked,
+    hitBoxes,
+    order: () => latest.current.spans.map((span) => span.clip.id),
+    rowsView: stacked ? rowsView : () => null,
+    bounds: () => ({
+      top: GEOMETRY.ruler,
+      bottom: GEOMETRY.ruler + (stacked ? spans.length * GEOMETRY.stackRow : GEOMETRY.clipRow),
+    }),
+  });
+  // While the box is drawn, what it would select is drawn selected
+  const drawnSelectedIds = marquee ? marquee.selectedIds : selectedIds;
+  // From what is drawn, so the clips a running box touches already show the group look release gives them.
+  const multi = drawnSelectedIds.size > 1;
 
   // Latest values for the handlers bound once (the wheel, the scroll, the playback follow)
-  const latest = useRef({ zoom, stacked, rowsOverflow, rowsViewport, spans, pressing });
+  const latest = useRef({ zoom, stacked, rowsOverflow, rowsViewport, spans, restBoxes, pressing, marqueePressing });
   useEffect(() => {
-    latest.current = { zoom, stacked, rowsOverflow, rowsViewport, spans, pressing };
+    latest.current = { zoom, stacked, rowsOverflow, rowsViewport, spans, restBoxes, pressing, marqueePressing };
   });
 
-  // A lined-up stack draws a header-lifted clip at the start it will have in the order it would drop into; a placed
-  // one keeps every start, so the lifted box keeps its x
+  // A lined-up stack draws a header-lifted clip (or each of a lifted group) at the start it will have in the order it
+  // would drop into; a placed one keeps every start, so the lifted boxes keep their x
   const liftId = stacked && reorder ? reorder.clipId : null;
+  const liftIds = stacked && reorder ? reorder.clipIds : null;
   const liftFrom = reorder?.index ?? -1;
   const liftTo = reorder?.dropIndex ?? -1;
+  /** The row move a header drag's release makes: one clip's, or a group's with its spacing kept. */
+  const liftMove = useCallback(
+    (from: StitchTimelineClip[]) =>
+      liftIds && liftIds.length > 1 ? shiftRows(from, new Set(liftIds), liftTo - liftFrom) : moveClip(from, liftFrom, liftTo),
+    [liftIds, liftFrom, liftTo],
+  );
   const liftedX = useMemo(() => {
-    if (liftId === null || placed) return null;
-    const moved = clipSpans(moveClip(timeline, liftFrom, liftTo), durations, overlapSec);
-    const span = moved.find((s) => s.clip.id === liftId);
-    return span ? axis.timeToX(span.start) : null;
-  }, [liftId, liftFrom, liftTo, placed, timeline, durations, overlapSec, axis]);
+    if (!liftIds || placed) return null;
+    const xs = new Map<string, number>();
+    for (const span of clipSpans(liftMove(timeline), durations, overlapSec)) {
+      if (liftIds.includes(span.clip.id)) xs.set(span.clip.id, axis.timeToX(span.start));
+    }
+    return xs;
+  }, [liftIds, liftMove, placed, timeline, durations, overlapSec, axis]);
 
   // The timeline the marks are drawn from: the one release would leave while a drag runs (a body drag always pins, so
   // its marks are placed ones in a lined-up stack too), else the draft's
@@ -229,9 +279,9 @@ export function Timeline({
     if (!stacked) return null;
     if (move) return move.timeline;
     if (trimTimeline) return trimTimeline;
-    if (liftId !== null && placed) return moveClip(pinStarts(timeline, durations, layout.overlapSec), liftFrom, liftTo);
+    if (liftId !== null && placed) return liftMove(pinStarts(timeline, durations, layout.overlapSec));
     return timeline;
-  }, [stacked, move, trimTimeline, liftId, placed, timeline, durations, layout.overlapSec, liftFrom, liftTo]);
+  }, [stacked, move, trimTimeline, liftId, liftMove, placed, timeline, durations, layout.overlapSec]);
   const markSpans = useMemo(() => {
     if (!markTimeline || markTimeline === timeline) return spans;
     return markTimeline === trimTimeline ? drawnSpans : layoutSpans(markTimeline, durations, layout);
@@ -278,8 +328,10 @@ export function Timeline({
       if (event.target instanceof Element && event.target.closest('[role="menu"]')) return;
       event.preventDefault();
       if (event.ctrlKey || event.metaKey) {
-        // Not mid-drag: a drag measures from the zoom it started at, and a box's press from its press
-        if (useStitchEditorStore.getState().cancelGesture || latest.current.pressing.current) return;
+        // Not mid-drag: a drag measures from the zoom it started at, and a box's press (or the selection box's) from
+        // its press
+        const { pressing: boxPress, marqueePressing: lanePress } = latest.current;
+        if (useStitchEditorStore.getState().cancelGesture || boxPress.current || lanePress.current) return;
         const z = latest.current.zoom;
         const viewX = Math.max(0, event.clientX - el.getBoundingClientRect().left);
         z.zoomAround(z.pxPerSec * Math.exp(-event.deltaY / WHEEL_ZOOM_SCALE), viewX);
@@ -372,6 +424,27 @@ export function Timeline({
     if (el && revealBox(el, selectedBox)) scrollPosition.set(el.scrollLeft);
   }, [selectedId, selectedStart, selectedBox, scroller, scrollPosition, takeMoveReleased, takeRowReleased, takeTrimReleased]);
 
+  // A new clip that becomes the selection (a paste, a duplicate) is brought into view, and takes focus from the clip
+  // that had it, so the arrows carry on from there
+  const knownIds = useRef<ReadonlySet<string> | null>(null);
+  const leadRow = selectedId === null ? -1 : spans.findIndex((s) => s.clip.id === selectedId);
+  const leadBox = leadRow === -1 ? null : restBoxes[leadRow];
+  useEffect(() => {
+    const before = knownIds.current;
+    knownIds.current = new Set(order);
+    if (!before || selectedId === null || before.has(selectedId) || !leadBox) return;
+    const root = rootRef.current;
+    const active = document.activeElement;
+    if (root && active instanceof HTMLElement && active.getAttribute("role") === "option" && root.contains(active)) {
+      const option = Array.from(root.querySelectorAll<HTMLElement>('[role="option"]')).find(
+        (el) => el.dataset.clipId === selectedId,
+      );
+      if (option && option !== active) option.focus();
+    }
+    const el = scroller.current;
+    if (el && revealBox(el, leadBox)) scrollPosition.set(el.scrollLeft);
+  }, [order, selectedId, leadBox, scroller, scrollPosition]);
+
   const empty = spans.length === 0;
   const stackedRight = stacked
     ? restBoxes.reduce((right, box, i) => (spans[i].length > 0 ? right : Math.max(right, box.x + box.width)), axis.endX)
@@ -398,14 +471,29 @@ export function Timeline({
   const insertionY = rowDrag ? stackedInsertionY(rowDrag.dropIndex, rowDrag.index, GEOMETRY.stackRow) : null;
   const snappedToPlayhead =
     trim?.result.snapped?.kind === "playhead" || move?.result.snapped?.kind === "playhead";
-  // The moving box as the lane draws it: its row's top plus the travel, inside the rows
-  const moveTop = move
-    ? Math.min(
-        Math.max(move.index * GEOMETRY.stackRow + GEOMETRY.stackClipTop + move.dy, 0),
-        spans.length * GEOMETRY.stackRow - GEOMETRY.stackClipHeight,
-      )
-    : 0;
+  // The moving box as the lane draws it: its row's top plus the travel (clamped to the rows by useClipMove)
+  const moveTop = move ? move.index * GEOMETRY.stackRow + GEOMETRY.stackClipTop + move.dy : 0;
   const moveTargetRow = move?.result.snapped?.row ?? null;
+  // A group's chip spans every moved clip, read from the timeline release leaves
+  const moveGroup = useMemo(() => {
+    if (!move || move.clipIds.length <= 1) return null;
+    const moved = markSpans.filter((span) => move.clipIds.includes(span.clip.id));
+    if (moved.length === 0) return null;
+    return { fromSec: Math.min(...moved.map((s) => s.start)), toSec: Math.max(...moved.map((s) => s.end)) };
+  }, [move, markSpans]);
+  const marqueeBox = marquee ? (
+    <div
+      aria-hidden="true"
+      data-testid="stitch-marquee"
+      className="pointer-events-none absolute z-20 rounded-[2px] border border-selection bg-selection/10"
+      style={{
+        left: marquee.drawn.left,
+        top: marquee.drawn.top,
+        width: marquee.drawn.right - marquee.drawn.left,
+        height: marquee.drawn.bottom - marquee.drawn.top,
+      }}
+    />
+  ) : null;
 
   return (
     <div
@@ -427,7 +515,15 @@ export function Timeline({
         canMuteAudio={music !== null || audioMuted}
         stackedRows={
           stacked
-            ? { spans, media, selectedId, rowsRef: headerRowsRef, insertionY, hBar, onRowPointerDown: onBodyPointerDown }
+            ? {
+                spans,
+                media,
+                selectedIds: drawnSelectedIds,
+                rowsRef: headerRowsRef,
+                insertionY,
+                hBar,
+                onRowPointerDown: onBodyPointerDown,
+              }
             : null
         }
       />
@@ -471,6 +567,8 @@ export function Timeline({
                 restBoxes={restBoxes}
                 media={media}
                 selectedId={selectedId}
+                selectedIds={drawnSelectedIds}
+                multi={multi}
                 trim={trim}
                 reorder={reorder}
                 liftedX={liftedX}
@@ -484,6 +582,7 @@ export function Timeline({
                 contentWidth={contentWidth}
                 onBodyPointerDown={onMovePointerDown}
                 onHandlePointerDown={onHandlePointerDown}
+                onLanePointerDown={onLanePointerDown}
               />
             </div>
             <div className="sticky bottom-0 z-2 bg-editor-lanes" style={{ height: audioRow }}>
@@ -517,8 +616,10 @@ export function Timeline({
                 }
                 scrollLeft={scrollLeft}
                 laneWidth={laneWidth}
+                group={moveGroup}
               />
             )}
+            {marqueeBox}
           </div>
         ) : (
           <div ref={contentRef} className="relative h-full" style={{ width: contentWidth }}>
@@ -537,6 +638,8 @@ export function Timeline({
               boxes={boxes}
               media={media}
               selectedId={selectedId}
+              selectedIds={drawnSelectedIds}
+              multi={multi}
               trim={trim}
               reorder={reorder}
               viewLeft={viewLeft}
@@ -544,6 +647,7 @@ export function Timeline({
               laneWidth={contentWidth}
               onBodyPointerDown={onBodyPointerDown}
               onHandlePointerDown={onHandlePointerDown}
+              onLanePointerDown={onLanePointerDown}
             />
             <AudioLane
               axis={axis}
@@ -560,6 +664,7 @@ export function Timeline({
             {trim && trimBox && <TrimMarks trim={trim} axis={playheadAxis} edgeX={edgeX} scrollLeft={scrollLeft} />}
             {/* Snapped to the playhead, the dashed guide stands in for its line */}
             {!empty && <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} />}
+            {marqueeBox}
           </div>
         )}
       </div>

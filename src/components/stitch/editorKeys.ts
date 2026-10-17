@@ -34,7 +34,12 @@ export type EditorKeyAction =
   | "rowUp"
   | "rowDown"
   | "startAtPlayhead"
-  | "endAtPlayhead";
+  | "endAtPlayhead"
+  | "copy"
+  | "cut"
+  | "paste"
+  | "duplicate"
+  | "selectAll";
 
 /** Inputs that take no typing: a focused slider or switch leaves the editor's keys working. */
 const NON_TEXT_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset"]);
@@ -69,9 +74,20 @@ export function isCanvasKey(e: KeyLike): boolean {
 }
 
 /**
+ * ⌘D (bookmark) always, and ⌘A (select the page) outside a text field: keys a stacked dialog or the clip menu, which
+ * keep the editor's keys for themselves, must still keep from the browser.
+ */
+export function isBrowserKey(e: KeyLike & { target: EventTarget | null }): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return false;
+  const key = e.key.toLowerCase();
+  return key === "d" || (key === "a" && !isTypingTarget(e.target));
+}
+
+/**
  * The editor action a key means, or null. Repeat is the caller's to check, and so is ⇧ on the nudges (a big step).
  * [ and ] are read by the character typed, before any modifier rule: on a German Mac it is ⌥5 and ⌥6, on German
- * Windows AltGr+8 and AltGr+9 (Ctrl+Alt). ⌘ and a plain Ctrl stay the browser's.
+ * Windows AltGr+8 and AltGr+9 (Ctrl+Alt). ⌘ (or Ctrl) with Z, Y, C, X, V, D and A are the editor's; any other stays
+ * the browser's.
  */
 export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
   const mod = e.metaKey || e.ctrlKey;
@@ -83,7 +99,21 @@ export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
   if (mod && !e.altKey) {
     if (key === "z") return e.shiftKey ? "redo" : "undo";
     if (key === "y" && !e.shiftKey) return "redo";
-    return null;
+    if (e.shiftKey) return null;
+    switch (key) {
+      case "c":
+        return "copy";
+      case "x":
+        return "cut";
+      case "v":
+        return "paste";
+      case "d":
+        return "duplicate";
+      case "a":
+        return "selectAll";
+      default:
+        return null;
+    }
   }
   if (e.altKey) {
     // The selected clip's modifier: ⌥← ⌥→ nudge it (⇧ further), ⌥↑ ⌥↓ change its row
@@ -120,8 +150,8 @@ export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
 }
 
 /**
- * Actions a held key must not repeat: a toggle would flicker, a split would cut again, a row move would run away.
- * The nudges repeat, as one undo step.
+ * Actions a held key must not repeat: a toggle would flicker, a split would cut again, a row move would run away, a
+ * paste would paste again. The nudges repeat, as one undo step.
  */
 export const NO_REPEAT: ReadonlySet<EditorKeyAction> = new Set([
   "togglePlay",
@@ -134,4 +164,9 @@ export const NO_REPEAT: ReadonlySet<EditorKeyAction> = new Set([
   "rowDown",
   "startAtPlayhead",
   "endAtPlayhead",
+  "copy",
+  "cut",
+  "paste",
+  "duplicate",
+  "selectAll",
 ]);

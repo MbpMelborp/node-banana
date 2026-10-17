@@ -9,8 +9,10 @@ import { MenuShortcut } from "@/components/ui/Menu";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
+import { clipIdsOf } from "@/lib/stitch/selection";
 import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
 import { formatSeconds } from "@/lib/stitch/timecode";
+import type { StitchTimelineClip } from "@/types";
 import {
   canRevealSource,
   canSplitSelectedAtPlayhead,
@@ -22,6 +24,7 @@ import {
   setClipStart,
   setClipVolume,
   setLoopCount,
+  setSelectedClipsMuted,
   splitAtPlayhead,
   splitBlockedReason,
   trimSelected,
@@ -53,6 +56,25 @@ const STACKED_HINTS = [
   { key: "⌥", text: "With ← → nudge a frame, with ↑ ↓ change row" },
   { key: "⇧", text: "Hold to move or trim without snapping" },
 ] as const;
+
+/** Several clips selected: what applies to all of them. */
+const multiHints = (stacked: boolean) =>
+  [
+    { key: "⌘", text: "With C copy, X cut, V paste, D duplicate" },
+    {
+      key: "⌥",
+      text: stacked ? "With M mute all, with ← → nudge a frame, with ↑ ↓ change row" : "With M mute or unmute all",
+    },
+    { key: "⇧", text: "Click a clip to select a range" },
+  ] as const;
+
+/** "Clip 1 and Clip 3", "Clip 1, Clip 3 and Clip 4", past three "Clip 1, Clip 2 and 3 more". */
+function clipNamesLine(indices: readonly number[]): string {
+  const names = indices.map(clipName);
+  if (names.length > 3) return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+  if (names.length < 2) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 function RailButton({
   icon,
@@ -91,7 +113,8 @@ function RailButton({
  * in Stacked where it starts on the timeline, its trim as In and Out
  * wells, its own sound, the clip actions with the trim keys, and the loop
  * count in the footer. With the audio track selected it shows the track
- * instead (AudioTrackRail).
+ * instead (AudioTrackRail), and with several clips what applies to all of
+ * them (MultiClipRail).
  */
 export function EditorRail({
   media,
@@ -107,6 +130,12 @@ export function EditorRail({
   const durations = useStitchEditorStore((s) => s.durations);
   const empty = !draft || draft.timeline.length === 0;
   const selection = useStitchEditorStore((s) => s.selection);
+  const selectedIndices = useMemo(() => {
+    if (selection?.kind !== "clip" || !draft) return [];
+    const ids = new Set(clipIdsOf(selection, draft.timeline.map((c) => c.id)));
+    return draft.timeline.flatMap((c, i) => (ids.has(c.id) ? [i] : []));
+  }, [selection, draft]);
+  const multi = selectedIndices.length > 1;
   const canSplit = useStitchEditorStore(canSplitSelectedAtPlayhead);
   const splitBlocked = useStitchEditorStore(splitBlockedReason);
   const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
@@ -134,7 +163,7 @@ export function EditorRail({
     if (active === null || active === document.body) {
       railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
     }
-  }, [hasClip, audio, stacked]);
+  }, [hasClip, audio, stacked, multi]);
 
   return (
     <aside
@@ -145,6 +174,14 @@ export function EditorRail({
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
         {audio ? (
           <AudioTrackRail music={music} total={total} />
+        ) : multi && draft ? (
+          <MultiClipRail
+            timeline={draft.timeline}
+            indices={selectedIndices}
+            stacked={stacked}
+            canSplit={canSplit}
+            splitBlocked={splitBlocked}
+          />
         ) : !clip ? (
           // An empty editor has nothing to select; the stage says why
           draft && draft.timeline.length > 0 && (
@@ -290,5 +327,92 @@ export function EditorRail({
         />
       </div>
     </aside>
+  );
+}
+
+/**
+ * The rail with several clips selected: how many and which, their sound as one control (neither On nor Off pressed
+ * while some are muted and some not), and the actions that apply to all of them. Trims, Start and Volume are one
+ * clip's, so they are not here.
+ */
+function MultiClipRail({
+  timeline,
+  indices,
+  stacked,
+  canSplit,
+  splitBlocked,
+}: {
+  timeline: readonly StitchTimelineClip[];
+  /** The selected clips' timeline indices, in order. */
+  indices: readonly number[];
+  stacked: boolean;
+  canSplit: boolean;
+  splitBlocked: string | null;
+}) {
+  const clips = indices.map((i) => timeline[i]);
+  const allOff = clips.every((c) => c.muted);
+  const allOn = clips.every((c) => !c.muted);
+  const sound = allOn ? "on" : allOff ? "off" : "mixed";
+  return (
+    <>
+      <div className="flex items-start justify-between gap-2 px-5 pt-4">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[13px] leading-4 font-semibold text-neutral-100">{`${clips.length} clips`}</span>
+          <span className="truncate text-[11px] leading-[13px] text-neutral-500">{clipNamesLine(indices)}</span>
+        </div>
+        <span className="pt-0.5 font-mono text-[11px] text-neutral-500">{`${clips.length} / ${timeline.length}`}</span>
+      </div>
+
+      <DialogPaneRule className="mx-5 mt-3.5 mb-2.5" />
+
+      <section className="flex flex-col gap-0.5 px-5">
+        <DialogSectionHeader className="mb-1 leading-[13px]">Audio</DialogSectionHeader>
+        <RailRow label="Clip audio">
+          <div className="flex items-center gap-2">
+            {sound === "mixed" && <span className="text-[11px] text-neutral-500">Mixed</span>}
+            <Segmented<"on" | "off" | "mixed">
+              size="sm"
+              label="Clip audio"
+              options={[
+                { value: "on", label: "On" },
+                { value: "off", label: "Off" },
+              ]}
+              value={sound}
+              onChange={(value) => {
+                if (value !== "mixed") setSelectedClipsMuted(value === "off");
+              }}
+              className="bg-editor-well"
+            />
+          </div>
+        </RailRow>
+      </section>
+
+      <DialogPaneRule className="mx-5 mt-3 mb-2.5" />
+
+      <div className="flex flex-col gap-1.5 px-5">
+        <RailButton
+          icon={<Scissors size={14} strokeWidth={1.75} />}
+          label="Split at playhead"
+          shortcut="S"
+          disabled={!canSplit}
+          title={canSplit ? undefined : (splitBlocked ?? undefined)}
+          onClick={splitAtPlayhead}
+        />
+        <RailButton
+          icon={<RotateCcw size={14} strokeWidth={1.75} />}
+          label="Reset trim"
+          disabled={!clips.some(isTrimmed)}
+          onClick={resetSelectedTrim}
+        />
+        <RailButton
+          icon={<Trash size={14} strokeWidth={1.75} />}
+          label={`Remove ${clips.length} clips`}
+          shortcut="⌫"
+          danger
+          onClick={removeSelection}
+        />
+        <KeyHints hints={multiHints(stacked)} />
+      </div>
+    </>
   );
 }

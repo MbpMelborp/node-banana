@@ -1514,6 +1514,20 @@ describe("Timeline, Stacked", () => {
       expect(starts()).toEqual([undefined, undefined, undefined]);
     });
 
+    it("stops a box dragged past the rows where it rests on the first or last row", () => {
+      seedClips([5, 5, 6]);
+      openStacked();
+      fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 26) });
+      move(100, 26 + 400);
+      expect(clipBox("Clip 1").style.top).toBe(`${2 * ROW + BOX_TOP}px`);
+      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${24 + 2 * ROW + BOX_TOP + 10}px`);
+      move(100, 26 - 400);
+      expect(clipBox("Clip 1").style.top).toBe(`${BOX_TOP}px`);
+      move(100, 26 + 400);
+      release(100, 26 + 400);
+      expect(order()).toEqual(["clip:e1", "clip:e2", "clip:e0"]);
+    });
+
     it("changes the row past half a row and 4px, and keeps it coming back", () => {
       seedClips([5, 5, 6]);
       openStacked();
@@ -2188,6 +2202,438 @@ describe("Timeline, Stacked", () => {
       // One still in view leaves the lanes where they are
       act(() => setClipStart("clip:eB", 21));
       expect(lanes.scrollLeft).toBe(ORIGIN + 20 * PPS - 64);
+    });
+  });
+});
+
+describe("Timeline, several clips", () => {
+  const ROW = 52;
+  const BOX_TOP = 6;
+  /** Clips of these lengths from their own generate nodes (clip ids clip:e0, clip:e1, …); stacked: placed at starts. */
+  function seedLengths(lengths: number[], starts?: number[]) {
+    useWorkflowStore.setState({
+      nodes: [
+        ...lengths.map((_, i) => node(`gen-${i}`, "generateVideo", { outputVideo: `blob:m${i}` })),
+        node("stitch", "videoStitch", {
+          clips: [],
+          clipOrder: lengths.map((_, i) => `e${i}`),
+          outputVideo: null,
+          loopCount: 1,
+          status: "idle",
+          ...(starts
+            ? {
+                timeline: lengths.map((_, i) => clipItem(`e${i}`, { startSec: starts[i] })),
+                sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true },
+              }
+            : {}),
+        }),
+      ],
+      edges: lengths.map((_, i) => edge(`e${i}`, `gen-${i}`, `video-${i}`)),
+      openModalCount: 0,
+      isModalOpen: false,
+    });
+    lengths.forEach((duration, i) =>
+      __setMediaInfoForTests(mediaKeyOf(`blob:m${i}`), { duration, width: 1920, height: 1080, fps: 24 }),
+    );
+  }
+  const id = (i: number) => `clip:e${i}`;
+  const ids = () => {
+    const s = editor().selection;
+    return s?.kind === "clip" ? (s.clipIds ?? [s.clipId]) : [];
+  };
+  const selectClips = (...indices: number[]) =>
+    act(() =>
+      editor().select({ kind: "clip", clipId: id(indices[0]), ...(indices.length > 1 ? { clipIds: indices.map(id) } : {}) }),
+    );
+  const order = () => editor().draft!.timeline.map((c) => c.id);
+  const starts = () => editor().draft!.timeline.map((c) => c.startSec);
+  const platform = (value: string) => vi.spyOn(navigator, "platform", "get").mockReturnValue(value);
+  const stackedBox = (name: string) => within(lane()).getByRole("option", { name: new RegExp(`^${name},`) });
+  const header = (clipId: string) => document.querySelector<HTMLElement>(`[data-row-header="${clipId}"]`)!;
+  const at = (x: number, y: number) => ({ clientX: x, clientY: y });
+  const move = (x: number, y: number, init: MouseEventInit = {}) => pointer("pointermove", x, { clientY: y, ...init });
+  const release = (x: number, y: number, init: MouseEventInit = {}) => pointer("pointerup", x, { clientY: y, ...init });
+  /** Holds the animation frames a drag asks for, so no auto-scroll runs. */
+  const holdFrames = () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+  };
+  const rect = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+  const ctrlClick = (el: HTMLElement, clientX: number, init: MouseEventInit = {}) => {
+    fireEvent.pointerDown(el, { button: 0, clientX, pointerId: 1, ctrlKey: true, ...init });
+    pointer("pointerup", clientX, { ctrlKey: true, ...init });
+  };
+
+  // Track at 64 px/s, lengths 5, 4 and 6: Clip 1 16–336, Clip 2 336–592, Clip 3 592–976 (2px inset at each join)
+
+  describe("selecting", () => {
+    it("adds and takes out a clip with ⌘-click on a Mac, and with Ctrl-click elsewhere", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      platform("MacIntel");
+      fireEvent.pointerDown(clipBox("Clip 3"), { button: 0, clientX: 700, pointerId: 1, metaKey: true });
+      pointer("pointerup", 700, { metaKey: true });
+      // The clip that joins leads, and ranges start from it
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(2), clipIds: [id(0), id(2)] });
+      // On a Mac a Ctrl-press is the menu's: no toggle
+      platform("Win32");
+      ctrlClick(clipBox("Clip 2"), 400);
+      expect(ids()).toEqual([id(0), id(1), id(2)]);
+      ctrlClick(clipBox("Clip 1"), 100);
+      expect(ids()).toEqual([id(1), id(2)]);
+      expect(editor().past).toHaveLength(0);
+    });
+
+    it("selects the range from the last clicked clip with ⇧-click, and a plain click collapses the group", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      click(clipBox("Clip 1"), 100);
+      fireEvent.pointerDown(clipBox("Clip 3"), { button: 0, clientX: 700, pointerId: 1, shiftKey: true });
+      pointer("pointerup", 700, { shiftKey: true });
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(2), clipIds: [id(0), id(1), id(2)], anchorId: id(0) });
+      expect(within(rail()).getByText("3 clips")).toBeInTheDocument();
+      expect(within(rail()).getByText("3 / 3")).toBeInTheDocument();
+      // Every selected box is ringed; the lane says it takes several
+      expect(lane()).toHaveAttribute("aria-multiselectable", "true");
+      for (const name of ["Clip 1", "Clip 2", "Clip 3"]) {
+        expect(clipBox(name)).toHaveClass("ring-selection");
+        expect(clipBox(name)).toHaveAttribute("aria-selected", "true");
+      }
+      click(clipBox("Clip 2"), 400);
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(1) });
+      expect(clipBox("Clip 1")).not.toHaveClass("ring-selection");
+    });
+
+    it("selects a range by row in Stacked, tinting every selected row and header", () => {
+      seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
+      openEditor();
+      fireEvent.pointerDown(stackedBox("Clip 4"), { button: 0, pointerId: 1, ...at(750, 190) });
+      release(750, 190);
+      fireEvent.pointerDown(stackedBox("Clip 2"), { button: 0, pointerId: 1, shiftKey: true, ...at(420, 90) });
+      release(420, 90, { shiftKey: true });
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(1), clipIds: [id(1), id(2), id(3)], anchorId: id(3) });
+      expect(header(id(0))).not.toHaveClass("bg-white/4");
+      for (const i of [1, 2, 3]) {
+        expect(header(id(i))).toHaveClass("bg-white/4");
+        expect(stackedBox(`Clip ${i + 1}`)).toHaveClass("ring-selection");
+      }
+    });
+
+    it("keeps a group under a Mac's Ctrl-click: on a box, on its handle and on empty space", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      platform("MacIntel");
+      selectClips(0, 2);
+      // A Mac's Ctrl-click: a left press with ctrl, then the context menu, then the release
+      fireEvent.pointerDown(clipBox("Clip 3"), { button: 0, clientX: 700, pointerId: 1, ctrlKey: true });
+      fireEvent.contextMenu(clipBox("Clip 3"), { clientX: 700, clientY: 50, ctrlKey: true });
+      pointer("pointerup", 700, { ctrlKey: true });
+      expect(ids()).toEqual([id(0), id(2)]);
+      const menu = screen.getByRole("menu");
+      expect(within(menu).getByText("2 clips")).toBeInTheDocument();
+      press("Escape");
+
+      fireEvent.pointerDown(handleOf("Clip 3", "in"), { button: 0, clientX: 596, pointerId: 1, ctrlKey: true });
+      fireEvent.contextMenu(handleOf("Clip 3", "in"), { clientX: 596, clientY: 50, ctrlKey: true });
+      pointer("pointermove", 640, { ctrlKey: true });
+      pointer("pointerup", 640, { ctrlKey: true });
+      expect(ids()).toEqual([id(0), id(2)]);
+      expect(within(screen.getByRole("menu")).getByText("2 clips")).toBeInTheDocument();
+      expect(screen.queryByTestId("stitch-trim-ghost")).toBeNull();
+      expect(editor().past).toHaveLength(0);
+      press("Escape");
+
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 400, clientY: 30, pointerId: 1, ctrlKey: true });
+      pointer("pointermove", 800, { clientY: 30, ctrlKey: true });
+      expect(screen.queryByTestId("stitch-marquee")).toBeNull();
+      pointer("pointerup", 800, { clientY: 30, ctrlKey: true });
+      expect(ids()).toEqual([id(0), id(2)]);
+    });
+
+    it("takes a ⌘- or ⇧-press on a trim handle for a click, and trims once it travels", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      platform("MacIntel");
+      selectClips(0, 1);
+      fireEvent.pointerDown(handleOf("Clip 3", "in"), { button: 0, clientX: 596, pointerId: 1, metaKey: true });
+      // Keys and the ⌘ wheel wait from the press
+      expect(editor().cancelGesture).not.toBeNull();
+      pointer("pointermove", 598, { metaKey: true });
+      expect(screen.queryByTestId("stitch-trim-ghost")).toBeNull();
+      pointer("pointerup", 598, { metaKey: true });
+      expect(ids()).toEqual([id(0), id(1), id(2)]);
+      expect(editor().past).toHaveLength(0);
+      expect(editor().cancelGesture).toBeNull();
+
+      // ⇧ held: past 4px it trims, without snapping (the playhead at 9.35 s is within reach), and the clip is the only
+      // selection
+      act(() => editor().setPlayhead(9.35));
+      fireEvent.pointerDown(handleOf("Clip 3", "in"), { button: 0, clientX: 596, pointerId: 1, shiftKey: true });
+      pointer("pointermove", 616, { shiftKey: true });
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(2) });
+      pointer("pointerup", 616, { shiftKey: true });
+      expect(editor().draft!.timeline[2].inSec).toBeCloseTo(20 / PPS, 5);
+      expect(editor().past).toHaveLength(1);
+
+      // ⌘ held: the same drag snaps to the playhead
+      act(() => editor().undo());
+      act(() => editor().setPlayhead(9.35));
+      selectClips(0, 1);
+      fireEvent.pointerDown(handleOf("Clip 3", "in"), { button: 0, clientX: 596, pointerId: 1, metaKey: true });
+      pointer("pointermove", 616, { metaKey: true });
+      pointer("pointerup", 616, { metaKey: true });
+      expect(editor().draft!.timeline[2].inSec).toBeCloseTo(0.35, 5);
+    });
+
+    it("trims on a plain handle press, which selects that clip alone; a group's handles show on hover only", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      selectClips(0, 2);
+      expect(handleOf("Clip 1", "out")).toHaveClass("opacity-0");
+      expect(handleOf("Clip 3", "in")).toHaveClass("opacity-0");
+      fireEvent.pointerDown(handleOf("Clip 3", "in"), { button: 0, clientX: 596, pointerId: 1 });
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(2) });
+      pointer("pointermove", 628);
+      pointer("pointerup", 628);
+      expect(editor().past).toHaveLength(1);
+      expect(handleOf("Clip 3", "in")).toHaveClass("bg-selection");
+    });
+
+    it("lets a ⌘-press on a box's hover mute button select, and leaves the clip's sound alone", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      platform("MacIntel");
+      const mute = soundButton("Clip 2", "Mute clip audio");
+      fireEvent.pointerDown(mute, { button: 0, clientX: 560, pointerId: 1, metaKey: true });
+      pointer("pointerup", 560, { metaKey: true });
+      fireEvent.click(mute, { metaKey: true });
+      expect(ids()).toEqual([id(0), id(1)]);
+      expect(editor().draft!.timeline[1].muted).toBe(false);
+      expect(editor().past).toHaveLength(0);
+      // A plain click still mutes that one clip
+      fireEvent.click(soundButton("Clip 2", "Mute clip audio"));
+      expect(editor().draft!.timeline[1].muted).toBe(true);
+      expect(ids()).toEqual([id(0), id(1)]);
+    });
+
+    it("clears a text selection on a press in the lane, so ⌘C copies clips, not old rail text", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      const text = within(rail()).getByText("1 / 3").firstChild!;
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 3);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+      expect(window.getSelection()!.isCollapsed).toBe(false);
+      click(clipBox("Clip 2"), 400);
+      expect(window.getSelection()!.isCollapsed).toBe(true);
+    });
+
+    it("re-renders a group's timeline once per store change", () => {
+      seedLengths([5, 4, 6]);
+      const onRender = vi.fn();
+      openEditor(onRender);
+      selectClips(0, 2);
+      onRender.mockClear();
+      act(() => editor().setPlayhead(1));
+      expect(onRender.mock.calls.length).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe("the selection box", () => {
+    it("selects the clips it crosses in Track, writes the store once, and adds with ⇧", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      const select = vi.spyOn(editor(), "select");
+      // In the band above the clips, across Clip 2 and Clip 3 (Track hits by x only)
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 400, clientY: 30, pointerId: 1 });
+      pointer("pointermove", 700, { clientY: 30 });
+      const box = screen.getByTestId("stitch-marquee");
+      expect(box.style.left).toBe("400px");
+      expect(box.style.width).toBe("300px");
+      // A level drag still draws over the whole clips row (ruler 24, row 92): Track selects by x alone
+      expect(box.style.top).toBe("24px");
+      expect(box.style.height).toBe("92px");
+      // Drawn selected while it runs, with the group look release gives (handles on hover only); the store is untouched
+      expect(clipBox("Clip 2")).toHaveClass("ring-selection");
+      expect(clipBox("Clip 1")).not.toHaveClass("ring-selection");
+      expect(handleOf("Clip 2", "in")).toHaveClass("opacity-0");
+      expect(handleOf("Clip 3", "out")).toHaveClass("opacity-0");
+      expect(select).not.toHaveBeenCalled();
+      pointer("pointerup", 700, { clientY: 30 });
+      expect(select).toHaveBeenCalledTimes(1);
+      expect(ids()).toEqual([id(1), id(2)]);
+      expect(screen.queryByTestId("stitch-marquee")).toBeNull();
+      expect(editor().past).toHaveLength(0);
+
+      click(clipBox("Clip 1"), 100);
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 800, clientY: 110, pointerId: 1, shiftKey: true });
+      pointer("pointermove", 900, { clientY: 110, shiftKey: true });
+      pointer("pointerup", 900, { clientY: 110, shiftKey: true });
+      expect(ids()).toEqual([id(0), id(2)]);
+      expect(editor().selection).toMatchObject({ clipId: id(0) });
+    });
+
+    it("puts the selection back on Escape, and a click on empty space clears it", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      selectClips(0);
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 400, clientY: 30, pointerId: 1 });
+      pointer("pointermove", 900, { clientY: 30 });
+      press("Escape");
+      expect(screen.queryByTestId("stitch-marquee")).toBeNull();
+      pointer("pointerup", 900, { clientY: 30 });
+      expect(editor().selection).toEqual({ kind: "clip", clipId: id(0) });
+      expect(editor().isOpen).toBe(true);
+
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 400, clientY: 110, pointerId: 1 });
+      pointer("pointerup", 402, { clientY: 110 });
+      expect(editor().selection).toBeNull();
+      expect(within(rail()).getByText("Select a clip to trim it.")).toBeInTheDocument();
+    });
+
+    it("waits with the ⌘ wheel from the press, and takes neither clip in the join between two", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      const lanes = screen.getByTestId("stitch-lanes");
+      selectClips(2);
+      // Clip 1 is drawn to 334, Clip 2 from 338
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 335, clientY: 26, pointerId: 1 });
+      fireEvent.wheel(lanes, { ctrlKey: true, deltaY: -100, clientX: 335 });
+      expect(editor().pxPerSec).toBe(PPS);
+      pointer("pointermove", 337, { clientY: 110 });
+      expect(screen.getByTestId("stitch-marquee")).toBeInTheDocument();
+      pointer("pointerup", 337, { clientY: 110 });
+      expect(editor().selection).toBeNull();
+    });
+
+    it("selects the boxes it touches in Stacked, and is drawn only over the rows in view", () => {
+      holdFrames();
+      seedLengths([5, 4, 6, 3, 5, 4], [0, 6, 9, 11, 2, 14]);
+      openEditor();
+      // From 12 s on the first row to 8 s on the third: Clip 2 (6–10 s) and Clip 3 (9–15 s); Clip 1 ends at 5 s
+      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(16 + 12 * PPS, 24 + 26) });
+      pointer("pointermove", 16 + 8 * PPS, { clientY: 24 + 2 * ROW + 26 });
+      pointer("pointerup", 16 + 8 * PPS, { clientY: 24 + 2 * ROW + 26 });
+      expect(ids()).toEqual([id(1), id(2)]);
+
+      // The rows scrolled 100px down: the rectangle takes in the second row, out of view above, but is drawn from the
+      // visible rows' top
+      selectClips(5);
+      const content = screen.getByTestId("stitch-rows").parentElement!;
+      vi.spyOn(content, "getBoundingClientRect").mockReturnValue(rect(0, -100, 2000, 600));
+      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(16 + 9.5 * PPS, 150) });
+      pointer("pointermove", 16 + 8 * PPS, { clientY: 10 });
+      const box = screen.getByTestId("stitch-marquee");
+      expect(parseFloat(box.style.top)).toBe(100 + 24);
+      pointer("pointerup", 16 + 8 * PPS, { clientY: 10 });
+      // Content y 110–250 over 8–9.5 s: Clip 2's box (82–122, wholly scrolled away) and Clip 3's (134–174)
+      expect(ids()).toEqual([id(1), id(2)]);
+    });
+  });
+
+  describe("dragging a group", () => {
+    it("moves a group in Stacked by one time and one row delta, in one undo step; Escape writes nothing", () => {
+      seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
+      openEditor();
+      selectClips(1, 2);
+      fireEvent.pointerDown(stackedBox("Clip 2"), { button: 0, pointerId: 1, ...at(420, 90) });
+      move(420 + 2 * PPS, 90 + ROW, { shiftKey: true });
+      // Both drawn where release leaves them: +2 s, one row down
+      expect(stackedBox("Clip 2").style.left).toBe(`${ORIGIN + 8 * PPS}px`);
+      expect(stackedBox("Clip 2").style.top).toBe(`${2 * ROW + BOX_TOP}px`);
+      expect(stackedBox("Clip 3").style.left).toBe(`${ORIGIN + 11 * PPS}px`);
+      expect(stackedBox("Clip 3").style.top).toBe(`${3 * ROW + BOX_TOP}px`);
+      expect(stackedBox("Clip 1").style.left).toBe(`${ORIGIN}px`);
+      expect(screen.getByTestId("stitch-move-chip")).toHaveTextContent("2 clips · 0:08.00–0:17.00 · +2.00 s");
+      expect(screen.getAllByTestId("stitch-insertion-bar")).toHaveLength(1);
+      release(420 + 2 * PPS, 90 + ROW, { shiftKey: true });
+      expect(order()).toEqual([id(0), id(3), id(1), id(2)]);
+      expect(starts()).toEqual([0, 11, 8, 11]);
+      expect(editor().past).toHaveLength(1);
+      expect(editor().selection).toMatchObject({ clipId: id(1), clipIds: [id(1), id(2)] });
+
+      act(() => editor().undo());
+      selectClips(1, 2);
+      fireEvent.pointerDown(stackedBox("Clip 2"), { button: 0, pointerId: 1, ...at(420, 90) });
+      move(420 + 2 * PPS, 90 + ROW, { shiftKey: true });
+      press("Escape");
+      release(420 + 2 * PPS, 90 + ROW);
+      expect(order()).toEqual([id(0), id(1), id(2), id(3)]);
+      expect(editor().past).toHaveLength(0);
+    });
+
+    it("stops a Stacked group together at the bottom row, keeping its spacing", () => {
+      holdFrames();
+      seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
+      openEditor();
+      selectClips(0, 2);
+      const apply = vi.spyOn(editor(), "apply");
+      fireEvent.pointerDown(stackedBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 40) });
+      move(100, 40 + 260, { shiftKey: true });
+      // Clip 3 stops where it rests on the last row, so both are one row down, 104px apart, where release puts them
+      expect(stackedBox("Clip 1").style.top).toBe(`${ROW + BOX_TOP}px`);
+      expect(stackedBox("Clip 3").style.top).toBe(`${3 * ROW + BOX_TOP}px`);
+      release(100, 40 + 260, { shiftKey: true });
+      expect(order()).toEqual([id(1), id(0), id(3), id(2)]);
+      expect(starts()).toEqual([6, 0, 11, 9]);
+      expect(apply).toHaveBeenCalledTimes(1);
+    });
+
+    it("moves a group's rows only by a row header", () => {
+      seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
+      openEditor();
+      selectClips(1, 2);
+      fireEvent.pointerDown(header(id(1)), { button: 0, pointerId: 1, ...at(40, 90) });
+      move(40, 90 + ROW);
+      expect(stackedBox("Clip 2").style.top).toBe(`${2 * ROW + BOX_TOP}px`);
+      expect(stackedBox("Clip 3").style.top).toBe(`${3 * ROW + BOX_TOP}px`);
+      release(40, 90 + ROW);
+      expect(order()).toEqual([id(0), id(3), id(1), id(2)]);
+      expect(starts()).toEqual([0, 11, 6, 9]);
+      expect(editor().past).toHaveLength(1);
+      expect(ids()).toEqual([id(1), id(2)]);
+    });
+
+    it("moves a group in Track as one block, in its order, in one undo step", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      selectClips(0, 1);
+      fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, clientX: 100, pointerId: 1 });
+      // Past Clip 3's midpoint (592 + 192)
+      pointer("pointermove", 800);
+      expect(clipBox("Clip 1")).toHaveClass("-rotate-[1.5deg]");
+      expect(clipBox("Clip 2")).toHaveClass("-rotate-[1.5deg]");
+      expect(clipBox("Clip 3")).toHaveClass("opacity-40");
+      expect(screen.getByTestId("stitch-insertion-bar")).toBeInTheDocument();
+      pointer("pointerup", 800);
+      expect(order()).toEqual([id(2), id(0), id(1)]);
+      expect(editor().past).toHaveLength(1);
+      expect(editor().selection).toMatchObject({ clipId: id(0), clipIds: [id(0), id(1)] });
+    });
+
+    it("never gathers a Track group on a wobble, and moves it once the bar has shown, even back where it was", () => {
+      seedLengths([5, 4, 6]);
+      openEditor();
+      selectClips(0, 2);
+      fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, clientX: 100, pointerId: 1 });
+      pointer("pointermove", 106);
+      expect(screen.queryByTestId("stitch-insertion-bar")).toBeNull();
+      pointer("pointerup", 106);
+      expect(order()).toEqual([id(0), id(1), id(2)]);
+      expect(editor().past).toHaveLength(0);
+
+      // Clip 3 pressed: left past Clip 2's midpoint (464) and back
+      fireEvent.pointerDown(clipBox("Clip 3"), { button: 0, clientX: 700, pointerId: 1 });
+      pointer("pointermove", 400);
+      expect(screen.getByTestId("stitch-insertion-bar")).toBeInTheDocument();
+      pointer("pointermove", 500);
+      expect(screen.getByTestId("stitch-insertion-bar")).toBeInTheDocument();
+      pointer("pointerup", 500);
+      expect(order()).toEqual([id(1), id(0), id(2)]);
+      expect(editor().past).toHaveLength(1);
     });
   });
 });

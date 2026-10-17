@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { dropIndexAt, stackedDropIndex } from "@/lib/stitch/reorder";
-import { moveClipTo } from "../editorActions";
+import { blockDropIndexAt, dropIndexAt, stackedDropIndex } from "@/lib/stitch/reorder";
+import { moveClipRows, moveClipsTo, moveClipTo } from "../editorActions";
 import { GEOMETRY } from "../editorStyles";
+import {
+  clearTextSelection,
+  clickClip,
+  isContextClick,
+  isToggleClick,
+  keepGroupSelected,
+  pressGroup,
+} from "../selectionActions";
+import { DRAG_START_PX } from "./autoScroll";
 import { releaseTypingFocus } from "./releaseTypingFocus";
+import { groupTravel } from "./useClipMove";
 
 /**
  * A pointer down on a clip's body: a click selects it, and a move of more
@@ -16,16 +26,31 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * time and across rows, useClipMove): the drag is vertical, the place comes
  * from the lifted box's centre crossing half a row, and the rows scroll by
  * themselves while the pointer is near their top or bottom.
+ *
+ * A click applies ⌘ (Ctrl off a Mac) and ⇧ to the selection (clickClip). A
+ * press on one of several selected clips drags them all. In Track they move
+ * as one block, in their order, to the drop point; the block is armed only
+ * once the drop point has left where the press found it, so a wobble never
+ * gathers clips that were apart. In Stacked (a row header) they move rows
+ * together, their spacing kept and the group stopped at the first and last
+ * rows.
  */
 
 export interface ReorderLive {
+  /** The pressed clip. */
   clipId: string;
+  /** Every clip the drag carries, the pressed one among them ([clipId] alone for one clip). */
+  clipIds: readonly string[];
   index: number;
   /** Pointer travel since the press across the lane's content, px: a scroll during the drag (a wheel, the playback follow) counts, so the clip stays under the pointer. */
   dx: number;
-  /** The same down the rows (Stacked; 0 in Track). */
+  /** The same down the rows (Stacked; 0 in Track). A group's is clamped once for the whole group (groupTravel). */
   dy: number;
   dropIndex: number;
+  /** Track, a group: the drop index at the press. One clip: its own index. */
+  liftIndex: number;
+  /** The drop index has left liftIndex at least once: only then does a group's release move it, and its bar show. */
+  armed: boolean;
 }
 
 export interface ReorderOptions {
@@ -36,7 +61,6 @@ export interface ReorderOptions {
   rowsView?: () => { top: number; bottom: number } | null;
 }
 
-const DRAG_START_PX = 4;
 /** Stacked: the rows scroll while the pointer is this near their top or bottom, this far each frame. */
 const AUTO_SCROLL_EDGE_PX = 20;
 const AUTO_SCROLL_STEP_PX = 6;
@@ -61,10 +85,22 @@ export function useClipReorder(
   const onBodyPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => {
       if (event.button !== 0) return;
+      // A Mac's Ctrl-press is the clip menu's: it keeps the selection
+      if (isContextClick(event)) return;
       // A focused In/Out field commits now, before the drag takes its picture of the draft
       releaseTypingFocus(event.currentTarget);
+      clearTextSelection();
       stop.current?.();
+      const mods = { toggle: isToggleClick(event), range: event.shiftKey };
+      const group = pressGroup(clipId);
+      const multi = group.length > 1;
+      const groupSet = new Set(group);
       const timelineAtStart = useStitchEditorStore.getState().draft?.timeline;
+      const groupIndices = new Set(
+        (timelineAtStart ?? []).flatMap((c, i) => (groupSet.has(c.id) ? [i] : [])),
+      );
+      const minIdx = Math.min(index, ...groupIndices);
+      const maxIdx = Math.max(index, ...groupIndices);
       const { stacked = false, rowCount = 0 } = latestOptions.current;
       const target = event.currentTarget;
       const pointerId = event.pointerId;
@@ -77,17 +113,30 @@ export function useClipReorder(
       const laneY = (clientY: number) => clientY - (contentRect()?.top ?? 0);
       const startLaneX = laneX(startX);
       const startLaneY = laneY(startY);
+      const liftIndex = multi && !stacked ? blockDropIndexAt(startLaneX, latestBoxes.current, groupIndices) : index;
+      let isArmed = false;
       let lastClientX = startX;
       let lastClientY = startY;
       const scroller = contentRef.current?.parentElement ?? null;
       const place = () => {
         const x = laneX(lastClientX);
         const y = laneY(lastClientY);
-        const dy = stacked ? y - startLaneY : 0;
-        const dropIndex = stacked
-          ? stackedDropIndex(index, dy, rowCount, GEOMETRY.stackRow)
-          : dropIndexAt(x, latestBoxes.current, index);
-        current = { clipId, index, dx: x - startLaneX, dy, dropIndex };
+        const rawDy = stacked ? y - startLaneY : 0;
+        let dy = rawDy;
+        let dropIndex: number;
+        if (!multi) {
+          dropIndex = stacked
+            ? stackedDropIndex(index, dy, rowCount, GEOMETRY.stackRow)
+            : dropIndexAt(x, latestBoxes.current, index);
+        } else if (stacked) {
+          const row = stackedDropIndex(index, rawDy, rowCount, GEOMETRY.stackRow);
+          dropIndex = Math.min(Math.max(row, index - minIdx), index + (rowCount - 1 - maxIdx));
+          dy = groupTravel(rawDy, minIdx, maxIdx, rowCount);
+        } else {
+          dropIndex = blockDropIndexAt(x, latestBoxes.current, groupIndices);
+        }
+        isArmed ||= dropIndex !== liftIndex;
+        current = { clipId, clipIds: group, index, dx: x - startLaneX, dy, dropIndex, liftIndex, armed: isArmed };
         setReorder(current);
       };
       const onScroll = () => {
@@ -148,8 +197,23 @@ export function useClipReorder(
         end();
         const s = useStitchEditorStore.getState();
         if (s.draft?.timeline !== timelineAtStart) return;
+        if (!moved) {
+          clickClip(clipId, mods);
+          return;
+        }
+        if (multi) {
+          if (stacked && moved.dropIndex !== index) {
+            released.current = clipId;
+            moveClipRows(group, moved.dropIndex - index);
+          } else if (!stacked && moved.armed) {
+            released.current = clipId;
+            moveClipsTo(group, moved.dropIndex);
+          }
+          keepGroupSelected(group, clipId);
+          return;
+        }
         s.select({ kind: "clip", clipId });
-        if (moved && moved.dropIndex !== index) {
+        if (moved.dropIndex !== index) {
           released.current = clipId;
           moveClipTo(clipId, moved.dropIndex);
         }
