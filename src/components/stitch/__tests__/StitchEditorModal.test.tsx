@@ -14,7 +14,7 @@ import { createClip } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
-import { setClipStart, setCrossfade, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
+import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
@@ -704,7 +704,6 @@ describe("StitchEditorModal", () => {
   describe("in Stacked", () => {
     // Clip 1 is 5 s and clip 2 is 4 s: 9 s end to end, 8 s overlapping by 1 s
     const totalShown = (text: string) => screen.getAllByText(text).length > 0;
-    const overlapField = () => screen.getByRole("textbox", { name: "Overlap" }) as HTMLInputElement;
     // The transport's toggle, as a user switches
     const layoutButton = (name: "Track" | "Stacked") =>
       within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name });
@@ -736,95 +735,41 @@ describe("StitchEditorModal", () => {
       expect(editor().past).toHaveLength(2);
     });
 
-    it("switches to Stacked from the transport, which shows Overlap, Crossfade and what they do; Track hides them", () => {
+    it("switches to Stacked from the transport, which shows Crossfade; Track hides it", () => {
       seed();
       openEditor();
-      expect(screen.queryByRole("textbox", { name: "Overlap" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Crossfade" })).toBeNull();
       stack();
-      expect(overlapField().value).toBe("1.0 s");
       expect(screen.getByRole("button", { name: "Crossfade" })).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByText("Each join blends over 1.0 s.")).toBeInTheDocument();
-      expect(screen.getByText("Loop sequence")).toBeInTheDocument();
       expect(totalShown("0:08.00")).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Crossfade" }));
       expect(editor().draft!.sequenceLayout.crossfade).toBe(false);
       expect(screen.getByRole("button", { name: "Crossfade" })).toHaveAttribute("aria-pressed", "false");
-      expect(screen.getByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeInTheDocument();
       expect(layoutButton("Stacked")).toHaveAttribute("aria-pressed", "true");
       fireEvent.click(layoutButton("Track"));
       expect(editor().draft!.sequenceLayout.mode).toBe("track");
       expect(layoutButton("Track")).toHaveAttribute("aria-pressed", "true");
-      expect(screen.queryByRole("textbox", { name: "Overlap" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Crossfade" })).toBeNull();
       expect(totalShown("0:09.00")).toBe(true);
     });
 
-    it("puts Crossfade in the transport beside Sound, and the summary above the Overlap row, which rests on Loop", () => {
+    it("puts Crossfade in the transport beside Sound, and leaves the rail's footer to Loop sequence", () => {
       seed();
       openEditor();
       stack();
       const crossfade = screen.getByRole("button", { name: "Crossfade" });
-      // In the transport, after Sound: out of the rail, so nothing the summary says can move it
       expect(crossfade.previousElementSibling).toBe(screen.getByRole("button", { name: "Sound" }));
-      expect(screen.getByRole("complementary", { name: "Clip" }).contains(crossfade)).toBe(false);
-      const row = overlapField().closest(".h-9")!;
-      const footer = row.parentElement!;
-      // The line first, the row last, then Loop sequence: what the line says changes the height above the row only
-      const line = screen.getByText("Each join blends over 1.0 s.");
-      expect(footer.firstElementChild).toBe(line);
-      expect(footer.lastElementChild).toBe(row);
-      expect(footer.nextElementSibling).toHaveTextContent("Loop sequence");
-      // One sentence, nothing reserved: the other crossfade sentence is not in the page
-      expect(footer.querySelectorAll("p")).toHaveLength(1);
-      expect(screen.queryByText("Each clip starts 1.0 s early, under the clip above. Both are heard.")).toBeNull();
-      // In a short window the line is cut before the row moves; its full text is on hover
-      expect(line).toHaveAttribute("title", "Each join blends over 1.0 s.");
-      // Pressing Crossfade blurs a typed Overlap, which commits: the line follows at once, with no hold, and the row
-      // stays the footer's last element
-      fireEvent.pointerDown(crossfade);
-      act(() => setOverlapSec(3));
-      expect(line).toHaveTextContent(
-        "Each join blends over 3.0 s. The join into Clip 2 is 2.00 s: an overlap is at most half a clip.",
-      );
-      expect(line).toHaveAttribute("title", line.textContent);
-      expect(footer.firstElementChild).toBe(line);
-      expect(footer.lastElementChild).toBe(row);
-      fireEvent.click(crossfade);
-      expect(editor().draft!.sequenceLayout).toEqual({ mode: "stacked", overlapSec: 3, crossfade: false });
-      expect(footer.lastElementChild).toBe(row);
+      const rail = screen.getByRole("complementary", { name: "Clip" });
+      expect(rail.contains(crossfade)).toBe(false);
+      // No Overlap well and no summary line in Stacked: the footer is Loop sequence alone, as in Track
+      expect(within(rail).queryByRole("textbox", { name: "Overlap" })).toBeNull();
+      expect(screen.queryByTestId("stitch-sequence-summary")).toBeNull();
+      expect(within(rail).getByText("Loop sequence")).toBeInTheDocument();
     });
-
     it("leaves the transport's toggle inert while there are no clips", () => {
       seed({ clips: false });
       openEditor();
       expect(screen.getByRole("group", { name: "Timeline layout", hidden: true })).toHaveAttribute("inert");
-    });
-
-    it("takes a typed Overlap, shortens the sequence by it, and ⌘Z puts it back", () => {
-      seed();
-      openEditor();
-      stack();
-      const field = overlapField();
-      field.focus();
-      fireEvent.focus(field);
-      fireEvent.change(field, { target: { value: "2" } });
-      fireEvent.keyDown(field, { key: "Enter" });
-      expect(editor().draft!.sequenceLayout.overlapSec).toBe(2);
-      expect(totalShown("0:07.00")).toBe(true);
-      press(document.body, "z", { metaKey: true });
-      expect(editor().draft!.sequenceLayout.overlapSec).toBe(1);
-      expect(overlapField().value).toBe("1.0 s");
-      expect(totalShown("0:08.00")).toBe(true);
-    });
-
-    it("names a join the half-clip cap shortens", () => {
-      seed();
-      openEditor();
-      stack();
-      act(() => setOverlapSec(3));
-      expect(
-        screen.getByText("Each join blends over 3.0 s. The join into Clip 2 is 2.00 s: an overlap is at most half a clip."),
-      ).toBeInTheDocument();
     });
 
     it("writes the layout on Done, in the same single write", () => {
@@ -918,20 +863,22 @@ describe("StitchEditorModal", () => {
       expect(dialog.contains(document.activeElement)).toBe(true);
     });
 
-    it("commits an Overlap being typed when Track is clicked, and keeps focus in the dialog", () => {
+    it("commits a Start being typed when Track is clicked, and keeps focus in the dialog", () => {
       seed();
       const dialog = openEditor();
       stack();
-      const field = overlapField();
+      const field = screen.getByRole("textbox", { name: "Start on the timeline" });
       act(() => field.focus());
       fireEvent.focus(field);
-      fireEvent.change(field, { target: { value: "3" } });
+      fireEvent.change(field, { target: { value: "2" } });
       pressLayout("Track");
-      expect(editor().draft!.sequenceLayout).toEqual({ mode: "track", overlapSec: 3, crossfade: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("track");
+      expect(editor().draft!.timeline[0].startSec).toBe(2);
       expect(dialog.contains(document.activeElement)).toBe(true);
-      // Two undo steps: the overlap, then the switch
+      // Two undo steps: the start, then the switch
       press(document.body, "z", { metaKey: true });
-      expect(editor().draft!.sequenceLayout).toEqual({ mode: "stacked", overlapSec: 3, crossfade: true });
+      expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+      expect(editor().draft!.timeline[0].startSec).toBe(2);
     });
 
     it("shows the frame under the playhead after switching back to Track at Overlap 0, and on ⌘Z and ⇧⌘Z", () => {
@@ -983,7 +930,6 @@ describe("StitchEditorModal", () => {
     describe("with clips placed in time", () => {
       const startField = () => screen.getByRole("textbox", { name: "Start on the timeline" }) as HTMLInputElement;
       const selectClip2 = () => act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
-      const summary = () => screen.getByRole("textbox", { name: "Overlap" }).closest(".h-9")!.previousElementSibling!;
 
       it("shows Start in Stacked only, above Trim", () => {
         seed();
@@ -1092,56 +1038,6 @@ describe("StitchEditorModal", () => {
         const split = screen.getByRole("button", { name: /Split at playhead/ });
         expect(split).toBeEnabled();
         expect(split).not.toHaveAttribute("title");
-      });
-
-      it("says what a placed stack does: where clips sit, how they layer, a clip hidden, the gaps", () => {
-        seed({ music: true });
-        openEditor();
-        stack();
-        // Clip 2 (4 s) wholly under Clip 1 (5 s), which is the higher row
-        act(() => setClipStart("clip:eB", 0.5));
-        expect(summary()).toHaveTextContent(
-          "Clips sit where you put them. Overlap applies to new clips and to Line up. Where clips overlap, the higher " +
-            "row fades in or out over the rows below. Clip 2 is hidden under a higher row.",
-        );
-        act(() => setCrossfade(false));
-        expect(summary()).toHaveTextContent(
-          "Clips sit where you put them. Overlap applies to new clips and to Line up. Where clips overlap, the higher " +
-            "row is in front. Every clip that plays is heard. Clip 2 is hidden under a higher row.",
-        );
-        act(() => setClipStart("clip:eB", 6));
-        expect(summary()).toHaveTextContent(
-          "Clips sit where you put them. Overlap applies to new clips and to Line up. None overlap. 1 gap plays black. " +
-            "The music plays on.",
-        );
-        expect(screen.getByText("Overlap")).toHaveAttribute(
-          "title",
-          "How far each clip overlaps the one above when lined up, and where new clips go.",
-        );
-      });
-
-      it("shows the whole summary where the rail has room, and holds its height from a press in the rail until the click", async () => {
-        seed();
-        openEditor();
-        stack();
-        selectClip2();
-        const line = summary() as HTMLElement;
-        // No fixed cap: only a window too short for it cuts the line (the rail body gives its room first)
-        expect(line.className).not.toMatch(/max-h-/);
-        expect(line).toHaveAttribute("title", line.textContent);
-        vi.spyOn(line, "offsetHeight", "get").mockReturnValue(50);
-        const split = screen.getByRole("button", { name: /Split at playhead/ });
-        fireEvent.pointerDown(split, { button: 0, pointerId: 1 });
-        // A commit the press makes cannot shrink the line under the pointer
-        expect(line.style.minHeight).toBe("50px");
-        act(() => {
-          window.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
-        });
-        expect(line.style.minHeight).toBe("50px");
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        });
-        expect(line.style.minHeight).toBe("");
       });
 
       it("lists the placing keys under the clip actions in Stacked, and the trim keys in Track", () => {

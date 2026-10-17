@@ -29,8 +29,7 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
   node, Remove from stitch; with the audio track selected, Track sound and
   the quick curve buttons (Fade in, Fade out, Flat). The footer holds Loop
-  sequence (1×, 2×, 3×); in Stacked, a line saying what Overlap and
-  Crossfade do, then Overlap, sit above it.
+  sequence (1×, 2×, 3×).
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the Audio lane (the music's waveform and its
@@ -238,9 +237,9 @@ then on an edit moves only the clip it edits.
   row, or both), a nudge, a typed Start, [ and ], and every trim (a drag,
   I, O, a typed In or Out, Reset trim).
 - Placing only in a stack that is already placed: a row move by the row
-  header, ⌥↑ / ⌥↓ or the clip menu, a split, a removal, and a change of
-  Overlap. In a lined-up stack these work as before: a row move or a
-  removal re-sequences the clips, and a split is refused inside an overlap.
+  header, ⌥↑ / ⌥↓ or the clip menu, a split and a removal. In a lined-up
+  stack these work as before: a row move or a removal re-sequences the
+  clips, and a split is refused inside an overlap.
 - Never placing: adding from the library, Crossfade, the layout switch,
   loops, clip sound and the curve. Edits in Track, and the card's reorder
   and ✕, keep every stored start.
@@ -259,43 +258,12 @@ rows above it, with the same limits as Line up (see Each join's overlap),
 so several new clips chain. It has no start of its own until the next edit
 that places, which writes the one it shows.
 
-In Stacked the transport shows Crossfade beside Sound, and the rail's
-footer adds, above Loop sequence, a line saying what Overlap and Crossfade
-do, then the Overlap row. The row sits on Loop sequence, so it stays put
-when the line grows or shrinks: the rail
-above gives or takes the room, and scrolls. In a window too short for the
-whole line it is cut a text line at a time, with its full text on hover.
-A press in the rail can commit a
-typed value that changes the line: from the press until its click lands,
-the line keeps its height, so nothing under the pointer moves.
+In Stacked the transport shows **Crossfade** beside Sound, on by default.
 
-- **Overlap**: 0 to 10 s in 0.1 s steps, 1.0 s by default. ↑ and ↓ in the
-  well change it by 0.1 s (⇧ by 1 s), as one undo step until the well is
-  left; a value typed before the arrow is taken first, so the step starts
-  from it. "1.5", "1,5", "2s" and "0:01.5" can be typed. In a lined-up
-  stack it moves the clips. In a placed one a change first places every
-  clip where it is (with the old Overlap), in the same undo step, so it
-  moves nothing: it then sets where new clips go, how Line up spaces the
-  clips, and the overlap snap target. The label's title says so: "How far
-  each clip overlaps the one above when lined up, and where new clips go."
-- **Crossfade**: on by default; a toggle in the transport, beside Sound.
-- The line above Overlap says what they do to this sequence. Lined up: "Each
-  join blends over 1.0 s." (Crossfade on), "Each clip starts 1.0 s early,
-  under the clip above. Both are heard." (off), or "Clips play end to end,
-  as in Track." (no join overlaps). Then, when they apply: a join that gets
-  less ("The join into Clip 3 is 0.70 s: an overlap is at most half a
-  clip.", "… is a cut: …", or "2 joins are shorter: …"), "Pieces of the
-  same video meet with a cut." and, with more than one loop, "The loop
-  restarts with a cut." Placed: "Clips sit where you put them. Overlap
-  applies to new clips and to Line up.", then "Where clips overlap, the
-  higher row fades in or out over the rows below." (Crossfade on), "Where
-  clips overlap, the higher row is in front. Every clip that plays is
-  heard." (off) or "None overlap."; the hidden clips ("Clip 4 is hidden
-  under a higher row.", "Clips 3 and 4 are hidden under higher rows.", "3
-  clips are hidden under higher rows."); the gaps ("1 gap plays black.",
-  with "The music plays on." when music is connected and not muted); and,
-  with more than one loop and some clips overlapping, "The loop restarts
-  with a cut."
+**Overlap** is 1.0 s by default and has no control in the editor. It sets
+how far each clip overlaps the one above in a lined-up stack, where a new
+clip goes in a placed one, how Line up spaces the clips, and the overlap
+snap target. A node keeps the Overlap it was saved with.
 
 **Each join's overlap** (`joinOverlaps` in `src/lib/stitch/stack.ts`, shared
 by the editor, the card and the encoder) lays out a lined-up stack.
@@ -769,7 +737,6 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | ⇧⌘Z / Ctrl+Y | Redo |
 | J / K / L | Back 1 s / pause / play |
 | ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too) |
-| ↑ / ↓ in the Overlap well | 0.1 s more or less (⇧: 1 s), one undo step until the well is left |
 | ↑ / ↓ in the Start well | 0.1 s later or earlier (⇧: 1 s), one undo step until the well is left |
 | Context menu key / ⇧F10 | Open the clip menu |
 | Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel |

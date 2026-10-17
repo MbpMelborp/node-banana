@@ -27,7 +27,6 @@ import {
   trimSelected,
 } from "./editorActions";
 import { AudioTrackRail } from "./AudioTrackRail";
-import { SequenceSettings } from "./SequenceSettings";
 import { KeyHints, RailRow } from "./railParts";
 import { RAIL_BUTTON } from "./editorStyles";
 import { TimecodeField } from "./TimecodeField";
@@ -91,9 +90,8 @@ function RailButton({
  * The 280px rail beside the stage: the selected clip's name and source,
  * in Stacked where it starts on the timeline, its trim as In and Out
  * wells, its own sound, the clip actions with the trim keys, and the loop
- * count in the footer, with Overlap and Crossfade above it in Stacked.
- * With the audio track selected it shows the track instead
- * (AudioTrackRail).
+ * count in the footer. With the audio track selected it shows the track
+ * instead (AudioTrackRail).
  */
 export function EditorRail({
   media,
@@ -273,7 +271,6 @@ export function EditorRail({
         )}
       </div>
 
-      {stacked && <SequenceSettings empty={empty} hasMusic={music !== null && !draft?.audioMuted} />}
       {/* Inert with nothing to loop, like the transport beside it */}
       <div
         className={cn(

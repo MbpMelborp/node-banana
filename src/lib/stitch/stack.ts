@@ -1,7 +1,5 @@
 import type { StitchSequenceLayout } from "@/types";
-import { clipName } from "./labels";
 import { FRAME_RATE, secToSlot, type PlannedClip } from "./sequencePlan";
-import { formatSeconds } from "./timecode";
 
 /**
  * The Stacked layout's rules, shared by the editor, the card and the encoder:
@@ -86,23 +84,6 @@ export function joinOverlaps(items: readonly StackItem[], overlapSec: number): n
     out[q] = overlap;
   }
   return out;
-}
-
-export type JoinKind = "first" | "empty" | "cut-same-source" | "overlap" | "short";
-
-/** Per item: what its join in is ("short" = not same-source and below floorToSlot(overlapSec), 0 included). */
-export function joinKinds(items: readonly StackItem[], overlapSec: number): JoinKind[] {
-  const overlaps = joinOverlaps(items, overlapSec);
-  const full = floorToSlot(overlapSec);
-  let previous: StackItem | null = null;
-  return items.map((item, i) => {
-    if (!(item.length > 0)) return "empty";
-    const before = previous;
-    previous = item;
-    if (!before) return "first";
-    if (before.source === item.source) return "cut-same-source";
-    return overlaps[i] > 0 && overlaps[i] >= full ? "overlap" : "short";
-  });
 }
 
 // The encoder's side: a planned sequence laid out stacked.
@@ -368,39 +349,4 @@ export function clipFadeSamples(
     outStart: Math.round(nextSeqStart * sr) - Math.round(clip.seqStart * sr),
     outLength: Math.round(clip.overlapOut * sr),
   };
-}
-
-/**
- * The summary line's sentences (S24), in order: the base sentence; a shortened join ("The join into Clip 3 is 0.70 s: an overlap
- * is at most half a clip." / "… is a cut: …" / "N joins are shorter: an overlap is at most half a clip."); "Pieces of the same video
- * meet with a cut." when a same-source cut exists; "The loop restarts with a cut." when loopCount > 1 and some join overlaps.
- * Base: no join overlaps → "Clips play end to end, as in Track."; on → "Each join blends over 1.0 s."; off → "Each clip starts
- * 1.0 s early, under the clip above. Both are heard." (overlapSec via formatSeconds(o, 1)). Shortened joins and same-source cuts
- * are only named while there is an overlap to shorten.
- */
-export function stackSummary(items: readonly StackItem[], layout: StitchSequenceLayout, loopCount: number): string {
-  const overlapSec = effectiveOverlapSec(layout);
-  const overlaps = joinOverlaps(items, overlapSec);
-  const kinds = joinKinds(items, overlapSec);
-  const overlapping = overlaps.some((o) => o > 0);
-  const amount = formatSeconds(overlapSec, 1);
-
-  const sentences: string[] = [];
-  if (!overlapping) sentences.push("Clips play end to end, as in Track.");
-  else if (layout.crossfade) sentences.push(`Each join blends over ${amount}.`);
-  else sentences.push(`Each clip starts ${amount} early, under the clip above. Both are heard.`);
-
-  if (floorToSlot(overlapSec) > 0) {
-    const short = kinds.flatMap((kind, i) => (kind === "short" ? [i] : []));
-    if (short.length === 1) {
-      const i = short[0];
-      const length = overlaps[i] > 0 ? formatSeconds(overlaps[i], 2) : "a cut";
-      sentences.push(`The join into ${clipName(i)} is ${length}: an overlap is at most half a clip.`);
-    } else if (short.length > 1) {
-      sentences.push(`${short.length} joins are shorter: an overlap is at most half a clip.`);
-    }
-    if (kinds.includes("cut-same-source")) sentences.push("Pieces of the same video meet with a cut.");
-  }
-  if (loopCount > 1 && overlapping) sentences.push("The loop restarts with a cut.");
-  return sentences.join(" ");
 }

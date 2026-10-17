@@ -8,14 +8,12 @@ import {
   dissolveFrames,
   effectiveOverlapSec,
   floorToSlot,
-  joinKinds,
   joinOverlaps,
   sharedCadence,
   cadenceRate,
   MIN_CADENCE_RATE,
   soloPass,
   stackSequence,
-  stackSummary,
   type StackItem,
 } from "../stack";
 
@@ -149,17 +147,6 @@ describe("joinOverlaps", () => {
         expect(spans.filter((s) => s.start <= t && t < s.end).length).toBeLessThanOrEqual(2);
       }
     }
-  });
-});
-
-describe("joinKinds", () => {
-  it("says what each join is", () => {
-    const items = [item(5, "a"), item(5, "b"), item(1, "c"), item(0, "x"), item(5, "d"), item(5, "d")];
-    expect(joinKinds(items, 1)).toEqual(["first", "overlap", "short", "empty", "short", "cut-same-source"]);
-  });
-
-  it("counts every join short without an overlap", () => {
-    expect(joinKinds([item(0, "x"), item(5, "a"), item(5, "b")], 0)).toEqual(["empty", "first", "short"]);
   });
 });
 
@@ -388,45 +375,6 @@ describe("clipFadeSamples", () => {
       const last = plan.clips[plan.clips.length - 1];
       expect(clipFadeSamples(last, null, sr).outLength).toBe(0);
     }
-  });
-});
-
-describe("stackSummary", () => {
-  const three = [item(5, "a"), item(5, "b"), item(6, "c")];
-
-  it("says what the layout does", () => {
-    expect(stackSummary(three, STACKED, 1)).toBe("Each join blends over 1.0 s.");
-    expect(stackSummary(three, { ...STACKED, crossfade: false }, 1)).toBe(
-      "Each clip starts 1.0 s early, under the clip above. Both are heard.",
-    );
-    expect(stackSummary(three, { ...STACKED, overlapSec: 0 }, 1)).toBe("Clips play end to end, as in Track.");
-    expect(stackSummary(three, { ...STACKED, mode: "track" }, 1)).toBe("Clips play end to end, as in Track.");
-  });
-
-  it("names one shortened join, or counts several", () => {
-    expect(stackSummary([item(5, "a"), item(5, "b"), item(1.4, "c")], STACKED, 1)).toBe(
-      "Each join blends over 1.0 s. The join into Clip 3 is 0.70 s: an overlap is at most half a clip.",
-    );
-    expect(stackSummary([item(5, "a"), item(1, "b"), item(1, "c")], STACKED, 1)).toBe(
-      "Each join blends over 1.0 s. 2 joins are shorter: an overlap is at most half a clip.",
-    );
-  });
-
-  it("calls a join too short to overlap a cut", () => {
-    expect(stackSummary([item(5, "a"), item(5, "b"), item(0.02, "c")], STACKED, 1)).toBe(
-      "Each join blends over 1.0 s. The join into Clip 3 is a cut: an overlap is at most half a clip.",
-    );
-  });
-
-  it("says pieces of one video cut", () => {
-    expect(stackSummary([item(5, "a"), item(5, "a"), item(5, "b")], STACKED, 1)).toBe(
-      "Each join blends over 1.0 s. Pieces of the same video meet with a cut.",
-    );
-  });
-
-  it("says the loop restarts with a cut only when something overlaps", () => {
-    expect(stackSummary(three, STACKED, 2)).toBe("Each join blends over 1.0 s. The loop restarts with a cut.");
-    expect(stackSummary(three, { ...STACKED, overlapSec: 0 }, 2)).toBe("Clips play end to end, as in Track.");
   });
 });
 

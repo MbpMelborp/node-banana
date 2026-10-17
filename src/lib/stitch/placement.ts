@@ -1,4 +1,3 @@
-import { clipName } from "./labels";
 import { FRAME_RATE } from "./sequencePlan";
 import { joinOverlaps, type StackItem } from "./stack";
 
@@ -572,31 +571,6 @@ export function hiddenUnits(env: StackEnvelope): number[] {
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-/**
- * The summary line for a placed stack: the base sentence and what Crossfade does where clips overlap; the clips hidden
- * under higher rows; the gaps (with "The music plays on." when the node has music); and "The loop restarts with a cut."
- * when it loops and some clips overlap.
- */
-export function placedSummary(env: StackEnvelope, loopCount: number, opts: { hasMusic?: boolean } = {}): string {
-  const sentences = ["Clips sit where you put them. Overlap applies to new clips and to Line up."];
-  const overlapping = overlapCount(env) > 0;
-  if (!overlapping) sentences.push("None overlap.");
-  else if (env.crossfade) sentences.push("Where clips overlap, the higher row fades in or out over the rows below.");
-  else sentences.push("Where clips overlap, the higher row is in front. Every clip that plays is heard.");
-
-  const hidden = hiddenUnits(env).map((unit) => env.units[unit].row);
-  if (hidden.length === 1) sentences.push(`${clipName(hidden[0])} is hidden under a higher row.`);
-  else if (hidden.length === 2) sentences.push(`Clips ${hidden[0] + 1} and ${hidden[1] + 1} are hidden under higher rows.`);
-  else if (hidden.length > 2) sentences.push(`${hidden.length} clips are hidden under higher rows.`);
-
-  const gapCount = gaps(env).length;
-  if (gapCount > 0) {
-    sentences.push(`${gapCount} ${gapCount === 1 ? "gap plays" : "gaps play"} black.${opts.hasMusic ? " The music plays on." : ""}`);
-  }
-  if (loopCount > 1 && overlapping) sentences.push("The loop restarts with a cut.");
-  return sentences.join(" ");
-}
 
 /** The card's middle items for a placed stack: ["2 crossfades" | "2 overlaps"]? then ["1 gap"]? */
 export function placedCardItems(env: StackEnvelope): string[] {

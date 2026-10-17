@@ -15,7 +15,6 @@ import {
   overlapCount,
   pairOverlap,
   placedCardItems,
-  placedSummary,
   resolveStarts,
   RUN_TOL_SEC,
   SLOT_SEC,
@@ -1139,34 +1138,7 @@ describe("gainPieces", () => {
   });
 });
 
-describe("placedSummary and placedCardItems", () => {
-  const base = "Clips sit where you put them. Overlap applies to new clips and to Line up.";
-
-  it("says what Crossfade does where clips overlap", () => {
-    expect(placedSummary(named([["A", 0, 5, 0], ["B", 4, 5, 1]]).env, 1)).toBe(
-      `${base} Where clips overlap, the higher row fades in or out over the rows below.`,
-    );
-    expect(placedSummary(named([["A", 0, 5, 0], ["B", 4, 5, 1]], false).env, 1)).toBe(
-      `${base} Where clips overlap, the higher row is in front. Every clip that plays is heard.`,
-    );
-    expect(placedSummary(named([["A", 0, 5, 0], ["B", 5, 5, 1]]).env, 1)).toBe(`${base} None overlap.`);
-  });
-
-  it("names hidden clips, gaps and the loop", () => {
-    expect(placedSummary(named(board).env, 2, { hasMusic: true })).toBe(
-      `${base} Where clips overlap, the higher row fades in or out over the rows below. Clip 4 is hidden under a higher row. ` +
-        "1 gap plays black. The music plays on. The loop restarts with a cut.",
-    );
-    expect(placedSummary(named(board).env, 1)).toContain("1 gap plays black.");
-    expect(placedSummary(named(board).env, 1)).not.toContain("music");
-    const two = named([["A", 0, 10, 0], ["B", 1, 2, 1], ["C", 4, 2, 2], ["D", 11, 1, 3], ["E", 13, 1, 4]]);
-    expect(placedSummary(two.env, 1, { hasMusic: true })).toContain(
-      "Clips 2 and 3 are hidden under higher rows. 2 gaps play black. The music plays on.",
-    );
-    const three = named([["A", 0, 10, 0], ["B", 1, 2, 1], ["C", 4, 2, 2], ["D", 7, 2, 3]]);
-    expect(placedSummary(three.env, 1)).toContain("3 clips are hidden under higher rows.");
-  });
-
+describe("placedCardItems", () => {
   it("gives the card's items", () => {
     expect(placedCardItems(named(board).env)).toEqual(["1 crossfade", "1 gap"]);
     expect(placedCardItems(named(board, false).env)).toEqual(["2 overlaps", "1 gap"]);
