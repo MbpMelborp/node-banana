@@ -67,6 +67,7 @@ import { EditApiError } from "@/lib/edits/client";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import { __resetAssetInfoForTests } from "@/lib/stitch/assetInfo";
 import { __resetMediaInfoForTests, __setMediaExtractorForTests, __setMediaInfoForTests, assetMediaKey } from "@/lib/stitch/mediaInfo";
+import { createAudioClip } from "@/lib/stitch/audioClips";
 import { createClip } from "@/lib/stitch/timeline";
 import { useAssetStore } from "@/store/assetStore";
 import { __resetEditProjectForTests, LAST_EDIT_KEY, useEditProjectStore } from "@/store/editProjectStore";
@@ -76,6 +77,7 @@ import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { setLoopCount } from "@/components/stitch/editorActions";
 import { libraryDrop } from "@/components/stitch/timeline/libraryDrop";
+import { LOOP_AUDIO_NOTE } from "@/components/stitch/sequenceMenu";
 import { EditVideoView } from "../EditVideoView";
 
 const ID = "ed0000000000a1";
@@ -825,7 +827,160 @@ describe("copy, cut and paste", () => {
   });
 });
 
+describe("the header", () => {
+  it("leads with Edits › the name: Edits goes home, the name renames, and the save word follows it", async () => {
+    await renderOpen();
+    const crumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumb).getAllByRole("button").map((b) => b.textContent)).toEqual(["Edits", "Trip"]);
+    expect(crumb.nextElementSibling).toBe(screen.getByTestId("edit-save-state"));
+    fireEvent.click(within(crumb).getByRole("button", { name: "Edits" }));
+    await screen.findByRole("button", { name: "New edit" });
+    expect(editor().isOpen).toBe(false);
+  });
+
+  it("shows Save only with Save automatically off; ⌘S saves either way", async () => {
+    useWorkflowStore.setState({ autoSaveEnabled: true });
+    await renderOpen();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Render" })).toBeInTheDocument();
+    act(() => useWorkflowStore.setState({ autoSaveEnabled: false }));
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    act(() => setLoopCount(2));
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("while rendering, Rendering N% and Stop take Save and Render's place, over a progress line", async () => {
+    measure(A, B);
+    await renderOpen();
+    act(() => project().setRenderState({ state: "rendering", editId: ID, progress: 40.4 }));
+    expect(screen.getByText("Rendering 40%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Rendering" })).toHaveAttribute("aria-valuenow", "40");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByTestId("edit-render-slot")).toBeNull();
+    // Stop ends the header, where Render did
+    expect(screen.getByRole("button", { name: "Stop" }).parentElement!.nextElementSibling).toBe(
+      screen.getByRole("progressbar", { name: "Rendering" }),
+    );
+    act(() => project().setRenderState({ state: "idle", editId: null, progress: 0 }));
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByTestId("edit-render-slot")).toBeInTheDocument();
+  });
+
+  it("Show the library sits first while the pane is hidden", async () => {
+    await renderOpen();
+    expect(screen.queryByRole("button", { name: "Show the library" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Hide the library" }));
+    const show = screen.getByRole("button", { name: "Show the library" });
+    expect(show.closest("[data-edit-chrome]")!.firstElementChild!.contains(show)).toBe(true);
+    fireEvent.click(show);
+    expect(screen.getByRole("complementary", { name: "Library" })).toBeInTheDocument();
+  });
+});
+
 describe("the edit menu", () => {
+  it("holds Rename, Duplicate, Show in Finder, Loop and Delete…, then what the sequence is", async () => {
+    measure(A, B);
+    await renderOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+    const menu = screen.getByRole("menu", { name: "Edit menu" });
+    const names = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.getAttribute("aria-label") ?? item.textContent);
+    // New edit and the other edits are on the home, behind the breadcrumb's Edits
+    expect(names).toEqual(["Rename", "Duplicate", "Show in Finder", "Loop: Off", "Delete…"]);
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toHaveFocus();
+    expect(menu).toHaveAccessibleDescription("2 clips · 1280 × 720 · 24 fps");
+    // Rename opens the name's field in place, and the field keeps the focus it takes
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    const field = await screen.findByRole("textbox", { name: "Edit name" });
+    expect(field).toHaveValue("Trip");
+    await waitFor(() => expect(field).toHaveFocus());
+  });
+
+  it("Loop is a set of radios: picking one sets the loop count as one undo step", async () => {
+    await renderOpen();
+    const trigger = screen.getByRole("button", { name: "Edit menu" });
+    fireEvent.click(trigger);
+    // Its row reads Off at 1×, where nothing repeats
+    const row = within(screen.getByRole("menu", { name: "Edit menu" })).getByRole("menuitem", { name: "Loop: Off" });
+    expect(row).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    const loop = screen.getByRole("menu", { name: "Loop" });
+    const radios = within(loop).getAllByRole("menuitemradio");
+    expect(radios.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
+      ["1×", "true"],
+      ["2×", "false"],
+      ["3×", "false"],
+    ]);
+    expect(radios[0]).toHaveFocus();
+    // ← goes back to Loop's row, Enter opens it again
+    fireEvent.keyDown(radios[0], { key: "ArrowLeft" });
+    expect(screen.queryByRole("menu", { name: "Loop" })).toBeNull();
+    expect(row).toHaveFocus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    const past = editor().past.length;
+    fireEvent.click(within(screen.getByRole("menu", { name: "Loop" })).getByRole("menuitemradio", { name: "3×" }));
+    expect(editor().draft!.loopCount).toBe(3);
+    expect(editor().past).toHaveLength(past + 1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Focus goes back to ⋯, not to <body>
+    expect(trigger).toHaveFocus();
+    expect(screen.getByTestId("edit-save-state")).toHaveTextContent("Unsaved");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menuitem", { name: "Loop: 3×" })).toBeInTheDocument();
+  });
+
+  it("keeps Loop's submenu a moment after the pointer leaves its row, so the pointer can cross a row into it", async () => {
+    await renderOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+    const row = screen.getByRole("menuitem", { name: /^Loop/ }).parentElement!;
+    fireEvent.mouseEnter(row);
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    fireEvent.mouseLeave(row);
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    // Arriving in the submenu keeps it
+    fireEvent.mouseEnter(screen.getByRole("menuitemradio", { name: "2×" }));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    fireEvent.mouseLeave(row);
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Loop" })).toBeNull());
+    expect(screen.getByRole("menu", { name: "Edit menu" })).toBeInTheDocument();
+    // The hover had put focus in the submenu; it is back on Loop's row, so the menu's keys still work
+    expect(screen.getByRole("menuitem", { name: /^Loop/ })).toHaveFocus();
+    press(document.activeElement!, "Escape");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("a click on Loop's row keeps open the submenu the hover opened", async () => {
+    await renderOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+    const loop = screen.getByRole("menuitem", { name: /^Loop/ });
+    fireEvent.mouseEnter(loop.parentElement!);
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    fireEvent.click(loop);
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    fireEvent.click(loop);
+    expect(screen.getByRole("menu", { name: "Loop" })).toBeInTheDocument();
+    expect(loop).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("Loop says each loop plays the audio clips again while it does", async () => {
+    const withAudio = doc({
+      sequence: { ...doc().sequence, loopCount: 2, audioClips: [createAudioClip({ kind: "asset", assetId: M }, { id: "a1" })] },
+    });
+    await renderOpen(withAudio);
+    const showLoop = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+      fireEvent.mouseEnter(screen.getByRole("menuitem", { name: /^Loop/ }).parentElement!);
+      return screen.getByRole("menu", { name: "Loop" });
+    };
+    expect(showLoop()).toHaveAccessibleDescription(LOOP_AUDIO_NOTE);
+    fireEvent.click(within(screen.getByRole("menu", { name: "Loop" })).getByRole("menuitemradio", { name: "1×" }));
+    expect(showLoop()).not.toHaveAttribute("aria-describedby");
+  });
+
   it("Delete… asks, then sends the edit to the Trash and goes home", async () => {
     await renderOpen();
     edits.deleteEdit.mockResolvedValue(undefined);
@@ -843,37 +998,19 @@ describe("the edit menu", () => {
   it("with Save automatically off, switching away from changes asks first", async () => {
     await renderOpen();
     act(() => setLoopCount(2));
-    edits.createEdit.mockResolvedValue(doc({ id: OTHER, name: "Untitled edit" }));
-    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "New edit" }));
+    const home = () => within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("button", { name: "Edits" });
+    fireEvent.click(home());
     const sheet = await screen.findByRole("dialog", { name: "Save changes?" });
     expect(sheet).toHaveTextContent("Save changes to “Trip”?");
     fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(editor().editId).toBe(ID);
-    expect(edits.createEdit).not.toHaveBeenCalled();
+    expect(editor().draft!.loopCount).toBe(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "New edit" }));
+    fireEvent.click(home());
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Save changes?" })).getByRole("button", { name: "Don't save" }));
-    await waitFor(() => expect(editor().editId).toBe(OTHER));
+    await screen.findByRole("button", { name: "New edit" });
+    expect(editor().isOpen).toBe(false);
     expect(edits.saveEdit).not.toHaveBeenCalled();
-  });
-
-  it("Open lists the other edits, newest first, then All edits…", async () => {
-    storage[LAST_EDIT_KEY] = ID;
-    edits.fetchEdit.mockResolvedValue(doc());
-    edits.fetchEditList.mockResolvedValue(listOf([doc({ id: OTHER, name: "Launch cut" }), doc()]));
-    render(<EditVideoView />);
-    await screen.findByRole("button", { name: "Edit menu" });
-    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
-    const openItem = within(screen.getByRole("menu")).getByRole("menuitem", { name: "Open" });
-    fireEvent.keyDown(openItem, { key: "ArrowRight" });
-    const submenu = screen.getByRole("menu", { name: "Open" });
-    expect(within(submenu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Launch cut", "All edits…"]);
-    expect(within(submenu).getByRole("menuitem", { name: "Launch cut" })).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
-    expect(screen.queryByRole("menu", { name: "Open" })).toBeNull();
-    expect(openItem).toHaveFocus();
   });
 });

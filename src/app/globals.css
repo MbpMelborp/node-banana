@@ -67,6 +67,15 @@
   --color-editor-stage: #0a0a0a;
   --color-editor-lanes: #141414;
   --color-editor-well: #0f0f0f;
+
+  /* Edit video's quiet look (the view and the node's dialog): the hairline
+     between regions (and the render's progress track), a field's ground,
+     and the fill of a control that is open or pressed; its menus' shadow
+     (the headers' ⋯, the home's row menu), deeper than shadow-menu. */
+  --color-edit-line: #1a1a1a;
+  --color-edit-field: #141414;
+  --color-edit-pressed: #1f1f1f;
+  --shadow-edit-menu: 0 16px 40px rgb(0 0 0 / 0.5);
 }
 
 /* The Stitch editor's trim ghost: the part of a clip a trim cuts away. */

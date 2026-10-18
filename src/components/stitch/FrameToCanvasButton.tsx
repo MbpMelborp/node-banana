@@ -45,7 +45,7 @@ export function FrameToCanvasButton({
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   spans: readonly ClipSpan[];
-  /** The header's size; null while no clip is ready with one. */
+  /** The sequence's frame size (the ⋯ menu's line); null while no clip is ready with one. */
   frameSize: { width: number; height: number } | null;
 }) {
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);

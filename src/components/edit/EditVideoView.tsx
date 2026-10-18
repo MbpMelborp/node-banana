@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, type HTMLAttributes } from "react";
 import { DialogSpinner } from "@/components/ui/Dialog";
 import { EditorWorkspace } from "@/components/stitch/EditorWorkspace";
 import { isTypingTarget } from "@/components/stitch/editorKeys";
-import { STITCH_EDITOR_PANEL } from "@/components/stitch/editorStyles";
+import { HEADER_PX, STITCH_EDITOR_PANEL } from "@/components/stitch/editorStyles";
 import { useEditorComposition } from "@/components/stitch/useEditorComposition";
 import { useStitchEditorKeys, type StitchEditorKeyOptions } from "@/components/stitch/useStitchEditorKeys";
 import { useEditProjectStore } from "@/store/editProjectStore";
@@ -16,8 +16,6 @@ import { EDIT_BANNER_PX, EditBanner, EditSheets, useEditBanner } from "./EditShe
 import { editViewKeyAction, runEditViewKey } from "./editViewKeys";
 import { LibraryPane } from "./LibraryPane";
 
-/** The header's height (its h-12). */
-const HEADER_PX = 48;
 /** Marked as the editor's panel: the editor's controls hand focus back to it, as they do to the dialog's. */
 const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLDivElement>;
 

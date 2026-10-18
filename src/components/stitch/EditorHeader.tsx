@@ -1,22 +1,49 @@
 "use client";
 
-import { Film } from "lucide-react";
-import { DialogButton } from "@/components/ui/Dialog";
+import { Redo2, Undo2 } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { MenuDivider } from "@/components/ui/Menu";
 import { selectCanRedo, selectCanUndo, selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
-import { formatTimecode } from "@/lib/stitch/timecode";
-import { TEXT_GHOST } from "./editorStyles";
+import { MoreMenu } from "./ActionMenu";
+import { HEADER_GHOST, HEADER_ICON_BUTTON, HEADER_PRIMARY, HEADER_TITLE } from "./editorStyles";
+import { sequenceMetaLine, useLoopMenuEntry } from "./sequenceMenu";
+
+/** Whether the dialog header's menu is open: it owns the keys meanwhile, as the view's menus do (see StitchEditorModal). */
+export const headerMenuOpen = () => document.querySelector("[data-editor-header] [role='menu']") !== null;
+
+/** Undo and Redo over the editor's own history, as icons, dimmed when there is nothing to undo or redo. */
+export function HistoryButtons() {
+  const canUndo = useStitchEditorStore(selectCanUndo);
+  const canRedo = useStitchEditorStore(selectCanRedo);
+  const undo = useStitchEditorStore((s) => s.undo);
+  const redo = useStitchEditorStore((s) => s.redo);
+  return (
+    <>
+      {/* The tooltips open downward, into the stage */}
+      <div className="group relative flex">
+        <button type="button" aria-label="Undo" className={HEADER_ICON_BUTTON} disabled={!canUndo} onClick={undo}>
+          <Undo2 size={16} strokeWidth={1.5} />
+        </button>
+        <Tooltip label="Undo" shortcut="⌘Z" placement="bottom" />
+      </div>
+      <div className="group relative flex">
+        <button type="button" aria-label="Redo" className={HEADER_ICON_BUTTON} disabled={!canRedo} onClick={redo}>
+          <Redo2 size={16} strokeWidth={1.5} />
+        </button>
+        <Tooltip label="Redo" shortcut="⇧⌘Z" placement="bottom" />
+      </div>
+    </>
+  );
+}
 
 /**
- * The editor's 48px header: the mark, "Edit video" and what the sequence is
- * (clips, length, size, rate); Undo and Redo over the editor's own history;
- * Cancel, Save (keeps the editor open) and Done. Nothing clickable sits in the top 12px of the left
- * 60px, where the desktop's window controls draw over the panel's corner.
+ * The dialog's 56px header, in the Edit video view's quiet language: "Edit
+ * video"; Undo, Redo and the ⋯ menu (Loop's radios in the menu itself, then
+ * what the sequence is: clips, size, rate); Cancel, Save (keeps the editor
+ * open) and Done. Nothing clickable sits in the top 12px of the left 60px,
+ * where the desktop's window controls draw over the panel's corner.
  */
 export function EditorHeader({
   clipCount,
-  total,
   size,
   fps,
   onCancel,
@@ -24,7 +51,6 @@ export function EditorHeader({
   onDone,
 }: {
   clipCount: number;
-  total: number;
   /** "1920 × 1080", or null when no ready clip has a size. */
   size: string | null;
   /** "24 fps", or null (mixed or unknown rates). */
@@ -33,76 +59,38 @@ export function EditorHeader({
   onSave: () => void;
   onDone: () => void;
 }) {
-  const canUndo = useStitchEditorStore(selectCanUndo);
-  const canRedo = useStitchEditorStore(selectCanRedo);
   const dirty = useStitchEditorStore(selectIsDirty);
   const initialClipCount = useStitchEditorStore((s) => s.initial?.timeline.length ?? 0);
-  const undo = useStitchEditorStore((s) => s.undo);
-  const redo = useStitchEditorStore((s) => s.redo);
+  // Loop is all the menu holds: its radios sit in it, not a submenu away
+  const loop = useLoopMenuEntry("group");
 
-  // Size and rate read as one item, "1920 × 1080 · 24 fps", with plain spaces round their dot
-  const meta = clipCount === 0 ? null : [size, fps].filter((v): v is string => v !== null).join(" · ") || null;
   return (
-    <div className="h-12 shrink-0 flex items-center justify-between gap-4 px-3 border-b border-chrome-border bg-editor-chrome">
-      <div className="flex min-w-0 items-center gap-2.5 pl-2">
-        <Film size={16} strokeWidth={1.75} className="shrink-0 text-neutral-400" aria-hidden="true" />
-        <span className="text-[13px] font-semibold text-neutral-100">Edit video</span>
-        <MenuDivider variant="bar" className="mx-0.5 shrink-0" aria-hidden="true" />
-        <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-neutral-500">
-          <span>{`${clipCount} clip${clipCount === 1 ? "" : "s"}`}</span>
-          {clipCount > 0 && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums text-neutral-400">{formatTimecode(total)}</span>
-            </>
-          )}
-          {meta && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{meta}</span>
-            </>
-          )}
-        </div>
+    <div data-editor-header className="relative z-20 flex h-14 shrink-0 items-center gap-2 bg-pane pl-5 pr-4">
+      <h2 className={`${HEADER_TITLE} min-w-0 flex-1 truncate`}>Edit video</h2>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <HistoryButtons />
+        <MoreMenu label="Edit menu" entries={[loop]} footer={sequenceMetaLine(clipCount, size, fps)} />
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {/* The tooltips open downward, into the stage, inside the panel */}
-        <div className="group relative flex">
-          <button type="button" className={TEXT_GHOST} disabled={!canUndo} onClick={undo}>
-            Undo
-          </button>
-          <Tooltip label="Undo" shortcut="⌘Z" placement="bottom" />
-        </div>
-        <div className="group relative flex">
-          <button type="button" className={TEXT_GHOST} disabled={!canRedo} onClick={redo}>
-            Redo
-          </button>
-          <Tooltip label="Redo" shortcut="⇧⌘Z" placement="bottom" />
-        </div>
-        <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
-        <DialogButton variant="ghost" className="focus-visible:ring-offset-editor-chrome" onClick={onCancel}>
+      <div className="ml-2 flex shrink-0 items-center gap-1">
+        <button type="button" className={HEADER_GHOST} onClick={onCancel}>
           Cancel
-        </DialogButton>
+        </button>
         <div className="group relative flex">
-          <DialogButton
-            variant="ghost"
-            className="focus-visible:ring-offset-editor-chrome"
-            disabled={!dirty}
-            onClick={onSave}
-          >
+          <button type="button" className={HEADER_GHOST} disabled={!dirty} onClick={onSave}>
             Save
-          </DialogButton>
+          </button>
           <Tooltip label="Save and keep editing" shortcut="⌘S" placement="bottom" />
         </div>
-        <DialogButton
-          variant="primary"
-          className="focus-visible:ring-offset-editor-chrome"
+        <button
+          type="button"
+          className={`${HEADER_PRIMARY} ml-1`}
           // Off only when there is nothing and nothing was given; a user who removed every clip can apply that.
           // Not "dirty": with nothing given, a loop count alone is nothing to keep.
           disabled={clipCount === 0 && initialClipCount === 0}
           onClick={onDone}
         >
           Done
-        </DialogButton>
+        </button>
       </div>
     </div>
   );

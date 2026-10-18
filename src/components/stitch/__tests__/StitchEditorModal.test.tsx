@@ -22,6 +22,7 @@ import { libraryDrop } from "../timeline/libraryDrop";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
+import { LOOP_AUDIO_NOTE } from "../sequenceMenu";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -117,6 +118,25 @@ const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =
 
 const toggleClipAudio = () => fireEvent.click(screen.getByRole("switch", { name: "Clip audio" }));
 
+/** The sequence's length is shown: the transport's total, "/ 0:09.00" (never the playhead's time beside it). */
+const totalShown = (text: string) => screen.queryByText(`/ ${text}`) !== null;
+
+/** The header's ⋯ menu, open. */
+function openHeaderMenu(): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+  return screen.getByRole("menu", { name: "Edit menu" });
+}
+
+/** The ⋯ menu's last line (clips, size and rate), which the menu names as its description; the menu is closed again. */
+function menuMeta(): string {
+  const menu = openHeaderMenu();
+  const line = document.getElementById(menu.getAttribute("aria-describedby")!)!.textContent!;
+  expect(menu).toHaveAccessibleDescription(line);
+  fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+  expect(screen.queryByRole("menu")).toBeNull();
+  return line;
+}
+
 beforeEach(async () => {
   // An edge removal holds the store's delete checkpoint until the next task; let an earlier test's go
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -174,13 +194,11 @@ describe("StitchEditorModal", () => {
   it("opens on the node's sequence with its length, size and rate", () => {
     seed();
     const dialog = openEditor();
-    const header = within(dialog);
-    expect(header.getByText("2 clips")).toBeInTheDocument();
-    expect(header.getAllByText("0:09.00").length).toBeGreaterThan(0);
-    // Size and rate are one item, so their dot is spaced like the words round it
-    expect(header.getByText("1920 × 1080 · 24 fps")).toBeInTheDocument();
+    // The length in the transport; the clips, size and rate as the ⋯ menu's last line
+    expect(totalShown("0:09.00")).toBe(true);
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080 · 24 fps");
     // The rail shows the first clip (the timeline names it too)
-    const rail = within(header.getByRole("complementary", { name: "Clip" }));
+    const rail = within(within(dialog).getByRole("complementary", { name: "Clip" }));
     expect(rail.getByText("Clip 1")).toBeInTheDocument();
     expect(rail.getByText("Generate video · Veo 3.1 · 5.00 s")).toBeInTheDocument();
   });
@@ -188,7 +206,7 @@ describe("StitchEditorModal", () => {
   it("leaves the rate out when the clips disagree", () => {
     seed({ fps: [24, 30] });
     openEditor();
-    expect(screen.queryByText(/fps$/)).toBeNull();
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080");
   });
 
   it("leaves a clip the encode drops out of the size and rate", () => {
@@ -203,9 +221,8 @@ describe("StitchEditorModal", () => {
         ],
       },
     });
-    const dialog = within(openEditor());
-    expect(dialog.getByText("1280 × 720 · 30 fps")).toBeInTheDocument();
-    expect(dialog.queryByText(/1920 × 1080/)).toBeNull();
+    openEditor();
+    expect(menuMeta()).toBe("2 clips · 1280 × 720 · 30 fps");
   });
 
   it("shows an Out stored past the video's end at the end", () => {
@@ -567,19 +584,30 @@ describe("StitchEditorModal", () => {
   it("opens empty on a node with no clips, with Done off", () => {
     seed({ clips: false });
     openEditor();
-    expect(screen.getByText("0 clips")).toBeInTheDocument();
+    expect(menuMeta()).toBe("0 clips");
     expect(screen.getByText("No clips yet")).toBeInTheDocument();
     // Nothing to select, so the rail does not ask for a selection
     expect(screen.queryByText("Select a clip to trim it.")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
   });
 
-  it("keeps Done off in an empty editor whatever the loop count, and the loop footer inert", () => {
+  it("keeps Done off in an empty editor whatever the loop count, and Loop off in the menu", () => {
     seed({ clips: false });
     openEditor();
-    const loop = screen.getByRole("group", { name: "Loop", hidden: true }).closest("[inert]");
-    expect(loop).not.toBeNull();
-    // A loop count set another way (the footer cannot be reached) is still nothing to keep
+    const menu = openHeaderMenu();
+    const radios = within(within(menu).getByRole("group", { name: "Loop" })).getAllByRole("menuitemradio");
+    for (const radio of radios) expect(radio).toBeDisabled();
+    // With every row off the menu takes focus itself, so Escape still reaches it: it closes, and only it
+    expect(menu).toHaveFocus();
+    press(document.activeElement!, "Escape");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit menu" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
+    // Tab closes it too, rather than leaving it open with the editor's keys off
+    openHeaderMenu();
+    press(document.activeElement!, "Tab");
+    expect(screen.queryByRole("menu")).toBeNull();
+    // A loop count set another way (Loop cannot be reached) is still nothing to keep
     act(() => setLoopCount(2));
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
   });
@@ -590,7 +618,7 @@ describe("StitchEditorModal", () => {
     const remove = () => fireEvent.click(screen.getByRole("button", { name: /Remove clip/ }));
     remove();
     remove();
-    expect(screen.getByText("0 clips")).toBeInTheDocument();
+    expect(menuMeta()).toBe("0 clips");
     const done = screen.getByRole("button", { name: "Done" });
     expect(done).toBeEnabled();
     fireEvent.click(done);
@@ -614,9 +642,9 @@ describe("StitchEditorModal", () => {
     ] as AssetView[]);
     __setMediaInfoForTests(assetMediaKey("alibrary00001"), { duration: 5, width: 1280, height: 720, fps: 24 });
     __setMediaInfoForTests(assetMediaKey("alibrary00002"), { duration: 3, width: 1280, height: 720, fps: 24 });
-    const dialog = openEditor();
-    expect(within(dialog).getByText("2 clips")).toBeInTheDocument();
-    expect(within(dialog).getByText("0:08.00")).toBeInTheDocument();
+    openEditor();
+    expect(menuMeta()).toBe("2 clips · 1280 × 720 · 24 fps");
+    expect(totalShown("0:08.00")).toBe(true);
     const rail = within(screen.getByRole("complementary"));
     expect(rail.getByText("Library · Veo 3.1 · 5.00 s")).toBeInTheDocument();
     // The second clip names what made it
@@ -650,7 +678,7 @@ describe("StitchEditorModal", () => {
       const slot = dialog.querySelector('[data-clip-id="lib"]');
       expect(slot).toHaveAttribute("data-empty-reason", "gone");
       expect(slot).toHaveTextContent("Clip 2 · not in the library");
-      expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+      expect(totalShown("0:09.00")).toBe(true);
     });
   });
 
@@ -674,7 +702,7 @@ describe("StitchEditorModal", () => {
       expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/assets/alibrary00001"), expect.anything());
       expect(dialog.querySelector('[data-clip-id="lib"]')).toHaveAttribute("data-empty-reason", "gone");
     });
-    expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+    expect(totalShown("0:09.00")).toBe(true);
   });
 
   it("shows a library clip as gone once the library says its file is missing, though the file was read before", async () => {
@@ -706,7 +734,7 @@ describe("StitchEditorModal", () => {
     const dialog = openEditor();
     await vi.waitFor(() => {
       expect(dialog.querySelector('[data-clip-id="lib"]')).toHaveAttribute("data-empty-reason", "gone");
-      expect(within(dialog).getByText("0:09.00")).toBeInTheDocument();
+      expect(totalShown("0:09.00")).toBe(true);
     });
   });
 
@@ -727,7 +755,7 @@ describe("StitchEditorModal", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
     const dialog = openEditor();
     expect(dialog.querySelector('[data-clip-id="lib"]')).not.toHaveAttribute("data-empty-reason", "gone");
-    expect(within(dialog).getByText("0:15.00")).toBeInTheDocument();
+    expect(totalShown("0:15.00")).toBe(true);
   });
 
   it("reads a library clip's file again when the editor opens, after an earlier read of it failed", async () => {
@@ -750,7 +778,7 @@ describe("StitchEditorModal", () => {
     const dialog = openEditor();
     await vi.waitFor(() => {
       expect(dialog.querySelector('[data-clip-id="lib"]')).not.toHaveAttribute("data-empty-reason");
-      expect(within(dialog).getByText("0:15.00")).toBeInTheDocument();
+      expect(totalShown("0:15.00")).toBe(true);
     });
     expect(probe).toHaveBeenCalledTimes(1);
   });
@@ -781,7 +809,6 @@ describe("StitchEditorModal", () => {
 
   describe("in Stacked", () => {
     // Clip 1 is 5 s and clip 2 is 4 s: 9 s end to end, 8 s overlapping by 1 s
-    const totalShown = (text: string) => screen.getAllByText(text).length > 0;
     // The transport's toggle, as a user switches
     const layoutButton = (name: "Track" | "Stacked") =>
       within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name });
@@ -801,7 +828,7 @@ describe("StitchEditorModal", () => {
       expect(divider).toHaveClass("w-px");
       expect(divider.previousElementSibling).toBe(fit);
       // Not in the header, nor in the timeline
-      expect(screen.getByRole("button", { name: "Undo" }).parentElement!.parentElement!.contains(toggle)).toBe(false);
+      expect(document.querySelector("[data-editor-header]")!.contains(toggle)).toBe(false);
       expect(screen.getByRole("listbox", { name: "Clips" }).closest(".bg-editor-lanes")!.contains(toggle)).toBe(false);
       // It switches from there, and back
       stack();
@@ -831,7 +858,7 @@ describe("StitchEditorModal", () => {
       expect(totalShown("0:09.00")).toBe(true);
     });
 
-    it("puts Crossfade in the transport beside Sound, and leaves the rail's footer to Loop sequence", () => {
+    it("puts Crossfade in the transport beside Sound, and keeps Loop out of the rail (it is in the header's menu)", () => {
       seed();
       openEditor();
       stack();
@@ -839,10 +866,12 @@ describe("StitchEditorModal", () => {
       expect(crossfade.previousElementSibling).toBe(screen.getByRole("button", { name: "Sound" }));
       const rail = screen.getByRole("complementary", { name: "Clip" });
       expect(rail.contains(crossfade)).toBe(false);
-      // No Overlap well and no summary line in Stacked: the footer is Loop sequence alone, as in Track
+      // No Overlap well and no summary line in Stacked; Loop is the header's
       expect(within(rail).queryByRole("textbox", { name: "Overlap" })).toBeNull();
       expect(screen.queryByTestId("stitch-sequence-summary")).toBeNull();
-      expect(within(rail).getByText("Loop sequence")).toBeInTheDocument();
+      expect(within(rail).queryByText(/^Loop/)).toBeNull();
+      const loop = within(openHeaderMenu()).getByRole("group", { name: "Loop" });
+      for (const radio of within(loop).getAllByRole("menuitemradio")) expect(radio).toBeEnabled();
     });
     it("leaves the transport's toggle inert while there are no clips", () => {
       seed({ clips: false });
@@ -1023,7 +1052,7 @@ describe("StitchEditorModal", () => {
         expect(startField().value).toBe("0:04.00");
       });
 
-      it("moves the clip to a typed Start, the header's total with it, and Done writes it in the single write", () => {
+      it("moves the clip to a typed Start, the sequence's length with it, and Done writes it in the single write", () => {
         seed();
         openEditor();
         stack();
@@ -1066,7 +1095,7 @@ describe("StitchEditorModal", () => {
         expect(editor().past.length).toBe(steps + 1);
       });
 
-      it("writes a clip moved by its box in Done's single write, the total with it on release", () => {
+      it("writes a clip moved by its box in Done's single write, the length with it on release", () => {
         seed();
         openEditor();
         stack();
@@ -1506,5 +1535,88 @@ describe("StitchEditorModal, audio clips", () => {
     ]);
     expect(stitchData().audioCurve).toEqual([{ t: 1, gain: 0.5 }]);
     expect(stitchData().audioMuted).toBe(false);
+  });
+
+  it("says under the menu's Loop that each loop plays the audio clips again, while it does", () => {
+    seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }), toneClip("t", { row: 1, startSec: 2 })]);
+    openEditor();
+    const showLoop = () => within(openHeaderMenu()).getByRole("group", { name: "Loop" });
+    expect(showLoop()).not.toHaveAttribute("aria-describedby");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "2×" }));
+    const loop = showLoop();
+    expect(loop).toHaveAccessibleDescription(LOOP_AUDIO_NOTE);
+    // Under the radios
+    expect(within(loop).getByText(LOOP_AUDIO_NOTE).previousElementSibling).toBe(screen.getByRole("menuitemradio", { name: "3×" }));
+  });
+});
+
+describe("StitchEditorModal, the header's menu", () => {
+  it("holds Loop's 1×, 2× and 3× in the menu itself, the count set in one undo step, and what the sequence is", () => {
+    seed();
+    openEditor();
+    const menu = openHeaderMenu();
+    expect(menu).toHaveAccessibleDescription("2 clips · 1920 × 1080 · 24 fps");
+    // Loop is all it holds: no submenu to open
+    expect(within(menu).queryByRole("menuitem")).toBeNull();
+    const loop = within(menu).getByRole("group", { name: "Loop" });
+    const radios = within(loop).getAllByRole("menuitemradio");
+    expect(radios.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
+      ["1×", "true"],
+      ["2×", "false"],
+      ["3×", "false"],
+    ]);
+    expect(radios[0]).toHaveFocus();
+    // ↓ and ↑ move between them, End and Home jump
+    fireEvent.keyDown(radios[0], { key: "ArrowDown" });
+    expect(radios[1]).toHaveFocus();
+    fireEvent.keyDown(radios[1], { key: "End" });
+    expect(radios[2]).toHaveFocus();
+    fireEvent.keyDown(radios[2], { key: "ArrowDown" });
+    expect(radios[0]).toHaveFocus();
+    const past = editor().past.length;
+    fireEvent.click(radios[1]);
+    expect(editor().draft!.loopCount).toBe(2);
+    expect(editor().past).toHaveLength(past + 1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Picking the count it has is no step
+    fireEvent.click(within(openHeaderMenu()).getByRole("menuitemradio", { name: "2×" }));
+    expect(editor().past).toHaveLength(past + 1);
+    // Done writes it with the rest
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(stitchData().loopCount).toBe(2);
+  });
+
+  it("gives focus back to ⋯ after a pick, inside the dialog, so Tab stays in it", () => {
+    seed();
+    const dialog = openEditor();
+    const trigger = screen.getByRole("button", { name: "Edit menu" });
+    fireEvent.click(within(openHeaderMenu()).getByRole("menuitemradio", { name: "3×" }));
+    expect(editor().draft!.loopCount).toBe(3);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("owns the keys while open: Escape closes it, not the dialog, and Space, ⌫ and S do nothing to the edit", () => {
+    seed();
+    openEditor();
+    act(() => {
+      editor().select({ kind: "clip", clipId: "clip:eA" });
+      setLoopCount(2);
+    });
+    const draft = editor().draft;
+    const menu = openHeaderMenu();
+    const first = within(menu).getAllByRole("menuitemradio")[0];
+    for (const key of [" ", "Backspace", "s", "k"]) press(document.activeElement ?? first, key);
+    expect(editor().draft).toBe(draft);
+    expect(editor().playing).toBe(false);
+    press(document.activeElement!, "Escape");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit menu" })).toHaveFocus();
+    expect(editor().discardOpen).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
+    // Closed, the editor's keys are back: Escape asks about the changes
+    press(document.body, "Escape");
+    expect(editor().discardOpen).toBe(true);
   });
 });

@@ -195,10 +195,13 @@ describe("FrameToCanvasButton", () => {
     expect(editor().playing).toBe(false);
   });
 
-  it("captures at the header's size", async () => {
+  it("captures at the sequence's size, as the header's menu gives it", async () => {
     seed();
     openEditor();
-    expect(screen.getByText("1920 × 1080 · 24 fps")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+    expect(screen.getByRole("menu", { name: "Edit menu" })).toHaveAccessibleDescription(/ · 1920 × 1080 · 24 fps$/);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
     await act(async () => {
       fireEvent.click(frameButton());
     });

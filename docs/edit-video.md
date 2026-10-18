@@ -16,9 +16,12 @@ near-full-screen `Dialog`, 24 px from every edge of the window like the
 annotation editor (so nothing in it sits in the desktop app's drag region),
 with its own darker chrome (the `editor-*` tokens in `globals.css`):
 
-- **Header**: "Edit video", then "N clips · length · W × H · F fps" (the frame
-  rate only when the clips agree; in Stacked the length runs to the end of
-  the clip that ends last); Undo, Redo, Cancel, Save and Done.
+- **Header**: "Edit video"; Undo, Redo and the ⋯ menu, which holds
+  **Loop**'s 1×, 2× and 3× (radios in the menu itself, off with no clips)
+  and, in a muted last line, "N clips · W × H · F fps" (the frame rate only
+  when the clips agree); then Cancel, Save and Done.
+  The transport shows the length (in Stacked it runs to the end of the
+  clip that ends last).
 - **Stage**: the sequence previewed at the playhead, letterboxed. In
   Stacked it blends or covers clips where they overlap, by row, and shows
   black in a gap. While you drag a clip, the preview keeps showing the
@@ -34,7 +37,7 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   audio (On or Off, with neither pressed while some are muted and some
   not), Split at playhead, Reset trim and Remove. At the foot of the
   rail, whatever is selected, sits **Frame to canvas** (see "Frame to
-  canvas"); under it the footer holds Loop sequence (1×, 2×, 3×).
+  canvas").
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the audio rows (each audio clip's waveform
@@ -610,8 +613,8 @@ at 0:00 (its curve and mute may be changed), the music plays on across
 loops as before, and its curve repeats each loop. Once the audio is anything
 else, every audio clip repeats with each loop, the music included: with
 Loop 2× on a 10 s sequence, a 20 s song plays its first 10 s twice instead
-of playing through once. Each restart is a cut. The rail says so under Loop
-sequence while it applies.
+of playing through once. Each restart is a cut. The header menu's Loop says
+so while it applies.
 
 **Clip sound** stays with each video clip (Clip audio and Volume in the
 rail), as before.
@@ -986,29 +989,36 @@ is placed from a length the editor does not know yet. Videos recorded
 while the view is open wait behind "N new · Show" at the top of the
 library, so the tiles never move under the pointer. `+` on the timeline
 goes to the library's search. The library pane hides with the button in
-its corner and stays hidden until shown again. The header names the edit
-(click to rename), and its menu offers New, Open, Duplicate, Rename, Show
-in Finder and Delete (to the Trash; renders stay in the library). The rail
-has no Reveal source node: an edit's clips come from the library.
+its corner and stays hidden until shown again (the header's first button
+shows it). The header reads "Edits › name": Edits goes home, and a click on
+the name renames the edit in place. Its ⋯ menu offers Rename, Duplicate,
+Show in Finder, Loop (a submenu of 1×, 2×, 3×; its row reads Off at 1×)
+and Delete (to the Trash; renders stay in the library), and ends with what
+the sequence is ("4 clips · 1280 × 720 · 24 fps"). New edit and the other
+edits are on the home, behind Edits. The rail has no Reveal source node:
+an edit's clips come from the library.
 
 **Saving.** An edit is a document. With "Save automatically" on (Settings
 › Project) it saves 3 s after the last change; ⌘S and File › Save save it
 now while the view shows (they save the workflow everywhere else; on the
-home screen ⌘S does nothing). The header says Saved, Saving…, Unsaved,
-Waiting… (the library is being moved), Save failed, Changed elsewhere or
-Not in Edits. Saves run one at a time, so ⌘S during an automatic save
+home screen ⌘S does nothing). Beside the name the header says Saved,
+Saving…, Unsaved, Waiting… (the library is being moved), Save failed,
+Changed elsewhere or Not in Edits; its Save button shows only while Save
+automatically is off. Saves run one at a time, so ⌘S during an automatic save
 never looks like a conflict. Leaving the view keeps the edit as it was,
 undo history and playhead included, and saves it first when Save
-automatically is on. With it off, switching to another edit asks whether
-to save. Closing the window with unsaved edits asks first. If another
-window changed the same edit, saving stops and asks: keep yours, or use
-the other version. If the edit's file is gone (deleted or renamed
+automatically is on. With it off, going home (Edits) or to a duplicate
+asks whether to save. Closing the window with unsaved edits asks first. If
+another window changed the same edit, saving stops and asks: keep yours,
+or use the other version. If the edit's file is gone (deleted or renamed
 elsewhere), saving offers **Save as a new edit**. A file copied in Finder
 keeps the original's id; the list shows it as a copy, with **Make it a
 separate edit**.
 
 **Render.** Encodes the edit with the same engine and options as the node
-(one clip is enough), with progress and Stop in the header. The video goes
+(one clip is enough). While it runs, "Rendering N%" and Stop take Render's
+place in the header, and a thin line along the header's foot fills with the
+progress. The video goes
 into the asset library as an edited video under the edit's name, not under
 any workflow, and in no project; a toast offers Show in Assets and Add to
 canvas. Assets lists an edit's renders together under the edit's current
@@ -1032,8 +1042,8 @@ whatever is selected.
 - It shows the clips the preview shows at the playhead, with the same
   source frames and blend as Render: in Stacked, the same mix of the clips
   that overlap there.
-- The image is the sequence's frame size (the largest clip, as the header
-  shows), as PNG.
+- The image is the sequence's frame size (the largest clip, as the header's
+  ⋯ menu shows), as PNG.
 - The new image node goes to the right of the Edit Video node, selected.
   More frames from the same node go in a column under it.
 - The frame is kept in the asset library as an edited image ("Frame grab"),
@@ -1128,7 +1138,7 @@ snaps its start only.
   same moment can both pass that check, and the later write wins. Listing
   edits never writes, so browsing from both is safe.
 - The Edit video view is laid out for windows 1100 px wide and more. Below
-  1100 px its header drops the clip count and size; a stage column under
+  that the header shortens a long edit name with an ellipsis; a stage column under
   760 px (the view at 1280 px with the library shown, or the dialog in a
   window under about 1088 px) drops the zoom slider and keeps −, + and Fit.
 - A project made by name before Edit video existed and called "Edits"

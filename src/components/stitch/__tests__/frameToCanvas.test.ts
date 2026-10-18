@@ -294,7 +294,7 @@ describe("frameToCanvas", () => {
     expect(recordUiAsset.mock.calls[0][0].parameters).toMatchObject({ mode: placed ? "placed" : "stacked", crossfade });
   });
 
-  it("hands the capture the raw sources, clip numbers and the header's size", async () => {
+  it("hands the capture the raw sources, clip numbers and the sequence's frame size", async () => {
     editor().setPlayhead(1);
     await press();
     const job = capture.mock.calls[0][0];

@@ -2,11 +2,9 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
-import { cn } from "@/components/nodes/ui/cn";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
 import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { clipIdsOf } from "@/lib/stitch/selection";
@@ -23,7 +21,6 @@ import {
   setClipMuted,
   setClipStart,
   setClipVolume,
-  setLoopCount,
   setSelectedClipsMuted,
   splitAtPlayhead,
   splitBlockedReason,
@@ -35,12 +32,6 @@ import { KeyHints, RailButton, RailRow } from "./railParts";
 import { TimecodeField } from "./TimecodeField";
 import type { AudioClipView, ClipMediaView } from "./useStitchEditorMedia";
 import { EDITOR_PANEL_SELECTOR } from "./editorStyles";
-
-const LOOP_OPTIONS = [
-  { value: "1", label: "1×" },
-  { value: "2", label: "2×" },
-  { value: "3", label: "3×" },
-] as const;
 
 const TRIM_HINTS = [
   { key: "I", text: "In at the playhead" },
@@ -80,12 +71,11 @@ function clipNamesLine(indices: readonly number[]): string {
 /**
  * The 280px rail beside the stage: the selected clip's name and source,
  * in Stacked where it starts on the timeline, its trim as In and Out
- * wells, its own sound, the clip actions with the trim keys, and the loop
- * count in the footer. With audio clips selected it shows them instead
- * (AudioClipRail), and with several video clips what applies to all of them
- * (MultiClipRail). Frame to canvas sits under the body, whatever is
- * selected, so it never moves when the body swaps or scrolls. While the
- * loop repeats audio clips, a line over the loop row says so.
+ * wells, its own sound, and the clip actions with the trim keys. With audio
+ * clips selected it shows them instead (AudioClipRail), and with several
+ * video clips what applies to all of them (MultiClipRail). Frame to canvas
+ * sits under the body, whatever is selected, so it never moves when the
+ * body swaps or scrolls. Loop is in the header's ⋯ menu.
  */
 export function EditorRail({
   media,
@@ -97,12 +87,11 @@ export function EditorRail({
   /** Each audio clip's view. */
   audio: ReadonlyMap<string, AudioClipView>;
   spans: readonly ClipSpan[];
-  /** The header's size; null while no clip is ready with one. */
+  /** The sequence's frame size (the ⋯ menu's line); null while no clip is ready with one. */
   frameSize: { width: number; height: number } | null;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
   const durations = useStitchEditorStore((s) => s.durations);
-  const empty = !draft || draft.timeline.length === 0;
   const selection = useStitchEditorStore((s) => s.selection);
   const selectedIndices = useMemo(() => {
     if (selection?.kind !== "clip" || !draft) return [];
@@ -136,8 +125,6 @@ export function EditorRail({
     return draft.audioClips.filter((c) => ids.has(c.id));
   }, [selection, draft]);
   const audioSelected = selectedAudio.length > 0;
-  // The loop rule is the new one once the audio is anything but the music alone, whole, from 0:00
-  const loopRepeatsAudio = (draft?.loopCount ?? 1) > 1 && draft !== null && !isLegacyAudioShape(draft.audioClips);
 
   // A swap of the rail's body (the last clip removed, the track for a clip or back, Overlap and Crossfade coming or going
   // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
@@ -295,32 +282,6 @@ export function EditorRail({
 
       <div className="shrink-0 border-t border-chrome-border/50 px-5 py-2.5">
         <FrameToCanvasButton media={media} spans={spans} frameSize={frameSize} />
-      </div>
-
-      {/* Over the loop row, so showing it moves nothing under a press on the loop */}
-      {loopRepeatsAudio && (
-        <p className="shrink-0 border-t border-chrome-border/50 px-5 pt-2.5 text-[11px] leading-[14px] text-neutral-500">
-          Each loop plays the audio clips again from their start.
-        </p>
-      )}
-      {/* Inert with nothing to loop, like the transport beside it */}
-      <div
-        className={cn(
-          "h-11 shrink-0 flex items-center justify-between px-5",
-          !loopRepeatsAudio && "border-t border-chrome-border/50",
-          empty && "opacity-50 pointer-events-none",
-        )}
-        inert={empty}
-      >
-        <span className="text-xs text-neutral-400">Loop sequence</span>
-        <Segmented
-          size="sm"
-          label="Loop"
-          options={[...LOOP_OPTIONS]}
-          value={String(draft?.loopCount ?? 1)}
-          onChange={(value) => setLoopCount(Number(value) as 1 | 2 | 3)}
-          className="bg-editor-well"
-        />
       </div>
     </aside>
   );

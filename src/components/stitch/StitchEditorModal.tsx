@@ -6,16 +6,13 @@ import { requestSave } from "@/store/saveRequestStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { DiscardSheet } from "./DiscardSheet";
-import { EditorHeader } from "./EditorHeader";
+import { EditorHeader, headerMenuOpen } from "./EditorHeader";
 import { EditorWorkspace } from "./EditorWorkspace";
-import { STITCH_EDITOR_PANEL } from "./editorStyles";
+import { HEADER_PX, STITCH_EDITOR_PANEL } from "./editorStyles";
 import { LibraryPicker } from "./library/LibraryPicker";
 import { useEditorComposition } from "./useEditorComposition";
 import { useEditorLifecycle } from "./useEditorLifecycle";
-import { useStitchEditorKeys } from "./useStitchEditorKeys";
-
-/** The header's height (its h-12). */
-const HEADER_PX = 48;
+import { useStitchEditorKeys, type StitchEditorKeyOptions } from "./useStitchEditorKeys";
 
 /** Cancel and Escape: straight out when nothing changed, otherwise the discard sheet asks. */
 function requestClose(): void {
@@ -23,6 +20,9 @@ function requestClose(): void {
   if (selectIsDirty(s)) s.setDiscardOpen(true);
   else s.close();
 }
+
+/** The header's ⋯ menu owns Escape, Space, ⌫ and the rest while it is open, as the Edit video view's menus do. */
+const KEY_OPTIONS: StitchEditorKeyOptions = { isStacked: headerMenuOpen };
 
 /** The marker the library picker hands focus back by (see STITCH_EDITOR_PANEL). */
 const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLDivElement>;
@@ -45,7 +45,7 @@ function StitchEditor() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEditorLifecycle();
-  useStitchEditorKeys(rootRef, requestClose);
+  useStitchEditorKeys(rootRef, requestClose, KEY_OPTIONS);
   const composition = useEditorComposition(rootRef, HEADER_PX);
 
   return (
@@ -62,7 +62,6 @@ function StitchEditor() {
       <div ref={rootRef} className="flex h-full min-h-0 flex-col">
         <EditorHeader
           clipCount={composition.clipCount}
-          total={composition.total}
           size={composition.size}
           fps={composition.fps}
           onCancel={requestClose}

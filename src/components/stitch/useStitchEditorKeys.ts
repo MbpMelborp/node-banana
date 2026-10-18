@@ -151,7 +151,7 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
  * browser on Windows. ⌘C, ⌘X, ⌘V, ⌘D and ⌘A act on clips, except that with
  * text selected on the page ⌘C and ⌘X copy the text, natively. The Edit
  * video view hands in its own view keys (`onOtherKey`) and menus
- * (`isStacked`); the node's dialog passes neither.
+ * (`isStacked`); the node's dialog its header's menu (`isStacked`).
  */
 export function useStitchEditorKeys(
   rootRef: RefObject<HTMLElement | null>,

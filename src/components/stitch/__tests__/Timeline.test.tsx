@@ -2714,7 +2714,8 @@ describe("Timeline, heights and the audio section", () => {
   });
 
   it("takes the room the editor leaves it: Stacked's rows give way first, then the audio rows", () => {
-    // The dialog is 752px tall (a 1280 × 800 window): the stage keeps 300, the timeline gets at most 360
+    // The dialog is 752px tall (a 1280 × 800 window): under its 56px header and the transport the stage keeps 300,
+    // the timeline gets at most 352
     const globals = globalThis as { ResizeObserver?: unknown };
     const original = globals.ResizeObserver;
     globals.ResizeObserver = class {
@@ -2733,8 +2734,8 @@ describe("Timeline, heights and the audio section", () => {
       seedWith([5, 5, 5, 5], [toneClip("t", { startSec: 1 }), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
       openEditor();
       act(() => editor().setAudioExpandedRow(0));
-      expect(timelineEl().style.height).toBe("360px");
-      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("200px");
+      expect(timelineEl().style.height).toBe("352px");
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("192px");
     } finally {
       globals.ResizeObserver = original;
     }

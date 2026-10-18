@@ -224,7 +224,9 @@ describe("the Index", () => {
     vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(box(600));
     vi.spyOn(more("Vesper opening"), "getBoundingClientRect").mockReturnValue(box(250));
     fireEvent.click(more("Vesper opening"));
-    expect(screen.getByRole("menu").className.split(" ")).not.toContain("bottom-full");
+    // Placed by its surface, which holds the menu (and, in a header, the line under it)
+    const surface = () => screen.getByRole("menu").parentElement!.className.split(" ");
+    expect(surface()).not.toContain("bottom-full");
     fireEvent.click(more("Vesper opening"));
     expect(screen.queryByRole("menu")).toBeNull();
 
@@ -232,7 +234,7 @@ describe("the Index", () => {
     fireEvent.pointerEnter(item("Salt flats"));
     vi.spyOn(more("Salt flats"), "getBoundingClientRect").mockReturnValue(box(560));
     fireEvent.click(more("Salt flats"));
-    expect(screen.getByRole("menu").className.split(" ")).toContain("bottom-full");
+    expect(surface()).toContain("bottom-full");
   });
 
   it("⋯ renames in place, duplicates, shows the file and deletes; while it is open the preview stays", async () => {
@@ -247,6 +249,8 @@ describe("the Index", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Duplicate" }));
     expect(actions.duplicate).toHaveBeenCalledWith("ed1");
     expect(screen.queryByRole("menu")).toBeNull();
+    // Focus goes back to ⋯ rather than to <body>
+    expect(screen.getByRole("button", { name: "More for Vesper opening" })).toHaveFocus();
 
     fireEvent.click(screen.getByRole("button", { name: "More for Vesper opening" }));
     fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Show in Finder" }));
@@ -262,6 +266,8 @@ describe("the Index", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     let field = screen.getByRole("textbox", { name: "Edit name" });
     expect(field).toHaveValue("Vesper opening");
+    // The field takes focus a frame later, from ⋯, which had it back from the closed menu
+    await waitFor(() => expect(field).toHaveFocus());
     fireEvent.pointerEnter(item("Salt flats"));
     expect(previewOf()).toBe("ed1");
     fireEvent.keyDown(field, { key: "Escape" });

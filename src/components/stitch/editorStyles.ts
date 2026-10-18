@@ -19,9 +19,31 @@ export const RAIL_BUTTON =
 export const ICON_BUTTON =
   "h-7 w-7 inline-flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
 
-/** Text ghosts: Undo, Redo, Snap, Fit. */
+/** Text ghosts: Snap, Crossfade and Fit in the transport, and the track headers' small text buttons. */
 export const TEXT_GHOST =
   "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-md text-xs text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-neutral-700/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:text-neutral-600 disabled:hover:bg-transparent";
+
+/** The headers' height (the view's and the dialog's h-14): what sits over the stage in the editor's column. */
+export const HEADER_PX = 56;
+
+/** The headers' 32px icon buttons (Undo, Redo, ⋯, Show the library): dimmed when off, filled while open. */
+export const HEADER_ICON_BUTTON =
+  "h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-lg text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 aria-expanded:bg-edit-pressed aria-expanded:text-neutral-100 disabled:text-neutral-600 disabled:hover:bg-transparent";
+
+/** The one white button in a header: Render, Done. */
+export const HEADER_PRIMARY =
+  "h-8 shrink-0 inline-flex items-center rounded-lg bg-neutral-100 px-4 text-[13px] font-semibold text-neutral-950 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-neutral-100";
+
+/** A header's quiet text button: Save, Cancel. */
+export const HEADER_GHOST =
+  "h-8 shrink-0 inline-flex items-center rounded-lg px-3 text-[13px] font-medium text-neutral-300 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent";
+
+/** Stop, outlined beside the render's progress. */
+export const HEADER_OUTLINE =
+  "h-8 shrink-0 inline-flex items-center rounded-lg border border-neutral-800 px-3.5 text-[13px] font-medium text-neutral-100 transition-colors hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
+
+/** A header's title: the edit's name, or "Edit video" in the dialog. */
+export const HEADER_TITLE = "font-display text-[15px] font-medium leading-[18px] tracking-[-0.02em] text-neutral-100";
 
 /** A pressed toggle (Snap, Sound off). */
 export const TOGGLE_ON = "bg-white/10 text-neutral-100";
@@ -35,7 +57,7 @@ export const TIMECODE_WELL = cn(
 /** The Overlap well: the timecode well's type, 64px wide ("1.0 s"). */
 export const SECONDS_WELL = cn(TIMECODE_WELL, "w-16");
 
-/** Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 48, transport 44, rail 280) are its Tailwind classes. */
+/** Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 56, transport 44, rail 280) are its Tailwind classes. */
 export const GEOMETRY = {
   /** One video row (Track's clips, or up to two of Stacked's), one audio row and the audio strip. */
   timeline: 224,

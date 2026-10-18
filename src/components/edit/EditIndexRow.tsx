@@ -4,10 +4,11 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent, type Ref } fr
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { formatDuration } from "@/components/assets/assetFormat";
+import { ActionMenu } from "@/components/stitch/ActionMenu";
 import { ICON_BUTTON } from "@/components/stitch/editorStyles";
 import type { EditSummary } from "@/lib/edits/types";
 import { useEditProjectStore } from "@/store/editProjectStore";
-import { ActionMenu, revealText } from "./EditMenu";
+import { revealText } from "./EditMenu";
 import { editCardMeta } from "./editMeta";
 import { EditNameField } from "./EditNameField";
 
@@ -150,7 +151,7 @@ export function EditIndexRow({
               { kind: "item", label: "Duplicate", onSelect: () => void store().duplicate(edit.id) },
               { kind: "item", label: revealText(), onSelect: () => void store().reveal(edit.id) },
               { kind: "divider" },
-              { kind: "item", label: "Delete…", danger: true, onSelect: () => store().requestDelete(edit.id) },
+              { kind: "item", label: "Delete…", onSelect: () => store().requestDelete(edit.id) },
             ]}
             onClose={(refocus) => {
               onMenuChange(false);
