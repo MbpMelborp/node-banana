@@ -13,7 +13,8 @@ export function revealText(): string {
 
 /**
  * The open edit's ⋯ in the header: Rename (in place), Duplicate, Show in
- * Finder; Loop (1×, 2×, 3×); Delete… (to the Trash, after a confirm); and
+ * Finder; Loop (its row reads the count; Off, 2×, 3× beside it, as in the
+ * dialog's menu); Delete… (to the Trash, after a confirm); and
  * under them, in a muted line, what the sequence is (`meta`). New edit and
  * the other edits are on the home, a click away on the breadcrumb's Edits.
  */

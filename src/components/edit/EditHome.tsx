@@ -6,7 +6,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { DialogSpinner } from "@/components/ui/Dialog";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { ICON_BUTTON, QUIET_BUTTON } from "@/components/stitch/editorStyles";
+import { HEADER_ICON_BUTTON, QUIET_BUTTON } from "@/components/stitch/editorStyles";
 import { useLibraryAvailable } from "@/components/stitch/library/useLibraryAvailable";
 import type { EditListProblem, EditSummary } from "@/lib/edits/types";
 import { useEditProjectStore } from "@/store/editProjectStore";
@@ -33,6 +33,14 @@ const ACTIVE_ROW = "[data-edit-row][tabindex='0']";
  */
 const NEW_EDIT_BUTTON =
   "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-100 pl-2.5 pr-3.5 text-[13px] font-semibold text-neutral-950 transition-colors hover:bg-white focus-visible:outline-none in-data-[keyed]:focus-visible:ring-2 in-data-[keyed]:focus-visible:ring-white/40 in-data-[keyed]:focus-visible:ring-offset-2 in-data-[keyed]:focus-visible:ring-offset-pane disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * The empty list's New edit entry, keyboard-focused once a key has been pressed: a faint fill and the editor's white
+ * ring (the fill alone is barely there on the pane), inside its edge, as the rows' (the list's scroller would cut an
+ * outer ring off).
+ */
+const KEYED_FOCUS =
+  "in-data-[keyed]:focus-visible:bg-white/6 in-data-[keyed]:focus-visible:ring-2 in-data-[keyed]:focus-visible:ring-inset in-data-[keyed]:focus-visible:ring-white/40";
 
 /** An other file's action (Make it a separate edit): no brighter than the line it ends. */
 const PROBLEM_BUTTON = cn(QUIET_BUTTON, "text-ink-3");
@@ -130,7 +138,10 @@ export function EditHome() {
           type="button"
           disabled={creating}
           onClick={() => void store().newEdit()}
-          className="-mx-2 flex h-12 shrink-0 items-center gap-3 self-start rounded-md px-2 font-display text-[22px] font-medium leading-[1.2] tracking-[-0.02em] text-neutral-100 transition-colors focus-visible:outline-none in-data-[keyed]:focus-visible:bg-white/6 disabled:opacity-50"
+          className={cn(
+            "-mx-2 flex h-12 shrink-0 items-center gap-3 self-start rounded-md px-2 font-display text-[22px] font-medium leading-[1.2] tracking-[-0.02em] text-neutral-100 transition-colors focus-visible:outline-none disabled:opacity-50",
+            KEYED_FOCUS,
+          )}
         >
           <Plus size={22} strokeWidth={1.5} aria-hidden="true" />
           {creating ? "Creating…" : "New edit"}
@@ -170,7 +181,7 @@ export function EditHome() {
                 aria-label={revealText()}
                 disabled={!libraryOn}
                 onClick={() => void store().revealFolder()}
-                className={cn(ICON_BUTTON, "h-8 w-8 rounded-lg text-ink-3 focus-visible:ring-white/40")}
+                className={cn(HEADER_ICON_BUTTON, "text-ink-3")}
               >
                 <FolderOpen size={16} strokeWidth={1.5} />
               </button>

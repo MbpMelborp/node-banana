@@ -14,12 +14,15 @@ It opens from **Expand** in the node's floating header (beside Run and the
 menu) or from **Open editor** on the card, beside Render. It is a
 near-full-screen `Dialog`, 24 px from every edge of the window like the
 annotation editor (so nothing in it sits in the desktop app's drag region).
-Its header, stage and rail sit on the pane colour, as in the Edit video view,
-with hairlines (`edit-line`) between regions; the timeline keeps its own
-ground (the `editor-*` and `edit-*` tokens in `globals.css`):
+Its header, stage, rail and timeline all sit on the pane colour, as in the
+Edit video view, with `edit-line` hairlines between regions (the rail's left
+edge, the timeline's top edge; in the view also the library pane's right
+edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
 
 - **Header**: "Edit video"; Undo, Redo and the ⋯ menu, which holds
-  **Loop**'s 1×, 2× and 3× (radios in the menu itself, off with no clips)
+  **Loop** as the view's menu does: one row that reads the count ("Loop
+  Off", no chevron, as the boards draw it; off with no clips) and opens Off,
+  2× and 3× as radios beside the menu on a hover, a click, → or Enter,
   and, in a muted last line, "N clips · W × H · F fps" (the frame rate only
   when the clips agree); then Cancel, Save and Done.
   The control row shows the length (in Stacked it runs to the end of the
@@ -36,7 +39,8 @@ ground (the `editor-*` and `edit-*` tokens in `globals.css`):
   at the right Frame to canvas (see "Frame to canvas"), Mute all (the
   preview's sound), Crossfade (in Stacked), Track | Stacked, Snap, Zoom
   out, Zoom in and Fit. There is no zoom slider: − and + (or the keys − and
-  =), Fit (⇧Z), and ⌘ wheel or pinch over the timeline zoom it. Track and
+  =), Fit (⇧Z), and ⌘ wheel or pinch over the timeline zoom it. At its limit
+  − or + dims but keeps keyboard focus (`aria-disabled`). Track and
   Stacked are two of the row's icons, the pressed one filled as Snap is. The
   icons say what they are, and their keys, on hover. Inert while there are no
   clips.
@@ -65,18 +69,23 @@ ground (the `editor-*` and `edit-*` tokens in `globals.css`):
   last clip that adds videos from the library) and the audio rows (each
   audio clip's waveform in grey) and, under them, a quiet **+ Audio**. A
   clip shows only its frames (or its waveform) at rest; its length shows on
-  hover, with its trim handles and, on a video clip, its sound button; an
-  audio clip's file name is its tooltip. A muted clip keeps its muted badge
+  hover or keyboard focus, and on hover its trim handles and, on a video
+  clip, its sound button; an audio clip's file name is its tooltip. A muted clip keeps its muted badge
   (an icon). Selected clips, video or audio, are ringed in white; a selected
   audio clip's waveform lightens and its volume curve is drawn in white. The
   playhead's line ends above "+ Audio". What the track headers held floats
-  in the timeline's 20 px left padding while the pointer is over a row, or
-  keyboard focus is on it: an audio row's mute and its volume-curve button
-  (which makes the row taller to edit the curve), and in Stacked each row's
-  grip. Scrolled sideways, the lanes pass under that padding, which covers
-  them there, so a press on the controls never reaches a clip out of view.
-  In Stacked the Clips lane is one row per clip; the rows scroll between a
-  fixed ruler and the audio rows. The timeline takes the height its rows
+  in the timeline's 20 px left padding, 2 px clear of its edge and of
+  0:00: an audio row's mute and its volume-curve button (which makes the
+  row taller to edit the curve) while the pointer is over the row or
+  keyboard focus is on it or one of its clips, and in Stacked each row's
+  grip while the pointer is over the row (from the keyboard, ⌥↑ / ⌥↓ and
+  the clip menu move rows). Scrolled sideways, the lanes pass under that
+  padding, which covers them there, so a press on the controls never
+  reaches a clip out of view. In Stacked the Clips lane is one row per
+  clip; the rows scroll between a fixed ruler and the audio rows, and fade
+  into either where more of them are out of view that way. When the rows'
+  view grows (the height settling once the pointer leaves the control row),
+  the rows above come into view first. The timeline takes the height its rows
   need, never more for the selection (see Audio clips). A clip's box drags in time and up or down to
   another row in one move; its row's grip drags it up or down only (see
   Stacked). Click, ⌘-click, ⇧-click or drag a box around clips to select
@@ -360,7 +369,7 @@ the clips still end in the order they start.
   as one clip, so a split never changes an overlap or moves a clip.
 
 **The lane.** Each row is 52 px, with the clip's box at its own start on the
-ruler. The boxes are compact: frames only, the length on hover, and the
+ruler. The boxes are compact: frames only, the length on hover or focus, and the
 muted badge on a muted clip. While the pointer is over a row, its grip
 shows in the timeline's left padding. A box's accessible name says where it
 starts ("Clip 3, starts 0:07.20"), and so does an empty clip's slot. A box
@@ -635,10 +644,14 @@ at a time; selecting a clip never changes a row's height). The controls, the
 row's mute over that button, float in the timeline's left padding while the
 pointer is over the row or keyboard focus is in them or on one of the row's
 clips, and stay while the row is taller, the button pressed; they keep
-their names ("Mute Audio 2", "Show volume curve") and their tab stops. The
-taller row grows upward, so the button stays under the pointer; its 0 dB
-and −12 dB guides are unlabelled (a dragged point's readout says its
-level). A press on a control keeps the controls in place until its
+their names ("Mute Audio 2", "Show volume curve for Audio 2") and their
+tab stops. The taller row grows upward, so the button stays under the
+pointer; its 0 dB and −12 dB guides are labelled in each clip, just over
+the line at the clip's left (what the row header's labels said), and a
+dragged point's readout says its level. While the clip's start is scrolled
+out of view the labels stay at the lanes' left, inside the clip, until its
+end takes them out of view; a clip too narrow for them (under 64 px) draws
+no guides, so no dashed line goes unnamed. A press on a control keeps the controls in place until its
 release, so a click whose pointer drifts still lands. At rest a clip shows
 its waveform alone; selected, its curve is drawn in white with its points,
 and on the taller row the other clips' curves show faintly. On a taller
@@ -1034,7 +1047,8 @@ button goes to the active row. Focus starts on the newest edit's row as
 the home shows, so Enter opens it (with no edits, on New edit, so Enter
 starts one); it never takes focus back from where it was moved. That first
 focus is unmarked; after a key, keyboard focus shows (a faint fill across
-the row). A long list scrolls in its column. Above it, New edit and the
+the row and a white ring inside its edge, where the list's scroller cannot
+cut it off; New edit's entry in an empty list shows the same). A long list scrolls in its column. Above it, New edit and the
 Edits folder's button (the heading "Edits" shows the folder's path on
 hover); under it, the files the view cannot open, also under the message
 when the list cannot be read again, with Make it a separate edit on a
@@ -1047,7 +1061,9 @@ editor as the dialog: stage, control row, rail and timeline, with the same
 keys. The library lists every project's videos and sounds, grouped by
 project in the list's order: videos as covers with only their length on
 them, sounds as one-line rows with their name and length.
-A tile's tooltip gives its name and says how to add it. There is one
+A tile's tooltip gives its name and says how to add it; on keyboard
+focus a cover shows its name (and why it cannot be added yet) at its top,
+as no tooltip follows the keys. There is one
 search; the filter button inside it opens a small popover with Kind (All,
 Video, Audio), Project, Favourites and Sort (newest or oldest first), and
 a dot on the button says one of them is not at its default. The popover
@@ -1070,8 +1086,8 @@ goes to the library's search (the audio rows' + also sets Kind to Audio). The li
 its corner and stays hidden until shown again (the header's first button
 shows it). The header reads "Edits › name": Edits goes home, and a click on
 the name renames the edit in place. Its ⋯ menu offers Rename, Duplicate,
-Show in Finder, Loop (a submenu of 1×, 2×, 3×; its row reads Off at 1×)
-and Delete (to the Trash; renders stay in the library), and ends with what
+Show in Finder, Loop (a submenu of Off, 2×, 3×; its row reads the one set,
+with no chevron, and is the same row in the node's dialog) and Delete (to the Trash; renders stay in the library), and ends with what
 the sequence is ("4 clips · 1280 × 720 · 24 fps"). New edit and the other
 edits are on the home, behind Edits. The rail has no Reveal source node:
 an edit's clips come from the library.
@@ -1098,8 +1114,8 @@ separate edit**.
 place in the header, and a thin line along the header's foot fills with the
 progress. The video goes
 into the asset library as an edited video under the edit's name, not under
-any workflow, and in no project; a toast offers Show in Assets and Add to
-canvas. Assets lists an edit's renders together under the edit's current
+any workflow, and in no project; a neutral toast (no green: the view has
+no colour but the footage's) offers Show in Assets and Add to canvas. Assets lists an edit's renders together under the edit's current
 name (a rename updates the name Assets shows) and offers no Open workflow
 for them. Render is off, and says why, while a clip's video is no longer in
 the library ("Not in the library · sunset.mp4" in the rail).

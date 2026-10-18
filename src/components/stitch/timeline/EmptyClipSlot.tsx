@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useId, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { CircleAlert } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Spinner } from "@/components/nodes/ui/Spinner";
@@ -43,6 +43,8 @@ const COPY = {
  * keeps its place in the order as a fixed 160px slot that counts 0 s, and
  * can be selected like a clip (so Reset trim fixes a trim past the end).
  * In Stacked its whole slot is a body that drags it in time and across rows.
+ * Why it has no length is its one line of text, in ink-3, and its accessible
+ * description.
  */
 export function EmptyClipSlot({
   span,
@@ -76,11 +78,13 @@ export function EmptyClipSlot({
 }) {
   const reason = emptyReason(span, view);
   const name = clipName(span.index);
+  const reasonId = useId();
   return (
     <div
       data-clip-id={span.clip.id}
       data-empty-reason={reason}
       aria-label={stacked ? `${name}, starts ${formatTimecode(span.start)}` : name}
+      aria-describedby={reasonId}
       aria-selected={selected}
       role="option"
       tabIndex={focusable ? 0 : -1}
@@ -88,7 +92,7 @@ export function EmptyClipSlot({
       onMouseDown={keepFocus}
       onContextMenu={onContextMenu}
       className={cn(
-        "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed border-white/20 bg-white/2 text-[11px] text-neutral-500 select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
+        "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed border-white/20 bg-white/2 text-[11px] text-ink-3 select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
         mode === "lifted" && cn(LIFTED_CLIP, "bg-edit-field"),
         mode === "moving" && cn(MOVING_CLIP, "bg-edit-field"),
         stacked && mode === "rest" && "cursor-grab",
@@ -107,6 +111,10 @@ export function EmptyClipSlot({
       )}
       {/* No side padding, as on the States board, so "not generated yet" fits one line; a longer reason wraps, balanced, rather than lose its end */}
       <span className="line-clamp-2 min-w-0 text-balance leading-[14px]">{`${name} · ${COPY[reason]}`}</span>
+      {/* The description alone (its name is the label): hidden, which a description may still point to */}
+      <span id={reasonId} hidden>
+        {COPY[reason]}
+      </span>
     </div>
   );
 }

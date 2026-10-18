@@ -17,13 +17,16 @@ export const EDITOR_CHIP =
 export const RAIL_ACTION =
   "group/action -mx-2 h-9 w-[calc(100%+16px)] shrink-0 flex items-center gap-2.5 px-2 rounded-md text-left text-[13px] text-neutral-300 transition-colors hover:bg-white/4 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-neutral-300";
 
-/** 28px icon buttons in the library pane and the home. */
+/** The home's 28px icon button: an edit row's ⋯ (the top row's folder button is a HEADER_ICON_BUTTON). */
 export const ICON_BUTTON =
-  "h-7 w-7 inline-flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
+  "h-7 w-7 inline-flex items-center justify-center rounded-lg text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
 
-/** The timeline's quiet text buttons under its rows: "+ Audio", and Line up in Stacked. */
+/**
+ * The timeline's quiet text buttons under its rows: "+ Audio", and Line up in Stacked. Their focus ring is drawn
+ * inside them: the line they sit in ends 2px under them, at the pane's (or the dialog's) bottom edge.
+ */
 export const TEXT_GHOST =
-  "h-6 px-1.5 inline-flex items-center gap-1 rounded-md text-xs text-ink-3 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
+  "h-6 px-1.5 inline-flex items-center gap-1 rounded-md text-xs text-ink-3 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
 
 /** A DialogButton or DialogCloseButton in the editor (the picker's Close and footer, the sheets, the banner's actions): the editor's white focus ring, not the dialogs' blue one. */
 export const DIALOG_BUTTON_RING = "focus-visible:ring-white/40";
@@ -150,9 +153,15 @@ export const MOVING_CLIP = "z-10 ring-2 ring-neutral-100 shadow-[0_8px_20px_rgba
 /** The edit menus' surface (the headers' ⋯, the clip menu): 220px, a hairline on neutral-900, 10px corners. */
 export const EDIT_MENU_SURFACE = "w-[220px] overflow-visible rounded-[10px] border-neutral-800 bg-neutral-900 p-1 shadow-edit-menu";
 
-/** Their row: 32px in 13px type, lit on hover, on keyboard focus and while its submenu is open. */
+/**
+ * Their row: 32px in 13px type, lit on hover and while its submenu is open; on keyboard focus also ringed in the
+ * editor's white, inside the row (the faint fill alone barely shows against the menu).
+ */
 export const EDIT_MENU_ROW =
-  "h-8 rounded-md py-0 text-[13px] text-neutral-200 hover:bg-white/6 focus-visible:bg-white/6 disabled:cursor-default disabled:text-neutral-600 disabled:opacity-100";
+  "h-8 rounded-md py-0 text-[13px] text-neutral-200 hover:bg-white/6 focus-visible:bg-white/6 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/40 disabled:cursor-default disabled:text-neutral-600 disabled:opacity-100";
+
+/** What a row says at its right (Loop's "Off", a clip menu's key): readable on a lit row too. */
+export const EDIT_MENU_VALUE = "text-neutral-400";
 
 /** A muted line in them: a group's label and note, a footer, the clip menu's heading. */
 export const EDIT_MENU_MUTED = "px-2.5 text-xs leading-4 tabular-nums text-ink-3";

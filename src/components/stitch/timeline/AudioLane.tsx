@@ -257,6 +257,7 @@ export function AudioLane({
         viewLeft={viewLeft}
         viewRight={viewRight}
         visibleRight={visibleRight}
+        lanesLeft={scrollLeft + GEOMETRY.origin}
         contentWidth={contentWidth}
         contentRef={contentRef}
         onBodyPointerDown={(event) => onBodyPointerDown(event, box.clip.id)}

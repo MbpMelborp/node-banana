@@ -19,6 +19,7 @@ import { moveClipTo, removeSelection, setClipStart, setCrossfade, setOverlapSec 
 import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
 import { libraryDrop } from "../timeline/libraryDrop";
+import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -162,7 +163,9 @@ describe("Timeline", () => {
     expect(within(first).queryByText("Clip 1")).toBeNull();
     expect(within(first).queryByText("Veo 3.1")).toBeNull();
     expect(first).toHaveClass("bg-edit-field", "rounded-md");
-    expect(within(first).getByText("5.0 s")).toHaveClass("opacity-0", "group-hover:opacity-100");
+    // On hover, and on keyboard focus (the box is the chip's group): a keyboard user sees it too
+    expect(first).toHaveClass("group");
+    expect(within(first).getByText("5.0 s")).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-visible:opacity-100");
     expect(within(clipBox("Clip 2")).getByText("4.0 s")).toBeInTheDocument();
     // 5 s at 64 px/s from the origin (20px into the lanes), the next one after the boards' 2px gap; 64px tall, 8px
     // under the ruler
@@ -732,6 +735,9 @@ describe("Timeline", () => {
     openEditor();
     const slot = clipBox("Clip 2");
     expect(slot).toHaveTextContent("Clip 2 · not generated yet");
+    // Why, in ink-3 (neutral-500 fell under 4.5:1 on the pane), and as the slot's description
+    expect(slot).toHaveClass("text-ink-3");
+    expect(slot).toHaveAccessibleDescription("not generated yet");
     expect(slot.style.width).toBe("159px");
   });
 
@@ -921,6 +927,8 @@ describe("Timeline", () => {
     // "+ Audio" under the audio rows is the panel's last tab stop (the clips' mute buttons are out of the tab
     // order): Tab from it wraps inside the dialog
     const addAudio = screen.getByRole("button", { name: "Add audio" });
+    // Its ring is drawn inside it: the line it sits in ends 2px under it, at the dialog's bottom edge
+    expect(addAudio).toHaveClass("focus-visible:ring-inset");
     act(() => addAudio.focus());
     fireEvent.keyDown(addAudio, { key: "Tab" });
     expect(dialog.contains(document.activeElement)).toBe(true);
@@ -956,8 +964,34 @@ describe("Timeline", () => {
     expect(editor().pxPerSec).toBeCloseTo(PPS * 1.5);
     fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
     expect(editor().pxPerSec).toBeCloseTo(PPS);
-    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fit the timeline" }));
     expect(editor().pxPerSec).toBeNull();
+  });
+
+  it("keeps a zoom button focusable at its limit, so Enter there leaves focus on it, inside the dialog", () => {
+    seed();
+    const dialog = openEditor();
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    act(() => editor().setZoom(MAX_PX_PER_SEC / 1.2));
+    act(() => zoomIn.focus());
+    // One step reaches the most: the button says it can go no further, without dropping focus
+    fireEvent.click(zoomIn);
+    expect(editor().pxPerSec).toBe(MAX_PX_PER_SEC);
+    expect(zoomIn).not.toBeDisabled();
+    expect(zoomIn).toHaveAttribute("aria-disabled", "true");
+    expect(zoomIn).toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // Another press does nothing
+    fireEvent.click(zoomIn);
+    expect(editor().pxPerSec).toBe(MAX_PX_PER_SEC);
+    // And Zoom out at the least
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+    act(() => editor().setZoom(MIN_PX_PER_SEC));
+    expect(zoomOut).not.toBeDisabled();
+    expect(zoomOut).toHaveAttribute("aria-disabled", "true");
+    expect(zoomIn).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(zoomOut);
+    expect(editor().pxPerSec).toBe(MIN_PX_PER_SEC);
   });
 });
 
@@ -1290,6 +1324,38 @@ describe("Timeline, Stacked", () => {
     // The boxes stay where they were: the scroll is the scroller's own
     const optionsAfter = within(lane()).getAllByRole("option");
     expect(optionsAfter.every((el, i) => el === optionsBefore[i] && el.style.top === `${i * ROW + BOX_TOP}px`)).toBe(true);
+  });
+
+  it("fades the rows into the ruler and the audio rows where more of them are out of view that way", () => {
+    seedClips([5, 5, 6, 5, 5, 6]);
+    const onRender = vi.fn();
+    openStacked(onRender);
+    const lanes = screen.getByTestId("stitch-lanes");
+    const top = screen.getByTestId("stitch-rows-fade-top");
+    const bottom = screen.getByTestId("stitch-rows-fade-bottom");
+    expect(top).toHaveAttribute("aria-hidden", "true");
+    // At the top the half row over the audio section fades into it: the rows go on below
+    expect(top).not.toHaveAttribute("data-shown");
+    expect(bottom).toHaveAttribute("data-shown");
+    onRender.mockClear();
+    lanes.scrollTop = 40;
+    fireEvent.scroll(lanes);
+    expect(top).toHaveAttribute("data-shown");
+    expect(bottom).toHaveAttribute("data-shown");
+    // Six rows in the 182px view scroll 130px: at the end only the top fades
+    lanes.scrollTop = 6 * ROW - 182;
+    fireEvent.scroll(lanes);
+    expect(top).toHaveAttribute("data-shown");
+    expect(bottom).not.toHaveAttribute("data-shown");
+    // Written straight to the fades, as to the grips: nothing renders
+    expect(onRender).not.toHaveBeenCalled();
+  });
+
+  it("draws no fade while the rows fit", () => {
+    seedClips([5, 5, 6]);
+    openStacked();
+    expect(screen.getByTestId("stitch-rows-fade-top")).not.toHaveAttribute("data-shown");
+    expect(screen.getByTestId("stitch-rows-fade-bottom")).not.toHaveAttribute("data-shown");
   });
 
   it("scrolls the rows with a plain wheel when they overflow, and along the timeline with ⇧", () => {
@@ -2903,6 +2969,23 @@ describe("Timeline, heights and the audio section", () => {
     expect(timelineEl().style.height).toBe("265px");
     fireEvent.pointerLeave(controls);
     expect(timelineEl().style.height).toBe("189px");
+  });
+
+  it("shows the rows above once the height settles: a switch to Stacked with Clip 2 selected leaves Clip 1 whole", () => {
+    seedWith([5, 5, 5, 5]);
+    openEditor();
+    const controls = screen.getByTestId("stitch-controls").parentElement!;
+    const lanes = screen.getByTestId("stitch-lanes");
+    act(() => editor().select({ kind: "clip", clipId: editor().draft!.timeline[1].id }));
+    fireEvent.pointerEnter(controls);
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    // Held at Track's height the rows' view is 80px: Clip 2's row (52–104) is shown by a 24px scroll
+    expect(timelineEl().style.height).toBe("189px");
+    expect(lanes.scrollTop).toBe(24);
+    fireEvent.pointerLeave(controls);
+    // Settled, the view is 182px and grew upward: the rows above come into view, Clip 1's row whole above Clip 2's
+    expect(timelineEl().style.height).toBe(`${1 + 28 + 182 + 52 + 28}px`);
+    expect(lanes.scrollTop).toBe(0);
   });
 
   it("keeps the room of a scrollbar drawn beside the lanes under the rows, shown or not: zooming in past Fit moves nothing", () => {

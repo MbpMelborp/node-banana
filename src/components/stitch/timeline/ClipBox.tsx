@@ -212,7 +212,13 @@ export function ClipBox({
       )}
       {/* A box in motion keeps its length, without the buttons a press would reach */}
       {(atRest || mode === "moving") && width >= MIN_CHIP_BOX_PX && (
-        <span className={cn(LENGTH_CHIP, trimEdge || mode === "moving" ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
+        // On hover, and on keyboard focus (the box is the group), as the length is drawn nowhere else
+        <span
+          className={cn(
+            LENGTH_CHIP,
+            trimEdge || mode === "moving" ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+          )}
+        >
           {formatSeconds(lengthSec, trimEdge ? 2 : 1)}
         </span>
       )}

@@ -42,10 +42,14 @@ export interface LibraryTileContext {
   posterReady: boolean;
 }
 
-/** The pane's narrow column: two covers a row, one sound a row. The picker's: four covers, two sounds. */
+/**
+ * The pane's narrow column: two covers a row, one sound a row. The picker's: four covers, two sounds. The quiet
+ * text (group labels, notices): ink-3 on the pane; neutral-400 on the picker's lighter card, where ink-3 falls
+ * under 4.5:1.
+ */
 const GRID = {
-  pane: { covers: "grid-cols-2 gap-2", sounds: "grid-cols-1 gap-1" },
-  picker: { covers: "grid-cols-4 gap-3", sounds: "grid-cols-2 gap-x-3 gap-y-1" },
+  pane: { covers: "grid-cols-2 gap-2", sounds: "grid-cols-1 gap-1", muted: "text-ink-3" },
+  picker: { covers: "grid-cols-4 gap-3", sounds: "grid-cols-2 gap-x-3 gap-y-1", muted: "text-neutral-400" },
 } as const;
 
 /**
@@ -109,7 +113,7 @@ export function LibraryResults({
 
   const grid = GRID[layout];
   let body: ReactNode;
-  if (!libraryOn) body = <Notice>The asset library is off.</Notice>;
+  if (!libraryOn) body = <Notice className={grid.muted}>The asset library is off.</Notice>;
   else if (assets.length === 0 && loading) {
     body = (
       <div className="flex h-full items-center justify-center" aria-busy>
@@ -118,7 +122,7 @@ export function LibraryResults({
     );
   } else if (assets.length === 0 && error) {
     body = (
-      <div role="status" className="flex h-full flex-col items-center justify-center gap-2 px-2 text-center text-xs text-ink-3">
+      <div role="status" className={cn("flex h-full flex-col items-center justify-center gap-2 px-2 text-center text-xs", grid.muted)}>
         <span>{error}</span>
         <button type="button" className={QUIET_BUTTON} onClick={retry}>
           Try again
@@ -126,14 +130,14 @@ export function LibraryResults({
       </div>
     );
   } else if (assets.length === 0) {
-    body = <Notice>{emptyText}</Notice>;
+    body = <Notice className={grid.muted}>{emptyText}</Notice>;
   } else {
     body = (
       <>
         <div className={cn("flex flex-col gap-5 transition-opacity", loading && "opacity-60")} aria-busy={loading || undefined}>
           {groups.map((group, i) => (
             <div key={group.key} role="group" aria-labelledby={`${id}-${i}`} className="min-w-0">
-              <h3 id={`${id}-${i}`} className="mb-2 truncate text-xs leading-4 text-ink-3">
+              <h3 id={`${id}-${i}`} className={cn("mb-2 truncate text-xs leading-4", grid.muted)}>
                 {group.label}
               </h3>
               {group.videos.length > 0 && (
@@ -160,7 +164,7 @@ export function LibraryResults({
           </div>
         ) : (
           moreError && (
-            <div role="status" className="flex flex-col items-center gap-2 py-3 text-center text-xs text-ink-3">
+            <div role="status" className={cn("flex flex-col items-center gap-2 py-3 text-center text-xs", grid.muted)}>
               <span>{moreError}</span>
               <button type="button" className={QUIET_BUTTON} onClick={loadMore}>
                 Try again
@@ -179,6 +183,6 @@ export function LibraryResults({
   );
 }
 
-function Notice({ children }: { children: ReactNode }) {
-  return <div className="flex h-full items-center justify-center px-2 text-center text-xs text-ink-3">{children}</div>;
+function Notice({ className, children }: { className: string; children: ReactNode }) {
+  return <div className={cn("flex h-full items-center justify-center px-2 text-center text-xs", className)}>{children}</div>;
 }

@@ -23,6 +23,30 @@ describe("MoreMenu", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("rings a row with keyboard focus in white, over its faint fill, and keeps a row's value readable when it is lit", () => {
+    render(
+      <MoreMenu
+        label="More"
+        entries={[
+          { kind: "item", label: "Plain", onSelect: vi.fn() },
+          {
+            kind: "submenu",
+            label: "Loop",
+            value: "Off",
+            entries: [{ kind: "radio", label: "Off", checked: true, onSelect: vi.fn() }],
+          },
+        ]}
+      />,
+    );
+    const menu = open();
+    for (const row of within(menu).getAllByRole("menuitem")) {
+      expect(row).toHaveClass("focus-visible:bg-white/6", "focus-visible:ring-2", "focus-visible:ring-inset", "focus-visible:ring-white/40");
+    }
+    // neutral-400, not ink-3, which falls under 4.5:1 on a lit row
+    expect(within(menu).getByText("Off")).toHaveClass("text-neutral-400");
+    expect(within(menu).getByText("Off")).not.toHaveClass("text-ink-3");
+  });
+
   it("gives focus back to ⋯ after a pick, unless the pick put it somewhere", () => {
     function Harness() {
       const [field, setField] = useState(false);
@@ -48,13 +72,14 @@ describe("MoreMenu", () => {
     expect(screen.getByRole("textbox", { name: "Field" })).toHaveFocus();
   });
 
-  it("moves ↑ ↓ through a group's radios with the menu's rows, and picks one like an item", () => {
+  it("draws a submenu's row as the boards draw Loop, its name and value alone, and opens its radios beside the menu", () => {
     const onSelect = vi.fn();
     const entries: ActionMenuEntry[] = [
       { kind: "item", label: "First", onSelect: vi.fn() },
       {
-        kind: "group",
+        kind: "submenu",
         label: "Count",
+        value: "One",
         footer: "A note",
         entries: [
           { kind: "radio", label: "One", checked: true, onSelect: vi.fn() },
@@ -64,15 +89,24 @@ describe("MoreMenu", () => {
     ];
     render(<MoreMenu label="More" entries={entries} />);
     const menu = open();
-    const group = within(menu).getByRole("group", { name: "Count" });
-    expect(group).toHaveAccessibleDescription("A note");
-    const [first, one, two] = Array.from(menu.querySelectorAll<HTMLElement>('[role^="menuitem"]'));
+    const [first, row] = within(menu).getAllByRole("menuitem");
+    expect(row).toHaveAccessibleName("Count: One");
+    expect(row).toHaveAttribute("aria-haspopup", "menu");
+    // "Count" and "One", nothing else: no chevron
+    expect(row.querySelector("svg")).toBeNull();
+    expect(Array.from(row.children, (el) => el.textContent)).toEqual(["Count", "One"]);
     expect(first).toHaveFocus();
     fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(row).toHaveFocus();
+    // → opens it, its first radio focused, with its note as its description
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    const sub = screen.getByRole("menu", { name: "Count" });
+    expect(sub).toHaveAccessibleDescription("A note");
+    const [one, two] = within(sub).getAllByRole("menuitemradio");
     expect(one).toHaveFocus();
+    expect(one).toHaveAttribute("aria-checked", "true");
     fireEvent.keyDown(one, { key: "ArrowDown" });
     expect(two).toHaveFocus();
-    expect(two).toHaveAttribute("aria-checked", "false");
     fireEvent.click(two);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).toBeNull();

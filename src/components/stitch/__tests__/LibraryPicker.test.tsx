@@ -244,9 +244,13 @@ describe("LibraryPicker", () => {
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(1);
     expect(api.fetchAssetPage.mock.calls[0][0]).toEqual({ kinds: ["video"], limit: 60 });
     expect(api.fetchAssetPage.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
-    // The tile: a cover under its project's name, with nothing on it but its length in whole seconds
+    // The tile: a cover under its project's name, with nothing on it at rest but its length in whole seconds; its
+    // name shows on keyboard focus alone, which no title tooltip follows
     expect(within(tile("a2.mp4")).getByText("0:05")).toBeInTheDocument();
-    expect(within(tile("a2.mp4")).queryByText("a2.mp4")).toBeNull();
+    expect(within(tile("a2.mp4")).getByText("a2.mp4").closest("[data-testid='library-tile-focus-name']")).toHaveClass(
+      "opacity-0",
+      "group-focus-visible:opacity-100",
+    );
     expect(within(tile("a2.mp4")).queryByText("Launch film")).toBeNull();
     expect(within(dialog()).getByRole("group", { name: "Launch film" })).toContainElement(tile("a2.mp4"));
     // Everything the tile knows is in its name, its length to a tenth; the file name is its tooltip
@@ -269,6 +273,11 @@ describe("LibraryPicker", () => {
       "Desert spots",
       "Not in a project",
     ]);
+    // In neutral-400 on the picker's card, where ink-3 would fall under 4.5:1
+    for (const label of within(dialog()).getAllByRole("heading", { level: 3 })) {
+      expect(label).toHaveClass("text-neutral-400");
+      expect(label).not.toHaveClass("text-ink-3");
+    }
     const ids = (name: string) =>
       [...within(dialog()).getByRole("group", { name }).querySelectorAll("[data-asset-id]")].map((el) => el.getAttribute("data-asset-id"));
     expect(ids("Launch film")).toEqual(["a1", "a2"]);
@@ -645,7 +654,10 @@ describe("LibraryPicker", () => {
   it("rings a picked cover in white, and draws nothing on a cover but its picture and length", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    const marks = () => [...tile("a1.mp4").children].map((el) => el.tagName);
+    // At rest: the name keyboard focus shows is not drawn
+    const focusName = within(tile("a1.mp4")).getByTestId("library-tile-focus-name");
+    expect(focusName).toHaveClass("opacity-0");
+    const marks = () => [...tile("a1.mp4").children].filter((el) => el !== focusName).map((el) => el.tagName);
     expect(tile("a1.mp4").className).not.toMatch(/ring-selection/);
     expect(marks()).toEqual(["IMG", "SPAN"]);
     fireEvent.click(tile("a1.mp4"));
@@ -682,7 +694,10 @@ describe("LibraryPicker", () => {
     // A thumbnail that fails to load
     fireEvent.error(tile("a2.mp4").querySelector("img")!);
     blank(tile("a2.mp4"));
-    expect(tile("a2.mp4")).toHaveTextContent(/^0:05$/);
+    // Its length, and its name for keyboard focus only
+    const focusName = within(tile("a2.mp4")).getByTestId("library-tile-focus-name");
+    expect(focusName).toHaveClass("opacity-0");
+    expect(tile("a2.mp4").textContent!.replace(focusName.textContent!, "")).toBe("0:05");
   });
 
   it("stays open under a press on its padding or a row's label, which still toggles the switch, and still hears Escape", async () => {

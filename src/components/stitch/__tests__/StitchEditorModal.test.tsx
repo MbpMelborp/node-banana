@@ -128,6 +128,12 @@ function openHeaderMenu(): HTMLElement {
   return screen.getByRole("menu", { name: "Edit menu" });
 }
 
+/** The header's ⋯ menu open, and Loop's radios beside it, opened by a click on its row. */
+function openLoop(): HTMLElement {
+  fireEvent.click(within(openHeaderMenu()).getByRole("menuitem", { name: /^Loop: / }));
+  return screen.getByRole("menu", { name: "Loop" });
+}
+
 /** The ⋯ menu's last line (clips, size and rate), which the menu names as its description; the menu is closed again. */
 function menuMeta(): string {
   const menu = openHeaderMenu();
@@ -408,12 +414,12 @@ describe("StitchEditorModal", () => {
     const row = screen.getByTestId("stitch-controls");
     expect(row.parentElement!.className).toContain("@container");
     const wrapper = (name: string) => screen.getByRole("button", { name }).parentElement!;
-    expect(wrapper("Fit").className).toContain("@max-[695px]:hidden");
+    expect(wrapper("Fit the timeline").className).toContain("@max-[695px]:hidden");
     expect(wrapper("Zoom out").className).toContain("@max-[628px]:hidden");
     expect(wrapper("Zoom in").className).toContain("@max-[628px]:hidden");
     // Stacked's row also holds Crossfade
     fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
-    expect(wrapper("Fit").className).toContain("@max-[763px]:hidden");
+    expect(wrapper("Fit the timeline").className).toContain("@max-[763px]:hidden");
     expect(wrapper("Zoom in").className).toContain("@max-[696px]:hidden");
   });
 
@@ -424,8 +430,11 @@ describe("StitchEditorModal", () => {
     const hover = (name: string) => screen.getByRole("button", { name }).parentElement!.querySelector(":scope > [aria-hidden='true']")!;
     expect(hover("Zoom out")).toHaveTextContent("Zoom out−");
     expect(hover("Zoom in")).toHaveTextContent("Zoom in=");
-    expect(hover("Fit")).toHaveTextContent("Fit the timeline⇧Z");
-    expect(screen.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-keyshortcuts", "Shift+Z");
+    expect(hover("Fit the timeline")).toHaveTextContent("Fit the timeline⇧Z");
+    // Named by what it fits, its visible word first
+    const fitButton = screen.getByRole("button", { name: "Fit the timeline" });
+    expect(fitButton).toHaveTextContent("Fit");
+    expect(fitButton).toHaveAttribute("aria-keyshortcuts", "Shift+Z");
     // Fit to start with (no stored zoom); = zooms in by a step, − back out, ⇧Z fits again
     expect(editor().pxPerSec).toBeNull();
     press(document.body, "=");
@@ -663,8 +672,11 @@ describe("StitchEditorModal", () => {
     seed({ clips: false });
     openEditor();
     const menu = openHeaderMenu();
-    const radios = within(within(menu).getByRole("group", { name: "Loop" })).getAllByRole("menuitemradio");
-    for (const radio of radios) expect(radio).toBeDisabled();
+    const loop = within(menu).getByRole("menuitem", { name: "Loop: Off" });
+    expect(loop).toBeDisabled();
+    // Off, it opens no radios to a hover
+    fireEvent.mouseEnter(loop.parentElement!);
+    expect(screen.queryByRole("menu", { name: "Loop" })).toBeNull();
     // With every row off the menu takes focus itself, so Escape still reaches it: it closes, and only it
     expect(menu).toHaveFocus();
     press(document.activeElement!, "Escape");
@@ -886,7 +898,7 @@ describe("StitchEditorModal", () => {
       seed();
       openEditor();
       const toggle = screen.getByRole("group", { name: "Timeline layout" });
-      const fit = screen.getByRole("button", { name: "Fit" });
+      const fit = screen.getByRole("button", { name: "Fit the timeline" });
       // The row's right-hand group: Frame to canvas, Mute all, the toggle, Snap, −, + and Fit (in its hover label's wrapper)
       const group = toggle.parentElement!;
       expect(group.contains(fit)).toBe(true);
@@ -942,8 +954,7 @@ describe("StitchEditorModal", () => {
       expect(within(rail).queryByRole("textbox", { name: "Overlap" })).toBeNull();
       expect(screen.queryByTestId("stitch-sequence-summary")).toBeNull();
       expect(within(rail).queryByText(/^Loop/)).toBeNull();
-      const loop = within(openHeaderMenu()).getByRole("group", { name: "Loop" });
-      for (const radio of within(loop).getAllByRole("menuitemradio")) expect(radio).toBeEnabled();
+      for (const radio of within(openLoop()).getAllByRole("menuitemradio")) expect(radio).toBeEnabled();
     });
     it("leaves the transport's toggle inert while there are no clips", () => {
       seed({ clips: false });
@@ -1635,28 +1646,32 @@ describe("StitchEditorModal, audio clips", () => {
   it("says under the menu's Loop that each loop plays the audio clips again, while it does", () => {
     seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }), toneClip("t", { row: 1, startSec: 2 })]);
     openEditor();
-    const showLoop = () => within(openHeaderMenu()).getByRole("group", { name: "Loop" });
-    expect(showLoop()).not.toHaveAttribute("aria-describedby");
+    expect(openLoop()).not.toHaveAttribute("aria-describedby");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "2×" }));
-    const loop = showLoop();
+    const loop = openLoop();
     expect(loop).toHaveAccessibleDescription(LOOP_AUDIO_NOTE);
     // Under the radios
-    expect(within(loop).getByText(LOOP_AUDIO_NOTE).previousElementSibling).toBe(screen.getByRole("menuitemradio", { name: "3×" }));
+    expect(loop.nextElementSibling).toHaveTextContent(LOOP_AUDIO_NOTE);
   });
 });
 
 describe("StitchEditorModal, the header's menu", () => {
-  it("holds Loop's 1×, 2× and 3× in the menu itself, the count set in one undo step, and what the sequence is", () => {
+  it("holds Loop as the view's menu does, one row reading the count with Off, 2× and 3× beside it, the count set in one undo step, and what the sequence is", () => {
     seed();
     openEditor();
     const menu = openHeaderMenu();
     expect(menu).toHaveAccessibleDescription("2 clips · 1920 × 1080 · 24 fps");
-    // Loop is all it holds: no submenu to open
-    expect(within(menu).queryByRole("menuitem")).toBeNull();
-    const loop = within(menu).getByRole("group", { name: "Loop" });
+    // Loop is all it holds: its one row, as the view's menu draws it, the radios a step away
+    const row = within(menu).getByRole("menuitem", { name: "Loop: Off" });
+    expect(within(menu).getAllByRole("menuitem")).toEqual([row]);
+    expect(row).toHaveAttribute("aria-haspopup", "menu");
+    expect(row).toHaveFocus();
+    // Enter opens them, the first focused
+    fireEvent.keyDown(row, { key: "Enter" });
+    const loop = screen.getByRole("menu", { name: "Loop" });
     const radios = within(loop).getAllByRole("menuitemradio");
     expect(radios.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
-      ["1×", "true"],
+      ["Off", "true"],
       ["2×", "false"],
       ["3×", "false"],
     ]);
@@ -1673,8 +1688,10 @@ describe("StitchEditorModal, the header's menu", () => {
     expect(editor().draft!.loopCount).toBe(2);
     expect(editor().past).toHaveLength(past + 1);
     expect(screen.queryByRole("menu")).toBeNull();
-    // Picking the count it has is no step
-    fireEvent.click(within(openHeaderMenu()).getByRole("menuitemradio", { name: "2×" }));
+    // The row reads the count it has now, and picking that count is no step
+    expect(within(openHeaderMenu()).getByRole("menuitem", { name: "Loop: 2×" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit menu" }));
+    fireEvent.click(within(openLoop()).getByRole("menuitemradio", { name: "2×" }));
     expect(editor().past).toHaveLength(past + 1);
     // Done writes it with the rest
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
@@ -1685,7 +1702,7 @@ describe("StitchEditorModal, the header's menu", () => {
     seed();
     const dialog = openEditor();
     const trigger = screen.getByRole("button", { name: "Edit menu" });
-    fireEvent.click(within(openHeaderMenu()).getByRole("menuitemradio", { name: "3×" }));
+    fireEvent.click(within(openLoop()).getByRole("menuitemradio", { name: "3×" }));
     expect(editor().draft!.loopCount).toBe(3);
     expect(screen.queryByRole("menu")).toBeNull();
     expect(trigger).toHaveFocus();
@@ -1701,10 +1718,17 @@ describe("StitchEditorModal, the header's menu", () => {
     });
     const draft = editor().draft;
     const menu = openHeaderMenu();
-    const first = within(menu).getAllByRole("menuitemradio")[0];
+    const first = within(menu).getAllByRole("menuitem")[0];
+    // Space on Loop's row opens its radios (the menu's own key); the rest reach nothing
     for (const key of [" ", "Backspace", "s", "k"]) press(document.activeElement ?? first, key);
     expect(editor().draft).toBe(draft);
     expect(editor().playing).toBe(false);
+    expect(screen.getByRole("menu", { name: "Loop" })).toContainElement(document.activeElement as HTMLElement);
+    // Escape closes the radios, then the menu, and neither reaches the dialog
+    press(document.activeElement!, "Escape");
+    expect(screen.queryByRole("menu", { name: "Loop" })).toBeNull();
+    expect(first).toHaveFocus();
+    expect(editor().discardOpen).toBe(false);
     press(document.activeElement!, "Escape");
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: "Edit menu" })).toHaveFocus();

@@ -28,15 +28,20 @@ import { audioRowName } from "./AudioLane";
 import { keepFocus } from "./ClipBox";
 import { openClipMenu } from "./ClipsLane";
 
-/** A row control's square, px: the 20px side padding holds it. */
-const CONTROL_PX = 18;
+/** A row control's square, px: the 20px side padding holds it, 2px clear of either edge. */
+const CONTROL_PX = 16;
+/**
+ * How far in from the timeline's left edge the controls sit, px: their focus ring clears the hairline beside the
+ * timeline (the library pane's edge) and, as the padding is 20px, the playhead's line at 0:00.
+ */
+const CONTROL_INSET_PX = 2;
 /** An audio row's group: its two controls stacked, 2px apart. */
 const AUDIO_GROUP_PX = CONTROL_PX * 2 + 2;
 /** The room under each audio row's block, px. */
 const ROW_GAP = GEOMETRY.audioRow - GEOMETRY.audioBlock;
 
 /**
- * A row control: 18px, quiet until hovered, white while on (a muted row, an open curve). Its focus ring is drawn inside
+ * A row control: 16px, quiet until hovered, white while on (a muted row, an open curve). Its focus ring is drawn inside
  * it, as the padding it sits in has no room around it.
  */
 const ROW_CONTROL =
@@ -221,7 +226,8 @@ export function AudioRowControls({
           const canMute = placeholder ? legacyMuted : (info?.hasClips ?? false);
           if (placeholder && !legacyMuted) return null;
           const muteLabel = muted ? `Unmute ${audioRowName(row)}` : `Mute ${audioRowName(row)}`;
-          const toggleLabel = expanded ? "Hide volume curve" : "Show volume curve";
+          // Each row's own, as its mute's is: a list of buttons tells the rows apart
+          const toggleLabel = `${expanded ? "Hide" : "Show"} volume curve for ${audioRowName(row)}`;
           const shown = hovered === row || focused === row || expanded || placeholder;
           return (
             <div
@@ -230,10 +236,13 @@ export function AudioRowControls({
               aria-label={audioRowName(row)}
               data-audio-row-controls={row}
               className={cn(
-                "absolute left-px flex flex-col items-center gap-0.5 rounded-md bg-pane transition-opacity",
+                "absolute flex flex-col items-center gap-0.5 rounded-md bg-pane transition-opacity",
                 groupShown(shown),
               )}
-              style={{ top: top + layout.rowHeights[row] - ROW_GAP - (placeholder ? CONTROL_PX : AUDIO_GROUP_PX) }}
+              style={{
+                left: CONTROL_INSET_PX,
+                top: top + layout.rowHeights[row] - ROW_GAP - (placeholder ? CONTROL_PX : AUDIO_GROUP_PX),
+              }}
             >
               <button
                 type="button"
@@ -331,10 +340,15 @@ export function StackedRowHandles({
             onMouseDown={keepFocus}
             onContextMenu={(event) => openClipMenu(event, span.clip.id)}
             className={cn(
-              "absolute left-px flex cursor-grab items-center justify-center rounded-[5px] bg-pane text-ink-3 transition-opacity select-none hover:text-neutral-100",
+              "absolute flex cursor-grab items-center justify-center rounded-[5px] bg-pane text-ink-3 transition-opacity select-none hover:text-neutral-100",
               hovered === i && !dragging ? "pointer-events-auto opacity-100" : "opacity-0",
             )}
-            style={{ top: i * GEOMETRY.stackRow + GEOMETRY.stackClipTop, width: CONTROL_PX, height: GEOMETRY.stackClipHeight }}
+            style={{
+              left: CONTROL_INSET_PX,
+              top: i * GEOMETRY.stackRow + GEOMETRY.stackClipTop,
+              width: CONTROL_PX,
+              height: GEOMETRY.stackClipHeight,
+            }}
           >
             <GripVertical size={12} strokeWidth={1.5} />
           </div>

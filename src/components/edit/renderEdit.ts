@@ -76,7 +76,8 @@ function canvasAction(asset: AssetView): ToastAction[] {
       label: "Add to canvas",
       onClick: () => {
         add({ src: assetFileUrl(asset.id), filename: asset.filename });
-        useToast.getState().show("Video added to the canvas", "success", false, null, [
+        // Neutral, as the render's own notice: the Edit video view has no colour but the footage's
+        useToast.getState().show("Video added to the canvas", "info", false, null, [
           { label: "Go to canvas", onClick: () => useAssetStore.getState().setAppView("canvas") },
         ]);
       },
@@ -137,7 +138,8 @@ export async function renderEdit(): Promise<"rendered" | "stopped" | "failed" | 
     });
     useEditProjectStore.getState().setRenderState({ state: "idle", progress: 100, message: null });
     const length = typeof asset.durationSec === "number" && asset.durationSec > 0 ? ` · ${formatDuration(asset.durationSec)}` : "";
-    useToast.getState().show(`Rendered “${edit.name}”${length}`, "success", false, null, [
+    // Neutral, not the app's green success: in the Edit video view it would be the one strong colour
+    useToast.getState().show(`Rendered “${edit.name}”${length}`, "info", false, null, [
       { label: "Show in Assets", onClick: () => showInAssets(asset) },
       ...canvasAction(asset),
     ]);

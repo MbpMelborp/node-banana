@@ -9,10 +9,17 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Check, ChevronRight, MoreHorizontal } from "lucide-react";
+import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuDivider, MenuItem, MenuSurface } from "@/components/ui/Menu";
-import { EDIT_MENU_DIVIDER, EDIT_MENU_MUTED, EDIT_MENU_ROW, EDIT_MENU_SURFACE, HEADER_ICON_BUTTON } from "./editorStyles";
+import {
+  EDIT_MENU_DIVIDER,
+  EDIT_MENU_MUTED,
+  EDIT_MENU_ROW,
+  EDIT_MENU_SURFACE,
+  EDIT_MENU_VALUE,
+  HEADER_ICON_BUTTON,
+} from "./editorStyles";
 
 /** One of a set; picking it closes the menu like an item. */
 export type ActionMenuRadio = { kind: "radio"; label: string; checked: boolean; onSelect: () => void; disabled?: boolean };
@@ -20,6 +27,7 @@ export type ActionMenuRadio = { kind: "radio"; label: string; checked: boolean; 
 export type ActionMenuEntry =
   | { kind: "item"; label: string; onSelect: () => void; disabled?: boolean }
   | {
+      /** A row that opens its rows beside the menu: drawn as the boards draw Loop, its name and its value, no chevron. */
       kind: "submenu";
       label: string;
       entries: ActionMenuEntry[];
@@ -30,16 +38,10 @@ export type ActionMenuEntry =
       footer?: ReactNode;
     }
   | ActionMenuRadio
-  /** A set of radios in the menu itself under a muted label (the dialog's Loop), with a muted note under them. */
-  | { kind: "group"; label: string; entries: ActionMenuRadio[]; footer?: ReactNode }
   | { kind: "divider" };
 
-/** The rows ↑ ↓ Home End move between: the menu's own, a submenu's trigger and a group's radios included, never a submenu's rows. */
-const ROWS = [
-  ':scope > [role^="menuitem"]:not(:disabled)',
-  ':scope > [role="none"] > [role="menuitem"]:not(:disabled)',
-  ':scope > [role="group"] > [role^="menuitem"]:not(:disabled)',
-].join(", ");
+/** The rows ↑ ↓ Home End move between: the menu's own and a submenu's trigger, never a submenu's rows. */
+const ROWS = ':scope > [role^="menuitem"]:not(:disabled), :scope > [role="none"] > [role="menuitem"]:not(:disabled)';
 
 /** How long a submenu stays once the pointer leaves its row: long enough to cross a row on the way into it. */
 const SUBMENU_CLOSE_MS = 300;
@@ -235,22 +237,6 @@ function MenuList({
         {entries.map((entry, i) => {
           if (entry.kind === "divider") return <MenuDivider key={i} role="separator" className={EDIT_MENU_DIVIDER} />;
           if (entry.kind === "radio") return radio(entry, i);
-          if (entry.kind === "group") {
-            const note = entry.footer ? `${id}-${i}-note` : undefined;
-            return (
-              <div key={i} role="group" aria-label={entry.label} aria-describedby={note}>
-                <div aria-hidden="true" className={cn(EDIT_MENU_MUTED, "pb-1 pt-1.5")}>
-                  {entry.label}
-                </div>
-                {entry.entries.map((r, j) => radio(r, j))}
-                {entry.footer && (
-                  <div id={note} className={cn(EDIT_MENU_MUTED, "pb-1.5 pt-1")}>
-                    {entry.footer}
-                  </div>
-                )}
-              </div>
-            );
-          }
           if (entry.kind === "submenu") {
             const open = openSub === i;
             return (
@@ -303,10 +289,9 @@ function MenuList({
                   }}
                 >
                   <span className="truncate">{entry.label}</span>
-                  <span className="ml-auto flex shrink-0 items-center gap-1 text-ink-3">
-                    {entry.value !== undefined && <span className="tabular-nums">{entry.value}</span>}
-                    <ChevronRight size={14} strokeWidth={1.5} aria-hidden="true" />
-                  </span>
+                  {entry.value !== undefined && (
+                    <span className={cn("ml-auto shrink-0 tabular-nums", EDIT_MENU_VALUE)}>{entry.value}</span>
+                  )}
                 </MenuItem>
                 {open && (
                   <MenuList

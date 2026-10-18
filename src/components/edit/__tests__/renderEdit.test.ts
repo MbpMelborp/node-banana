@@ -156,19 +156,20 @@ describe("renderEdit", () => {
     expect(useEditProjectStore.getState().open).toMatchObject({ id: OTHER, renders: [] });
   });
 
-  it("offers Show in Assets and Add to canvas", async () => {
+  it("offers Show in Assets and Add to canvas, in a neutral notice", async () => {
     const add = vi.fn();
     setRenderCanvasAdder(add);
     await renderEdit();
     const [text, type, , , actions] = m.show.mock.calls[0];
     expect(text).toBe("Rendered “Trip” · 0:12");
-    expect(type).toBe("success");
+    expect(type).toBe("info");
     expect(actions.map((a: { label: string }) => a.label)).toEqual(["Show in Assets", "Add to canvas"]);
 
     actions[1].onClick();
     expect(add).toHaveBeenCalledWith({ src: `/api/assets/${asset.id}/file`, filename: "Trip.mp4" });
-    const [addedText, , , , addedActions] = m.show.mock.calls[1];
+    const [addedText, addedType, , , addedActions] = m.show.mock.calls[1];
     expect(addedText).toBe("Video added to the canvas");
+    expect(addedType).toBe("info");
     expect(addedActions.map((a: { label: string }) => a.label)).toEqual(["Go to canvas"]);
     addedActions[0].onClick();
     expect(useAssetStore.getState().appView).toBe("canvas");

@@ -37,7 +37,7 @@ export function HistoryButtons() {
 
 /**
  * The dialog's 56px header, in the Edit video view's quiet language: "Edit
- * video"; Undo, Redo and the ⋯ menu (Loop's radios in the menu itself, then
+ * video"; Undo, Redo and the ⋯ menu (Loop, the row the view's menu has, then
  * what the sequence is: clips, size, rate); Cancel, Save (keeps the editor
  * open) and Done. Nothing clickable sits in the top 12px of the left 60px,
  * where the desktop's window controls draw over the panel's corner.
@@ -61,8 +61,7 @@ export function EditorHeader({
 }) {
   const dirty = useStitchEditorStore(selectIsDirty);
   const initialClipCount = useStitchEditorStore((s) => s.initial?.timeline.length ?? 0);
-  // Loop is all the menu holds: its radios sit in it, not a submenu away
-  const loop = useLoopMenuEntry("group");
+  const loop = useLoopMenuEntry();
 
   return (
     <div data-editor-header className="relative z-20 flex h-14 shrink-0 items-center gap-2 bg-pane pl-5 pr-4">

@@ -42,6 +42,10 @@ const NARROW = {
   stacked: { fit: "@max-[763px]:hidden", zoom: "@max-[696px]:hidden" },
 } as const;
 
+/** A button at its limit (Zoom in at the most, Zoom out at the least): dimmed as a disabled one, still focusable. */
+const AT_LIMIT =
+  "aria-disabled:cursor-default aria-disabled:text-neutral-600 aria-disabled:hover:bg-transparent aria-disabled:hover:text-neutral-600";
+
 /** One of the row's icon buttons, with its hover label above it (into the stage). */
 function ControlButton({
   label,
@@ -49,7 +53,7 @@ function ControlButton({
   shortcut,
   keyshortcuts,
   pressed,
-  disabled,
+  atLimit = false,
   className,
   onClick,
   children,
@@ -61,7 +65,11 @@ function ControlButton({
   /** The key as aria-keyshortcuts names it, when the button has one of its own. */
   keyshortcuts?: string;
   pressed?: boolean;
-  disabled?: boolean;
+  /**
+   * It can go no further (a zoom at its limit): aria-disabled, its clicks ignored. Not disabled, which would drop the
+   * focus of a keyboard user whose Enter took it there, out of the dialog's Tab trap.
+   */
+  atLimit?: boolean;
   /** On the wrapper, which holds the button and its label. */
   className?: string;
   onClick: () => void;
@@ -74,10 +82,10 @@ function ControlButton({
         aria-label={label}
         aria-pressed={pressed}
         aria-keyshortcuts={keyshortcuts}
-        disabled={disabled}
-        className={CONTROL_BUTTON}
+        aria-disabled={atLimit || undefined}
+        className={cn(CONTROL_BUTTON, AT_LIMIT)}
         onMouseDown={keepFocus}
-        onClick={onClick}
+        onClick={atLimit ? undefined : onClick}
       >
         {children}
       </button>
@@ -178,7 +186,7 @@ export function EditorTransport({
             shortcut="−"
             keyshortcuts="-"
             className={narrow.zoom}
-            disabled={zoom.pxPerSec <= MIN_PX_PER_SEC}
+            atLimit={zoom.pxPerSec <= MIN_PX_PER_SEC}
             onClick={zoom.zoomOut}
           >
             <ZoomOut size={16} strokeWidth={1.5} />
@@ -188,7 +196,7 @@ export function EditorTransport({
             shortcut="="
             keyshortcuts="="
             className={narrow.zoom}
-            disabled={zoom.pxPerSec >= MAX_PX_PER_SEC}
+            atLimit={zoom.pxPerSec >= MAX_PX_PER_SEC}
             onClick={zoom.zoomIn}
           >
             <ZoomIn size={16} strokeWidth={1.5} />
@@ -196,6 +204,8 @@ export function EditorTransport({
           <div className={cn("group relative flex", narrow.fit)}>
             <button
               type="button"
+              // Its visible word first, then what it fits, as its hover label says
+              aria-label="Fit the timeline"
               aria-keyshortcuts="Shift+Z"
               className="h-8 shrink-0 rounded-lg px-2 text-[13px] text-ink-3 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
               onMouseDown={keepFocus}

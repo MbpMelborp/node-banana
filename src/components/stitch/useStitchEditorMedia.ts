@@ -40,8 +40,8 @@ export interface ClipMediaView {
   frames: ReadonlyArray<string | null>;
   sourceNodeId: string | null;
   /**
-   * Label bar: the model ("Veo 3.1"), else the node's kind ("Ease curve"). A library clip: the model it was made
-   * with, else what made it ("Video edit"), else "Library".
+   * What the clip's context menu names it by, under its heading: the model ("Veo 3.1"), else the node's kind ("Ease
+   * curve"). A library clip: the model it was made with, else what made it ("Video edit"), else "Library".
    */
   sourceLabel: string;
   /** Where it comes from, for the rail's line ("Generate video · Veo 3.1", "Library · Veo 3.1"); see RailSource. */
@@ -61,8 +61,6 @@ export interface AudioClipView {
   mediaKey: string | null;
   /** The music's file name, or the library file's. */
   fileName: string;
-  /** Label bar: the music's node kind ("Audio Input"); a library clip's model, else what made it, else "Library". */
-  sourceLabel: string;
   /** Where it comes from, for the rail's line ("Audio Input", "Library · Kling 3"); see RailSource. */
   railSource: RailSource;
   /** The decoded file's length (the encoder's decode); null until then, and for a file that cannot be read. */
@@ -339,7 +337,6 @@ export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions
         src,
         mediaKey,
         fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || lost?.name || "Audio",
-        sourceLabel: lost ? lost.name : (model ?? kind),
         railSource: lost ? { kind: NOT_IN_LIBRARY, detail: lost.name } : { kind, detail: model !== kind ? model : null },
         duration,
         recordDuration,

@@ -9,21 +9,20 @@ const LOOP_COUNTS = [1, 2, 3] as const;
 /** Under Loop while each loop restarts the audio clips (once the audio is more than the music alone, whole, from 0:00). */
 export const LOOP_AUDIO_NOTE = "Each loop plays the audio clips again from their start.";
 
-/** What Loop's row says it is set to: "Off" at 1× (nothing repeats), else the count. */
+/** What a loop count is called in the menus: "Off" at 1× (nothing repeats), else the count ("2×"). */
 export function loopValue(loopCount: number): string {
   return loopCount === 1 ? "Off" : `${loopCount}×`;
 }
 
 /**
- * The headers' Loop, in their ⋯ menu: 1×, 2× and 3× as radios, picking one
- * setting the loop count as one undo step. As a `submenu` (the view's menu,
- * among other rows) its row shows what it is set to ("Off", "2×"); as a
- * `group` (the dialog's menu, where Loop is all there is) the radios sit in
- * the menu itself under a muted "Loop". Off with no clips, as the rail's
+ * The headers' Loop, in their ⋯ menu, the same in the view's and the
+ * dialog's: one row that reads what it is set to ("Loop  Off", as the boards
+ * draw it), opening Off, 2× and 3× as radios beside the menu; picking one
+ * sets the loop count as one undo step. Off with no clips, as the rail's
  * footer was inert then; while a loop repeats the audio clips it says so
  * under the radios.
  */
-export function useLoopMenuEntry(shape: "submenu" | "group" = "submenu"): ActionMenuEntry {
+export function useLoopMenuEntry(): ActionMenuEntry {
   const loopCount = useStitchEditorStore((s) => s.draft?.loopCount ?? 1);
   const empty = useStitchEditorStore((s) => !s.draft || s.draft.timeline.length === 0);
   // The loop rule is the new one once the audio is anything but the music alone, whole, from 0:00
@@ -33,14 +32,13 @@ export function useLoopMenuEntry(shape: "submenu" | "group" = "submenu"): Action
   const radios = LOOP_COUNTS.map(
     (n): ActionMenuRadio => ({
       kind: "radio",
-      label: `${n}×`,
+      label: loopValue(n),
       checked: n === loopCount,
       disabled: empty,
       onSelect: () => setLoopCount(n),
     }),
   );
   const footer = repeatsAudio ? LOOP_AUDIO_NOTE : undefined;
-  if (shape === "group") return { kind: "group", label: "Loop", entries: radios, footer };
   return { kind: "submenu", label: "Loop", value: loopValue(loopCount), disabled: empty, entries: radios, footer };
 }
 

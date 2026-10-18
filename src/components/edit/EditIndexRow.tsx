@@ -33,7 +33,8 @@ const RENAME_FIELD = cn(
  * row (hovered or focused; the preview shows it) is lit and carries ⋯, which
  * renames it in place, duplicates it, shows its file or deletes it. A press
  * or Enter opens it. With keyboard focus on it (after a key, not the focus
- * the home gives the newest row as it shows) the whole row takes a faint fill.
+ * the home gives the newest row as it shows) the whole row takes a faint fill
+ * and a white ring inside its edge.
  */
 export function EditIndexRow({
   edit,
@@ -88,7 +89,10 @@ export function EditIndexRow({
   return (
     <li
       data-active={active || undefined}
-      className="-mx-2 flex h-12 items-center gap-4 rounded-md px-2 transition-colors in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6"
+      // Keyboard focus on the row's open button, once a key has been pressed: a faint fill and the editor's white ring
+      // round the whole row (the lit name alone also marks the last row hovered). The ring is drawn inside the row: its
+      // edges are the list scroller's, which would cut an outer ring off
+      className="-mx-2 flex h-12 items-center gap-4 rounded-md px-2 transition-colors in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6 in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-2 in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-inset in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-white/40"
       onPointerEnter={pointed}
       onPointerMove={pointed}
       onFocus={(event) => onFocusIn((event.target as HTMLElement).dataset.editRow !== undefined)}
@@ -134,7 +138,7 @@ export function EditIndexRow({
             aria-label={`More for ${edit.name}`}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            className={cn(ICON_BUTTON, "rounded-lg focus-visible:ring-white/40", menuOpen && "bg-white/6 text-neutral-100")}
+            className={cn(ICON_BUTTON, menuOpen && "bg-white/6 text-neutral-100")}
             onClick={toggleMenu}
           >
             <MoreHorizontal size={16} strokeWidth={1.5} />

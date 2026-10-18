@@ -294,8 +294,21 @@ describe("the Index", () => {
     expect(document.querySelector("[data-keyed]")).toBeNull();
     expect(newEdit().className.split(" ")).not.toContain("focus-visible:ring-2");
     expect(newEdit().className.split(" ")).toContain("in-data-[keyed]:focus-visible:ring-2");
-    // One fill for the whole row, ⋯ included, and only on keyboard focus
-    expect(item("Vesper opening").className.split(" ")).toContain("in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6");
+    // One fill and one white ring for the whole row, ⋯ included, and only on keyboard focus
+    expect(item("Vesper opening").className.split(" ")).toEqual(
+      expect.arrayContaining([
+        "in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6",
+        "in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-2",
+        "in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-white/40",
+      ]),
+    );
+    // The row's edges are the list scroller's (the row's -mx-2 against its px-2, the first row at its top), which
+    // clips: the ring is drawn inside the row, or only its bottom would show
+    const scroller = item("Vesper opening").closest<HTMLElement>("[data-edit-index-scroller]")!;
+    expect(scroller.className.split(" ")).toEqual(expect.arrayContaining(["overflow-y-auto", "px-2"]));
+    expect(item("Vesper opening").className.split(" ")).toEqual(
+      expect.arrayContaining(["-mx-2", "in-data-[keyed]:has-[[data-edit-row]:focus-visible]:ring-inset"]),
+    );
     expect(row("Vesper opening").className).not.toMatch(/bg-white/);
     fireEvent.keyDown(row("Vesper opening"), { key: "s", metaKey: true });
     expect(document.querySelector("[data-keyed]")).toBeNull();
@@ -426,8 +439,18 @@ describe("the empty Index", () => {
     expect(screen.queryByRole("list", { name: "Edits" })).toBeNull();
     const entries = screen.getAllByRole("button", { name: "New edit" });
     expect(entries).toHaveLength(1);
-    // Focus starts on it, so Enter starts an edit
+    // Focus starts on it, so Enter starts an edit; once a key is pressed its focus is a fill and a white ring, drawn
+    // inside its edge (it sits on the list scroller's edges, which would cut an outer ring off)
     expect(entries[0]).toHaveFocus();
+    expect(entries[0].className.split(" ")).toEqual(
+      expect.arrayContaining([
+        "in-data-[keyed]:focus-visible:bg-white/6",
+        "in-data-[keyed]:focus-visible:ring-2",
+        "in-data-[keyed]:focus-visible:ring-inset",
+        "in-data-[keyed]:focus-visible:ring-white/40",
+      ]),
+    );
+    expect(entries[0].closest("[data-edit-index-scroller]")).not.toBeNull();
     expect(screen.getByText("An edit puts videos and audio from any project on one timeline.")).toBeInTheDocument();
     expect(previewOf()).toBe("");
     expectBlankFrame(previewFrame());

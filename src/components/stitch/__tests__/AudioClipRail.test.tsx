@@ -26,7 +26,6 @@ function view(clip: StitchAudioClip, init: Partial<AudioClipView> = {}): AudioCl
     src: music ? "blob:m" : `/api/assets/${TONE}/file`,
     mediaKey: null,
     fileName: music ? "score.mp3" : "tone1320.m4a",
-    sourceLabel: music ? "Audio input" : "Library",
     railSource: music ? { kind: "Audio input", detail: null } : { kind: "Library", detail: "Kling 3" },
     duration: music ? 20 : 3,
     recordDuration: music ? null : 3,

@@ -37,10 +37,13 @@ export function BlankCover() {
   );
 }
 
-/** A cover's length, in whole seconds, at its bottom right: the one thing drawn on it. */
+/** A chip on a cover: its length at rest, its name on keyboard focus. */
+const COVER_CHIP = "rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none text-neutral-100";
+
+/** A cover's length, in whole seconds, at its bottom right: the one thing drawn on it at rest. */
 export function CoverLength({ seconds }: { seconds: number }) {
   return (
-    <span className="absolute bottom-1 right-1 rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none tabular-nums text-neutral-100">
+    <span className={cn(COVER_CHIP, "absolute bottom-1 right-1 tabular-nums")}>
       {formatTimecode(seconds, 0)}
     </span>
   );
@@ -60,7 +63,8 @@ export function CoverLength({ seconds }: { seconds: number }) {
  * (`mode="add"`) a click (or Enter) adds it at the playhead and a press can
  * start a drag onto the timeline, which the tooltip says. A tile that cannot
  * be added yet says why in its tooltip. A cover carries nothing but its
- * length.
+ * length; on keyboard focus, which no title tooltip follows, it also shows
+ * its name (and why it cannot be added yet) at its top.
  */
 export const LibraryTile = memo(function LibraryTile({
   asset,
@@ -175,7 +179,7 @@ export const LibraryTile = memo(function LibraryTile({
   return (
     <button
       {...shared}
-      className={cn("relative block aspect-video w-full min-w-0 overflow-hidden rounded-md bg-edit-field", rings)}
+      className={cn("group relative block aspect-video w-full min-w-0 overflow-hidden rounded-md bg-edit-field", rings)}
     >
       {!missing && thumbFailed !== thumbUrl ? (
         // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
@@ -192,6 +196,15 @@ export const LibraryTile = memo(function LibraryTile({
         <BlankCover />
       )}
       {duration !== null && <CoverLength seconds={duration} />}
+      {/* What the title says on hover, for the keys: inside the cover, so a scrolling list never clips it */}
+      <span
+        aria-hidden="true"
+        data-testid="library-tile-focus-name"
+        className="pointer-events-none absolute inset-x-1 top-1 flex flex-col items-start gap-0.5 opacity-0 transition-opacity group-focus-visible:opacity-100"
+      >
+        <span className={cn(COVER_CHIP, "max-w-full truncate")}>{asset.filename}</span>
+        {blocked && <span className={cn(COVER_CHIP, "max-w-full truncate font-normal text-neutral-300")}>{disabledReason}</span>}
+      </span>
     </button>
   );
 });

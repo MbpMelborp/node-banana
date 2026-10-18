@@ -69,6 +69,7 @@ export function AudioClipBox({
   viewLeft,
   viewRight,
   visibleRight,
+  lanesLeft,
   contentWidth,
   contentRef,
   onBodyPointerDown,
@@ -106,6 +107,8 @@ export function AudioClipBox({
   viewLeft: number;
   viewRight: number;
   visibleRight: number;
+  /** The lanes' first x in view, past the side padding once they scroll: where an open row's dB labels stay. */
+  lanesLeft: number;
   contentWidth: number;
   contentRef: RefObject<HTMLDivElement | null>;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -219,6 +222,7 @@ export function AudioClipBox({
               window={curveWindow}
               blockX={x}
               blockWidth={width}
+              lanesLeft={lanesLeft}
               height={height}
               expanded={expanded}
               selected={selected}
@@ -244,7 +248,13 @@ export function AudioClipBox({
           </span>
         ) : (
           length > 0 && (
-            <span className={cn(LENGTH_CHIP, trimEdge ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
+            // On hover, and on keyboard focus (the box is the group)
+            <span
+              className={cn(
+                LENGTH_CHIP,
+                trimEdge ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+              )}
+            >
               {formatSeconds(length, trimEdge ? 2 : 1)}
             </span>
           )

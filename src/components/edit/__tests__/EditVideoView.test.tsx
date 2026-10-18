@@ -416,9 +416,9 @@ describe("the open edit", () => {
       "Snap",
       "Zoom out",
       "Zoom in",
-      "Fit",
+      "Fit the timeline",
     ]);
-    expect(screen.getByRole("button", { name: "Fit" }).parentElement!.className).toContain("@max-[695px]:hidden");
+    expect(screen.getByRole("button", { name: "Fit the timeline" }).parentElement!.className).toContain("@max-[695px]:hidden");
     for (const name of ["Zoom out", "Zoom in"]) {
       expect(screen.getByRole("button", { name }).parentElement!.className).toContain("@max-[628px]:hidden");
     }
@@ -677,6 +677,10 @@ describe("keys", () => {
     fireEvent.keyDown(favourites, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
     expect(screen.getByRole("button", { name: "Filter and sort" })).toHaveFocus();
+    // The focus shows the button's label again: under it, in the list, never over the title row's hide button
+    const tip = screen.getByRole("button", { name: "Filter and sort" }).nextElementSibling!;
+    expect(tip).toHaveTextContent("Filter and sort");
+    expect(tip).toHaveClass("top-full");
     expect(editor().selection).toBe(selection);
     act(() => (document.activeElement as HTMLElement | null)?.blur());
 
@@ -851,6 +855,8 @@ describe("adding from the library", () => {
     await renderOpen(doc({}, "stacked"));
     await waitFor(() => expect(tile(C)).toHaveAttribute("aria-disabled", "true"));
     expect(tile(C)).toHaveAttribute("title", "desert.mp4\nWaiting for the clips to load");
+    // The keys see it too: on focus the cover shows its name and why it waits
+    expect(within(tile(C)).getByTestId("library-tile-focus-name")).toHaveTextContent("desert.mp4Waiting for the clips to load");
     // Audio never waits
     expect(tile(M)).not.toHaveAttribute("aria-disabled");
     fireEvent.click(tile(C));
@@ -928,8 +934,14 @@ describe("the library pane", () => {
     expect(within(pane).getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["Desert spots", "Launch film"]);
     const launch = within(pane).getByRole("group", { name: "Launch film" });
     expect([...launch.querySelectorAll<HTMLElement>("[data-asset-id]")].map((el) => el.dataset.assetId)).toEqual([B, A, M]);
-    // A cover shows its length alone; a sound is a row with its name and length
-    expect(tile(C)).toHaveTextContent(/^0:05$/);
+    // A cover shows its length alone at rest (its name waits for keyboard focus); a sound is a row with its name and
+    // length
+    const focusName = within(tile(C)).getByTestId("library-tile-focus-name");
+    expect(tile(C).textContent!.replace(focusName.textContent!, "")).toBe("0:05");
+    expect(tile(C)).toHaveClass("group");
+    expect(focusName).toHaveTextContent(/^desert\.mp4$/);
+    expect(focusName).toHaveClass("opacity-0", "group-focus-visible:opacity-100");
+    expect(focusName).toHaveAttribute("aria-hidden", "true");
     expect(tile(M)).toHaveTextContent("music.m4a0:20");
     expect(tile(C)).toHaveAccessibleName("Add desert.mp4, 0:05.0, Desert spots, at the playhead");
     expect(tile(C)).toHaveAttribute("title", "desert.mp4\nClick to add at the playhead, or drag onto the timeline.");
@@ -1195,14 +1207,14 @@ describe("the edit menu", () => {
     await renderOpen();
     const trigger = screen.getByRole("button", { name: "Edit menu" });
     fireEvent.click(trigger);
-    // Its row reads Off at 1×, where nothing repeats
+    // Its row reads Off at 1×, where nothing repeats, and so does the radio it names
     const row = within(screen.getByRole("menu", { name: "Edit menu" })).getByRole("menuitem", { name: "Loop: Off" });
     expect(row).toHaveAttribute("aria-haspopup", "menu");
     fireEvent.keyDown(row, { key: "ArrowRight" });
     const loop = screen.getByRole("menu", { name: "Loop" });
     const radios = within(loop).getAllByRole("menuitemradio");
     expect(radios.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
-      ["1×", "true"],
+      ["Off", "true"],
       ["2×", "false"],
       ["3×", "false"],
     ]);
@@ -1269,7 +1281,7 @@ describe("the edit menu", () => {
       return screen.getByRole("menu", { name: "Loop" });
     };
     expect(showLoop()).toHaveAccessibleDescription(LOOP_AUDIO_NOTE);
-    fireEvent.click(within(screen.getByRole("menu", { name: "Loop" })).getByRole("menuitemradio", { name: "1×" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Loop" })).getByRole("menuitemradio", { name: "Off" }));
     expect(showLoop()).not.toHaveAttribute("aria-describedby");
   });
 

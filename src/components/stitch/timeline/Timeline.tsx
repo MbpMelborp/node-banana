@@ -69,6 +69,11 @@ const NO_AUDIO: StitchAudioClip[] = [];
 const NO_GAPS: ReadonlyArray<{ fromSec: number; toSec: number }> = [];
 /** A clip moved by the keys or the rail to a place out of view is scrolled to this far inside the lanes' left, px. */
 const REVEAL_INSET_PX = 64;
+/**
+ * A fade at an edge of Stacked's rows view: a 0px sticky line in the lanes' flow (over the rows, under the playhead's
+ * line and the ruler), hidden until paintRowFades marks it shown.
+ */
+const ROWS_FADE = "pointer-events-none sticky z-1 h-0 opacity-0 transition-opacity duration-150 data-shown:opacity-100";
 
 /** The scroller as measured after layout; until then, what the height leaves without a scrollbar. */
 interface RowsMeasure {
@@ -89,6 +94,33 @@ function revealRow(el: HTMLElement | null, index: number, viewport: number): voi
   else if (bottom > el.scrollTop + viewport) el.scrollTop = bottom - viewport;
 }
 
+/**
+ * Stacked's rows fade into the ruler and the audio section where more of them are scrolled out of view that way: a
+ * row cut by either edge then reads as one that scrolls, not one the edge covers. Written straight to the fades on
+ * each scroll, as the grips' transform is.
+ */
+function paintRowFades(
+  el: HTMLElement | null,
+  fades: { top: HTMLElement | null; bottom: HTMLElement | null },
+  rows: { overflow: boolean; height: number; viewport: number },
+): void {
+  if (!el) return;
+  const scroll = el.scrollTop;
+  const set = (fade: HTMLElement | null, shown: boolean) => {
+    if (!fade) return;
+    if (shown) fade.dataset.shown = "";
+    else delete fade.dataset.shown;
+  };
+  set(fades.top, rows.overflow && scroll > 0.5);
+  set(fades.bottom, rows.overflow && scroll < rows.height - rows.viewport - 0.5);
+}
+
+/** Stacked's rows view grew by `grown` px at its top: the rows scroll up by as much, so they stay put on screen. */
+function showRowsAbove(el: HTMLElement | null, grown: number): void {
+  if (!el || !(grown > 0) || el.scrollTop <= 0) return;
+  el.scrollTop = Math.max(0, el.scrollTop - grown);
+}
+
 /** Scrolls the lanes so a box wholly out of view sits REVEAL_INSET_PX inside their left; whether they scrolled. */
 function revealBox(el: HTMLElement | null, box: { x: number; width: number }): boolean {
   if (!el) return false;
@@ -103,10 +135,11 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
  * no track headers: the lanes run its full width, 0:00 sitting 20px in. They
  * scroll sideways and hold the ruler, the video (Track's clips row or
  * Stacked's rows), the audio section at the bottom and the playhead. What
- * the headers did floats in the 20px left padding on a row's hover or
- * keyboard focus (RowControls: an audio row's mute and volume-curve toggle,
- * Stacked's row grips); scrolled sideways, the lanes pass under that
- * padding, which covers them there. "+ Audio" (with Line up in Stacked) is a
+ * the headers did floats in the 20px left padding (RowControls): an audio
+ * row's mute and volume-curve toggle on the row's hover or keyboard focus,
+ * and Stacked's row grips on hover only (from the keys, ⌥↑ / ⌥↓ and the clip
+ * menu move rows); scrolled sideways, the lanes pass under that padding,
+ * which covers them there. "+ Audio" (with Line up in Stacked) is a
  * quiet line under the last audio row, and the playhead's line ends above it. The zoom comes from useTimelineZoom (shared
  * with the control row); ⌘ wheel or a pinch zooms around the pointer, any
  * other wheel scrolls. Selection is a white ring; the selection box is a
@@ -130,9 +163,13 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
  * scroll vertically between a sticky ruler and the sticky audio section, in
  * the same scroller as the sideways scroll, and the row grips follow the
  * scroll through a transform written straight to them (no render per
- * scroll). A plain wheel over the audio section scrolls the audio rows (when
- * they overflow) and nothing else; elsewhere it scrolls Stacked's rows when
- * they overflow; ⇧ wheel scrolls along the timeline. The row of the clip
+ * scroll). The rows fade into the ruler and into the audio section where
+ * more of them are out of view that way, so the half row the view ends on
+ * reads as one that scrolls; a view that grows (the height settling after
+ * the control row's hold) shows the rows above first. A plain wheel over
+ * the audio section scrolls the audio rows (when they overflow) and nothing
+ * else; elsewhere it scrolls Stacked's rows when they overflow; ⇧ wheel
+ * scrolls along the timeline. The row of the clip
  * that drives the preview, or of a clip selected by a key, is scrolled into
  * view, and so is an audio clip's row.
  *
@@ -182,6 +219,8 @@ export function Timeline({
   const barProbeRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const gripRowsRef = useRef<HTMLDivElement>(null);
+  const fadeTopRef = useRef<HTMLDivElement>(null);
+  const fadeBottomRef = useRef<HTMLDivElement>(null);
   const audioViewRef = useRef<HTMLDivElement>(null);
   const selectedId = useStitchEditorStore((s) => (s.selection?.kind === "clip" ? s.selection.clipId : null));
   const selection = useStitchEditorStore((s) => s.selection);
@@ -390,6 +429,7 @@ export function Timeline({
     zoom,
     stacked,
     rowsOverflow,
+    rowsHeight,
     rowsViewport,
     spans,
     restBoxes,
@@ -520,6 +560,12 @@ export function Timeline({
       scrollPosition.set(el.scrollLeft);
       const rows = gripRowsRef.current;
       if (rows) rows.style.transform = `translateY(${-el.scrollTop}px)`;
+      const live = latest.current;
+      paintRowFades(
+        el,
+        { top: fadeTopRef.current, bottom: fadeBottomRef.current },
+        { overflow: live.rowsOverflow, height: live.rowsHeight, viewport: live.rowsViewport },
+      );
     };
     // Native and non-passive, so a wheel over the timeline neither scrolls the page nor reaches anything behind. Bound on
     // the whole timeline: a wheel over a row's controls (Stacked's grips, an audio row's group) scrolls what the
@@ -572,11 +618,28 @@ export function Timeline({
     };
   }, [scroller, scrollPosition]);
 
-  // The grips are mounted again on a switch to Stacked: they start where the rows are
+  // The rows' view grown (the height settling once the pointer leaves the control row, a taller window) shows the rows
+  // above first, as the timeline grows upward: the rows stay where they were on screen. A row a selection revealed in
+  // the smaller view stays in view, and a switch to Stacked made with a clip selected no longer leaves Clip 1 half
+  // under the ruler
+  const shownRows = useRef({ stacked, viewport: rowsViewport });
+  useLayoutEffect(() => {
+    const before = shownRows.current;
+    shownRows.current = { stacked, viewport: rowsViewport };
+    const el = scroller.current;
+    if (stacked && before.stacked) showRowsAbove(el, rowsViewport - before.viewport);
+  }, [stacked, rowsViewport, scroller]);
+
+  // The grips are mounted again on a switch to Stacked: they start where the rows are, and so do the rows' fades
   useLayoutEffect(() => {
     const el = scroller.current;
     const rows = gripRowsRef.current;
     if (el && rows) rows.style.transform = `translateY(${-el.scrollTop}px)`;
+    paintRowFades(
+      el,
+      { top: fadeTopRef.current, bottom: fadeBottomRef.current },
+      { overflow: rowsOverflow, height: rowsHeight, viewport: rowsViewport },
+    );
   });
 
   // A switch of layout (the toggle, ⌘Z) swaps the lane and Line up: focus on them is removed with them. It goes to
@@ -859,6 +922,16 @@ export function Timeline({
               ))}
               {!empty && <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} part="head" />}
             </div>
+            {/* Under the ruler: shown while rows are scrolled out of view above (paintRowFades) */}
+            <div
+              ref={fadeTopRef}
+              aria-hidden="true"
+              data-testid="stitch-rows-fade-top"
+              className={ROWS_FADE}
+              style={{ top: GEOMETRY.ruler }}
+            >
+              <div className="absolute inset-x-0 top-0 h-4 bg-linear-to-b from-pane to-transparent" />
+            </div>
             <div data-testid="stitch-rows" className="relative z-0" style={{ height: rowsBlock }}>
               <StackedClipsLane
                 axis={axis}
@@ -884,6 +957,16 @@ export function Timeline({
                 onHandlePointerDown={onHandlePointerDown}
                 onLanePointerDown={onLanePointerDown}
               />
+            </div>
+            {/* Over the audio section: shown while rows are scrolled out of view below (paintRowFades) */}
+            <div
+              ref={fadeBottomRef}
+              aria-hidden="true"
+              data-testid="stitch-rows-fade-bottom"
+              className={ROWS_FADE}
+              style={{ bottom: audioLayout.sectionHeight }}
+            >
+              <div className="absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-pane to-transparent" />
             </div>
             <div className="sticky bottom-0 z-2">{audioLane}</div>
             {/* Pinned to the rows' view, so the line runs from its top to the strip whatever the rows' scroll */}

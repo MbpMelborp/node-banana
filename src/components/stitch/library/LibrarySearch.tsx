@@ -122,7 +122,9 @@ export function LibrarySearch({
             <ListFilter size={14} strokeWidth={1.5} aria-hidden="true" />
             {filtered && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[5px] w-[5px] rounded-full bg-neutral-100" />}
           </button>
-          {!shown && <Tooltip label={FILTER_LABEL} detail={filtered ? FILTERS_ON : undefined} align="end" />}
+          {/* Under the button, in the list: focus coming back from the popover shows it, and above it would cover the
+              title row's hide button */}
+          {!shown && <Tooltip label={FILTER_LABEL} detail={filtered ? FILTERS_ON : undefined} placement="bottom" align="end" />}
         </div>
         {filtered && (
           <span id={noteId} className="sr-only">

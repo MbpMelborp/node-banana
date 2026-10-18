@@ -139,7 +139,7 @@ const click = (el: HTMLElement, clientX = x(4), clientY = 30) => {
 };
 const toggle = (row = 0) =>
   fireEvent.click(
-    screen.getAllByRole("button", { name: /^(Show|Hide) volume curve$/ })[row] as HTMLElement,
+    screen.getAllByRole("button", { name: /^(Show|Hide) volume curve for Audio \d+$/ })[row] as HTMLElement,
   );
 /** The music selected on an expanded row: its curve takes presses. */
 const editMusic = () => {
@@ -205,7 +205,7 @@ describe("Audio section", () => {
     expect(musicBox()).toHaveAccessibleName("score.mp3, Audio 1, starts 0:00.00");
     // Only the length shows, on hover, as on a video clip; the name is the box's tooltip, the source the rail's
     const length = within(musicBox()).getByText("20.0 s");
-    expect(length).toHaveClass("opacity-0", "group-hover:opacity-100");
+    expect(length).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-visible:opacity-100");
     expect(within(musicBox()).queryByText("score.mp3")).toBeNull();
     expect(musicBox()).toHaveAttribute("title", "score.mp3");
     expect(within(musicBox()).queryByText("Audio input")).toBeNull();
@@ -253,7 +253,7 @@ describe("Audio section", () => {
     expect(rows()[0].style.height).toBe("52px");
     expect(timelineEl().style.height).toBe("189px");
     expect(rail()).toBeInTheDocument();
-    const show = screen.getByRole("button", { name: "Show volume curve" });
+    const show = screen.getByRole("button", { name: "Show volume curve for Audio 1" });
     expect(show).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(show);
     expect(editor().audioExpandedRow).toBe(0);
@@ -261,11 +261,17 @@ describe("Audio section", () => {
     expect(rows()[0].style.height).toBe("128px");
     expect(musicBox().style.height).toBe("120px");
     expect(timelineEl().style.height).toBe("265px");
-    // The 0 dB and −12 dB guides, unlabelled: a dragged point's readout says its level
+    // The 0 dB and −12 dB guides, labelled in the clip just over each line (−∞ is the block's foot)
     expect(screen.getByTestId("stitch-db-guides")).toBeInTheDocument();
-    expect(screen.queryAllByTestId("stitch-db-label")).toHaveLength(0);
+    const labels = within(musicBox()).getAllByTestId("stitch-db-label");
+    expect(labels.map((el) => el.textContent)).toEqual(["0 dB", "−12"]);
+    const guideYs = [...within(musicBox()).getByTestId("stitch-db-guides").querySelectorAll("line")].map(
+      (line) => Number(line.getAttribute("y1")) - 0.5,
+    );
+    // Each 12px label's foot 1px over its line
+    expect(labels.map((el) => parseFloat(el.style.top) + 12 + 1)).toEqual(guideYs);
     // The same button, now the one that hides it
-    expect(screen.getByRole("button", { name: "Hide volume curve" })).toBe(show);
+    expect(screen.getByRole("button", { name: "Hide volume curve for Audio 1" })).toBe(show);
     expect(show).toHaveAttribute("aria-expanded", "true");
     // Selecting a video clip leaves the row as it is
     click(screen.getByRole("option", { name: "Clip 1" }), 100, 0);
@@ -274,6 +280,42 @@ describe("Audio section", () => {
     fireEvent.click(show);
     expect(editor().audioExpandedRow).toBeNull();
     expect(rows()[0].style.height).toBe("52px");
+  });
+
+  it("keeps an open row's dB labels in view while the lanes scroll past a clip's start, inside the clip, and draws no guides a clip has no room to name", () => {
+    seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
+    openEditor();
+    toggle(0);
+    const labelLefts = () => within(musicBox()).getAllByTestId("stitch-db-label").map((el) => el.style.left);
+    // The music runs from 0:00 for 20 s (1280 px): its labels 14 px in
+    expect(labelLefts()).toEqual(["14px", "14px"]);
+    // Scrolled 300 px, its start is out of view: the labels stay 14 px past the lanes' side padding, over the
+    // guides they name
+    const lanes = screen.getByTestId("stitch-lanes");
+    lanes.scrollLeft = 300;
+    fireEvent.scroll(lanes);
+    expect(labelLefts()).toEqual([`${300 + ORIGIN - x(0) + 14}px`, `${300 + ORIGIN - x(0) + 14}px`]);
+    expect(within(musicBox()).getByTestId("stitch-db-guides")).toBeInTheDocument();
+    // Near its end they keep to the clip, clear of its Out handle, and leave the view with it
+    lanes.scrollLeft = 1260;
+    fireEvent.scroll(lanes);
+    expect(labelLefts()).toEqual([`${20 * PPS - 50}px`, `${20 * PPS - 50}px`]);
+    lanes.scrollLeft = 0;
+    fireEvent.scroll(lanes);
+    expect(labelLefts()).toEqual(["14px", "14px"]);
+
+    // The 3 s tone on its open row: 192 px, named; at 16 px/s (48 px) it has no room for the labels, so no guides
+    toggle(1);
+    const toneBox = () => box("tone1320.m4a");
+    expect(within(toneBox()).getAllByTestId("stitch-db-label")).toHaveLength(2);
+    expect(within(toneBox()).getByTestId("stitch-db-guides")).toBeInTheDocument();
+    act(() => editor().setZoom(16));
+    expect(toneBox().style.width).toBe("48px");
+    expect(within(toneBox()).queryByTestId("stitch-db-label")).toBeNull();
+    expect(within(toneBox()).queryByTestId("stitch-db-guides")).toBeNull();
+    // Its curve still shows when it is selected
+    click(toneBox(), ORIGIN + 16 * 2.5, 30);
+    expect(within(toneBox()).getByTestId("stitch-curve").querySelector("polyline")).toBeInTheDocument();
   });
 
   it("moves no box and no row controls when a clip on another row is clicked while row 0 is expanded", () => {
@@ -395,7 +437,7 @@ describe("Audio section", () => {
     act(() => useStitchEditorStore.setState({ editId: null }));
     expect(screen.queryAllByRole("option").filter((el) => el.dataset.audioClipId)).toHaveLength(0);
     expect(screen.queryByRole("button", { name: /^Mute Audio/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show volume curve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /volume curve/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Add audio" })).toBeEnabled();
   });
 
@@ -819,7 +861,9 @@ describe("Audio row controls", () => {
       for (const button of within(group(row)).getAllByRole("button")) expect(button).not.toHaveAttribute("tabindex");
     }
     expect(within(group(1)).getByRole("button", { name: "Mute Audio 2" })).toBeInTheDocument();
-    expect(within(group(1)).getByRole("button", { name: "Show volume curve" })).toBeInTheDocument();
+    // Named for its row, as the mute is, so a list of buttons tells the rows' toggles apart
+    expect(within(group(1)).getByRole("button", { name: "Show volume curve for Audio 2" })).toBeInTheDocument();
+    expect(within(group(0)).getByRole("button", { name: "Show volume curve for Audio 1" })).toBeInTheDocument();
   });
 
   it("keeps the group a press started on until its release, so a click whose pointer drifts still lands", () => {
@@ -864,18 +908,25 @@ describe("Audio row controls", () => {
   it("keeps the open row's group shown, at the foot of its block so the toggle stays under the pointer", () => {
     seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
     openEditor();
-    // Its bottom 8px over the row's foot: 52 − 8 − 38 (two 18px controls, 2px apart)
-    expect(group(0).style.top).toBe("6px");
-    expect(group(1).style.top).toBe(`${52 + 6}px`);
+    // Its bottom 8px over the row's foot: 52 − 8 − 34 (two 16px controls, 2px apart)
+    expect(group(0).style.top).toBe("10px");
+    expect(group(1).style.top).toBe(`${52 + 10}px`);
+    // 2px in from the timeline's edge, so their focus rings clear the hairline beside it and the playhead at 0:00
+    // (20px in): 2 + 16 leaves 2px
+    expect(group(0).style.left).toBe("2px");
+    for (const control of within(group(0)).getAllByRole("button")) {
+      expect(control.style.width).toBe("16px");
+      expect(control).toHaveClass("focus-visible:ring-inset");
+    }
     toggle(0);
     expect(shown(0)).toBe(true);
     fireEvent.pointerLeave(timelineEl());
     expect(shown(0)).toBe(true);
     // The open row is 128px: its group moved down with the row's foot, and row 1's with its row
-    expect(group(0).style.top).toBe(`${128 - 8 - 38}px`);
-    expect(group(1).style.top).toBe(`${128 + 6}px`);
+    expect(group(0).style.top).toBe(`${128 - 8 - 34}px`);
+    expect(group(1).style.top).toBe(`${128 + 10}px`);
     toggle(0);
     expect(shown(0)).toBe(false);
-    expect(group(0).style.top).toBe("6px");
+    expect(group(0).style.top).toBe("10px");
   });
 });

@@ -45,7 +45,14 @@ import {
 } from "../editorActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
-import { EDIT_MENU_DIVIDER, EDIT_MENU_MUTED, EDIT_MENU_ROW, EDIT_MENU_SURFACE, EDITOR_PANEL_SELECTOR } from "../editorStyles";
+import {
+  EDIT_MENU_DIVIDER,
+  EDIT_MENU_MUTED,
+  EDIT_MENU_ROW,
+  EDIT_MENU_SURFACE,
+  EDIT_MENU_VALUE,
+  EDITOR_PANEL_SELECTOR,
+} from "../editorStyles";
 
 /** The edit menus' 220px. */
 const MENU_WIDTH = 220;
@@ -135,7 +142,7 @@ function menuItem(act: (run: () => void) => () => void) {
     return (
       <MenuItem role="menuitem" disabled={opts.disabled} title={opts.title} onClick={act(run)} className={EDIT_MENU_ROW}>
         <span className="truncate">{label}</span>
-        {opts.shortcut && <MenuShortcut className="font-sans text-xs tabular-nums">{opts.shortcut}</MenuShortcut>}
+        {opts.shortcut && <MenuShortcut className={cn("font-sans text-xs tabular-nums", EDIT_MENU_VALUE)}>{opts.shortcut}</MenuShortcut>}
       </MenuItem>
     );
   };
