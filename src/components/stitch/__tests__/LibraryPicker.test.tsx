@@ -147,6 +147,26 @@ const dialog = () => screen.getByRole("dialog", { name: "Add from library" });
 /** A tile's accessible name starts with its file name, then its length, project and flags. */
 const named = (file: string) => new RegExp(`^${file.replace(/\./g, "\\.")}(,|$)`);
 const tile = (file: string) => within(dialog()).getByRole("button", { name: named(file) });
+const filterButton = (scope = dialog()) => within(scope).getByRole("button", { name: "Filter and sort" });
+/** The search's filter popover, opened if it is not open yet. */
+function filters(scope = dialog()) {
+  const button = filterButton(scope);
+  if (button.getAttribute("aria-expanded") !== "true") fireEvent.click(button);
+  return within(scope).getByRole("dialog", { name: "Filter and sort" });
+}
+
+/**
+ * A press on `target`, with the focus a browser gives it (jsdom moves none): the nearest focusable ancestor takes it
+ * (the page, when none does), then the click.
+ */
+function pressAt(target: HTMLElement) {
+  const focusable = target.closest<HTMLElement>("button:not(:disabled), input:not(:disabled), [tabindex]");
+  act(() => {
+    if (focusable) focusable.focus();
+    else (document.activeElement as HTMLElement | null)?.blur();
+  });
+  fireEvent.click(target);
+}
 
 beforeEach(() => {
   __resetPosterRequestsForTests();
@@ -224,11 +244,36 @@ describe("LibraryPicker", () => {
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(1);
     expect(api.fetchAssetPage.mock.calls[0][0]).toEqual({ kinds: ["video"], limit: 60 });
     expect(api.fetchAssetPage.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
-    // The tile: its length to a tenth, the file name and the project's folder
-    expect(within(tile("a2.mp4")).getByText("0:04.6")).toBeInTheDocument();
-    expect(within(tile("a2.mp4")).getAllByText("Launch film")).toHaveLength(1);
-    // Everything the tile shows is in its name
+    // The tile: a cover under its project's name, with nothing on it but its length in whole seconds
+    expect(within(tile("a2.mp4")).getByText("0:05")).toBeInTheDocument();
+    expect(within(tile("a2.mp4")).queryByText("a2.mp4")).toBeNull();
+    expect(within(tile("a2.mp4")).queryByText("Launch film")).toBeNull();
+    expect(within(dialog()).getByRole("group", { name: "Launch film" })).toContainElement(tile("a2.mp4"));
+    // Everything the tile knows is in its name, its length to a tenth; the file name is its tooltip
     expect(tile("a2.mp4")).toHaveAccessibleName("a2.mp4, 0:04.6, Launch film");
+    expect(tile("a2.mp4")).toHaveAttribute("title", "a2.mp4");
+    // Nothing narrows the list: no dot on the filter button
+    expect(filterButton()).not.toHaveAttribute("data-filtered");
+    expect(filterButton()).not.toHaveAccessibleDescription();
+  });
+
+  it("groups the files by project, each where its first file comes in the list", async () => {
+    const elsewhere = { id: "wf_2", name: "Desert", projectPath: "/Users/me/Node Banana/Desert spots" };
+    api.fetchAssetPage.mockResolvedValue(
+      page([asset("a1"), asset("d1", { workflow: elsewhere }), asset("a2"), asset("n1", { workflow: { id: "wf_3", name: null, projectPath: null } }), asset("d2", { workflow: elsewhere })]),
+    );
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    expect(within(dialog()).getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
+      "Launch film",
+      "Desert spots",
+      "Not in a project",
+    ]);
+    const ids = (name: string) =>
+      [...within(dialog()).getByRole("group", { name }).querySelectorAll("[data-asset-id]")].map((el) => el.getAttribute("data-asset-id"));
+    expect(ids("Launch film")).toEqual(["a1", "a2"]);
+    expect(ids("Desert spots")).toEqual(["d1", "d2"]);
+    expect(ids("Not in a project")).toEqual(["n1"]);
   });
 
   it("searches 200 ms after the last key", async () => {
@@ -247,22 +292,38 @@ describe("LibraryPicker", () => {
     expect(lastRequest()).toEqual({ kinds: ["video"], limit: 60, q: "veo" });
   });
 
-  it("narrows to favourites and to this workflow", async () => {
+  it("narrows to favourites and to this workflow, from the search's filter button, which then shows a dot", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
+    expect(filterButton()).toHaveAttribute("aria-expanded", "false");
+    const panel = filters();
+    expect(filterButton()).toHaveAttribute("aria-expanded", "true");
+    // It takes focus as it opens
+    expect(within(panel).getByRole("button", { name: "Project: All projects" })).toHaveFocus();
+    fireEvent.click(within(panel).getByRole("switch", { name: "Favorites" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true }));
-    fireEvent.click(within(dialog()).getByRole("button", { name: "This workflow" }));
+    fireEvent.click(within(filters()).getByRole("switch", { name: "This workflow" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true, workflowIds: ["wf_1"] }));
-    expect(within(dialog()).getByRole("button", { name: "This workflow" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(filters()).getByRole("switch", { name: "This workflow" })).toHaveAttribute("aria-checked", "true");
+    expect(filterButton()).toHaveAttribute("data-filtered", "true");
+    expect(filterButton()).toHaveAccessibleDescription("Filters are on");
+    // A click on a row's label toggles its switch too
+    fireEvent.click(within(filters()).getByText("Favorites"));
+    await waitFor(() => expect(lastRequest()).not.toHaveProperty("favorite"));
+    // A press outside closes the popover; the dot stays while This workflow is on
+    fireEvent.pointerDown(screen.getByTestId("stitch-library-grid"));
+    expect(within(dialog()).queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
+    expect(filterButton()).toHaveAttribute("data-filtered", "true");
   });
 
   it("cannot narrow to a workflow that has no id yet", async () => {
     openPicker({ workflowId: null });
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    const toggle = within(dialog()).getByRole("button", { name: "This workflow" });
+    const toggle = within(filters()).getByRole("switch", { name: "This workflow" });
     expect(toggle).toBeDisabled();
-    expect(toggle).toHaveAttribute("title", "Nothing from this workflow is in the library yet");
+    // The switch itself says why, to a screen reader as to a pointer over its row
+    expect(toggle).toHaveAccessibleDescription("Nothing from this workflow is in the library yet");
+    expect(toggle.closest("label")).toHaveAttribute("title", "Nothing from this workflow is in the library yet");
   });
 
   it("narrows to a project from the library's own list", async () => {
@@ -274,29 +335,45 @@ describe("LibraryPicker", () => {
     );
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Project: All projects" }));
+    fireEvent.click(within(filters()).getByRole("button", { name: "Project: All projects" }));
     const menu = await screen.findByRole("menu", { name: "Project: All projects" });
     await waitFor(() => expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(3));
     fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Launch film" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ projects: ["/p"] }));
     expect(screen.queryByRole("menu")).toBeNull();
-    expect(within(dialog()).getByRole("button", { name: "Project: Launch film" })).toBeInTheDocument();
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Project: Launch film" }));
+    // The pick closes the menu, not the filters, and gives focus back to its field
+    expect(within(filters()).getByRole("button", { name: "Project: Launch film" })).toHaveFocus();
+    fireEvent.click(within(filters()).getByRole("button", { name: "Project: Launch film" }));
     fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "Not in a project" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ projects: [""] }));
+    expect(filterButton()).toHaveAttribute("data-filtered", "true");
   });
 
-  it("sorts oldest first, and Escape closes the menu but not the picker", async () => {
+  it("sorts oldest first; Escape closes the project menu, then the filters, but not the picker", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Sort: Newest first" }));
-    const menu = screen.getByRole("menu", { name: "Sort: Newest first" });
-    fireEvent.keyDown(within(menu).getByRole("menuitemradio", { name: "Newest first" }), { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(editor().pickerOpen).toBe("video");
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Sort: Newest first" }));
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "Oldest first" }));
+    const sort = within(filters()).getByRole("radiogroup", { name: "Sort" });
+    expect(within(sort).getByRole("radio", { name: "Newest" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(sort).getByRole("radio", { name: "Oldest" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ sort: "oldest" }));
+    expect(within(sort).getByRole("radio", { name: "Oldest" })).toHaveAttribute("aria-checked", "true");
+    expect(filterButton()).toHaveAttribute("data-filtered", "true");
+    // One tab stop; the arrows move the choice
+    expect(within(sort).getByRole("radio", { name: "Newest" })).toHaveAttribute("tabindex", "-1");
+    fireEvent.keyDown(within(sort).getByRole("radio", { name: "Oldest" }), { key: "ArrowLeft" });
+    await waitFor(() => expect(lastRequest()).not.toHaveProperty("sort"));
+    expect(within(sort).getByRole("radio", { name: "Newest" })).toHaveFocus();
+    expect(filterButton()).not.toHaveAttribute("data-filtered");
+
+    fireEvent.click(within(filters()).getByRole("button", { name: "Project: All projects" }));
+    const menu = screen.getByRole("menu", { name: "Project: All projects" });
+    fireEvent.keyDown(within(menu).getByRole("menuitemradio", { name: "All projects" }), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(within(dialog()).getByRole("dialog", { name: "Filter and sort" })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(within(dialog()).queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
+    expect(filterButton()).toHaveFocus();
+    expect(editor().pickerOpen).toBe("video");
   });
 
   it("counts the picked videos, their length and where they go", async () => {
@@ -311,7 +388,7 @@ describe("LibraryPicker", () => {
     expect(within(dialog()).getByRole("button", { name: "Add 1 clip" })).toBeEnabled();
     fireEvent.click(tile("a2.mp4"));
     expect(tile("a2.mp4")).toHaveAttribute("aria-pressed", "true");
-    expect(within(tile("a2.mp4")).getByLabelText("Selected")).toBeInTheDocument();
+    expect(tile("a2.mp4").className).toMatch(/\bring-neutral-100\b/);
     expect(within(dialog()).getByText("2 selected")).toBeInTheDocument();
     expect(within(dialog()).getByText("0:09.60")).toBeInTheDocument();
     expect(within(dialog()).getByText("goes after Clip 2")).toBeInTheDocument();
@@ -386,7 +463,7 @@ describe("LibraryPicker", () => {
     api.fetchAssetPage.mockResolvedValue(page([asset("a1", { missing: true }), asset("a2")]));
     openPicker();
     expect(await within(dialog()).findByRole("button", { name: named("a1.mp4") })).toBeDisabled();
-    expect(tile("a1.mp4")).toHaveAttribute("title", "The file is missing");
+    expect(tile("a1.mp4")).toHaveAttribute("title", "a1.mp4\nThe file is missing");
     expect(tile("a2.mp4")).toBeEnabled();
   });
 
@@ -395,7 +472,7 @@ describe("LibraryPicker", () => {
     api.fetchAssetPage.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
     api.fetchAssetPage.mockResolvedValueOnce(page([asset("fav", { favorite: true })]));
     openPicker();
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
+    fireEvent.click(within(filters()).getByRole("switch", { name: "Favorites" }));
     expect(await within(dialog()).findByRole("button", { name: named("fav.mp4") })).toBeInTheDocument();
     expect(tile("fav.mp4")).toHaveAccessibleName("fav.mp4, 0:05.0, Launch film, favorite");
     await act(async () => answerFirst(page([asset("stale")])));
@@ -408,7 +485,7 @@ describe("LibraryPicker", () => {
     openPicker();
     expect(await within(dialog()).findByText("No videos match")).toBeInTheDocument();
     api.fetchAssetPage.mockRejectedValueOnce(new Error("The library is moving."));
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
+    fireEvent.click(within(filters()).getByRole("switch", { name: "Favorites" }));
     expect(await within(dialog()).findByText("The library is moving.")).toBeInTheDocument();
   });
 
@@ -429,7 +506,7 @@ describe("LibraryPicker", () => {
     const grid = screen.getByTestId("stitch-library-grid");
     grid.scrollTop = 300;
     api.fetchAssetPage.mockResolvedValueOnce(page([asset("fav", { favorite: true }), asset("a2"), asset("a3")]));
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
+    fireEvent.click(within(filters()).getByRole("switch", { name: "Favorites" }));
     await within(dialog()).findByRole("button", { name: named("fav.mp4") });
     expect(grid.scrollTop).toBe(0);
   });
@@ -472,7 +549,7 @@ describe("LibraryPicker", () => {
       await within(dialog()).findByRole("button", { name: named("a1.mp4") });
       await fireSentinel(observers, 0);
       await within(dialog()).findByRole("button", { name: named("a2.mp4") });
-      const favourites = within(dialog()).getByRole("button", { name: "Favorites" });
+      const favourites = within(filters()).getByRole("switch", { name: "Favorites" });
       fireEvent.click(favourites);
       fireEvent.click(favourites);
       expect(api.fetchAssetPage).toHaveBeenCalledTimes(4);
@@ -559,10 +636,61 @@ describe("LibraryPicker", () => {
   it("closes an open menu on a wheel over the grid", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Project: All projects" }));
+    fireEvent.click(within(filters()).getByRole("button", { name: "Project: All projects" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
     fireEvent.wheel(screen.getByTestId("stitch-library-grid"), { deltaY: 40 });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("rings a picked cover in white, and draws nothing on a cover but its picture and length", async () => {
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    const marks = () => [...tile("a1.mp4").children].map((el) => el.tagName);
+    expect(tile("a1.mp4").className).not.toMatch(/ring-selection/);
+    expect(marks()).toEqual(["IMG", "SPAN"]);
+    fireEvent.click(tile("a1.mp4"));
+    expect(tile("a1.mp4").className).toMatch(/\bring-neutral-100\b/);
+    // The ring is the pick (aria-pressed says it): no badge on the picture
+    expect(marks()).toEqual(["IMG", "SPAN"]);
+    expect(within(tile("a1.mp4")).queryByLabelText("Selected")).toBeNull();
+  });
+
+  it("draws a cover it has no picture for as a grey frame, never a tinted placeholder", async () => {
+    api.fetchAssetPage.mockResolvedValue(page([asset("gone", { missing: true }), asset("a2")]));
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a2.mp4") });
+    const blank = (cover: HTMLElement) => {
+      expect(cover.querySelector("img")).toBeNull();
+      expect(cover.querySelector("svg")).not.toBeNull();
+      expect(cover.innerHTML).not.toMatch(/handle-/);
+    };
+    // A file that is gone
+    blank(tile("gone.mp4"));
+    // A thumbnail that fails to load
+    fireEvent.error(tile("a2.mp4").querySelector("img")!);
+    blank(tile("a2.mp4"));
+    expect(tile("a2.mp4")).toHaveTextContent(/^0:05$/);
+  });
+
+  it("stays open under a press on its padding or a row's label, which still toggles the switch, and still hears Escape", async () => {
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    const panel = filters();
+    const open = () => within(dialog()).queryByRole("dialog", { name: "Filter and sort" });
+    // Its padding: the popover takes focus, not the dialog around it (which would close it)
+    pressAt(panel);
+    expect(panel).toHaveFocus();
+    expect(open()).toBe(panel);
+    // A row's label, and a switch row's, which toggles its switch
+    pressAt(within(panel).getByText("Sort"));
+    expect(open()).toBe(panel);
+    pressAt(within(panel).getByText("Favorites"));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true }));
+    expect(open()).toBe(panel);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(open()).toBeNull();
+    expect(filterButton()).toHaveFocus();
+    expect(editor().pickerOpen).toBe("video");
   });
 });
 
@@ -703,9 +831,13 @@ describe("LibraryPicker over the editor", () => {
         "placeholder",
         "Search audio",
       );
-      expect(within(audioDialog()).getByText("Audio")).toBeInTheDocument();
-      // The audio placeholder, not a thumbnail
+      // A one-line row: its name and its length, no thumbnail
+      expect(audioTile("t1.m4a")).toHaveTextContent("t1.m4a0:03");
       expect(audioTile("t1.m4a").querySelector("img")).toBeNull();
+      fireEvent.click(audioTile("t1.m4a"));
+      expect(audioTile("t1.m4a")).toHaveAttribute("aria-pressed", "true");
+      expect(within(audioTile("t1.m4a")).getByLabelText("Selected")).toBeInTheDocument();
+      fireEvent.click(audioTile("t1.m4a"));
       expect(poster.ensurePoster).not.toHaveBeenCalled();
       expect(within(audioDialog()).getByText("Pick audio files to add")).toBeInTheDocument();
     });
@@ -737,7 +869,7 @@ describe("LibraryPicker over the editor", () => {
       api.fetchAssetPage.mockResolvedValue(page([]));
       openPicker({ kind: "audio" });
       expect(await within(audioDialog()).findByText("No audio in the library yet")).toBeInTheDocument();
-      fireEvent.click(within(audioDialog()).getByRole("button", { name: "Favorites" }));
+      fireEvent.click(within(filters(audioDialog())).getByRole("switch", { name: "Favorites" }));
       expect(await within(audioDialog()).findByText("No audio matches")).toBeInTheDocument();
     });
 

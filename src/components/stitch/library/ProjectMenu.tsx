@@ -8,10 +8,12 @@ const MENU_WIDTH = 220;
 const ALL_PROJECTS = "All projects";
 
 /**
- * "All projects ▾": all of them, or one of the projects that hold assets
- * (the library's facets, as the Assets rail lists them), with "Not in a
- * project" last. The filter value is the project's folder, "" for not in a
- * project, null for all.
+ * "All projects ▾", in the library's filter popover: all of them, or one of
+ * the projects that hold assets (the library's facets, as the Assets rail
+ * lists them), with "Not in a project" last. The filter value is the
+ * project's folder, "" for not in a project, null for all. A select-like
+ * field as wide as its row; the menu opens leftward from its right edge, so
+ * it stays over the library.
  */
 export function ProjectMenu({
   value,
@@ -31,13 +33,14 @@ export function ProjectMenu({
   return (
     <RadioMenu
       label={`Project: ${current}`}
-      buttonLabel={<span className="min-w-0 max-w-[160px] truncate">{current}</span>}
+      buttonLabel={<span className="min-w-0 flex-1 truncate text-left">{current}</span>}
       value={value}
       options={options}
       onChange={onChange}
       width={MENU_WIDTH}
-      // The one toolbar item that gives way: a long project name truncates before the row runs out
-      className="min-w-0 shrink border border-card-border px-2.5 text-neutral-200 hover:bg-white/[0.03]"
+      align="end"
+      // A long project name truncates before the row runs out
+      className="h-7 w-full min-w-0 shrink rounded-md bg-edit-field pl-2.5 pr-1.5 text-neutral-200 hover:bg-edit-pressed aria-expanded:bg-edit-pressed"
     />
   );
 }

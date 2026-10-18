@@ -1,24 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { PanelLeftClose, Star } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Music, PanelLeftClose } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
-import { DialogButton, DialogSearchField, DialogSpinner } from "@/components/ui/Dialog";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { AssetPlaceholder, tileThumbUrl } from "@/components/assets/AssetTile";
+import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { fetchFacets } from "@/lib/assets/client/api";
-import { onPosterReady } from "@/lib/assets/client/poster";
 import { onAssetRecorded } from "@/lib/assets/client/recorder";
 import type { AssetFacets, AssetView } from "@/lib/assets/types";
 import { WAITING_FOR_CLIPS } from "@/lib/stitch/libraryInsert";
 import { DEFAULT_LIBRARY_QUERY, libraryKinds, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { addLibraryItemAt, libraryAddBlockedReason } from "@/components/stitch/editorActions";
-import { EDITOR_CHIP, ICON_BUTTON, LIFTED_CLIP } from "@/components/stitch/editorStyles";
-import { FILTER_BUTTON, FILTER_OFF, FILTER_ON } from "@/components/stitch/library/filterStyles";
-import { LibraryTile } from "@/components/stitch/library/LibraryTile";
+import { EDITOR_CHIP, HEADER_ICON_BUTTON, LIFTED_CLIP } from "@/components/stitch/editorStyles";
+import { LibraryResults } from "@/components/stitch/library/LibraryResults";
+import {
+  FilterDivider,
+  FilterRow,
+  FilterSegments,
+  FilterSwitch,
+  LibrarySearch,
+  SORT_OPTIONS,
+} from "@/components/stitch/library/LibrarySearch";
+import { BlankCover, CoverLength, LibraryTile } from "@/components/stitch/library/LibraryTile";
 import { ProjectMenu } from "@/components/stitch/library/ProjectMenu";
-import { SortMenu } from "@/components/stitch/library/SortMenu";
 import { useLibraryAvailable } from "@/components/stitch/library/useLibraryAvailable";
 import { useLibraryVideos } from "@/components/stitch/library/useLibraryVideos";
 import { useEditProjectStore, type EditPaneKind } from "@/store/editProjectStore";
@@ -31,8 +36,9 @@ const KIND_OPTIONS: { value: EditPaneKind; label: string }[] = [
   { value: "video", label: "Video" },
   { value: "audio", label: "Audio" },
 ];
-/** The ghost's poster, 16:9. */
+/** The ghost's cover, as wide as a tile's; an audio file's row. */
 const GHOST_WIDTH = 112;
+const GHOST_ROW_WIDTH = 200;
 
 const VIDEO_ITEM = { assetId: "", kind: "video", durationSec: null } as const;
 
@@ -49,24 +55,22 @@ function useVideoAddBlocked(): string | null {
 
 /**
  * The Edit video view's library pane, beside the timeline: the asset
- * library's videos and audio from every project, searched, narrowed by
- * project, kind and favourites, newest or oldest first. A click (or Enter)
- * on a tile adds it at the playhead; a drag puts it where it is dropped on
- * the timeline. A recording that lands while the pane is open never reloads
- * the list by itself (a new first tile would move every tile, perhaps under
- * a press): "N new · Show", in a row kept for it, loads the first page again.
+ * library's videos and audio from every project, grouped by project, under
+ * one search whose filter button holds the rest: kind, project, favourites,
+ * newest or oldest first. A click (or Enter) on a tile adds it at the
+ * playhead; a drag puts it where it is dropped on the timeline (which the
+ * tiles' tooltip says). A recording that lands while the pane is open never
+ * reloads the list by itself (a new first tile would move every tile,
+ * perhaps under a press): "N new · Show", in the top row, loads the first
+ * page again.
  */
 export function LibraryPane() {
   const kind = useEditProjectStore((s) => s.pane.kind);
   const focusRequest = useEditProjectStore((s) => s.pane.focusRequest);
   const libraryOn = useLibraryAvailable();
   const [query, setQuery] = useState<LibraryVideoQuery>(DEFAULT_LIBRARY_QUERY);
-  const { assets, loading, loadingMore, error, moreError, hasMore, loadMore, retry, listingKey } = useLibraryVideos(
-    query,
-    null,
-    libraryOn,
-    libraryKinds(kind),
-  );
+  const list = useLibraryVideos(query, null, libraryOn, libraryKinds(kind));
+  const { retry, listingKey } = list;
   const update = (patch: Partial<LibraryVideoQuery>) => setQuery((q) => ({ ...q, ...patch }));
   const videoBlocked = useVideoAddBlocked();
   const drag = useLibraryDrag();
@@ -114,30 +118,6 @@ export function LibraryPane() {
     retry();
   };
 
-  const [posters, setPosters] = useState<ReadonlySet<string>>(() => new Set());
-  useEffect(() => onPosterReady((id) => setPosters((prev) => new Set(prev).add(id))), []);
-
-  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
-  const scrollEl = useRef<HTMLDivElement | null>(null);
-  const scrollRootRef = useCallback((el: HTMLDivElement | null) => {
-    scrollEl.current = el;
-    setScrollRoot(el);
-  }, []);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || !scrollRoot || !hasMore || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => entry?.isIntersecting && loadMore(), {
-      root: scrollRoot,
-      rootMargin: "240px",
-    });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [scrollRoot, hasMore, loadMore]);
-  useLayoutEffect(() => {
-    if (scrollEl.current) scrollEl.current.scrollTop = 0;
-  }, [listingKey]);
-
   const { consumeClick, onPointerDown } = drag;
   const add = useCallback(
     (asset: AssetView) => {
@@ -148,80 +128,20 @@ export function LibraryPane() {
   );
 
   const filtered = query.q.trim() !== "" || query.project !== null || query.favourites;
-  let body: ReactNode;
-  if (!libraryOn) body = <Notice>The asset library is off.</Notice>;
-  else if (assets.length === 0 && loading) {
-    body = (
-      <div className="flex h-full items-center justify-center" aria-busy>
-        <DialogSpinner />
-      </div>
-    );
-  } else if (assets.length === 0 && error) {
-    body = (
-      <div role="status" className="flex h-full flex-col items-center justify-center gap-2 px-2 text-center text-xs text-neutral-500">
-        <span>{error}</span>
-        <DialogButton variant="ghost" compact onClick={retry}>
-          Try again
-        </DialogButton>
-      </div>
-    );
-  } else if (assets.length === 0) {
-    body = <Notice>{filtered ? "No videos or audio match" : "Nothing in the library yet"}</Notice>;
-  } else {
-    body = (
-      <>
-        <div className={cn("grid grid-cols-2 gap-x-2 gap-y-3", loading && "opacity-60")} aria-busy={loading || undefined}>
-          {assets.map((asset) => (
-            <LibraryTile
-              key={asset.id}
-              asset={asset}
-              selected={false}
-              posterReady={posters.has(asset.id)}
-              scrollRoot={scrollRoot}
-              onToggle={add}
-              mode="add"
-              disabledReason={asset.kind === "video" ? videoBlocked : null}
-              onPointerDown={onPointerDown}
-            />
-          ))}
-        </div>
-        <div ref={sentinelRef} aria-hidden="true" className="h-px" />
-        {loadingMore ? (
-          <div className="flex justify-center py-3">
-            <DialogSpinner />
-          </div>
-        ) : (
-          moreError && (
-            <div role="status" className="flex flex-col items-center gap-2 py-3 text-xs text-neutral-500">
-              <span>{moreError}</span>
-              <DialogButton variant="ghost" compact onClick={loadMore}>
-                Try again
-              </DialogButton>
-            </div>
-          )
-        )}
-      </>
-    );
-  }
+  // The dot on the filter button: anything in its popover not at its default
+  const filtersOn = kind !== "all" || query.project !== null || query.favourites || query.sort !== "newest";
 
   return (
-    <aside
-      aria-label="Library"
-      data-edit-chrome
-      className="flex w-[240px] shrink-0 flex-col border-r border-chrome-border bg-pane"
-    >
-      <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-2">
-        <span className="text-[13px] font-semibold text-neutral-100">Library</span>
-        {/* Between the title and the button, so the chip appearing moves neither */}
+    <aside aria-label="Library" data-edit-chrome className="flex w-[264px] shrink-0 flex-col border-r border-edit-line bg-pane">
+      <div className="flex h-14 shrink-0 items-center gap-2 pl-4 pr-2">
+        <h2 className="text-[13px] font-medium text-neutral-400">Library</h2>
+        {/* Between the title and the button, so the line appearing moves neither */}
         <div className="flex min-w-0 flex-1 justify-end" data-testid="library-arrivals">
           {arrivals > 0 && (
             <button
               type="button"
               onClick={showArrivals}
-              className={cn(
-                EDITOR_CHIP,
-                "truncate text-neutral-200 hover:bg-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
-              )}
+              className="h-6 min-w-0 truncate rounded-md px-1.5 text-xs text-ink-3 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
             >
               {`${arrivals} new · Show`}
             </button>
@@ -232,105 +152,119 @@ export function LibraryPane() {
             type="button"
             aria-label="Hide the library"
             aria-expanded
-            className={ICON_BUTTON}
+            // It says the pane is open, but is not drawn as an open control
+            className={cn(HEADER_ICON_BUTTON, "aria-expanded:bg-transparent aria-expanded:text-neutral-400 aria-expanded:hover:bg-white/6 aria-expanded:hover:text-neutral-100")}
             onClick={() => useEditProjectStore.getState().setPaneOpen(false)}
           >
-            <PanelLeftClose size={16} strokeWidth={1.75} />
+            <PanelLeftClose size={16} strokeWidth={1.5} />
           </button>
           <Tooltip label="Hide the library" placement="bottom" />
         </div>
       </div>
-      <div className="flex shrink-0 flex-col gap-2 px-4">
-        <DialogSearchField
-          ref={searchRef}
-          placeholder="Search videos and audio"
-          aria-label="Search the library"
-          value={query.q}
-          onChange={(event) => update({ q: event.target.value })}
-          // Escape leaves the field, as in Assets, so E, Space and the editor's keys work again
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            event.currentTarget.blur();
-          }}
-          disabled={!libraryOn}
-        />
-        <div className="flex min-w-0 items-center gap-1">
-          <ProjectMenu value={query.project} projects={projects} onChange={(project) => update({ project })} />
-          <div className="flex-1" />
-          <SortMenu value={query.sort} onChange={(sort) => update({ sort })} short />
-        </div>
-        <div className="flex items-center gap-1">
-          <div role="radiogroup" aria-label="Kind" className="flex items-center gap-1">
-            {KIND_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={kind === option.value}
-                onClick={() => useEditProjectStore.getState().setPaneKind(option.value)}
-                className={cn(FILTER_BUTTON, "h-7 px-2", kind === option.value ? FILTER_ON : FILTER_OFF)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex-1" />
-          <div className="group relative flex">
-            <button
-              type="button"
-              aria-label="Favorites"
-              aria-pressed={query.favourites}
-              onClick={() => update({ favourites: !query.favourites })}
-              className={cn(FILTER_BUTTON, "h-7 w-7 justify-center px-0", query.favourites ? FILTER_ON : FILTER_OFF)}
-            >
-              <Star size={12} strokeWidth={2} fill={query.favourites ? "currentColor" : "none"} />
-            </button>
-            <Tooltip label="Favorites" placement="bottom" />
-          </div>
-        </div>
-      </div>
-      <div ref={scrollRootRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="edit-library-grid">
-        {body}
-      </div>
-      <p className="shrink-0 border-t border-chrome-border px-4 py-2.5 text-[11px] leading-4 text-neutral-500">
-        Click to add at the playhead, or drag onto the timeline.
-      </p>
+      <LibrarySearch
+        inputRef={searchRef}
+        className="mx-4 shrink-0"
+        label="Search the library"
+        value={query.q}
+        onChange={(q) => update({ q })}
+        // Escape leaves the field, as in Assets, so E, Space and the editor's keys work again
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.currentTarget.blur();
+        }}
+        disabled={!libraryOn}
+        filtered={filtersOn}
+        filters={
+          <>
+            <FilterRow label="Kind">
+              <FilterSegments
+                label="Kind"
+                value={kind}
+                options={KIND_OPTIONS}
+                onChange={(value) => useEditProjectStore.getState().setPaneKind(value)}
+              />
+            </FilterRow>
+            <FilterRow label="Project">
+              <ProjectMenu value={query.project} projects={projects} onChange={(project) => update({ project })} />
+            </FilterRow>
+            <FilterSwitch label="Favorites" checked={query.favourites} onChange={(favourites) => update({ favourites })} />
+            <FilterDivider />
+            <FilterRow label="Sort">
+              <FilterSegments label="Sort" value={query.sort} options={SORT_OPTIONS} onChange={(sort) => update({ sort })} />
+            </FilterRow>
+          </>
+        }
+      />
+      <LibraryResults
+        libraryOn={libraryOn}
+        list={list}
+        emptyText={filtered ? "No videos or audio match" : "Nothing in the library yet"}
+        layout="pane"
+        testId="edit-library-grid"
+        className="px-4 pt-5 pb-4"
+        renderTile={(asset, { scrollRoot, posterReady }) => (
+          <LibraryTile
+            asset={asset}
+            selected={false}
+            posterReady={posterReady}
+            scrollRoot={scrollRoot}
+            onToggle={add}
+            mode="add"
+            disabledReason={asset.kind === "video" ? videoBlocked : null}
+            onPointerDown={onPointerDown}
+          />
+        )}
+      />
       <DragGhost />
     </aside>
   );
 }
 
-function Notice({ children }: { children: ReactNode }) {
-  return <div className="flex h-full items-center justify-center px-2 text-center text-xs text-neutral-500">{children}</div>;
-}
-
-/** What follows the pointer while a tile is dragged: its poster (or the audio mark), name and length. */
+/**
+ * What follows the pointer while a tile is dragged: the tile itself, lifted. A video's cover and its length (with why
+ * it cannot land there yet, while it cannot), or a sound's row.
+ */
 function DragGhost() {
   const ghost = useLibraryDragGhost();
   if (!ghost) return null;
   const { asset } = ghost;
   const duration = typeof asset.durationSec === "number" && asset.durationSec > 0 ? asset.durationSec : null;
+  const place = { left: ghost.x + 12, top: ghost.y + 12 };
+  if (asset.kind === "audio") {
+    return (
+      <div
+        aria-hidden="true"
+        data-testid="library-drag-ghost"
+        className={cn(
+          "pointer-events-none fixed z-100 flex h-8 items-center gap-2 rounded-md bg-edit-field px-2 ring-1 ring-white/10",
+          LIFTED_CLIP,
+        )}
+        style={{ ...place, width: GHOST_ROW_WIDTH }}
+      >
+        <Music size={14} strokeWidth={1.5} className="shrink-0 text-ink-3" />
+        <span className="min-w-0 flex-1 truncate text-xs text-neutral-200">{asset.filename}</span>
+        {duration !== null && <span className="shrink-0 text-[11px] tabular-nums text-ink-3">{formatTimecode(duration, 0)}</span>}
+      </div>
+    );
+  }
   return (
     <div
       aria-hidden="true"
       data-testid="library-drag-ghost"
       className="pointer-events-none fixed z-100 flex flex-col gap-1"
-      style={{ left: ghost.x + 12, top: ghost.y + 12, width: GHOST_WIDTH }}
+      style={{ ...place, width: GHOST_WIDTH }}
     >
-      <div className={cn("relative aspect-video w-full overflow-hidden rounded-media bg-well ring-1 ring-white/10", LIFTED_CLIP)}>
-        {asset.kind === "audio" ? (
-          <AssetPlaceholder kind="audio" size={20} />
-        ) : asset.hasPoster ? (
+      <div className={cn("relative aspect-video w-full overflow-hidden rounded-md bg-edit-field ring-1 ring-white/10", LIFTED_CLIP)}>
+        {asset.hasPoster ? (
           // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route
           <img src={tileThumbUrl(asset, GHOST_WIDTH)} alt="" draggable={false} className="h-full w-full object-cover" />
         ) : (
-          <AssetPlaceholder kind="video" size={20} />
+          <BlankCover />
         )}
+        {duration !== null && <CoverLength seconds={duration} />}
       </div>
-      <span className={cn(EDITOR_CHIP, "self-start whitespace-nowrap text-neutral-200")}>
-        {ghost.waiting ? WAITING_FOR_CLIPS : duration !== null ? `${asset.filename} · ${formatTimecode(duration, 1)}` : asset.filename}
-      </span>
+      {ghost.waiting && <span className={cn(EDITOR_CHIP, "self-start whitespace-nowrap text-neutral-200")}>{WAITING_FOR_CLIPS}</span>}
     </div>
   );
 }

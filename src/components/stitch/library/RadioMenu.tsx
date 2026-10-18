@@ -12,6 +12,7 @@ import {
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuItem, MenuSurface } from "@/components/ui/Menu";
+import { EDIT_MENU_ROW, EDIT_MENU_SURFACE } from "../editorStyles";
 
 export interface RadioMenuOption<T> {
   value: T;
@@ -22,8 +23,8 @@ const EDGE = 8;
 const MENU_GAP = 4;
 
 /**
- * A toolbar button that opens a one-choice menu under it, on the app's menu
- * skin: the picker's project and sort menus. The arrows, Home and End move
+ * A button that opens a one-choice menu under it, on the edit menus' skin:
+ * the library's project menu, in its filter popover. The arrows, Home and End move
  * between the choices, Enter picks one, and choosing closes it. Escape, Tab,
  * a press outside, a wheel or a resize close it too; Escape closes only the
  * menu, not the dialog it is in. Focus goes back to the button.
@@ -36,7 +37,6 @@ export function RadioMenu<T>({
   onChange,
   width,
   className,
-  chevronClassName = "text-neutral-500",
   align = "start",
 }: {
   /** The button's accessible name, e.g. "Project: All projects". */
@@ -48,7 +48,6 @@ export function RadioMenu<T>({
   onChange: (value: T) => void;
   width: number;
   className?: string;
-  chevronClassName?: string;
   /** Which edge of the button the menu lines up with: "end" for a button at the right end of a row. */
   align?: "start" | "end";
 }) {
@@ -75,12 +74,12 @@ export function RadioMenu<T>({
         aria-label={label}
         onClick={toggle}
         className={cn(
-          "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
+          "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
           className,
         )}
       >
         {buttonLabel}
-        <ChevronDown size={12} strokeWidth={2} className={cn("shrink-0", chevronClassName)} />
+        <ChevronDown size={14} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-ink-3" />
       </button>
       {anchor && (
         <OpenRadioMenu
@@ -186,15 +185,15 @@ function OpenRadioMenu<T>({
       role="menu"
       aria-label={ariaLabel}
       onKeyDown={onKeyDown}
-      className="max-h-[320px] overflow-y-auto py-1"
+      className={cn(EDIT_MENU_SURFACE, "max-h-[320px] overflow-y-auto")}
       style={{ left: position.left, top: position.top, width }}
     >
       {options.map((option, i) => {
         const active = option.value === value;
         return (
-          <MenuItem key={i} role="menuitemradio" aria-checked={active} onClick={() => onPick(option.value)}>
+          <MenuItem key={i} role="menuitemradio" aria-checked={active} className={EDIT_MENU_ROW} onClick={() => onPick(option.value)}>
             <span className="truncate">{option.label}</span>
-            {active && <Check size={14} strokeWidth={2} className="ml-auto shrink-0 text-neutral-100" />}
+            {active && <Check size={14} strokeWidth={1.5} aria-hidden="true" className="ml-auto shrink-0" />}
           </MenuItem>
         );
       })}

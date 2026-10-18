@@ -22,8 +22,8 @@ const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLD
 /** Escape with nothing to cancel leaves the view alone: it is left on purpose (E, the tab strip), never by dismissing. */
 const stayOpen = () => {};
 
-/** The view's own menus (the header's, the pane's project and sort menus) own the keys while open. */
-const viewMenuOpen = () => document.querySelector("[data-edit-chrome] [role='menu']") !== null;
+/** The view's own menus (the header's, the library's filter popover and its project menu) own the keys while open. */
+const viewMenuOpen = () => document.querySelector("[data-edit-chrome] [role='menu'], [data-edit-chrome] [role='dialog']") !== null;
 
 const KEY_OPTIONS: StitchEditorKeyOptions = {
   onOtherKey: (e) => {

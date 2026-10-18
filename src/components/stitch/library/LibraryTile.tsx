@@ -1,9 +1,9 @@
 "use client";
 
 import { memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { Check, Plus, Star } from "lucide-react";
+import { Check, Film, Music } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
-import { AssetPlaceholder, tileThumbUrl } from "@/components/assets/AssetTile";
+import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { projectLabel } from "@/components/assets/assetFormat";
 import { requestPoster } from "@/components/assets/posterRequests";
 import type { AssetView } from "@/lib/assets/types";
@@ -11,6 +11,9 @@ import { formatTimecode } from "@/lib/stitch/timecode";
 
 /** About a quarter of the 880px dialog, for the thumbnail size asked for. */
 const TILE_WIDTH = 200;
+
+/** What a click or a drag does with a tile in the Edit video view's pane: its tooltip's second line. */
+const LIBRARY_ADD_HINT = "Click to add at the playhead, or drag onto the timeline.";
 
 /** Whether the element is inside the scroll area's view (always, where IntersectionObserver is missing). */
 function useOnScreen(ref: RefObject<HTMLElement | null>, root: HTMLElement | null): boolean {
@@ -25,17 +28,39 @@ function useOnScreen(ref: RefObject<HTMLElement | null>, root: HTMLElement | nul
   return onScreen;
 }
 
+/** A cover with no poster to show: the empty frame's grey, with a faint film glyph (never a tinted placeholder). */
+export function BlankCover() {
+  return (
+    <span aria-hidden="true" className="flex h-full w-full items-center justify-center bg-edit-field">
+      <Film size={16} strokeWidth={1.5} className="text-neutral-600" />
+    </span>
+  );
+}
+
+/** A cover's length, in whole seconds, at its bottom right: the one thing drawn on it. */
+export function CoverLength({ seconds }: { seconds: number }) {
+  return (
+    <span className="absolute bottom-1 right-1 rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none tabular-nums text-neutral-100">
+      {formatTimecode(seconds, 0)}
+    </span>
+  );
+}
+
 /**
- * One library video in the picker: its poster, its length, a star when it
- * is a favourite, and a check once picked. The tile is a toggle button. A
- * video without a poster on screen gets one made, through the Assets view's
- * own capture queue; a tile whose file is gone cannot be picked. An audio
- * file shows the library's audio placeholder and asks for no poster.
+ * One library file, as the library pane and the picker show it, under its
+ * project's name. A video is a 16:9 cover with nothing on it but its length;
+ * an audio file is a one-line row (a music glyph, its name, its length). Its
+ * name, project and whether it is a favourite are in its accessible name, and
+ * the name is its tooltip's first line. A video without a poster on screen
+ * gets one made, through the Assets view's own capture queue; a file that is
+ * gone cannot be picked or added.
  *
- * In the Edit video view's pane (`mode="add"`) a tile is no toggle: a click
- * (or Enter) adds it at the playhead, a press can start a drag onto the
- * timeline, and a hover shows "+" where the pick ring would be. A tile that
- * cannot be added yet says why in its title.
+ * In the picker (`mode="pick"`) a tile is a toggle button, ringed in white
+ * once picked (a sound's row also checks it). In the Edit video view's pane
+ * (`mode="add"`) a click (or Enter) adds it at the playhead and a press can
+ * start a drag onto the timeline, which the tooltip says. A tile that cannot
+ * be added yet says why in its tooltip. A cover carries nothing but its
+ * length.
  */
 export const LibraryTile = memo(function LibraryTile({
   asset,
@@ -81,7 +106,7 @@ export const LibraryTile = memo(function LibraryTile({
 
   const duration = typeof asset.durationSec === "number" && asset.durationSec > 0 ? asset.durationSec : null;
   const project = projectLabel(asset.workflow?.projectPath ?? null);
-  // Everything the tile shows, for a screen reader (the pressed state is aria-pressed)
+  // Everything the tile knows, for a screen reader (the pressed state is aria-pressed)
   const label = [
     adding ? `Add ${asset.filename}` : asset.filename,
     duration !== null ? formatTimecode(duration, 1) : null,
@@ -91,105 +116,82 @@ export const LibraryTile = memo(function LibraryTile({
   ]
     .filter(Boolean)
     .join(", ");
-  return (
-    <button
-      ref={ref}
-      type="button"
-      aria-pressed={adding ? undefined : selected}
-      aria-label={adding && !missing ? `${label}, at the playhead` : label}
-      aria-disabled={blocked || undefined}
-      data-asset-id={asset.id}
-      disabled={missing}
-      title={missing ? "The file is missing" : blocked ? (disabledReason ?? undefined) : undefined}
-      onClick={() => onToggle(asset)}
-      onPointerDown={adding && !missing ? (event) => onPointerDown?.(event, asset) : undefined}
-      className={cn(
-        "group flex min-w-0 flex-col gap-1.5 text-left focus-visible:outline-none",
-        missing && "opacity-40",
-        adding && !missing && "touch-none select-none",
-      )}
-    >
-      <span
+  // The name the tile no longer shows, then what a press does or why it does nothing
+  const title = [
+    asset.filename,
+    missing ? "The file is missing" : blocked ? disabledReason : adding ? LIBRARY_ADD_HINT : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const length = duration !== null ? formatTimecode(duration, 0) : null;
+
+  const shared = {
+    ref,
+    type: "button" as const,
+    "aria-pressed": adding ? undefined : selected,
+    "aria-label": adding && !missing ? `${label}, at the playhead` : label,
+    "aria-disabled": blocked || undefined,
+    "data-asset-id": asset.id,
+    disabled: missing,
+    title,
+    onClick: () => onToggle(asset),
+    onPointerDown: adding && !missing ? (event: ReactPointerEvent<HTMLButtonElement>) => onPointerDown?.(event, asset) : undefined,
+  };
+  // The pick is the white ring; keyboard focus a fainter one, set off from a pick by its offset. The offset is the
+  // surface the tile sits on: the pane in the view, the dialog's card in the picker
+  const rings = cn(
+    "focus-visible:outline-none",
+    selected
+      ? "ring-2 ring-neutral-100 focus-visible:ring-offset-2"
+      : "focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-1",
+    adding ? "focus-visible:ring-offset-pane" : "focus-visible:ring-offset-card",
+    missing && "opacity-40",
+    adding && !missing && "touch-none select-none",
+  );
+
+  if (audio) {
+    return (
+      <button
+        {...shared}
         className={cn(
-          "relative block aspect-video w-full overflow-hidden rounded-media bg-well transition-shadow",
-          // The blue ring is the pick alone; keyboard focus is the Assets view's white ring, set off from a pick
-          selected
-            ? "ring-2 ring-selection group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-card"
-            : cn(
-                "ring-1 ring-white/8 group-focus-visible:ring-2 group-focus-visible:ring-white/40 group-focus-visible:ring-offset-1",
-                // Set off by the surface the tile sits on: the pane in the view, the dialog's card in the picker
-                adding ? "group-focus-visible:ring-offset-pane" : "group-focus-visible:ring-offset-card",
-              ),
+          "flex h-8 w-full min-w-0 items-center gap-2 rounded-md bg-edit-field px-2 text-left transition-colors enabled:hover:bg-edit-pressed",
+          rings,
         )}
       >
-        {audio ? (
-          <AssetPlaceholder kind="audio" size={24} />
-        ) : !missing && thumbFailed !== thumbUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
-          <img
-            src={thumbUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            draggable={false}
-            onError={() => setThumbFailed(thumbUrl)}
-            className="pointer-events-none h-full w-full object-cover"
-          />
-        ) : (
-          <AssetPlaceholder kind="video" size={24} />
-        )}
-        {asset.favorite && (
-          <Star
-            size={13}
-            strokeWidth={1.5}
-            fill="currentColor"
-            aria-hidden="true"
-            className="absolute left-1.5 top-1.5 text-amber-400"
-          />
-        )}
-        {duration !== null && (
-          <span className="absolute bottom-1.5 left-1.5 rounded px-[5px] py-0.5 font-mono text-[10px] leading-3 tabular-nums text-neutral-200 bg-black/70">
-            {formatTimecode(duration, 1)}
-          </span>
-        )}
-        {adding ? (
-          !missing &&
-          !blocked && (
-            <span
-              aria-hidden="true"
-              className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-neutral-100 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-            >
-              <Plus size={12} strokeWidth={2.5} />
-            </span>
-          )
-        ) : selected ? (
-          <span
-            aria-label="Selected"
-            className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-selection text-white"
-          >
-            <Check size={12} strokeWidth={3} />
-          </span>
-        ) : (
-          !missing && (
-            <span
-              aria-hidden="true"
-              className="absolute right-1.5 top-1.5 h-5 w-5 rounded-full border-[1.5px] border-white/70 bg-black/25 opacity-0 transition-opacity group-hover:opacity-100"
-            />
-          )
-        )}
-      </span>
-      {adding ? (
-        // A narrow pane's tile: the name and the project each get their own line
-        <span className="flex min-w-0 flex-col text-[11px] leading-[14px]">
-          <span className="truncate text-neutral-300">{asset.filename}</span>
-          <span className="truncate text-neutral-500">{project}</span>
+        <Music size={14} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-ink-3" />
+        <span className={cn("min-w-0 flex-1 truncate text-xs", selected ? "text-neutral-100" : "text-neutral-300")}>
+          {asset.filename}
         </span>
+        {selected && (
+          <span aria-label="Selected" className="flex shrink-0 text-neutral-100">
+            <Check size={14} strokeWidth={1.5} aria-hidden="true" />
+          </span>
+        )}
+        {length !== null && <span className="shrink-0 text-[11px] tabular-nums text-ink-3">{length}</span>}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      {...shared}
+      className={cn("relative block aspect-video w-full min-w-0 overflow-hidden rounded-md bg-edit-field", rings)}
+    >
+      {!missing && thumbFailed !== thumbUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
+        <img
+          src={thumbUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={() => setThumbFailed(thumbUrl)}
+          className="pointer-events-none h-full w-full object-cover"
+        />
       ) : (
-        <span className="flex min-w-0 justify-between gap-2 text-[11px] leading-[14px]">
-          <span className={cn("truncate", selected ? "text-neutral-100" : "text-neutral-300")}>{asset.filename}</span>
-          <span className="shrink-0 whitespace-nowrap text-neutral-500">{project}</span>
-        </span>
+        <BlankCover />
       )}
+      {duration !== null && <CoverLength seconds={duration} />}
     </button>
   );
 });

@@ -592,8 +592,9 @@ at 0:00. A music clip whose music is not connected is kept, drawn dashed
 
 **Adding audio.** With no audio the first row is an empty outline (in a
 node's dialog it says "Connect audio to the node"). **+ Audio**, under the
-audio rows, opens **Add audio from the library**: audio files only, with
-the same search, project menu, Favourites, This workflow and sort as for videos. Each picked file goes on a
+audio rows, opens **Add audio from the library**: audio files only, as
+one-line rows grouped by project, with the same search and filter button as
+for videos. Each picked file goes on a
 new row of its own, starting at the playhead. A library clip stores only the
 asset's id; a clip whose file is gone is drawn "Not in the library" and
 stops a render until it is removed.
@@ -958,8 +959,12 @@ move the curve: press Fade out again after a move that changes the end.
 
 The `+` slot after the last clip (in Stacked, in the last row), or the
 empty lane opens **Add from
-library**: videos only, with search, a project menu, Favourites, This
-workflow and a sort. The picked videos are added after the last clip, in
+library**: videos only, grouped by project as in the Edit video view's
+library pane, with the same tiles (a cover and its length; the name is the
+tooltip) and one search. The filter button inside the search opens the
+project, Favourites, This workflow and the sort (newest or oldest first);
+a dot on it says one of them is set. A picked video is ringed in white. The
+picked videos are added after the last clip, in
 the order they were picked, as one undo step. The playhead goes to the
 first added clip's start. In Stacked each added clip gets a row of its own
 at the bottom. In a lined-up stack it overlaps the clip before it like any
@@ -1031,7 +1036,15 @@ new edit is called "Untitled edit" (then "Untitled edit 2", …).
 
 **Editing.** The open edit shows the library on the left and the same
 editor as the dialog: stage, control row, rail and timeline, with the same
-keys. Click a video or a sound in the library (or press Enter on it) to
+keys. The library lists every project's videos and sounds, grouped by
+project in the list's order: videos as covers with only their length on
+them, sounds as one-line rows with their name and length.
+A tile's tooltip gives its name and says how to add it. There is one
+search; the filter button inside it opens a small popover with Kind (All,
+Video, Audio), Project, Favourites and Sort (newest or oldest first), and
+a dot on the button says one of them is not at its default. The popover
+keeps the editor's keys while it is open (Space toggles a switch in it);
+Escape closes it. Click a video or a sound in the library (or press Enter on it) to
 add it at the playhead: in Track after the clip under the playhead (the
 new clip is selected with the playhead at its start, so clicks in a row
 add in the order clicked), in Stacked on a new bottom row starting at the playhead, or after the last
@@ -1045,7 +1058,7 @@ adding a video there waits ("Waiting for the clips to load"), so nothing
 is placed from a length the editor does not know yet. Videos recorded
 while the view is open wait behind "N new · Show" at the top of the
 library, so the tiles never move under the pointer. `+` on the timeline
-goes to the library's search. The library pane hides with the button in
+goes to the library's search (the audio rows' + also sets Kind to Audio). The library pane hides with the button in
 its corner and stays hidden until shown again (the header's first button
 shows it). The header reads "Edits › name": Edits goes home, and a click on
 the name renames the edit in place. Its ⋯ menu offers Rename, Duplicate,

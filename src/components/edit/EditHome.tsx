@@ -6,7 +6,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { DialogSpinner } from "@/components/ui/Dialog";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { ICON_BUTTON } from "@/components/stitch/editorStyles";
+import { ICON_BUTTON, QUIET_BUTTON } from "@/components/stitch/editorStyles";
 import { useLibraryAvailable } from "@/components/stitch/library/useLibraryAvailable";
 import type { EditListProblem, EditSummary } from "@/lib/edits/types";
 import { useEditProjectStore } from "@/store/editProjectStore";
@@ -30,10 +30,6 @@ const INDEX_LIST = "data-edit-index";
  */
 const NEW_EDIT_BUTTON =
   "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-100 pl-2.5 pr-3.5 text-[13px] font-semibold text-neutral-950 transition-colors hover:bg-white focus-visible:outline-none in-data-[keyed]:focus-visible:ring-2 in-data-[keyed]:focus-visible:ring-white/40 in-data-[keyed]:focus-visible:ring-offset-2 in-data-[keyed]:focus-visible:ring-offset-pane disabled:cursor-not-allowed disabled:opacity-50";
-
-/** The quiet text button: Try again. */
-const QUIET_BUTTON =
-  "inline-flex h-7 shrink-0 items-center rounded-md px-2 text-[12px] text-neutral-400 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
 
 /** An other file's action (Make it a separate edit): no brighter than the line it ends. */
 const PROBLEM_BUTTON = cn(QUIET_BUTTON, "text-ink-3");

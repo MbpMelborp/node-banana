@@ -25,6 +25,20 @@ export const ICON_BUTTON =
 export const TEXT_GHOST =
   "h-6 px-1.5 inline-flex items-center gap-1 rounded-md text-xs text-ink-3 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
 
+/** The quiet text button under a notice that something failed: Try again (the home, the library). */
+export const QUIET_BUTTON =
+  "inline-flex h-7 shrink-0 items-center rounded-md px-2 text-[12px] text-neutral-400 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
+
+/**
+ * A few choices side by side (the rail's volume curve; the library filters' Kind and Sort): a row on the field
+ * ground, the chosen segment lifted.
+ */
+export const SEGMENTS = "flex gap-0.5 rounded-lg bg-edit-field p-0.5";
+export const SEGMENT =
+  "h-7 min-w-0 flex-1 whitespace-nowrap rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40";
+export const SEGMENT_ON = "bg-neutral-800 font-medium text-neutral-100";
+export const SEGMENT_OFF = "text-ink-3 hover:text-neutral-200";
+
 /** The headers' height (the view's and the dialog's h-14): what sits over the stage in the editor's column. */
 export const HEADER_PX = 56;
 

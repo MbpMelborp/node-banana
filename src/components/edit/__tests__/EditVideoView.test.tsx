@@ -228,6 +228,18 @@ const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =
   return event;
 };
 const tile = (id: string) => document.querySelector<HTMLElement>(`aside [data-asset-id="${id}"]`)!;
+/**
+ * A press on `target`, with the focus a browser gives it (jsdom moves none): the nearest focusable ancestor takes it
+ * (the page, when none does), then the click.
+ */
+function pressAt(target: HTMLElement) {
+  const focusable = target.closest<HTMLElement>("button:not(:disabled), input:not(:disabled), [tabindex]");
+  act(() => {
+    if (focusable) focusable.focus();
+    else (document.activeElement as HTMLElement | null)?.blur();
+  });
+  fireEvent.click(target);
+}
 const tileIds = () => Array.from(document.querySelectorAll<HTMLElement>("aside [data-asset-id]")).map((el) => el.dataset.assetId);
 const timelineIds = () => editor().draft!.timeline.map((c) => c.source.kind === "asset" ? c.source.assetId : c.id);
 
@@ -606,7 +618,7 @@ describe("the open edit", () => {
 });
 
 describe("keys", () => {
-  it("the header's menu and the pane's project and sort menus own Escape, Space, ⌫ and S while open", async () => {
+  it("the header's menu, the library's filters and their project menu own Escape, Space, ⌫ and S while open", async () => {
     measure(A, B);
     await renderOpen();
     act(() => {
@@ -618,8 +630,10 @@ describe("keys", () => {
 
     for (const open of [
       () => fireEvent.click(screen.getByRole("button", { name: "Edit menu" })),
-      () => fireEvent.click(screen.getByRole("button", { name: "Project: All projects" })),
-      () => fireEvent.click(screen.getByRole("button", { name: "Sort: Newest first" })),
+      () => {
+        fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
+        fireEvent.click(screen.getByRole("button", { name: "Project: All projects" }));
+      },
     ]) {
       open();
       const menu = await screen.findByRole("menu");
@@ -637,7 +651,24 @@ describe("keys", () => {
       expect(editor().playing).toBe(false);
     }
 
-    // Both closed: the editor's keys work again
+    // The project menu's Escape closed only it: the filters are still open, and own the keys too. Space is the
+    // switch's (a browser turns it into a click), not Play
+    const filters = screen.getByRole("dialog", { name: "Filter and sort" });
+    const favourites = within(filters).getByRole("switch", { name: "Favorites" });
+    favourites.focus();
+    for (const key of [" ", "Backspace", "s"]) {
+      const event = press(favourites, key);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(editor().draft).toBe(draft);
+    expect(editor().playing).toBe(false);
+    fireEvent.keyDown(favourites, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Filter and sort" })).toHaveFocus();
+    expect(editor().selection).toBe(selection);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+
+    // All closed: the editor's keys work again
     press(document.body, "s");
     expect(editor().draft!.timeline).toHaveLength(3);
     press(document.body, "Backspace");
@@ -694,12 +725,18 @@ describe("keys", () => {
   it("the timeline's + focuses the library's search; the audio + also shows Audio", async () => {
     await renderOpen();
     act(() => useEditProjectStore.getState().setPaneKind("all"));
+    expect(screen.getByRole("button", { name: "Filter and sort" })).not.toHaveAttribute("data-filtered");
     fireEvent.click(screen.getAllByRole("button", { name: "Add a clip from the library" })[0]);
     expect(screen.getByRole("textbox", { name: "Search the library" })).toHaveFocus();
     expect(editor().pickerOpen).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: /Add audio/ }));
-    expect(screen.getByRole("radio", { name: "Audio" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("textbox", { name: "Search the library" })).toHaveFocus();
+    // The kind is in the filters, whose button says something is set
+    expect(screen.getByRole("button", { name: "Filter and sort" })).toHaveAttribute("data-filtered", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
+    expect(screen.getByRole("radio", { name: "Audio" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
 
     // Hidden and shown again from the header: the earlier + is spent, so Space still plays
     fireEvent.click(screen.getByRole("button", { name: "Hide the library" }));
@@ -768,7 +805,10 @@ describe("adding from the library", () => {
       expect(screen.queryByTestId("library-drop-marker")).toBeNull();
       fireEvent.pointerMove(target, { pointerId: 1, clientX: 60, clientY: 300 });
       expect(screen.getByTestId("library-drop-marker")).toBeInTheDocument();
-      expect(screen.getByTestId("library-drag-ghost")).toHaveTextContent("desert.mp4");
+      // The ghost is the tile lifted: its cover and its length, no name
+      const ghost = screen.getByTestId("library-drag-ghost");
+      expect(ghost.querySelector("img")).toHaveAttribute("src", expect.stringContaining(LIBRARY[C].sha256));
+      expect(ghost).toHaveTextContent(/^0:05$/);
       expect(editor().draft!.timeline).toHaveLength(2);
       fireEvent.pointerUp(target, { pointerId: 1, clientX: 60, clientY: 300 });
       fireEvent.click(target);
@@ -798,17 +838,49 @@ describe("adding from the library", () => {
     measure(A);
     await renderOpen(doc({}, "stacked"));
     await waitFor(() => expect(tile(C)).toHaveAttribute("aria-disabled", "true"));
-    expect(tile(C)).toHaveAttribute("title", "Waiting for the clips to load");
+    expect(tile(C)).toHaveAttribute("title", "desert.mp4\nWaiting for the clips to load");
     // Audio never waits
     expect(tile(M)).not.toHaveAttribute("aria-disabled");
     fireEvent.click(tile(C));
     expect(editor().draft!.timeline).toHaveLength(2);
     expect(editor().draft!.timeline.every((c) => c.startSec === undefined)).toBe(true);
+    // Dragged over the lanes, the ghost says why it cannot land
+    const unregister = libraryDrop.register(() => ({ lane: "clips", mode: "stacked", startSec: 1, row: 2 }), () => null);
+    try {
+      fireEvent.pointerDown(tile(C), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(tile(C), { pointerId: 1, clientX: 60, clientY: 300 });
+      expect(screen.getByTestId("library-drag-ghost")).toHaveTextContent("0:05Waiting for the clips to load");
+      expect(screen.queryByTestId("library-drop-marker")).toBeNull();
+      press(document.body, "Escape");
+      fireEvent.pointerUp(tile(C), { pointerId: 1, clientX: 60, clientY: 300 });
+      expect(screen.queryByTestId("library-drag-ghost")).toBeNull();
+    } finally {
+      unregister();
+    }
 
     act(() => measure(B));
     await waitFor(() => expect(tile(C)).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(tile(C));
     expect(editor().draft!.timeline.map((c) => c.startSec)).toEqual([0, 4.5, 0]);
+  });
+
+  it("a sound's ghost is its row: the music glyph, its name and length, no picture", async () => {
+    measure(A, B);
+    await renderOpen();
+    const unregister = libraryDrop.register(() => ({ lane: "audio", startSec: 1, row: 0, newRow: true }), () => null);
+    try {
+      fireEvent.pointerDown(tile(M), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(tile(M), { pointerId: 1, clientX: 60, clientY: 300 });
+      const ghost = screen.getByTestId("library-drag-ghost");
+      expect(ghost).toHaveTextContent(/^music\.m4a0:20$/);
+      expect(ghost.querySelector("img")).toBeNull();
+      expect(ghost.querySelector("svg")).not.toBeNull();
+      press(document.body, "Escape");
+      fireEvent.pointerUp(tile(M), { pointerId: 1, clientX: 60, clientY: 300 });
+      expect(editor().draft!.audioClips).toHaveLength(0);
+    } finally {
+      unregister();
+    }
   });
 
   it("holds new recordings behind “1 new · Show”, so no tile moves under a press", async () => {
@@ -828,6 +900,127 @@ describe("adding from the library", () => {
     fireEvent.click(screen.getByRole("button", { name: "1 new · Show" }));
     await waitFor(() => expect(tileIds()[0]).toBe(fresh.id));
     expect(screen.queryByRole("button", { name: /new · Show/ })).toBeNull();
+  });
+});
+
+describe("the library pane", () => {
+  const lastRequest = () => assetsApi.fetchAssetPage.mock.calls[assetsApi.fetchAssetPage.mock.calls.length - 1][0];
+  const desert = { id: "wf_2", name: "Desert", projectPath: "/Users/me/Node Banana/Desert spots" };
+
+  it("groups the library by project: covers, then sounds as rows, each tile's tooltip saying how to add it", async () => {
+    assetsApi.fetchAssetPage.mockResolvedValue(page([asset(C, { filename: "desert.mp4", workflow: desert }), LIBRARY[B], LIBRARY[A], LIBRARY[M]]));
+    await renderOpen();
+    const pane = screen.getByRole("complementary", { name: "Library" });
+    expect(within(pane).getByRole("heading", { level: 2, name: "Library" })).toBeInTheDocument();
+    expect(lastRequest()).toEqual({ kinds: ["video", "audio"], limit: 60 });
+    expect(within(pane).getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["Desert spots", "Launch film"]);
+    const launch = within(pane).getByRole("group", { name: "Launch film" });
+    expect([...launch.querySelectorAll<HTMLElement>("[data-asset-id]")].map((el) => el.dataset.assetId)).toEqual([B, A, M]);
+    // A cover shows its length alone; a sound is a row with its name and length
+    expect(tile(C)).toHaveTextContent(/^0:05$/);
+    expect(tile(M)).toHaveTextContent("music.m4a0:20");
+    expect(tile(C)).toHaveAccessibleName("Add desert.mp4, 0:05.0, Desert spots, at the playhead");
+    expect(tile(C)).toHaveAttribute("title", "desert.mp4\nClick to add at the playhead, or drag onto the timeline.");
+    // The hint is the tiles' tooltip now, not a line under the list
+    expect(within(pane).queryByText("Click to add at the playhead, or drag onto the timeline.")).toBeNull();
+  });
+
+  it("keeps kind, project, favourites and sort in the search's filter popover, and dots its button while one is set", async () => {
+    await renderOpen();
+    const button = () => screen.getByRole("button", { name: "Filter and sort" });
+    expect(button()).not.toHaveAttribute("data-filtered");
+    fireEvent.click(button());
+    const filters = screen.getByRole("dialog", { name: "Filter and sort" });
+    // Focus starts on the kind's choice
+    expect(within(filters).getByRole("radio", { name: "All" })).toHaveFocus();
+    expect(within(filters).getByRole("button", { name: "Project: All projects" })).toBeInTheDocument();
+    fireEvent.click(within(filters).getByRole("radio", { name: "Video" }));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ kinds: ["video"] }));
+    expect(project().pane.kind).toBe("video");
+    expect(button()).toHaveAttribute("data-filtered", "true");
+    fireEvent.keyDown(within(filters).getByRole("radio", { name: "Video" }), { key: "ArrowRight" });
+    await waitFor(() => expect(lastRequest()).toMatchObject({ kinds: ["audio"] }));
+    expect(within(filters).getByRole("radio", { name: "Audio" })).toHaveFocus();
+    fireEvent.click(within(filters).getByRole("switch", { name: "Favorites" }));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ kinds: ["audio"], favorite: true }));
+    fireEvent.click(within(filters).getByRole("radio", { name: "Oldest" }));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true, sort: "oldest" }));
+    // A press outside closes it; the settings stay, and so does the dot
+    fireEvent.pointerDown(screen.getByTestId("edit-library-grid"));
+    expect(screen.queryByRole("dialog", { name: "Filter and sort" })).toBeNull();
+    expect(button()).toHaveAttribute("data-filtered", "true");
+    expect(button()).toHaveAccessibleDescription("Filters are on");
+    fireEvent.click(button());
+    expect(screen.getByRole("switch", { name: "Favorites" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("never leaves its filters open with focus elsewhere, where they would keep the editor's keys", async () => {
+    measure(A, B);
+    await renderOpen();
+    const button = () => screen.getByRole("button", { name: "Filter and sort" });
+    const filters = () => screen.queryByRole("dialog", { name: "Filter and sort" });
+
+    // A press on a row's label focuses the popover itself (nothing around it in the view could take focus, so a
+    // browser would leave it on the page, out of reach of the popover's Escape)
+    fireEvent.click(button());
+    pressAt(within(filters()!).getByText("Kind"));
+    expect(filters()).toHaveFocus();
+    fireEvent.keyDown(filters()!, { key: "Escape" });
+    expect(filters()).toBeNull();
+    expect(button()).toHaveFocus();
+
+    // Shift+Tab out of it: to its button (still open), then on to the search, which closes it
+    fireEvent.click(button());
+    act(() => button().focus());
+    expect(filters()).not.toBeNull();
+    const search = screen.getByRole("textbox", { name: "Search the library" });
+    act(() => search.focus());
+    expect(filters()).toBeNull();
+    // Escape leaves the field, and the editor's keys are back
+    press(search, "Escape");
+    press(document.body, " ");
+    expect(editor().playing).toBe(true);
+    act(() => editor().setPlaying(false));
+
+    // Tab on from it to a tile
+    fireEvent.click(button());
+    expect(within(filters()!).getByRole("radio", { name: "All" })).toHaveFocus();
+    act(() => tile(C).focus());
+    expect(filters()).toBeNull();
+
+    // The library going off closes it, and it does not come back with the library, nor take focus
+    fireEvent.click(button());
+    act(() => applyLibraryStatus(status(false)));
+    expect(filters()).toBeNull();
+    act(() => applyLibraryStatus(status(true)));
+    expect(filters()).toBeNull();
+    expect(button()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("says when the library is empty, when nothing matches, and when it can't be read", async () => {
+    assetsApi.fetchAssetPage.mockResolvedValue(page([]));
+    storage[LAST_EDIT_KEY] = ID;
+    edits.fetchEdit.mockResolvedValue(doc());
+    edits.fetchEditList.mockResolvedValue(listOf([doc()]));
+    render(<EditVideoView />);
+    expect(await screen.findByText("Nothing in the library yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Favorites" }));
+    expect(await screen.findByText("No videos or audio match")).toBeInTheDocument();
+    assetsApi.fetchAssetPage.mockRejectedValueOnce(new Error("The library is moving."));
+    fireEvent.click(screen.getByRole("switch", { name: "Favorites" }));
+    expect(await screen.findByText("The library is moving.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Nothing in the library yet")).toBeInTheDocument();
+  });
+
+  it("with the library off, says so and turns its search and filters off", async () => {
+    await renderOpen();
+    act(() => applyLibraryStatus(status(false)));
+    const pane = screen.getByRole("complementary", { name: "Library" });
+    expect(within(pane).getByText("The asset library is off.")).toBeInTheDocument();
+    expect(within(pane).getByRole("textbox", { name: "Search the library" })).toBeDisabled();
+    expect(within(pane).getByRole("button", { name: "Filter and sort" })).toBeDisabled();
   });
 });
 

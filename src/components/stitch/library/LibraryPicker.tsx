@@ -1,22 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Star } from "lucide-react";
-import { cn } from "@/components/nodes/ui/cn";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogButton,
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogSearchField,
-  DialogSpinner,
   DialogTitle,
 } from "@/components/ui/Dialog";
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fetchFacets } from "@/lib/assets/client/api";
-import { onPosterReady } from "@/lib/assets/client/poster";
 import type { AssetFacets, AssetKind, AssetView } from "@/lib/assets/types";
 import { DEFAULT_LIBRARY_QUERY, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 import { draftSpans } from "@/lib/stitch/draft";
@@ -25,10 +20,10 @@ import { isPlaced } from "@/lib/stitch/timeline";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { addAssetClips, addAudioFromLibrary, drawnPlayhead } from "../editorActions";
 import { STITCH_EDITOR_PANEL } from "../editorStyles";
-import { FILTER_BUTTON, FILTER_OFF, FILTER_ON } from "./filterStyles";
+import { LibraryResults } from "./LibraryResults";
+import { FilterDivider, FilterRow, FilterSegments, FilterSwitch, LibrarySearch, SORT_OPTIONS } from "./LibrarySearch";
 import { LibraryTile } from "./LibraryTile";
 import { ProjectMenu } from "./ProjectMenu";
-import { SortMenu } from "./SortMenu";
 import { useLibraryAvailable } from "./useLibraryAvailable";
 import { useLibraryVideos } from "./useLibraryVideos";
 
@@ -37,6 +32,9 @@ const VIDEO_KINDS: readonly AssetKind[] = ["video"];
 const AUDIO_KINDS: readonly AssetKind[] = ["audio"];
 
 const closePicker = () => useStitchEditorStore.getState().setPickerOpen(false);
+
+/** The footer's buttons take the editor's white focus ring, not the dialogs' blue one. */
+const FOOTER_RING = "focus-visible:ring-white/40";
 
 /**
  * The clip new ones go after: the last row, or in a placed stack the clip that ends last (they start Overlap before
@@ -56,9 +54,10 @@ function goesAfterIndex(s: StitchEditorState): number {
 
 /**
  * "Add from library", over the Stitch editor: the library's videos (or, from
- * "+ Add audio", its audio files), searched and narrowed by project,
- * favourites and this workflow, newest or oldest first. Files are picked in
- * order. Add appends one video clip each, in that order, after the last
+ * "+ Audio", its audio files) grouped by project, as the Edit video view's
+ * library pane shows them, searched, and narrowed by project, favourites and
+ * this workflow, newest or oldest first, in the search's filter popover.
+ * Files are picked in order. Add appends one video clip each, in that order, after the last
  * clip; for audio it puts each file on a new audio row of its own, starting
  * at the playhead. The picker owns its query and its pages; it never touches
  * the Assets view's own list. Escape closes only the picker.
@@ -76,12 +75,7 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
   const libraryOn = useLibraryAvailable();
   const audio = kind === "audio";
   const [query, setQuery] = useState<LibraryVideoQuery>(DEFAULT_LIBRARY_QUERY);
-  const { assets, loading, loadingMore, error, moreError, hasMore, loadMore, retry, listingKey } = useLibraryVideos(
-    query,
-    workflowId,
-    libraryOn,
-    audio ? AUDIO_KINDS : VIDEO_KINDS,
-  );
+  const list = useLibraryVideos(query, workflowId, libraryOn, audio ? AUDIO_KINDS : VIDEO_KINDS);
   const update = (patch: Partial<LibraryVideoQuery>) => setQuery((q) => ({ ...q, ...patch }));
 
   // Focus goes to the search through the Dialog (not autoFocus), so the Dialog records the + that opened it and
@@ -148,34 +142,6 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
     return () => controller.abort();
   }, [libraryOn]);
 
-  // A poster made for a tile since its page was read: the tile asks for its thumbnail again
-  const [posters, setPosters] = useState<ReadonlySet<string>>(() => new Set());
-  useEffect(() => onPosterReady((id) => setPosters((prev) => new Set(prev).add(id))), []);
-
-  // The next page comes as the end of the grid scrolls near
-  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
-  const scrollEl = useRef<HTMLDivElement | null>(null);
-  const scrollRootRef = useCallback((el: HTMLDivElement | null) => {
-    scrollEl.current = el;
-    setScrollRoot(el);
-  }, []);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || !scrollRoot || !hasMore || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => entry?.isIntersecting && loadMore(), {
-      root: scrollRoot,
-      rootMargin: "240px",
-    });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [scrollRoot, hasMore, loadMore]);
-
-  // A new query's list starts at the top, as the Assets view's does: its newest matches are not left above the view
-  useLayoutEffect(() => {
-    if (scrollEl.current) scrollEl.current.scrollTop = 0;
-  }, [listingKey]);
-
   const pickedIds = new Set(picked.map((a) => a.id));
   const pickedSec = picked.reduce((sum, a) => sum + (a.durationSec ?? 0), 0);
   const n = picked.length;
@@ -185,64 +151,8 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
       ? `goes after ${clipName(afterIndex)}`
       : "goes first";
   const filtered = query.q.trim() !== "" || query.project !== null || query.favourites || query.thisWorkflow;
-
-  let body: ReactNode;
-  if (!libraryOn) body = <Notice>The asset library is off.</Notice>;
-  else if (assets.length === 0 && loading) {
-    body = (
-      <div className="flex h-full items-center justify-center" aria-busy>
-        <DialogSpinner />
-      </div>
-    );
-  } else if (assets.length === 0 && error) {
-    body = (
-      <div role="status" className="flex h-full items-center justify-center gap-3 text-xs text-neutral-500">
-        <span>{error}</span>
-        <DialogButton variant="ghost" compact onClick={retry}>
-          Try again
-        </DialogButton>
-      </div>
-    );
-  }
-  else if (assets.length === 0) {
-    body = <Notice>{!audio ? "No videos match" : filtered ? "No audio matches" : "No audio in the library yet"}</Notice>;
-  }
-  else {
-    body = (
-      <>
-        <div
-          className={cn("grid grid-cols-4 gap-x-3 gap-y-3.5 transition-opacity", loading && "opacity-60")}
-          aria-busy={loading || undefined}
-        >
-          {assets.map((asset) => (
-            <LibraryTile
-              key={asset.id}
-              asset={asset}
-              selected={pickedIds.has(asset.id)}
-              posterReady={posters.has(asset.id)}
-              scrollRoot={scrollRoot}
-              onToggle={toggle}
-            />
-          ))}
-        </div>
-        <div ref={sentinelRef} aria-hidden="true" className="h-px" />
-        {loadingMore ? (
-          <div className="flex justify-center py-3">
-            <DialogSpinner />
-          </div>
-        ) : (
-          moreError && (
-            <div role="status" className="flex items-center justify-center gap-3 py-3 text-xs text-neutral-500">
-              <span>{moreError}</span>
-              <DialogButton variant="ghost" compact onClick={loadMore}>
-                Try again
-              </DialogButton>
-            </div>
-          )
-        )}
-      </>
-    );
-  }
+  // The dot on the filter button: anything in its popover not at its default
+  const filtersOn = query.project !== null || query.favourites || query.thisWorkflow || query.sort !== "newest";
 
   return (
     <Dialog
@@ -272,45 +182,55 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex shrink-0 items-center gap-2 px-5 py-2.5">
-        <DialogSearchField
-          ref={searchRef}
-          className="w-[260px] shrink-0"
+      <div className="flex shrink-0 items-center px-5 py-2.5">
+        <LibrarySearch
+          inputRef={searchRef}
+          className="w-[260px]"
+          label={audio ? "Search audio" : "Search videos"}
           placeholder={audio ? "Search audio" : "Search videos"}
-          aria-label={audio ? "Search audio" : "Search videos"}
           value={query.q}
-          onChange={(event) => update({ q: event.target.value })}
+          onChange={(q) => update({ q })}
           disabled={!libraryOn}
+          filtered={filtersOn}
+          filters={
+            <>
+              <FilterRow label="Project">
+                <ProjectMenu value={query.project} projects={projects} onChange={(project) => update({ project })} />
+              </FilterRow>
+              <FilterSwitch label="Favorites" checked={query.favourites} onChange={(favourites) => update({ favourites })} />
+              <FilterSwitch
+                label="This workflow"
+                checked={query.thisWorkflow}
+                disabled={workflowId === null}
+                title={workflowId === null ? "Nothing from this workflow is in the library yet" : undefined}
+                onChange={(thisWorkflow) => update({ thisWorkflow })}
+              />
+              <FilterDivider />
+              <FilterRow label="Sort">
+                <FilterSegments label="Sort" value={query.sort} options={SORT_OPTIONS} onChange={(sort) => update({ sort })} />
+              </FilterRow>
+            </>
+          }
         />
-        <ProjectMenu value={query.project} projects={projects} onChange={(project) => update({ project })} />
-        <span className={cn(FILTER_BUTTON, FILTER_ON)}>{audio ? "Audio" : "Videos"}</span>
-        <button
-          type="button"
-          aria-pressed={query.favourites}
-          onClick={() => update({ favourites: !query.favourites })}
-          className={cn(FILTER_BUTTON, query.favourites ? FILTER_ON : FILTER_OFF)}
-        >
-          <Star size={12} strokeWidth={2} />
-          Favorites
-        </button>
-        <button
-          type="button"
-          aria-pressed={query.thisWorkflow}
-          disabled={workflowId === null}
-          title={workflowId === null ? "Nothing from this workflow is in the library yet" : undefined}
-          onClick={() => update({ thisWorkflow: !query.thisWorkflow })}
-          className={cn(FILTER_BUTTON, query.thisWorkflow ? FILTER_ON : FILTER_OFF)}
-        >
-          This workflow
-        </button>
-        <div className="flex-1" />
-        <SortMenu value={query.sort} onChange={(sort) => update({ sort })} />
       </div>
 
-      {/* DialogBody's own shape, as a plain element: the sentinel and the tiles observe it as their root */}
-      <div ref={scrollRootRef} className="min-h-0 flex-1 overflow-y-auto px-5 pt-0.5 pb-4" data-testid="stitch-library-grid">
-        {body}
-      </div>
+      <LibraryResults
+        libraryOn={libraryOn}
+        list={list}
+        emptyText={!audio ? "No videos match" : filtered ? "No audio matches" : "No audio in the library yet"}
+        layout="picker"
+        testId="stitch-library-grid"
+        className="px-5 pt-1 pb-4"
+        renderTile={(asset, { scrollRoot, posterReady }) => (
+          <LibraryTile
+            asset={asset}
+            selected={pickedIds.has(asset.id)}
+            posterReady={posterReady}
+            scrollRoot={scrollRoot}
+            onToggle={toggle}
+          />
+        )}
+      />
 
       <DialogFooter>
         <div className="mr-auto flex min-w-0 items-center gap-2 text-xs">
@@ -327,10 +247,10 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
             <span className="text-neutral-400">{audio ? "Pick audio files to add" : "Pick videos to add"}</span>
           )}
         </div>
-        <DialogButton variant="ghost" onClick={closePicker}>
+        <DialogButton variant="ghost" className={FOOTER_RING} onClick={closePicker}>
           Cancel
         </DialogButton>
-        <DialogButton variant="primary" disabled={n === 0} onClick={add}>
+        <DialogButton variant="primary" className={FOOTER_RING} disabled={n === 0} onClick={add}>
           {n === 0
             ? "Add clips"
             : audio
@@ -340,8 +260,4 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
       </DialogFooter>
     </Dialog>
   );
-}
-
-function Notice({ children }: { children: ReactNode }) {
-  return <div className="flex h-full items-center justify-center text-xs text-neutral-500">{children}</div>;
 }

@@ -4,7 +4,7 @@ import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { formatSeconds } from "@/lib/stitch/timecode";
-import { EDITOR_PANEL_SELECTOR, HEADER_TITLE, RAIL_ACTION } from "./editorStyles";
+import { EDITOR_PANEL_SELECTOR, HEADER_TITLE, RAIL_ACTION, SEGMENT, SEGMENT_OFF, SEGMENT_ON, SEGMENTS } from "./editorStyles";
 import { LIBRARY_SOURCE, type RailSource } from "./useStitchEditorMedia";
 
 /**
@@ -93,11 +93,14 @@ export function RailSwitch({
   onChange,
   label,
   disabled,
+  title,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
   disabled?: boolean;
+  /** Why it is off, say: its tooltip and its accessible description. */
+  title?: string;
 }) {
   return (
     <button
@@ -106,6 +109,7 @@ export function RailSwitch({
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
+      title={title}
       onClick={() => onChange(!checked)}
       className={cn(
         "relative h-[18px] w-8 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40",
@@ -188,7 +192,7 @@ export function RailSegments({
   className?: string;
 }) {
   return (
-    <div role="group" aria-label={label} className={cn("flex gap-0.5 rounded-lg bg-edit-field p-0.5", className)}>
+    <div role="group" aria-label={label} className={cn(SEGMENTS, className)}>
       {segments.map((segment) => (
         <button
           key={segment.label}
@@ -197,10 +201,7 @@ export function RailSegments({
           disabled={segment.disabled}
           title={segment.title}
           onClick={segment.onClick}
-          className={cn(
-            "h-7 min-w-0 flex-1 whitespace-nowrap rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40",
-            segment.pressed ? "bg-neutral-800 font-medium text-neutral-100" : "text-ink-3 hover:text-neutral-200",
-          )}
+          className={cn(SEGMENT, segment.pressed ? SEGMENT_ON : SEGMENT_OFF)}
         >
           {segment.label}
         </button>
