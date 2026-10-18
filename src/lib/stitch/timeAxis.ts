@@ -121,16 +121,3 @@ export function fitPxPerSec(
   const pps = room / seconds;
   return clamp(Number.isFinite(pps) ? pps : MIN_PX_PER_SEC, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
 }
-
-const LOG_RANGE = Math.log(MAX_PX_PER_SEC / MIN_PX_PER_SEC);
-
-/** 0..100 on a log scale, so each step of the slider zooms by the same factor. */
-export function zoomToSlider(pxPerSec: number): number {
-  const pps = clamp(Number.isFinite(pxPerSec) ? pxPerSec : MIN_PX_PER_SEC, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
-  return (100 * Math.log(pps / MIN_PX_PER_SEC)) / LOG_RANGE;
-}
-
-export function sliderToZoom(value: number): number {
-  const v = clamp(Number.isFinite(value) ? value : 0, 0, 100);
-  return clamp(MIN_PX_PER_SEC * Math.exp((v / 100) * LOG_RANGE), MIN_PX_PER_SEC, MAX_PX_PER_SEC);
-}

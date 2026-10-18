@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, type HTMLAttributes } from "react";
+import { useRef, useState, type HTMLAttributes } from "react";
+import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { Dialog } from "@/components/ui/Dialog";
 import { requestSave } from "@/store/saveRequestStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
@@ -24,6 +25,9 @@ function requestClose(): void {
 /** The header's ⋯ menu owns Escape, Space, ⌫ and the rest while it is open, as the Edit video view's menus do. */
 const KEY_OPTIONS: StitchEditorKeyOptions = { isStacked: headerMenuOpen };
 
+/** ?, as the canvas reads it: no ⌘, Ctrl or ⌥. */
+const isShortcutsKey = (e: KeyboardEvent) => e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey;
+
 /** The marker the library picker hands focus back by (see STITCH_EDITOR_PANEL). */
 const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLDivElement>;
 
@@ -44,9 +48,21 @@ export function StitchEditorModal() {
 function StitchEditor() {
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // The keyboard shortcuts, the editor's first, over the dialog: its own list, in a portal, so it sits above the
+  // dialog (the canvas's mounts earlier in the page, under it) and owns Escape
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   useEditorLifecycle();
-  useStitchEditorKeys(rootRef, requestClose, KEY_OPTIONS);
   const composition = useEditorComposition(rootRef, HEADER_PX);
+  useStitchEditorKeys(rootRef, requestClose, {
+    ...KEY_OPTIONS,
+    onOtherKey: (e) => {
+      if (!isShortcutsKey(e)) return false;
+      setShortcutsOpen(true);
+      return true;
+    },
+    zoom: composition.zoom,
+  });
 
   return (
     <Dialog
@@ -73,6 +89,7 @@ function StitchEditor() {
       </div>
       <DiscardSheet />
       <LibraryPicker />
+      <KeyboardShortcutsDialog isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} portal />
     </Dialog>
   );
 }

@@ -13,6 +13,7 @@ import { getAssetInfo, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { draftDuration, draftSpans, sameLayout, type StitchDraft } from "@/lib/stitch/draft";
 import {
   addAudioAt,
+  audioCurveShape,
   audioFadeIn,
   audioFadeOut,
   audioLengthOf,
@@ -1092,7 +1093,7 @@ export function toggleSelectedAudioMute(): void {
   setSelectedAudioMuted(!s.draft.audioClips.filter((c) => ids.has(c.id)).every((c) => c.muted));
 }
 
-/** The rail's Clip sound, Mute all and Unmute all: every selected audio clip, one step. */
+/** The rail's Sound switch, and its Mute N clips or Unmute N clips: every selected audio clip, one step. */
 export function setSelectedAudioMuted(muted: boolean): void {
   const s = editor();
   const ids = new Set(selectedAudioIds(s));
@@ -1134,6 +1135,17 @@ export function applyAudioFadeOut(): void {
 
 export function flattenAudioCurve(): void {
   setSingleAudioCurve(() => flat());
+}
+
+const NO_SHAPE = { flat: false, fadeIn: false, fadeOut: false } as const;
+
+/**
+ * The rail's Volume shapes pressed for the single selected audio clip: what its curve does over the part one loop
+ * hears (audioCurveShape). None without one. A new object each call: read it with useShallow.
+ */
+export function selectedAudioCurveShape(s: StitchEditorState): { flat: boolean; fadeIn: boolean; fadeOut: boolean } {
+  const span = singleAudioSpan(s);
+  return span ? audioCurveShape(span.clip, span, editorTotal(s)) : NO_SHAPE;
 }
 
 /** Fade out needs the part one loop hears, so it waits for the file's length. */

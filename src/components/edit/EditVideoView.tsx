@@ -39,8 +39,8 @@ const KEY_OPTIONS: StitchEditorKeyOptions = {
  * The Edit video view, laid over the canvas while `appView` is "edit" (bare E,
  * the tab strip's toggle, the menu's row). It edits edit projects, not nodes:
  * with none open it lists them (EditHome); with one open, the library pane
- * runs down the left beside the editor (header, stage, transport, rail and
- * timeline, the dialog's own body and keys).
+ * runs down the left beside the editor (header, stage with its control row,
+ * rail and timeline, the dialog's own body and keys), all on the pane colour.
  *
  * Showing it brings back the edit left open here, or opens the last one;
  * leaving it parks that edit, saving it first when Save automatically is on.
@@ -120,10 +120,10 @@ function OpenEdit() {
   const snapshot = useEditProjectStore((s) => s.open?.assets);
   const banner = useEditBanner();
 
-  useStitchEditorKeys(rootRef, stayOpen, KEY_OPTIONS);
   // A clip the library has lost is named from the edit's file
   const assetFallback = useCallback((assetId: string) => snapshot?.[assetId], [snapshot]);
   const composition = useEditorComposition(rootRef, HEADER_PX + (banner ? EDIT_BANNER_PX : 0), { assetFallback });
+  useStitchEditorKeys(rootRef, stayOpen, { ...KEY_OPTIONS, zoom: composition.zoom });
 
   // Space plays at once: the editor takes focus as it opens
   useEffect(() => {
@@ -137,11 +137,11 @@ function OpenEdit() {
         ref={rootRef}
         tabIndex={-1}
         {...EDITOR_PANEL_PROPS}
-        className="flex min-h-0 min-w-0 flex-1 flex-col bg-editor-chrome outline-none"
+        className="flex min-h-0 min-w-0 flex-1 flex-col bg-pane outline-none"
       >
         <EditHeader composition={composition} />
         {banner && <EditBanner banner={banner} />}
-        <EditorWorkspace composition={composition} narrowHidesZoom />
+        <EditorWorkspace composition={composition} />
       </div>
     </div>
   );

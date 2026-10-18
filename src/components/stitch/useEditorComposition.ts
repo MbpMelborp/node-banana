@@ -16,8 +16,6 @@ import { useStitchEditorMedia, type StitchEditorMediaOptions } from "./useStitch
 const DEFAULT_ASPECT = 16 / 9;
 const EMPTY_TIMELINE: StitchTimelineClip[] = [];
 const NO_AUDIO: StitchAudioClip[] = [];
-/** The transport's height (its h-11). */
-const TRANSPORT_PX = 44;
 
 /** Everything the editor's body and its header read: the open session's media, layout, playback and zoom. */
 export type EditorComposition = ReturnType<typeof useEditorComposition>;
@@ -48,7 +46,7 @@ export function useEditorComposition(
     const root = rootRef.current;
     if (!root || typeof ResizeObserver === "undefined") return;
     const measure = () => {
-      if (root.clientHeight > 0) setMaxTimeline(root.clientHeight - chromePx - TRANSPORT_PX - GEOMETRY.stageFloor);
+      if (root.clientHeight > 0) setMaxTimeline(root.clientHeight - chromePx - GEOMETRY.stageFloor);
     };
     measure();
     const observer = new ResizeObserver(measure);

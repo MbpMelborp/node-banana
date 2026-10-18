@@ -120,6 +120,16 @@ function openEditor() {
 
 const frameButton = () => screen.getByRole("button", { name: /^(Frame to canvas|Adding frame…)$/ });
 
+/** The button's hover label. */
+const hoverLabel = () => frameButton().parentElement!.querySelector<HTMLElement>(":scope > [aria-hidden='true']")!;
+
+/** Why the button is off: its accessible description, and its hover label after the button's name. */
+function expectReason(reason: string) {
+  expect(frameButton()).toHaveAccessibleDescription(reason);
+  expect(hoverLabel().firstChild).toHaveTextContent(/^Frame to canvas$/);
+  expect(within(hoverLabel()).getByText(reason)).toBeInTheDocument();
+}
+
 /** Stacked and placed: clip 1 at 0–5 s, clip 2 at 7–11 s, a gap between. */
 function placeWithGap() {
   act(() => {
@@ -175,12 +185,18 @@ describe("FrameToCanvasButton", () => {
       expect(frameButton()).toBe(button);
       expect(button).toBeEnabled();
     }
-    // Several clips and the audio track each had their own rail body meanwhile
+    // Several clips and the audio track each had their own rail body meanwhile; the button is the control row's,
+    // under the video, never the rail's
     const rail = screen.getByRole("complementary", { name: "Clip" });
     expect(within(rail).getByText("2 clips")).toBeInTheDocument();
-    expect(rail).toContainElement(button);
+    expect(rail).not.toContainElement(button);
+    expect(screen.getByTestId("stitch-controls")).toContainElement(button);
     act(() => editor().select(audioSelectionOf({ clipId: MUSIC_CLIP_ID })));
-    expect(screen.getByRole("complementary", { name: "Audio clip" })).toContainElement(button);
+    expect(screen.getByRole("complementary", { name: "Audio clip" })).not.toContainElement(button);
+    expect(screen.getByTestId("stitch-controls")).toContainElement(button);
+    // An icon button with its hover label
+    expect(button).toHaveTextContent("");
+    expect(button.parentElement!.querySelector(":scope > [aria-hidden='true']")).toHaveTextContent("Frame to canvas");
   });
 
   it("is ready while the preview plays, and the press pauses it", async () => {
@@ -230,7 +246,8 @@ describe("FrameToCanvasButton", () => {
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).not.toHaveAttribute("disabled");
-    expect(button).toHaveTextContent("Adding frame…");
+    expect(button).toHaveAccessibleName("Adding frame…");
+    expect(button).toHaveAccessibleDescription("Adding the frame…");
     expect(document.activeElement).toBe(button);
     fireEvent.click(button);
 
@@ -244,7 +261,7 @@ describe("FrameToCanvasButton", () => {
     expect(capture).toHaveBeenCalledTimes(1);
     // Back in the gap now that it is idle
     expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("title", "Nothing plays at the playhead");
+    expect(button).toHaveAccessibleDescription("Nothing plays at the playhead");
   });
 
   it("lets Enter activate it and keeps Space for play", async () => {
@@ -279,32 +296,34 @@ describe("FrameToCanvasButton", () => {
     await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
   });
 
-  it("is off with no clips", () => {
+  it("is off with no clips, in the inert control row under the empty stage that says how to add them", () => {
     seed({ clips: false });
     openEditor();
     expect(frameButton()).toBeDisabled();
-    expect(frameButton()).toHaveAttribute("title", "Add clips to grab a frame");
+    // Nothing in the row can be hovered or focused: the empty frame explains instead
+    expect(frameButton().closest("[inert]")).toContainElement(screen.getByTestId("stitch-controls"));
+    expect(screen.getByText("No clips yet")).toBeInTheDocument();
   });
 
   it("is off while a clip is still loading", () => {
     seed({ ready: ["a"] });
     openEditor();
     expect(frameButton()).toBeDisabled();
-    expect(frameButton()).toHaveAttribute("title", "Waiting for the clips to load");
+    expectReason("Waiting for the clips to load");
   });
 
   it("is off while no clip has a video", () => {
     seed({ outputs: false });
     openEditor();
     expect(frameButton()).toBeDisabled();
-    expect(frameButton()).toHaveAttribute("title", "No clip has a video yet");
+    expectReason("No clip has a video yet");
   });
 
   it("is off while every clip's video failed to read", async () => {
     seed({ ready: [] });
     __setMediaExtractorForTests({ probe: () => Promise.reject(new Error("bad")), open: () => Promise.reject(new Error("bad")) });
     openEditor();
-    await vi.waitFor(() => expect(frameButton()).toHaveAttribute("title", "No clip has a video yet"));
+    await vi.waitFor(() => expectReason("No clip has a video yet"));
     expect(frameButton()).toBeDisabled();
   });
 
@@ -314,11 +333,12 @@ describe("FrameToCanvasButton", () => {
     placeWithGap();
     act(() => editor().setPlayhead(6));
     expect(frameButton()).toBeDisabled();
-    expect(frameButton()).toHaveAttribute("title", "Nothing plays at the playhead");
+    expectReason("Nothing plays at the playhead");
     fireEvent.click(frameButton());
     expect(capture).not.toHaveBeenCalled();
     act(() => editor().setPlayhead(8));
     expect(frameButton()).toBeEnabled();
-    expect(frameButton()).not.toHaveAttribute("title");
+    expect(frameButton()).not.toHaveAttribute("aria-describedby");
+    expect(hoverLabel()).toHaveTextContent(/^Frame to canvas$/);
   });
 });

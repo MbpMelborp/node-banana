@@ -373,15 +373,80 @@ describe("the open edit", () => {
     expect(within(slot).getByRole("button", { name: "Render" })).toBeDisabled();
   });
 
-  it("drops the zoom slider in a narrow column, and −/+ then keep their full width so neither covers the other", async () => {
+  it("puts the controls in one row under the video, which drops Fit, then − and +, when narrow", async () => {
     measure(A, B);
     await renderOpen();
-    const slider = screen.getByRole("slider", { name: "Timeline zoom" });
-    expect(slider.parentElement!.className).toContain("@container");
-    expect(slider.className).toContain("@max-[760px]:hidden");
+    expect(screen.queryByRole("slider", { name: "Timeline zoom" })).toBeNull();
+    const row = screen.getByTestId("stitch-controls");
+    expect(row.parentElement!.className).toContain("@container");
+    expect(screen.getByTestId("stitch-stage-column")).toContainElement(row);
+    // Time | start, play, end | the rest, in the boards' order
+    const [time, middle, right] = [...row.children] as HTMLElement[];
+    expect(time).toHaveTextContent("0:00.00 / 0:10.00");
+    expect(within(middle).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Go to start", "Play", "Go to end"]);
+    expect(within(right).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "Frame to canvas",
+      "Mute all",
+      "Track",
+      "Stacked",
+      "Snap",
+      "Zoom out",
+      "Zoom in",
+      "Fit",
+    ]);
+    expect(screen.getByRole("button", { name: "Fit" }).parentElement!.className).toContain("@max-[695px]:hidden");
     for (const name of ["Zoom out", "Zoom in"]) {
-      expect(screen.getByRole("button", { name }).className).toContain("@max-[760px]:mx-0");
+      expect(screen.getByRole("button", { name }).parentElement!.className).toContain("@max-[628px]:hidden");
     }
+    // Track and Stacked are the row's own buttons, pressed as Snap is, with no ground of their own
+    const layout = screen.getByRole("group", { name: "Timeline layout" });
+    expect(layout).not.toHaveClass("bg-edit-field");
+    expect(within(layout).getByRole("button", { name: "Track" })).toHaveClass("aria-pressed:bg-edit-pressed");
+  });
+
+  it("mutes the preview from the control row, and shows Snap pressed while on", async () => {
+    measure(A, B);
+    await renderOpen();
+    const mute = screen.getByRole("button", { name: "Mute all" });
+    expect(mute).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(mute);
+    expect(editor().soundOn).toBe(false);
+    expect(mute).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(mute);
+    expect(editor().soundOn).toBe(true);
+    // The preview's sound is no edit
+    expect(editor().past).toHaveLength(0);
+    // Snap is on by default: a press turns it off and the next on again, and neither is an edit
+    const snap = screen.getByRole("button", { name: "Snap" });
+    expect(editor().snap).toBe(true);
+    expect(snap).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(snap);
+    expect(editor().snap).toBe(false);
+    expect(snap).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(snap);
+    expect(editor().snap).toBe(true);
+    expect(snap).toHaveAttribute("aria-pressed", "true");
+    expect(editor().past).toHaveLength(0);
+  });
+
+  it("keeps the rail's column with nothing selected, and leaves Library out of a clip's source", async () => {
+    measure(A, B);
+    await renderOpen();
+    act(() => editor().select(null));
+    const rail = screen.getByRole("complementary", { name: "Clip" });
+    expect(rail).toHaveClass("w-[280px]", "border-l", "border-edit-line");
+    expect(within(rail).getByText("Select a clip to edit it.")).toBeInTheDocument();
+    act(() => editor().select({ kind: "clip", clipId: "v2" }));
+    expect(within(rail).getByText("Clip 2 of 2")).toBeInTheDocument();
+    // Every clip of an edit is the library's: the line is its model and length
+    expect(within(rail).getByText("Veo 3.1 · 5.00 s")).toBeInTheDocument();
+    // A trim shows as the part of the file kept, and Reset trim only then
+    expect(within(rail).queryByRole("button", { name: "Reset trim" })).toBeNull();
+    act(() => editor().apply((d) => ({ ...d, timeline: d.timeline.map((c) => (c.id === "v2" ? { ...c, inSec: 1 } : c)) })));
+    expect(within(rail).getByText("Veo 3.1 · 4.00 s of 5.00 s")).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Reset trim" })).toBeEnabled();
+    // The editor sits on the pane, as the header does
+    expect(screen.getByRole("button", { name: "Mute all" }).closest("[data-stitch-editor]")).toHaveClass("bg-pane");
   });
 
   it("asks for a clip's record again when its file can't be read, and holds Render back either way", async () => {

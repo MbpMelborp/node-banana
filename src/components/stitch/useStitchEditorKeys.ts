@@ -3,6 +3,7 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { isSaveShortcut } from "@/utils/saveShortcut";
 import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
 import { copySelection, cutSelection, duplicateSelection, pasteClipboard } from "./clipboardActions";
+import type { TimelineZoom } from "./timeline/useTimelineZoom";
 import { hasTextSelection, selectAllAudioClips, selectAllClips } from "./selectionActions";
 import {
   endSelectedAtPlayhead,
@@ -42,13 +43,20 @@ export interface StitchEditorKeyOptions {
   onOtherKey?: (e: KeyboardEvent) => boolean;
   /** Something of the caller's own over the editor (a menu) owns the keys, as a stacked dialog does. */
   isStacked?: () => boolean;
+  /** The timeline's zoom, for − = and ⇧Z (the same as the control row's −, + and Fit, which a narrow row drops). */
+  zoom?: Pick<TimelineZoom, "zoomIn" | "zoomOut" | "fit">;
 }
 
 /**
  * Each action is handled in either layout; the ones that place a video clip in time or change its row do nothing in
  * Track. With audio clips selected, the clip keys act on them (audio always has a start and a row); M mutes them.
  */
-function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repeat">, requestClose: () => void): void {
+function run(
+  action: EditorKeyAction,
+  e: Pick<KeyboardEvent, "shiftKey" | "repeat">,
+  requestClose: () => void,
+  zoom: StitchEditorKeyOptions["zoom"],
+): void {
   const s = useStitchEditorStore.getState();
   if (s.selection?.kind === "audio") {
     switch (action) {
@@ -126,6 +134,12 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
       return duplicateSelection();
     case "selectAll":
       return selectAllClips();
+    case "zoomIn":
+      return zoom?.zoomIn();
+    case "zoomOut":
+      return zoom?.zoomOut();
+    case "zoomFit":
+      return zoom?.fit();
     case "undo":
       return s.undo();
     case "redo":
@@ -151,7 +165,9 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
  * browser on Windows. ⌘C, ⌘X, ⌘V, ⌘D and ⌘A act on clips, except that with
  * text selected on the page ⌘C and ⌘X copy the text, natively. The Edit
  * video view hands in its own view keys (`onOtherKey`) and menus
- * (`isStacked`); the node's dialog its header's menu (`isStacked`).
+ * (`isStacked`); the node's dialog its header's menu (`isStacked`) and ?
+ * (`onOtherKey`); both their timeline's zoom (`zoom`), which − = and ⇧Z
+ * drive.
  */
 export function useStitchEditorKeys(
   rootRef: RefObject<HTMLElement | null>,
@@ -221,7 +237,7 @@ export function useStitchEditorKeys(
         if (e.repeat && NO_REPEAT.has(action)) return;
         // The drag applies what it measured at the press on release: nothing may edit the draft under it (K only pauses)
         if (s.cancelGesture && action !== "pause") return;
-        run(action, e, requestClose);
+        run(action, e, requestClose, optionsRef.current.zoom);
         return;
       }
       if (!s.cancelGesture && optionsRef.current.onOtherKey?.(e)) {

@@ -2,14 +2,11 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
-import { Segmented, Slider, Switch } from "@/components/ui/Controls";
-import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { clipIdsOf } from "@/lib/stitch/selection";
-import { clipLength, isTrimmed, type ClipSpan } from "@/lib/stitch/timeline";
-import { formatSeconds } from "@/lib/stitch/timecode";
+import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
 import {
   canRevealSource,
@@ -27,38 +24,23 @@ import {
   trimSelected,
 } from "./editorActions";
 import { AudioClipRail } from "./AudioClipRail";
-import { FrameToCanvasButton } from "./FrameToCanvasButton";
-import { KeyHints, RailButton, RailRow } from "./railParts";
+import {
+  RailAction,
+  RailActions,
+  RailField,
+  RailFields,
+  RailNote,
+  RailRow,
+  RailSegments,
+  RailSlider,
+  RailSwitch,
+  RailTitle,
+  railDetail,
+  START_KEYS,
+} from "./railParts";
 import { TimecodeField } from "./TimecodeField";
 import type { AudioClipView, ClipMediaView } from "./useStitchEditorMedia";
 import { EDITOR_PANEL_SELECTOR } from "./editorStyles";
-
-const TRIM_HINTS = [
-  { key: "I", text: "In at the playhead" },
-  { key: "O", text: "Out at the playhead" },
-  { key: "⇧", text: "Hold to trim without snapping" },
-] as const;
-
-/** Stacked places clips in time and in rows too. */
-const STACKED_HINTS = [
-  { key: "I", text: "In at the playhead" },
-  { key: "O", text: "Out at the playhead" },
-  { key: "[", text: "Start at the playhead" },
-  { key: "]", text: "End at the playhead" },
-  { key: "⌥", text: "With ← → nudge a frame, with ↑ ↓ change row" },
-  { key: "⇧", text: "Hold to move or trim without snapping" },
-] as const;
-
-/** Several clips selected: what applies to all of them. */
-const multiHints = (stacked: boolean) =>
-  [
-    { key: "⌘", text: "With C copy, X cut, V paste, D duplicate" },
-    {
-      key: "⌥",
-      text: stacked ? "With M mute all, with ← → nudge a frame, with ↑ ↓ change row" : "With M mute or unmute all",
-    },
-    { key: "⇧", text: "Click a clip to select a range" },
-  ] as const;
 
 /** "Clip 1 and Clip 3", "Clip 1, Clip 3 and Clip 4", past three "Clip 1, Clip 2 and 3 more". */
 function clipNamesLine(indices: readonly number[]): string {
@@ -69,26 +51,24 @@ function clipNamesLine(indices: readonly number[]): string {
 }
 
 /**
- * The 280px rail beside the stage: the selected clip's name and source,
- * in Stacked where it starts on the timeline, its trim as In and Out
- * wells, its own sound, and the clip actions with the trim keys. With audio
- * clips selected it shows them instead (AudioClipRail), and with several
- * video clips what applies to all of them (MultiClipRail). Frame to canvas
- * sits under the body, whatever is selected, so it never moves when the
- * body swaps or scrolls. Loop is in the header's ⋯ menu.
+ * The 280px rail beside the stage, on the pane with a hairline at its left
+ * edge. It keeps its column whatever is selected, so the video never changes
+ * size on a click. One clip: "Clip 2 of 4", its source and length; its In and
+ * Out side by side (in Stacked Start first: where it starts on the timeline);
+ * its own Sound and Volume; then, at the foot, Split at playhead, Reset trim
+ * (only while trimmed), Reveal source node (the dialog's) and Remove clip.
+ * With audio clips selected it shows them instead (AudioClipRail), and with
+ * several video clips what applies to all of them (MultiClipRail). The keys
+ * are in the fields' and the actions' hover labels. Frame to canvas is in the
+ * control row under the video; Loop is in the header's ⋯ menu.
  */
 export function EditorRail({
   media,
   audio,
-  spans,
-  frameSize,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   /** Each audio clip's view. */
   audio: ReadonlyMap<string, AudioClipView>;
-  spans: readonly ClipSpan[];
-  /** The sequence's frame size (the ⋯ menu's line); null while no clip is ready with one. */
-  frameSize: { width: number; height: number } | null;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
   const durations = useStitchEditorStore((s) => s.durations);
@@ -126,7 +106,7 @@ export function EditorRail({
   }, [selection, draft]);
   const audioSelected = selectedAudio.length > 0;
 
-  // A swap of the rail's body (the last clip removed, the track for a clip or back, Overlap and Crossfade coming or going
+  // A swap of the rail's body (the last clip removed, the track for a clip or back, Start or Crossfade coming or going
   // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
   useEffect(() => {
     const active = document.activeElement;
@@ -139,149 +119,120 @@ export function EditorRail({
     <aside
       ref={railRef}
       aria-label={audioSelected ? "Audio clip" : "Clip"}
-      className="w-[280px] shrink-0 flex flex-col border-l border-chrome-border/50 bg-editor-chrome"
+      className="w-[280px] shrink-0 overflow-y-auto border-l border-edit-line"
     >
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+      <div className="flex min-h-full flex-col p-5">
         {audioSelected ? (
           <AudioClipRail clips={selectedAudio} views={audio} />
         ) : multi && draft ? (
           <MultiClipRail
             timeline={draft.timeline}
             indices={selectedIndices}
-            stacked={stacked}
             canSplit={canSplit}
             splitBlocked={splitBlocked}
           />
         ) : !clip ? (
           // An empty editor has nothing to select; the stage says why
-          draft && draft.timeline.length > 0 && (
-            <p className="px-5 pt-4 text-xs text-neutral-500">Select a clip to trim it.</p>
-          )
+          draft &&
+          draft.timeline.length > 0 && <p className="text-[13px] leading-5 text-ink-3">Select a clip to edit it.</p>
         ) : (
           <>
-            <div className="flex items-start justify-between gap-2 px-5 pt-4">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-[13px] leading-4 font-semibold text-neutral-100">{clipName(index)}</span>
-                <span className="truncate text-[11px] leading-[13px] text-neutral-500">{view?.railSubtitle ?? ""}</span>
-              </div>
-              <span className="pt-0.5 font-mono text-[11px] text-neutral-500">{`${index + 1} / ${draft!.timeline.length}`}</span>
-            </div>
+            <RailTitle
+              title={`${clipName(index)} of ${draft!.timeline.length}`}
+              lines={[
+                railDetail(
+                  view?.railSource,
+                  duration,
+                  duration === null ? null : clipLength(clip, duration),
+                  inEdit,
+                ),
+              ]}
+            />
 
-            <DialogPaneRule className="mx-5 mt-3.5 mb-2.5" />
-
-            {start !== null && (
-              // Leaving the well ends a run of ↑/↓ steps: the next one is a new undo step
-              <div className="mb-2 px-5" onBlur={endGesture}>
-                <RailRow label="Start">
+            <RailFields>
+              {start !== null && (
+                // Leaving the well ends a run of ↑/↓ steps: the next one is a new undo step
+                <RailField label="Start" hint="Start or end at the playhead" shortcut={START_KEYS} onBlur={endGesture}>
                   <TimecodeField
                     label="Start on the timeline"
                     value={start}
                     onCommit={(sec) => setClipStart(clip.id, sec)}
                     onNudge={nudgeStartWell}
                   />
-                </RailRow>
-              </div>
-            )}
-
-            <section className="flex flex-col gap-0.5 px-5">
-              <DialogSectionHeader className="mb-1 leading-[13px]">Trim</DialogSectionHeader>
-              <RailRow label="In">
+                </RailField>
+              )}
+              <RailField label="In" hint="In at the playhead" shortcut="I">
                 <TimecodeField
                   label="In"
                   value={clip.inSec}
                   disabled={duration === null}
                   onCommit={(inSec) => trimSelected({ inSec })}
                 />
-              </RailRow>
-              <RailRow label="Out">
+              </RailField>
+              <RailField label="Out" hint="Out at the playhead" shortcut="O" last>
                 <TimecodeField
                   label="Out"
                   value={duration !== null ? Math.min(clip.outSec ?? duration, duration) : (clip.outSec ?? 0)}
                   disabled={duration === null}
                   onCommit={(outSec) => trimSelected({ outSec })}
                 />
-              </RailRow>
-              <RailRow label="Length">
-                <span className="w-[88px] pr-2 text-right font-mono text-xs tabular-nums text-neutral-400">
-                  {duration === null ? "–" : formatSeconds(clipLength(clip, duration))}
-                </span>
-              </RailRow>
-              {duration !== null && clip.inSec >= duration && (
-                <p className="text-[11px] text-neutral-500">The trim starts past the end of this video.</p>
-              )}
-              {duration !== null && duration > 0 && clip.inSec < duration && clipLength(clip, duration) === 0 && (
-                <p className="text-[11px] text-neutral-500">The trim is shorter than a frame, so this clip is left out.</p>
-              )}
-            </section>
+              </RailField>
+            </RailFields>
+            {duration !== null && clip.inSec >= duration && <RailNote>The trim starts past the end of this video.</RailNote>}
+            {duration !== null && duration > 0 && clip.inSec < duration && clipLength(clip, duration) === 0 && (
+              <RailNote>The trim is shorter than a frame, so this clip is left out.</RailNote>
+            )}
 
-            <DialogPaneRule className="mx-5 mt-3 mb-2.5" />
-
-            <section className="flex flex-col gap-0.5 px-5">
-              <DialogSectionHeader className="mb-1 leading-[13px]">Audio</DialogSectionHeader>
-              <RailRow label="Clip audio">
-                <Switch label="Clip audio" checked={!clip.muted} onChange={(on) => setClipMuted(clip.id, !on)} />
+            <div className="mt-7">
+              <RailRow label="Sound">
+                <RailSwitch label="Sound" checked={!clip.muted} onChange={(on) => setClipMuted(clip.id, !on)} />
               </RailRow>
-              <div className="h-7 flex items-center gap-3">
-                <span className="w-[52px] shrink-0 text-xs text-neutral-400">Volume</span>
-                <div
-                  className="min-w-0 flex-1"
-                  onPointerUp={endGesture}
-                  onKeyUp={endGesture}
-                  onBlur={endGesture}
-                >
-                  <Slider
-                    label="Clip volume"
-                    min={0}
-                    max={100}
-                    value={Math.round(clip.volume * 100)}
-                    readout={`${Math.round(clip.volume * 100)}%`}
-                    disabled={clip.muted}
-                    onChange={(pct) => setClipVolume(clip.id, pct / 100)}
-                  />
-                </div>
+              <div onPointerUp={endGesture} onKeyUp={endGesture} onBlur={endGesture}>
+                <RailSlider
+                  label="Volume"
+                  ariaLabel="Clip volume"
+                  value={Math.round(clip.volume * 100)}
+                  disabled={clip.muted}
+                  onChange={(pct) => setClipVolume(clip.id, pct / 100)}
+                />
               </div>
-            </section>
+            </div>
 
-            <DialogPaneRule className="mx-5 mt-3 mb-2.5" />
-
-            <div className="flex flex-col gap-1.5 px-5">
-              <RailButton
-                icon={<Scissors size={14} strokeWidth={1.75} />}
+            <RailActions>
+              <RailAction
+                icon={<Scissors size={16} strokeWidth={1.5} />}
                 label="Split at playhead"
                 shortcut="S"
                 disabled={!canSplit}
                 title={canSplit ? undefined : (splitBlocked ?? undefined)}
                 onClick={splitAtPlayhead}
               />
-              <RailButton
-                icon={<RotateCcw size={14} strokeWidth={1.75} />}
-                label="Reset trim"
-                disabled={!isTrimmed(clip)}
-                onClick={resetSelectedTrim}
-              />
+              {isTrimmed(clip) && (
+                <RailAction
+                  icon={<RotateCcw size={16} strokeWidth={1.5} />}
+                  label="Reset trim"
+                  vanishes
+                  onClick={resetSelectedTrim}
+                />
+              )}
               {!inEdit && (
-                <RailButton
-                  icon={<Crosshair size={14} strokeWidth={1.75} />}
+                <RailAction
+                  icon={<Crosshair size={16} strokeWidth={1.5} />}
                   label="Reveal source node"
                   disabled={!canRevealSource(clip, view)}
                   onClick={revealSelectedSource}
                 />
               )}
-              <RailButton
-                icon={<Trash size={14} strokeWidth={1.75} />}
+              <RailAction
+                icon={<Trash size={16} strokeWidth={1.5} />}
                 label="Remove clip"
                 shortcut="⌫"
-                danger
+                keyshortcuts="Backspace"
                 onClick={removeSelection}
               />
-              <KeyHints hints={stacked ? STACKED_HINTS : TRIM_HINTS} />
-            </div>
+            </RailActions>
           </>
         )}
-      </div>
-
-      <div className="shrink-0 border-t border-chrome-border/50 px-5 py-2.5">
-        <FrameToCanvasButton media={media} spans={spans} frameSize={frameSize} />
       </div>
     </aside>
   );
@@ -295,14 +246,12 @@ export function EditorRail({
 function MultiClipRail({
   timeline,
   indices,
-  stacked,
   canSplit,
   splitBlocked,
 }: {
   timeline: readonly StitchTimelineClip[];
   /** The selected clips' timeline indices, in order. */
   indices: readonly number[];
-  stacked: boolean;
   canSplit: boolean;
   splitBlocked: string | null;
 }) {
@@ -312,64 +261,49 @@ function MultiClipRail({
   const sound = allOn ? "on" : allOff ? "off" : "mixed";
   return (
     <>
-      <div className="flex items-start justify-between gap-2 px-5 pt-4">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-[13px] leading-4 font-semibold text-neutral-100">{`${clips.length} clips`}</span>
-          <span className="truncate text-[11px] leading-[13px] text-neutral-500">{clipNamesLine(indices)}</span>
-        </div>
-        <span className="pt-0.5 font-mono text-[11px] text-neutral-500">{`${clips.length} / ${timeline.length}`}</span>
-      </div>
+      <RailTitle title={`${clips.length} clips`} lines={[clipNamesLine(indices)]} />
 
-      <DialogPaneRule className="mx-5 mt-3.5 mb-2.5" />
-
-      <section className="flex flex-col gap-0.5 px-5">
-        <DialogSectionHeader className="mb-1 leading-[13px]">Audio</DialogSectionHeader>
-        <RailRow label="Clip audio">
+      <div className="mt-7">
+        <RailRow label="Sound">
           <div className="flex items-center gap-2">
-            {sound === "mixed" && <span className="text-[11px] text-neutral-500">Mixed</span>}
-            <Segmented<"on" | "off" | "mixed">
-              size="sm"
-              label="Clip audio"
-              options={[
-                { value: "on", label: "On" },
-                { value: "off", label: "Off" },
+            {sound === "mixed" && <span className="text-xs text-ink-3">Mixed</span>}
+            <RailSegments
+              label="Sound"
+              className="w-[104px]"
+              segments={[
+                { label: "On", pressed: sound === "on", onClick: () => setSelectedClipsMuted(false) },
+                { label: "Off", pressed: sound === "off", onClick: () => setSelectedClipsMuted(true) },
               ]}
-              value={sound}
-              onChange={(value) => {
-                if (value !== "mixed") setSelectedClipsMuted(value === "off");
-              }}
-              className="bg-editor-well"
             />
           </div>
         </RailRow>
-      </section>
+      </div>
 
-      <DialogPaneRule className="mx-5 mt-3 mb-2.5" />
-
-      <div className="flex flex-col gap-1.5 px-5">
-        <RailButton
-          icon={<Scissors size={14} strokeWidth={1.75} />}
+      <RailActions>
+        <RailAction
+          icon={<Scissors size={16} strokeWidth={1.5} />}
           label="Split at playhead"
           shortcut="S"
           disabled={!canSplit}
           title={canSplit ? undefined : (splitBlocked ?? undefined)}
           onClick={splitAtPlayhead}
         />
-        <RailButton
-          icon={<RotateCcw size={14} strokeWidth={1.75} />}
-          label="Reset trim"
-          disabled={!clips.some(isTrimmed)}
-          onClick={resetSelectedTrim}
-        />
-        <RailButton
-          icon={<Trash size={14} strokeWidth={1.75} />}
+        {clips.some(isTrimmed) && (
+          <RailAction
+            icon={<RotateCcw size={16} strokeWidth={1.5} />}
+            label="Reset trim"
+            vanishes
+            onClick={resetSelectedTrim}
+          />
+        )}
+        <RailAction
+          icon={<Trash size={16} strokeWidth={1.5} />}
           label={`Remove ${clips.length} clips`}
           shortcut="⌫"
-          danger
+          keyshortcuts="Backspace"
           onClick={removeSelection}
         />
-        <KeyHints hints={multiHints(stacked)} />
-      </div>
+      </RailActions>
     </>
   );
 }

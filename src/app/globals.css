@@ -60,21 +60,24 @@
   --tracking-display: -0.03em;
 
   /* Stitch editor (src/components/stitch): a darker chrome than a normal
-     dialog, by request. Chrome = header, rail, transport, track headers;
-     stage = the letterboxed preview; lanes = the timeline ground; well =
-     timecode inputs and segmented groups. Stacked dialogs keep bg-card. */
+     dialog, by request. Chrome = the dialog's panel and the track headers
+     (the stage, its control row and the rail sit on the pane colour, as the
+     headers do); lanes = the timeline ground; well = an empty frame (the
+     editor's stage with no clips, the home's preview). Stacked dialogs keep
+     bg-card. */
   --color-editor-chrome: #1a1a1a;
-  --color-editor-stage: #0a0a0a;
   --color-editor-lanes: #141414;
   --color-editor-well: #0f0f0f;
 
   /* Edit video's quiet look (the view and the node's dialog): the hairline
      between regions (and the render's progress track), a field's ground,
-     and the fill of a control that is open or pressed; its menus' shadow
-     (the headers' ⋯, the home's row menu), deeper than shadow-menu. */
+     the fill of a control that is open or pressed, and a switch's track
+     while it is off; its menus' shadow (the headers' ⋯, the home's row
+     menu), deeper than shadow-menu. */
   --color-edit-line: #1a1a1a;
   --color-edit-field: #141414;
   --color-edit-pressed: #1f1f1f;
+  --color-edit-switch-off: #333333;
   --shadow-edit-menu: 0 16px 40px rgb(0 0 0 / 0.5);
 }
 
@@ -109,6 +112,41 @@
   }
   &:focus-visible {
     box-shadow: 0 0 0 2px #171717, 0 0 0 4px #3b82f6;
+  }
+}
+
+/* Edit video's rail slider (a clip's Volume): a quieter range-ink, a 4px
+   neutral-800 track filled neutral-300 to --p and a plain 12px thumb. */
+@utility range-edit {
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--color-neutral-300) var(--p, 50%),
+    var(--color-neutral-800) var(--p, 50%)
+  );
+  outline: none;
+  &::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--color-neutral-100);
+    border: 0;
+  }
+  &::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--color-neutral-100);
+    border: 0;
+  }
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-pane), 0 0 0 4px rgb(255 255 255 / 0.4);
+  }
+  &:disabled {
+    opacity: 0.4;
   }
 }
 

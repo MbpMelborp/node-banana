@@ -5,6 +5,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import type { StitchSequenceLayout } from "@/types";
 import { setSequenceMode } from "./editorActions";
+import { CONTROL_BUTTON } from "./editorStyles";
 import { keepFocus } from "./timeline/ClipBox";
 import { releaseTypingFocus } from "./timeline/releaseTypingFocus";
 
@@ -41,15 +42,16 @@ const OPTIONS: ReadonlyArray<{ mode: Mode; label: string; tip: string }> = [
 ];
 
 /**
- * Track | Stacked, at the transport's right end after Fit. A switch changes
- * the timeline's height, and the timeline grows up from the panel's bottom,
- * so with three or more clips the transport, and the toggle in it, moves up
- * or down by the difference. A node setting, so a switch is one undo step
- * and Done writes it; the editor pauses on any switch (the modal's own
- * effect). Inert, like the rest of the transport, while the draft has no
- * clips.
+ * Track | Stacked, in the control row under the video between Mute all and
+ * Snap: two of the row's own icon buttons, the pressed one on the pressed
+ * fill as Snap is, with a little room either side so they read as a pair. A
+ * switch changes the timeline's height, and with it the stage's, so the
+ * video and its row (the toggle in it) can move by the difference. A node
+ * setting, so a switch is one undo step and Done writes it; the editor
+ * pauses on any switch (the modal's own effect). Inert, like the rest of the
+ * row, while the draft has no clips.
  */
-export function LayoutToggle() {
+export function LayoutToggle({ className }: { className?: string }) {
   const mode = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode ?? "track");
   const empty = useStitchEditorStore((s) => (s.draft?.timeline.length ?? 0) === 0);
   return (
@@ -57,35 +59,29 @@ export function LayoutToggle() {
       role="group"
       aria-label="Timeline layout"
       inert={empty}
-      className="flex h-7 shrink-0 gap-0.5 rounded-lg bg-editor-well px-0.5"
+      className={cn("flex shrink-0 items-center gap-0.5", className)}
     >
-      {OPTIONS.map((option) => {
-        const pressed = option.mode === mode;
-        return (
-          // The tooltips open up, into the stage: the wrapper is the well's height, so they line up
-          <div key={option.mode} className="group relative flex py-0.5">
-            <button
-              type="button"
-              aria-label={option.label}
-              aria-pressed={pressed}
-              // Focus stays where it was, so the editor's keys keep working after a click; a field being typed in
-              // (Overlap, which Track takes away) gives it up first and commits, as a click elsewhere would
-              onMouseDown={(event) => {
-                releaseTypingFocus(event.currentTarget);
-                keepFocus(event);
-              }}
-              onClick={() => setSequenceMode(option.mode)}
-              className={cn(
-                "inline-flex h-6 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
-                pressed ? "bg-white/12 text-neutral-100" : "text-neutral-500 hover:text-neutral-200",
-              )}
-            >
-              <LayoutGlyph mode={option.mode} />
-            </button>
-            <Tooltip label={option.tip} placement="top" />
-          </div>
-        );
-      })}
+      {OPTIONS.map((option) => (
+        // The tooltips open up, into the stage, as the row's others do
+        <div key={option.mode} className="group relative flex">
+          <button
+            type="button"
+            aria-label={option.label}
+            aria-pressed={option.mode === mode}
+            // Focus stays where it was, so the editor's keys keep working after a click; a field being typed in
+            // (Overlap, which Track takes away) gives it up first and commits, as a click elsewhere would
+            onMouseDown={(event) => {
+              releaseTypingFocus(event.currentTarget);
+              keepFocus(event);
+            }}
+            onClick={() => setSequenceMode(option.mode)}
+            className={CONTROL_BUTTON}
+          >
+            <LayoutGlyph mode={option.mode} />
+          </button>
+          <Tooltip label={option.tip} placement="top" />
+        </div>
+      ))}
     </div>
   );
 }

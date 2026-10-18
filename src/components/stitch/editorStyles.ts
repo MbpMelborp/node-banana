@@ -1,4 +1,3 @@
-import { inputClass } from "@/components/ui/Controls";
 import { cn } from "@/components/nodes/ui/cn";
 import { AUDIO_ROW_EXPANDED_PX, AUDIO_ROW_PX, AUDIO_ROWS_CAP, AUDIO_STRIP_PX } from "@/lib/stitch/audioLayout";
 
@@ -11,17 +10,20 @@ import { AUDIO_ROW_EXPANDED_PX, AUDIO_ROW_PX, AUDIO_ROWS_CAP, AUDIO_STRIP_PX } f
 export const EDITOR_CHIP =
   "rounded-md squircle border border-white/10 bg-neutral-950 shadow-[0_4px_12px_rgba(0,0,0,0.5)] px-2 py-1 text-[10px] font-medium leading-3";
 
-/** The rail's action buttons: 32px, a faint fill and a hairline border. */
-export const RAIL_BUTTON =
-  "h-8 w-full flex items-center gap-2 px-2.5 rounded-lg border border-white/10 bg-white/6 text-xs font-medium text-neutral-200 text-left transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/6";
+/**
+ * The rail's actions (Split at playhead, Reset trim, Remove clip): a text row with no box, its icon in ink-3 at the
+ * content's left edge (the row's padding hangs into the rail's), the key shown at the right on hover or focus.
+ */
+export const RAIL_ACTION =
+  "group/action -mx-2 h-9 w-[calc(100%+16px)] shrink-0 flex items-center gap-2.5 px-2 rounded-md text-left text-[13px] text-neutral-300 transition-colors hover:bg-white/4 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-neutral-300";
 
-/** 28px icon buttons in the transport and track headers. */
+/** 28px icon buttons in the track headers, the library pane and the home. */
 export const ICON_BUTTON =
-  "h-7 w-7 inline-flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
+  "h-7 w-7 inline-flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
 
-/** Text ghosts: Snap, Crossfade and Fit in the transport, and the track headers' small text buttons. */
+/** Text ghosts: the track headers' small text buttons. */
 export const TEXT_GHOST =
-  "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-md text-xs text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-neutral-700/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:text-neutral-600 disabled:hover:bg-transparent";
+  "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-md text-xs text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-neutral-700/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
 
 /** The headers' height (the view's and the dialog's h-14): what sits over the stage in the editor's column. */
 export const HEADER_PX = 56;
@@ -45,19 +47,23 @@ export const HEADER_OUTLINE =
 /** A header's title: the edit's name, or "Edit video" in the dialog. */
 export const HEADER_TITLE = "font-display text-[15px] font-medium leading-[18px] tracking-[-0.02em] text-neutral-100";
 
-/** A pressed toggle (Snap, Sound off). */
-export const TOGGLE_ON = "bg-white/10 text-neutral-100";
-
-/** The In and Out wells. */
-export const TIMECODE_WELL = cn(
-  inputClass,
-  "h-7 w-[88px] px-2 border-0 bg-editor-well shadow-well font-mono text-xs tabular-nums text-right text-neutral-100 focus-visible:ring-1 focus-visible:ring-neutral-500",
+/**
+ * The control row's 32px icon buttons under the video: quiet, and white on the pressed fill while on (Snap, Mute all,
+ * Crossfade, Track | Stacked).
+ */
+export const CONTROL_BUTTON = cn(
+  HEADER_ICON_BUTTON,
+  "aria-pressed:bg-edit-pressed aria-pressed:text-neutral-100 aria-disabled:cursor-progress",
 );
 
-/** The Overlap well: the timecode well's type, 64px wide ("1.0 s"). */
-export const SECONDS_WELL = cn(TIMECODE_WELL, "w-16");
+/** The rail's fields (Start, In, Out): 32px on the field ground, 13px tabular figures, as wide as their column. */
+export const TIMECODE_WELL =
+  "h-8 w-full min-w-0 rounded-md border-0 bg-edit-field px-2.5 text-[13px] tabular-nums text-neutral-200 outline-none transition-colors placeholder:text-neutral-500 focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-50";
 
-/** Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 56, transport 44, rail 280) are its Tailwind classes. */
+/**
+ * Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 56, rail
+ * 280) are its Tailwind classes; the stage's room and its control row are EditorStage's.
+ */
 export const GEOMETRY = {
   /** One video row (Track's clips, or up to two of Stacked's), one audio row and the audio strip. */
   timeline: 224,
@@ -96,8 +102,11 @@ export const GEOMETRY = {
   audioStrip: AUDIO_STRIP_PX,
   /** Audio rows shown before the rest scroll. */
   audioRowsCap: AUDIO_ROWS_CAP,
-  /** The stage keeps at least this much height: the timeline gives up room below it first. */
-  stageFloor: 300,
+  /**
+   * The stage keeps at least this much height, its padding and the control row under the video included (a 240px
+   * frame): the timeline gives up room below it first.
+   */
+  stageFloor: 344,
   /** Stacked's rows view is never capped below one and a half rows, so it still reads as scrollable. */
   stackRowsFloor: 78,
   /** An audio row header's controls sit this far above the row's bottom, in either height. */

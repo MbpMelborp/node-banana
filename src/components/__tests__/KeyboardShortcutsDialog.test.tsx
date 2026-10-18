@@ -81,6 +81,35 @@ describe("KeyboardShortcutsDialog", () => {
     useAssetStore.setState({ appView: "canvas" });
   });
 
+  it("lists the editor's zoom keys and mouse modifiers, which no rail or menu shows", () => {
+    useAssetStore.setState({ appView: "edit" });
+    useStitchEditorStore.getState().openEdit({ editId: "ed0000000000a1", draft: emptyDraft() });
+    render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
+    for (const row of [
+      "Zoom the timeline out / in",
+      "Fit the timeline",
+      "Nudge the selected clips a frame",
+      "Select a range of clips",
+      "Move or trim without snapping",
+      "Move a whole volume line",
+    ]) {
+      expect(screen.getByText(row)).toBeInTheDocument();
+    }
+    useStitchEditorStore.getState().close();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+
+  it("puts the editor's keys first over the Edit Video node's dialog, where ⌘S saves and keeps it open", () => {
+    useStitchEditorStore.getState().open({ nodeId: "stitch", draft: emptyDraft(), canvasGeneration: 1 });
+    render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(headings.slice(0, 2)).toEqual(["Edit video", "On the canvas"]);
+    expect(screen.getByText("Save, keeping the editor open")).toBeInTheDocument();
+    expect(screen.queryByText("Save the edit")).toBeNull();
+    expect(screen.getByText("Select a range of clips")).toBeInTheDocument();
+    useStitchEditorStore.getState().close();
+  });
+
   it("lists no edit keys on the Edit video home screen, where none of them works", () => {
     useAssetStore.setState({ appView: "edit" });
     render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);

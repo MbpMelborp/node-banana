@@ -92,7 +92,7 @@ describe("useStitchEditorMedia's audio clips", () => {
       src: "blob:m",
       fileName: "score.mp3",
       sourceLabel: kind,
-      railSubtitle: `${kind} · 20.00 s`,
+      railSource: { kind, detail: null },
       duration: 20,
       recordDuration: null,
       status: "ready",
@@ -103,13 +103,13 @@ describe("useStitchEditorMedia's audio clips", () => {
       src: `/api/assets/${TONE}/file`,
       fileName: "tone1320.m4a",
       sourceLabel: "Library",
-      railSubtitle: "Library · 3.02 s",
+      railSource: { kind: "Library", detail: null },
       duration: 3.02,
       recordDuration: 3,
       missing: false,
     });
     // A file that cannot be decoded keeps its record's length for drawing
-    expect(views.get("r")).toMatchObject({ duration: null, recordDuration: 8, railSubtitle: "Library · 8.00 s" });
+    expect(views.get("r")).toMatchObject({ duration: null, recordDuration: 8, railSource: { kind: "Library", detail: null } });
     expect(views.get("g")).toMatchObject({ missing: true, duration: null });
   });
 
@@ -177,13 +177,13 @@ describe("useStitchEditorMedia's snapshot fallback (an edit project's file)", ()
     await waitFor(() => expect(result.current.byClip.get("v")?.missing).toBe(true));
     expect(result.current.byClip.get("v")).toMatchObject({
       sourceLabel: "sunset.mp4",
-      railSubtitle: "Not in the library · sunset.mp4",
+      railSource: { kind: "Not in the library", detail: "sunset.mp4" },
       duration: null,
     });
     await waitFor(() => expect(result.current.audioByClip.get("w")?.missing).toBe(true));
     expect(result.current.audioByClip.get("w")).toMatchObject({
       fileName: "waves.m4a",
-      railSubtitle: "Not in the library · waves.m4a",
+      railSource: { kind: "Not in the library", detail: "waves.m4a" },
     });
   });
 
@@ -191,7 +191,7 @@ describe("useStitchEditorMedia's snapshot fallback (an edit project's file)", ()
     openEdit();
     const { result } = renderHook(() => useStitchEditorMedia());
     await waitFor(() => expect(result.current.byClip.get("v")?.missing).toBe(true));
-    expect(result.current.byClip.get("v")).toMatchObject({ sourceLabel: "Library", railSubtitle: "Library" });
+    expect(result.current.byClip.get("v")).toMatchObject({ sourceLabel: "Library", railSource: { kind: "Library", detail: null } });
     expect(result.current.audioByClip.get("w")?.fileName).toBe("Audio");
   });
 });

@@ -70,6 +70,27 @@ describe("editorKeyAction", () => {
     expect(editorKeyAction(event)).toBe(action);
   });
 
+  it.each([
+    [key("-"), "zoomOut"],
+    [key("="), "zoomIn"],
+    // + is ⇧= on many keyboards, and its own key on others and the number pad
+    [key("+", { shiftKey: true }), "zoomIn"],
+    [key("+"), "zoomIn"],
+    [key("Z", { shiftKey: true }), "zoomFit"],
+  ] as const)("the timeline's zoom: %o → %s", (event, action) => {
+    expect(editorKeyAction(event)).toBe(action);
+  });
+
+  it("leaves ⌘− and ⌘= to the browser, and ⌥ or ⌘ with ⇧Z alone", () => {
+    expect(editorKeyAction(key("-", { metaKey: true }))).toBeNull();
+    expect(editorKeyAction(key("=", { ctrlKey: true }))).toBeNull();
+    expect(editorKeyAction(key("Z", { shiftKey: true, altKey: true }))).toBeNull();
+    expect(editorKeyAction(key("Z", { shiftKey: true, metaKey: true }))).toBe("redo");
+    // A held − or = keeps zooming; a held ⇧Z fits once
+    expect(NO_REPEAT.has("zoomIn")).toBe(false);
+    expect(NO_REPEAT.has("zoomFit")).toBe(true);
+  });
+
   it("leaves [ and ] with ⌘ or a plain Ctrl to the browser, and ⇧⌥↑ ⇧⌥↓ alone", () => {
     expect(editorKeyAction(key("[", { metaKey: true }))).toBeNull();
     expect(editorKeyAction(key("]", { ctrlKey: true }))).toBeNull();
@@ -474,6 +495,29 @@ describe("useStitchEditorKeys's options (the Edit video view)", () => {
     store().setCancelGesture(() => {});
     dispatch("keydown", "e", root);
     expect(onOtherKey).not.toHaveBeenCalled();
+  });
+
+  it("zooms the timeline it is given with − and =, and fits it with ⇧Z, keeping them from the canvas", () => {
+    const zoom = { zoomIn: vi.fn(), zoomOut: vi.fn(), fit: vi.fn() };
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}, { zoom }));
+    const behind = vi.fn();
+    window.addEventListener("keydown", behind);
+    try {
+      expect(dispatch("keydown", "=", root).defaultPrevented).toBe(true);
+      dispatch("keydown", "-", root);
+      dispatch("keydown", "Z", root, { shiftKey: true });
+      expect([zoom.zoomIn, zoom.zoomOut, zoom.fit].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+      expect(behind).not.toHaveBeenCalled();
+      // Not while typing (a minus in a field), nor during a drag
+      const field = document.createElement("input");
+      root.appendChild(field);
+      dispatch("keydown", "-", field);
+      store().setCancelGesture(() => {});
+      dispatch("keydown", "=", root);
+      expect([zoom.zoomIn, zoom.zoomOut].map((f) => f.mock.calls.length)).toEqual([1, 1]);
+    } finally {
+      window.removeEventListener("keydown", behind);
+    }
   });
 
   it("without options, behaves as the dialog always has: E is shielded, not handled", () => {

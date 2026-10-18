@@ -15,7 +15,6 @@ import { assetMediaKey, mediaKeyOf, retryMediaInfo } from "@/lib/stitch/mediaInf
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { edgeClipSourcesFromTuple, edgeClipSourceTuple, stitchMusicEdge, stitchMusicMedia } from "@/lib/stitch/sources";
 import { sourceKey, type SourceKey } from "@/lib/stitch/timeline";
-import { formatSeconds } from "@/lib/stitch/timecode";
 import { getWaveform, requestWaveform, subscribeWaveform } from "@/lib/stitch/waveformCache";
 import type { AudioInputNodeData, StitchAudioSource, WorkflowEdge, WorkflowNode } from "@/types";
 
@@ -45,8 +44,8 @@ export interface ClipMediaView {
    * with, else what made it ("Video edit"), else "Library".
    */
   sourceLabel: string;
-  /** "Generate video · Veo 3.1 · 5.00 s"; "Library · Veo 3.1 · 5.00 s" for a library clip. */
-  railSubtitle: string;
+  /** Where it comes from, for the rail's line ("Generate video · Veo 3.1", "Library · Veo 3.1"); see RailSource. */
+  railSource: RailSource;
   /** A library clip the library no longer has (or whose file is gone): an error slot that counts 0 s. */
   missing: boolean;
 }
@@ -64,8 +63,8 @@ export interface AudioClipView {
   fileName: string;
   /** Label bar: the music's node kind ("Audio Input"); a library clip's model, else what made it, else "Library". */
   sourceLabel: string;
-  /** "Audio Input · 20.00 s"; "Library · Kling 3 · 3.00 s". */
-  railSubtitle: string;
+  /** Where it comes from, for the rail's line ("Audio Input", "Library · Kling 3"); see RailSource. */
+  railSource: RailSource;
   /** The decoded file's length (the encoder's decode); null until then, and for a file that cannot be read. */
   duration: number | null;
   /** The library record's length, used for drawing and overlap checks until the decode; null when it has none. */
@@ -76,10 +75,23 @@ export interface AudioClipView {
   missing: boolean;
 }
 
+/**
+ * Where a clip comes from, as the rail's line names it before the clip's length: its kind ("Generate video",
+ * "Library", "Not in the library"), then what made it (the model), or a lost clip's file name; null when that would
+ * only repeat the kind.
+ */
+export interface RailSource {
+  kind: string;
+  detail: string | null;
+}
+
+/** A library clip's kind. The Edit video view's rail leaves it out, since every clip of an edit is the library's. */
+export const LIBRARY_SOURCE = "Library";
+
 const NO_FRAMES: ReadonlyArray<string | null> = [];
 const EMPTY: string[] = [];
 const LABEL_WIDTH = 3;
-const LIBRARY = "Library";
+const LIBRARY = LIBRARY_SOURCE;
 
 /** A library clip's source label, from its record: the model, else the operation, else "Library". */
 function assetSourceLabel(asset: AssetView | null | undefined): string {
@@ -254,11 +266,7 @@ export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions
         frames: info?.frames ?? NO_FRAMES,
         sourceNodeId: edge?.sourceNodeId ?? null,
         sourceLabel: lost ? lost.name : (model ?? kind),
-        railSubtitle: lost
-          ? `${NOT_IN_LIBRARY} · ${lost.name}`
-          : [kind, model !== kind ? model : null, duration !== null ? formatSeconds(duration) : null]
-              .filter(Boolean)
-              .join(" · "),
+        railSource: lost ? { kind: NOT_IN_LIBRARY, detail: lost.name } : { kind, detail: model !== kind ? model : null },
         missing,
       });
     }
@@ -321,7 +329,6 @@ export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions
         clip.source.kind === "asset" && (asset === null || (asset?.missing === true && waveform?.status !== "ready"));
       const duration = waveform?.status === "ready" && !missing ? waveform.duration : null;
       const recordDuration = typeof asset?.durationSec === "number" ? asset.durationSec : null;
-      const length = duration ?? recordDuration;
       const kind = clip.source.kind === "music" ? musicKind || "Audio" : LIBRARY;
       const model = clip.source.kind === "asset" ? assetSourceLabel(asset) : null;
       const lost = missing && clip.source.kind === "asset" ? assetFallback?.(clip.source.assetId) : undefined;
@@ -333,11 +340,7 @@ export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions
         mediaKey,
         fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || lost?.name || "Audio",
         sourceLabel: lost ? lost.name : (model ?? kind),
-        railSubtitle: lost
-          ? `${NOT_IN_LIBRARY} · ${lost.name}`
-          : [kind, model !== kind ? model : null, length !== null ? formatSeconds(length) : null]
-              .filter(Boolean)
-              .join(" · "),
+        railSource: lost ? { kind: NOT_IN_LIBRARY, detail: lost.name } : { kind, detail: model !== kind ? model : null },
         duration,
         recordDuration,
         status: !src ? "empty" : (waveform?.status ?? "loading"),

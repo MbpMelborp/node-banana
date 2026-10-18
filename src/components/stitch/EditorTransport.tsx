@@ -1,17 +1,20 @@
 "use client";
 
-import type { CSSProperties, MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Blend, Magnet, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
-import { MenuDivider } from "@/components/ui/Menu";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
+import type { ClipSpan } from "@/lib/stitch/timeline";
 import { goToEnd, goToStart, setCrossfade, togglePlay } from "./editorActions";
 import { isTypingTarget } from "./editorKeys";
-import { ICON_BUTTON, TEXT_GHOST, TOGGLE_ON, EDITOR_PANEL_SELECTOR } from "./editorStyles";
+import { CONTROL_BUTTON, EDITOR_PANEL_SELECTOR } from "./editorStyles";
+import { FrameToCanvasButton } from "./FrameToCanvasButton";
 import { LayoutToggle } from "./LayoutToggle";
 import type { TimelineZoom } from "./timeline/useTimelineZoom";
+import type { ClipMediaView } from "./useStitchEditorMedia";
 
 /**
  * A click must not take focus from the panel, or Space would press the button instead of playing. A timecode
@@ -28,22 +31,86 @@ const keepFocus = (event: MouseEvent<HTMLElement>) => {
 };
 
 /**
- * The 44px transport under the stage: start, play, end, the timecode, then
- * Snap, preview Sound, Crossfade (Stacked only), the timeline's zoom (out,
- * the slider, in, Fit) and Track | Stacked. Inert while the editor has no
- * clips.
+ * Where the row drops Fit, then − and +, as it narrows (the row is its own container): below these widths the
+ * right-hand group no longer fits beside the time with Play still centred under the video. Twice the group's width
+ * plus the middle (116) and the two 12px gaps: Track's group is 277px (five 32px buttons, the toggle's 66 with 4px
+ * either side, Fit's 31, 2px between), 244 without Fit, 176 without − and +; Stacked's is wider by Crossfade (34).
+ * Their keys (− = and ⇧Z) still zoom. Literal classes, so Tailwind sees them.
+ */
+const NARROW = {
+  track: { fit: "@max-[695px]:hidden", zoom: "@max-[628px]:hidden" },
+  stacked: { fit: "@max-[763px]:hidden", zoom: "@max-[696px]:hidden" },
+} as const;
+
+/** One of the row's icon buttons, with its hover label above it (into the stage). */
+function ControlButton({
+  label,
+  tip = label,
+  shortcut,
+  keyshortcuts,
+  pressed,
+  disabled,
+  className,
+  onClick,
+  children,
+}: {
+  label: string;
+  tip?: string;
+  /** The key as the hover label draws it. */
+  shortcut?: string;
+  /** The key as aria-keyshortcuts names it, when the button has one of its own. */
+  keyshortcuts?: string;
+  pressed?: boolean;
+  disabled?: boolean;
+  /** On the wrapper, which holds the button and its label. */
+  className?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("group relative flex", className)}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={pressed}
+        aria-keyshortcuts={keyshortcuts}
+        disabled={disabled}
+        className={CONTROL_BUTTON}
+        onMouseDown={keepFocus}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+      <Tooltip label={tip} shortcut={shortcut} placement="top" />
+    </div>
+  );
+}
+
+/**
+ * The control row under the video, as wide as the video (EditorStage sizes
+ * it): the time at the left (where the playhead is, then the length); Go to
+ * start, Play and Go to end in the middle; at the right Frame to canvas, Mute
+ * all (the preview's sound), Crossfade (Stacked only), Track | Stacked, Snap,
+ * the timeline's zoom (−, +) and Fit. Crossfade comes left of the toggle, so a
+ * switch of layout never moves the toggle under the pointer. Narrow, the row
+ * drops Fit, then − and +; their keys (− = and ⇧Z), ⌘ wheel and pinch still
+ * zoom. Inert while the editor has no clips.
  */
 export function EditorTransport({
   total,
   empty,
   zoom,
-  narrowHidesZoom = false,
+  media,
+  spans,
+  frameSize,
 }: {
   total: number;
   empty: boolean;
-  zoom: Pick<TimelineZoom, "slider" | "setSlider" | "zoomIn" | "zoomOut" | "fit" | "pxPerSec">;
-  /** Below a 760px row, drop the slider and keep −, + and Fit (the Edit video view, beside its library). */
-  narrowHidesZoom?: boolean;
+  zoom: Pick<TimelineZoom, "zoomIn" | "zoomOut" | "fit" | "pxPerSec">;
+  /** Frame to canvas's: the clips' media, their spans and the sequence's frame size. */
+  media: ReadonlyMap<string, ClipMediaView>;
+  spans: readonly ClipSpan[];
+  frameSize: { width: number; height: number } | null;
 }) {
   const playing = useStitchEditorStore((s) => s.playing);
   const playhead = useStitchEditorStore((s) => s.playhead);
@@ -53,114 +120,93 @@ export function EditorTransport({
   const setSoundOn = useStitchEditorStore((s) => s.setSoundOn);
   const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
   const crossfade = useStitchEditorStore((s) => s.draft?.sequenceLayout.crossfade ?? false);
+  const narrow = stacked ? NARROW.stacked : NARROW.track;
 
   return (
-    <div
-      className={cn(
-        "h-11 shrink-0 flex items-center gap-1 px-3 border-t border-chrome-border/50 bg-editor-chrome",
-        narrowHidesZoom && "@container",
-        empty && "opacity-50 pointer-events-none",
-      )}
-      inert={empty}
-    >
-      <button type="button" aria-label="Go to start" className={ICON_BUTTON} onMouseDown={keepFocus} onClick={goToStart}>
-        <SkipBack size={14} strokeWidth={2} fill="currentColor" />
-      </button>
-      <button
-        type="button"
-        aria-label={playing ? "Pause" : "Play"}
-        className="h-7 w-7 inline-flex items-center justify-center rounded-md bg-neutral-200 text-neutral-900 transition-colors hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-        onMouseDown={keepFocus}
-        onClick={togglePlay}
-      >
-        {playing ? (
-          <Pause size={14} strokeWidth={0} fill="currentColor" />
-        ) : (
-          <Play size={14} strokeWidth={0} fill="currentColor" />
-        )}
-      </button>
-      <button type="button" aria-label="Go to end" className={ICON_BUTTON} onMouseDown={keepFocus} onClick={goToEnd}>
-        <SkipForward size={14} strokeWidth={2} fill="currentColor" />
-      </button>
-      <span className="ml-2.5 font-mono tabular-nums text-[13px] text-neutral-100" data-testid="stitch-playhead">
-        {formatTimecode(Math.min(playhead, total))}
-      </span>
-      <span className="font-mono tabular-nums text-xs text-neutral-500">{`/ ${formatTimecode(total)}`}</span>
+    <div className={cn("@container w-full", empty && "pointer-events-none opacity-50")} inert={empty}>
+      <div data-testid="stitch-controls" className="grid h-12 grid-cols-[1fr_auto_1fr] items-center gap-x-3">
+        <div className="min-w-0 truncate whitespace-nowrap text-[13px] tabular-nums">
+          <span className="text-neutral-100" data-testid="stitch-playhead">
+            {formatTimecode(Math.min(playhead, total))}
+          </span>
+          {/* A row narrower than its controls (a small window) keeps the playhead's time and drops the length */}
+          <span className="text-ink-3 @max-[500px]:hidden">{` / ${formatTimecode(total)}`}</span>
+        </div>
 
-      <div className="flex-1" />
+        <div className="flex items-center gap-2">
+          <ControlButton label="Go to start" onClick={goToStart}>
+            <SkipBack size={16} strokeWidth={1.5} />
+          </ControlButton>
+          <div className="group relative flex">
+            <button
+              type="button"
+              aria-label={playing ? "Pause" : "Play"}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-neutral-100 text-neutral-950 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane"
+              onMouseDown={keepFocus}
+              onClick={togglePlay}
+            >
+              {playing ? (
+                <Pause size={16} strokeWidth={1.5} fill="currentColor" />
+              ) : (
+                <Play size={16} strokeWidth={1.5} fill="currentColor" className="translate-x-px" />
+              )}
+            </button>
+            <Tooltip label={playing ? "Pause" : "Play"} shortcut="Space" placement="top" />
+          </div>
+          <ControlButton label="Go to end" onClick={goToEnd}>
+            <SkipForward size={16} strokeWidth={1.5} />
+          </ControlButton>
+        </div>
 
-      <button
-        type="button"
-        aria-pressed={snap}
-        className={cn(TEXT_GHOST, snap && TOGGLE_ON)}
-        onMouseDown={keepFocus}
-        onClick={() => setSnap(!snap)}
-      >
-        <Magnet size={14} strokeWidth={1.75} />
-        Snap
-      </button>
-      <button
-        type="button"
-        aria-label="Sound"
-        aria-pressed={soundOn}
-        className={cn(ICON_BUTTON, soundOn && "text-neutral-100")}
-        onMouseDown={keepFocus}
-        onClick={() => setSoundOn(!soundOn)}
-      >
-        {soundOn ? <Volume2 size={16} strokeWidth={1.75} /> : <VolumeX size={16} strokeWidth={1.75} />}
-      </button>
-      {/* The row's right end is fixed, so showing this moves Snap and Sound left, never the zoom or the toggle */}
-      {stacked && (
-        <button
-          type="button"
-          aria-pressed={crossfade}
-          className={cn(TEXT_GHOST, crossfade && TOGGLE_ON)}
-          onMouseDown={keepFocus}
-          onClick={() => setCrossfade(!crossfade)}
-        >
-          <Blend size={14} strokeWidth={1.75} />
-          Crossfade
-        </button>
-      )}
-      <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
-      {/* -mx-[7px]: each takes its 14px icon's room in the row, as drawn, and keeps the 28px hit area. Without the
-          slider between them the two would overlap, so there they take their full width */}
-      <button
-        type="button"
-        aria-label="Zoom out"
-        className={cn(ICON_BUTTON, "-mx-[7px]", narrowHidesZoom && "@max-[760px]:mx-0")}
-        disabled={zoom.pxPerSec <= MIN_PX_PER_SEC}
-        onMouseDown={keepFocus}
-        onClick={zoom.zoomOut}
-      >
-        <ZoomOut size={14} strokeWidth={1.75} className="text-neutral-500" />
-      </button>
-      <input
-        type="range"
-        aria-label="Timeline zoom"
-        className={cn("range-ink mx-1.5 w-24", narrowHidesZoom && "@max-[760px]:hidden")}
-        min={0}
-        max={100}
-        step={0.5}
-        value={zoom.slider}
-        onChange={(event) => zoom.setSlider(Number(event.target.value))}
-        style={{ "--p": `${zoom.slider}%` } as CSSProperties}
-      />
-      <button
-        type="button"
-        aria-label="Zoom in"
-        className={cn(ICON_BUTTON, "-mx-[7px]", narrowHidesZoom && "@max-[760px]:mx-0")}
-        disabled={zoom.pxPerSec >= MAX_PX_PER_SEC}
-        onMouseDown={keepFocus}
-        onClick={zoom.zoomIn}
-      >
-        <ZoomIn size={14} strokeWidth={1.75} className="text-neutral-500" />
-      </button>
-      <button type="button" className={cn(TEXT_GHOST, "ml-1")} onMouseDown={keepFocus} onClick={zoom.fit}>
-        Fit
-      </button>
-      <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
-      <LayoutToggle />
+        {/* Never narrower than its buttons: below that the middle gives way, not the buttons */}
+        <div className="flex items-center justify-end gap-0.5">
+          <FrameToCanvasButton media={media} spans={spans} frameSize={frameSize} keepFocus={keepFocus} />
+          <ControlButton label="Mute all" pressed={!soundOn} onClick={() => setSoundOn(!soundOn)}>
+            {soundOn ? <Volume2 size={16} strokeWidth={1.5} /> : <VolumeX size={16} strokeWidth={1.5} />}
+          </ControlButton>
+          {stacked && (
+            <ControlButton label="Crossfade" pressed={crossfade} onClick={() => setCrossfade(!crossfade)}>
+              <Blend size={16} strokeWidth={1.5} />
+            </ControlButton>
+          )}
+          <LayoutToggle className="mx-1" />
+          <ControlButton label="Snap" tip="Snap · drag freely with" shortcut="⇧" pressed={snap} onClick={() => setSnap(!snap)}>
+            <Magnet size={16} strokeWidth={1.5} />
+          </ControlButton>
+          <ControlButton
+            label="Zoom out"
+            shortcut="−"
+            keyshortcuts="-"
+            className={narrow.zoom}
+            disabled={zoom.pxPerSec <= MIN_PX_PER_SEC}
+            onClick={zoom.zoomOut}
+          >
+            <ZoomOut size={16} strokeWidth={1.5} />
+          </ControlButton>
+          <ControlButton
+            label="Zoom in"
+            shortcut="="
+            keyshortcuts="="
+            className={narrow.zoom}
+            disabled={zoom.pxPerSec >= MAX_PX_PER_SEC}
+            onClick={zoom.zoomIn}
+          >
+            <ZoomIn size={16} strokeWidth={1.5} />
+          </ControlButton>
+          <div className={cn("group relative flex", narrow.fit)}>
+            <button
+              type="button"
+              aria-keyshortcuts="Shift+Z"
+              className="h-8 shrink-0 rounded-lg px-2 text-[13px] text-ink-3 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+              onMouseDown={keepFocus}
+              onClick={zoom.fit}
+            >
+              Fit
+            </button>
+            <Tooltip label="Fit the timeline" shortcut="⇧Z" placement="top" align="end" />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

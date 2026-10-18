@@ -10,19 +10,13 @@ import { Timeline } from "./timeline/Timeline";
 import type { EditorComposition } from "./useEditorComposition";
 
 /**
- * The editor's body under its header: the stage and transport, the rail beside
- * them, and the timeline across the bottom. The node's dialog and the Edit
- * video view each lay it out in their own column, with the composition they
- * read once for it and their header.
+ * The editor's body under its header: the stage with its control row under
+ * the video, the rail beside them, both on the pane colour, and the timeline
+ * across the bottom. The node's dialog and the Edit video view each lay it
+ * out in their own column, with the composition they read once for it and
+ * their header.
  */
-export function EditorWorkspace({
-  composition,
-  narrowHidesZoom = false,
-}: {
-  composition: EditorComposition;
-  /** The transport drops its zoom slider when its column is narrow (the Edit video view, beside its library). */
-  narrowHidesZoom?: boolean;
-}) {
+export function EditorWorkspace({ composition }: { composition: EditorComposition }) {
   const { byClip, audioByClip, spans, total, empty, stacked, zoom } = composition;
 
   // An edit that pins a lined-up stack waits for these (clipsLoading)
@@ -34,21 +28,27 @@ export function EditorWorkspace({
 
   return (
     <>
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <EditorStage
+      <div className="flex min-h-0 flex-1 bg-pane">
+        <EditorStage
+          empty={empty}
+          aspect={composition.aspect}
+          layers={composition.videoLayers}
+          stacked={stacked}
+          activeSrc={composition.activeSrc}
+          registerVideo={composition.registerVideo}
+          audioLayers={composition.audioLayers}
+          registerAudio={composition.registerAudio}
+        >
+          <EditorTransport
+            total={total}
             empty={empty}
-            aspect={composition.aspect}
-            layers={composition.videoLayers}
-            stacked={stacked}
-            activeSrc={composition.activeSrc}
-            registerVideo={composition.registerVideo}
-            audioLayers={composition.audioLayers}
-            registerAudio={composition.registerAudio}
+            zoom={zoom}
+            media={byClip}
+            spans={spans}
+            frameSize={composition.frameSize}
           />
-          <EditorTransport total={total} empty={empty} zoom={zoom} narrowHidesZoom={narrowHidesZoom} />
-        </div>
-        <EditorRail media={byClip} audio={audioByClip} spans={spans} frameSize={composition.frameSize} />
+        </EditorStage>
+        <EditorRail media={byClip} audio={audioByClip} />
       </div>
       <Timeline
         spans={spans}

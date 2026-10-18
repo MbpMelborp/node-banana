@@ -8,8 +8,6 @@ import {
   buildTimeAxis,
   DEFAULT_PX_PER_SEC,
   fitPxPerSec,
-  sliderToZoom,
-  zoomToSlider,
 } from "../timeAxis";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
@@ -99,23 +97,6 @@ describe("fitPxPerSec", () => {
 
   it("takes the lane's own origin, slot width and trailing room", () => {
     expect(fitPxPerSec(10, 1, 1000, { origin: 24, slotPx: 100, trailingPx: 40 })).toBeCloseTo((1000 - 24 - 40 - 100) / 10);
-  });
-});
-
-describe("zoom slider", () => {
-  it("round-trips px/s through the 0..100 log scale", () => {
-    expect(zoomToSlider(MIN_PX_PER_SEC)).toBe(0);
-    expect(zoomToSlider(MAX_PX_PER_SEC)).toBeCloseTo(100);
-    for (const pps of [8, 20, 64, 120, 480]) expect(sliderToZoom(zoomToSlider(pps))).toBeCloseTo(pps);
-    // Equal slider steps are equal zoom factors
-    expect(sliderToZoom(50) / sliderToZoom(25)).toBeCloseTo(sliderToZoom(75) / sliderToZoom(50));
-  });
-
-  it("clamps out-of-range values", () => {
-    expect(zoomToSlider(1)).toBe(0);
-    expect(zoomToSlider(10_000)).toBeCloseTo(100);
-    expect(sliderToZoom(-5)).toBe(MIN_PX_PER_SEC);
-    expect(sliderToZoom(500)).toBeCloseTo(MAX_PX_PER_SEC);
   });
 });
 

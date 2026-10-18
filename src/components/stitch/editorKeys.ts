@@ -39,7 +39,10 @@ export type EditorKeyAction =
   | "cut"
   | "paste"
   | "duplicate"
-  | "selectAll";
+  | "selectAll"
+  | "zoomIn"
+  | "zoomOut"
+  | "zoomFit";
 
 /** Inputs that take no typing: a focused slider or switch leaves the editor's keys working. */
 const NON_TEXT_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset"]);
@@ -126,6 +129,10 @@ export function editorKeyAction(e: KeyLike): EditorKeyAction | null {
     return e.code === "KeyM" ? "toggleClipMute" : null;
   }
   if (e.key === "Backspace" || e.key === "Delete") return "remove";
+  // The timeline's zoom: − and = (or +, which some keyboards type with ⇧), and ⇧Z for Fit. ⌘− and ⌘= stay the browser's
+  if (e.key === "-") return "zoomOut";
+  if (e.key === "=" || e.key === "+") return "zoomIn";
+  if (e.shiftKey && key === "z") return "zoomFit";
   if (e.shiftKey) return null;
   switch (key) {
     case " ":
@@ -169,4 +176,5 @@ export const NO_REPEAT: ReadonlySet<EditorKeyAction> = new Set([
   "paste",
   "duplicate",
   "selectAll",
+  "zoomFit",
 ]);

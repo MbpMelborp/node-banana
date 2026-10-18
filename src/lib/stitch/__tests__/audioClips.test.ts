@@ -3,6 +3,7 @@ import type { StitchAudioClip, StitchAudioSource } from "@/types";
 import {
   addAudioAt,
   audioClipLength,
+  audioCurveShape,
   audioFadeIn,
   audioFadeOut,
   audioLengthOf,
@@ -452,6 +453,41 @@ describe("fades", () => {
     const span = audioSpans([clip], new Map())[0];
     expect(audioFadeIn(clip, span, 10)).toEqual([{ t: 1, gain: 0 }, { t: 2, gain: 1 }]);
     expect(audioFadeOut(clip, span, 10)).toEqual([]);
+  });
+
+  it("reads the curve's shapes over the part that is heard", () => {
+    // The 3 s tone at 2 s, under a 10 s loop
+    const shape = (clip: StitchAudioClip, loop = 10) => audioCurveShape(clip, audioSpans([clip], D)[0], loop);
+    const plain = tone("t", { startSec: 2 });
+    expect(shape(plain)).toEqual({ flat: true, fadeIn: false, fadeOut: false });
+    const span = audioSpans([plain], D)[0];
+    const faded = { ...plain, curve: audioFadeOut(plain, span, 10) };
+    const both = { ...faded, curve: audioFadeIn(faded, audioSpans([faded], D)[0], 10) };
+    expect(shape(both)).toEqual({ flat: false, fadeIn: true, fadeOut: true });
+    // A drawn curve that starts from silence reads as a fade in
+    expect(shape({ ...plain, curve: [{ t: 0, gain: 0 }, { t: 2, gain: 0.5 }] })).toEqual({ flat: false, fadeIn: true, fadeOut: false });
+  });
+
+  it("does not count a fade a split or a trim has cut away", () => {
+    const plain = tone("t", { startSec: 2 });
+    const inOnly = { ...plain, curve: audioFadeIn(plain, audioSpans([plain], D)[0], 10) };
+    const shape = (clip: StitchAudioClip, loop = 10) => audioCurveShape(clip, audioSpans([clip], D)[0], loop);
+    // Split 1.5 s in (past the 1 s ramp): both pieces keep the curve, but only the left one starts from silence
+    const split = splitAudioClipAt([inOnly], D, "t", 3.5, "r")!;
+    expect(shape(at(split.clips, "t")).fadeIn).toBe(true);
+    expect(shape(at(split.clips, "r"))).toEqual({ flat: false, fadeIn: false, fadeOut: false });
+    // In trimmed past the ramp: heard from 1.2 s, at full volume
+    const trimmedIn = trimAudioClip([inOnly], D, "t", { inSec: 1.2 });
+    expect(shape(at(trimmedIn, "t")).fadeIn).toBe(false);
+    // A fade out, then Out trimmed earlier: the heard part ends before the silence
+    const outOnly = { ...plain, curve: audioFadeOut(plain, audioSpans([plain], D)[0], 10) };
+    expect(shape(outOnly).fadeOut).toBe(true);
+    const trimmedOut = trimAudioClip([outOnly], D, "t", { outSec: 2.5 });
+    expect(shape(at(trimmedOut, "t")).fadeOut).toBe(false);
+    // The loop ending inside the clip cuts the heard part short too
+    expect(shape(outOnly, 4).fadeOut).toBe(false);
+    // Out trimmed back to the end: heard again
+    expect(shape(at(trimAudioClip(trimmedOut, D, "t", { outSec: null }), "t")).fadeOut).toBe(true);
   });
 
   it("follows the end with followEndFade on the legacy music clip, and leaves a clip that starts after the old end", () => {

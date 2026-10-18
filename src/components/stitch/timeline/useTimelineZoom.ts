@@ -1,23 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import {
-  buildTimeAxis,
-  fitPxPerSec,
-  MAX_PX_PER_SEC,
-  MIN_PX_PER_SEC,
-  sliderToZoom,
-  zoomToSlider,
-  type TimeAxis,
-} from "@/lib/stitch/timeAxis";
+import { buildTimeAxis, fitPxPerSec, MAX_PX_PER_SEC, MIN_PX_PER_SEC, type TimeAxis } from "@/lib/stitch/timeAxis";
 import { draftSpans } from "@/lib/stitch/draft";
 import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
 import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
 
 /**
- * The timeline's zoom, shared by the lane (which it lays out) and the
- * transport (whose slider, ± buttons and Fit drive it). The store holds the
- * chosen px/s, or null for Fit, which follows the lane's width as it is
- * observed. A zoom keeps one moment where it was on screen: the pointer's
+ * The timeline's zoom, shared by the lane (which it lays out), the control
+ * row (−, + and Fit), the editor's keys (− = and ⇧Z) and ⌘ wheel or pinch
+ * over the lanes. The store holds the chosen px/s, or null for Fit, which
+ * follows the lane's width as it is observed. A zoom keeps one moment where
+ * it was on screen: the pointer's
  * for the wheel, otherwise the playhead when it is in view, else the middle.
  * While the preview plays, it scrolls the lanes to keep the playhead in view.
  *
@@ -66,9 +59,6 @@ export interface TimelineZoom {
   axisNow(): TimeAxis;
   /** The lanes' scroll position (subscribe with useSyncExternalStore). */
   scrollPosition: ScrollPosition;
-  /** 0..100, log scale. */
-  slider: number;
-  setSlider(value: number): void;
   zoomIn(): void;
   zoomOut(): void;
   fit(): void;
@@ -239,8 +229,6 @@ export function useTimelineZoom(spans: readonly ClipSpan[], stacked = false): Ti
     laneWidth,
     axisNow,
     scrollPosition,
-    slider: zoomToSlider(pxPerSec),
-    setSlider: (value) => zoomKeepingFocus(sliderToZoom(value)),
     zoomIn: () => zoomKeepingFocus(pxPerSec * STEP),
     zoomOut: () => zoomKeepingFocus(pxPerSec / STEP),
     fit,

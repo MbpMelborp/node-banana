@@ -307,9 +307,14 @@ describe("Audio section", () => {
     fireEvent.click(within(rail()).getByRole("button", { name: "Fade out" }));
     expect(curve()).toEqual(fadeOut(fadeIn([], 9), 9));
     expect(editor().past).toHaveLength(2);
+    // Both shapes are pressed now
+    for (const name of ["Fade in", "Fade out"]) {
+      expect(within(rail()).getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+    }
     fireEvent.click(within(rail()).getByRole("button", { name: "Flat" }));
     expect(curve()).toEqual([]);
-    expect(within(rail()).getByRole("button", { name: "Flat" })).toBeDisabled();
+    expect(within(rail()).getByRole("button", { name: "Flat" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(rail()).getByRole("button", { name: "Fade in" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("mutes the music with M when no audio clip is selected, and from its row's header", () => {

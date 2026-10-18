@@ -13,31 +13,50 @@ placed anywhere). What the editor shows is what Render encodes.
 It opens from **Expand** in the node's floating header (beside Run and the
 menu) or from **Open editor** on the card, beside Render. It is a
 near-full-screen `Dialog`, 24 px from every edge of the window like the
-annotation editor (so nothing in it sits in the desktop app's drag region),
-with its own darker chrome (the `editor-*` tokens in `globals.css`):
+annotation editor (so nothing in it sits in the desktop app's drag region).
+Its header, stage and rail sit on the pane colour, as in the Edit video view,
+with hairlines (`edit-line`) between regions; the timeline keeps its own
+ground (the `editor-*` and `edit-*` tokens in `globals.css`):
 
 - **Header**: "Edit video"; Undo, Redo and the ⋯ menu, which holds
   **Loop**'s 1×, 2× and 3× (radios in the menu itself, off with no clips)
   and, in a muted last line, "N clips · W × H · F fps" (the frame rate only
   when the clips agree); then Cancel, Save and Done.
-  The transport shows the length (in Stacked it runs to the end of the
+  The control row shows the length (in Stacked it runs to the end of the
   clip that ends last).
-- **Stage**: the sequence previewed at the playhead, letterboxed. In
-  Stacked it blends or covers clips where they overlap, by row, and shows
-  black in a gap. While you drag a clip, the preview keeps showing the
-  clips where they were; it updates when you let go.
-- **Transport**: go to start, play, go to end, the timecode, Snap, Sound,
-  Crossfade (in Stacked), the zoom slider, Fit and Track | Stacked.
-- **Rail**: the selected clip's name and source, in Stacked its Start (where
-  it starts on the timeline), Trim (In, Out, Length),
-  Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
-  node, Remove clip; with an audio clip selected, its Start, Trim,
-  Sound and the curve's quick buttons (Fade in, Fade out, Flat). With several clips
-  selected the rail shows how many, and what applies to all of them: Clip
-  audio (On or Off, with neither pressed while some are muted and some
-  not), Split at playhead, Reset trim and Remove. At the foot of the
-  rail, whatever is selected, sits **Frame to canvas** (see "Frame to
-  canvas").
+- **Stage**: the sequence previewed at the playhead, on black in a frame
+  with 8 px corners, fitted to the output's aspect and centred with its
+  control row under it. In Stacked it blends or covers clips where they
+  overlap, by row, and shows black in a gap. While you drag a clip, the
+  preview keeps showing the clips where they were; it updates when you let
+  go. With no clips the frame is empty and says how to add some.
+- **Control row**, under the video and as wide as it (never narrower than
+  576 px, for a portrait clip): at the left the playhead's time and the
+  length; in the middle Go to start, Play (a white circle) and Go to end;
+  at the right Frame to canvas (see "Frame to canvas"), Mute all (the
+  preview's sound), Crossfade (in Stacked), Track | Stacked, Snap, Zoom
+  out, Zoom in and Fit. There is no zoom slider: − and + (or the keys − and
+  =), Fit (⇧Z), and ⌘ wheel or pinch over the timeline zoom it. Track and
+  Stacked are two of the row's icons, the pressed one filled as Snap is. The
+  icons say what they are, and their keys, on hover. Inert while there are no
+  clips.
+- **Rail**, 280 px beside the stage. It keeps its column whatever is
+  selected, so the video never changes size on a click; with nothing
+  selected it says "Select a clip to edit it." One clip: "Clip 2 of 4", then
+  where it comes from and how long it is ("Veo 3.1 · 5.00 s", or "4.20 s of
+  5.00 s" once trimmed); its In and Out side by side (in Stacked Start first,
+  where it starts on the timeline); its Sound switch and Volume; and at the
+  foot Split at playhead, Reset trim (only while it is trimmed), Reveal
+  source node and Remove clip. An audio clip: its row ("Audio 1"), its file,
+  source and length; Start, In and Out; Sound; and Volume's shapes, Flat,
+  Fade in and Fade out, pressed by what the curve does; then Split at
+  playhead, Reset trim and Remove clip. With several clips selected the
+  rail shows how many and which, and what applies to all of them: Sound (On
+  or Off, with neither pressed while some are muted and some not), Split at
+  playhead, Reset trim and Remove; several audio clips: Mute 2 clips (or
+  Unmute, M), Split at playhead and Remove. The keys are in hover labels: a
+  field's (I, O, and [ or ]) and an action's (shown at its right on hover or
+  focus); ? lists them all, with the mouse modifiers.
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the audio rows (each audio clip's waveform
@@ -251,7 +270,7 @@ written a timeline, that connection's clip plays its first video only.
 
 ## Stacked
 
-**Track | Stacked**, at the transport's right end after Fit, sets how the
+**Track | Stacked**, in the control row between Mute all and Snap, sets how the
 sequence is laid out. Track, the default, is the single Clips row: each
 clip starts where the one before it ends. Stacked gives each clip its own
 row, like a layer in After Effects, and a clip can start at any time. It is
@@ -264,8 +283,8 @@ discard sheet names what would be lost ("The switch to Stacked and the
 overlap will be lost.", "A trim and a moved clip will be lost.", or "lining
 up the clips" after Line up). The switch changes the timeline's height, and
 the timeline grows up from the bottom of the editor, so with three or more
-clips the transport, and the toggle in it, moves up or down when the layout
-switches.
+clips the stage, and the video and its control row (the toggle in it), can
+change size when the layout switches.
 
 **Lined up and placed.** A Stacked node starts **lined up**: no clip has a
 start of its own, and each starts a set time (Overlap) before the clip
@@ -301,7 +320,8 @@ rows above it, with the same limits as Line up (see Each join's overlap),
 so several new clips chain. It has no start of its own until the next edit
 that places, which writes the one it shows.
 
-In Stacked the transport shows **Crossfade** beside Sound, on by default.
+In Stacked the control row shows **Crossfade** after Mute all, left of the
+toggle (so the toggle stays under the pointer), on by default.
 
 **Overlap** is 1.0 s by default and has no control in the editor. It sets
 how far each clip overlaps the one above in a lined-up stack, where a new
@@ -389,7 +409,7 @@ output frame (1/60 s) earlier or later, and with ⇧ ten frames; a held
 key's repeats are one undo step. [ starts the selected clip at the
 playhead, and ] ends it there (off when the clip is longer than the time
 before the playhead). The clip menu has them too, as Start at playhead and
-End at playhead. The rail's **Start**, above Trim, is where the selected
+End at playhead. The rail's **Start**, first of its fields, is where the selected
 clip starts on the timeline (In and Out are times in the source). Type a
 time and press Enter or leave the well, or step it with ↑ and ↓ (0.1 s, ⇧
 1 s), as one undo step until the well is left. A clip starts between 0:00
@@ -399,14 +419,13 @@ box sits 64 px inside their left side. A move made in the timeline never
 does: not a drag's release (a box's body, a row header or a trim handle:
 the box lands where it was drawn), and not a
 typed Start that a press in the timeline commits (the lanes stay under the
-pointer). In Stacked the rail's key hints add
-[, ] and ⌥ ("With ← → nudge a frame, with ↑ ↓ change row"), and ⇧ reads
-"Hold to move or trim without snapping".
+pointer). Start's hover label names [ and ] (either key, a slash between),
+as In's and Out's name I and O, and Snap's says ⇧ drags without snapping.
 
 Moves keep the zoom. In Fit, a move that makes the sequence longer or
 shorter, or moves an empty clip's slot (Fit leaves room for it), keeps the
-lane's px/s, so the clip lands where it was drawn; press Fit to fit the new
-length. Trims still re-fit. A box dragged earlier that makes the sequence
+lane's px/s, so the clip lands where it was drawn; press Fit (or ⇧Z) to fit
+the new length. Trims still re-fit. A box dragged earlier that makes the sequence
 shorter leaves the lanes as wide as they were drawn until they are scrolled
 back, so lanes scrolled to their end do not jump on release.
 
@@ -597,10 +616,14 @@ time; selecting a clip never changes a row's height). On a taller row, with
 one clip selected: click the line to add a point, drag a point, double-click
 a point to remove it (the point before it is then selected, so ⌫ removes
 points, not the clip), ⌥-drag to move the whole line. Fade in, Fade out and
-Flat are in the rail for any one selected clip. The curve belongs to the
+Flat are the rail's Volume for any one selected clip: pressed by what the
+curve does over the part that is heard (Flat with no points, Fade in when it
+is silent where the clip starts being heard, Fade out when it is silent where
+it stops, both after both). The curve belongs to the
 sound: moving the clip takes it along, and trimming shows or hides part of
-it, so a fade that is trimmed away needs Fade in or Fade out again. A split
-keeps the whole curve on both pieces. Fade out ends where the clip stops
+it, so a fade that is trimmed away needs Fade in or Fade out again (and is no
+longer pressed). A split keeps the whole curve on both pieces; only the piece
+that still starts or ends in silence shows the fade pressed. Fade out ends where the clip stops
 being heard: its Out, or the end of the sequence; on a clip that plays to
 the end of its file, Fade out waits until the file's length is read.
 
@@ -616,7 +639,7 @@ Loop 2× on a 10 s sequence, a 20 s song plays its first 10 s twice instead
 of playing through once. Each restart is a cut. The header menu's Loop says
 so while it applies.
 
-**Clip sound** stays with each video clip (Clip audio and Volume in the
+**Clip sound** stays with each video clip (Sound and Volume in the
 rail), as before.
 
 **The timeline's height** depends on the number of video clips, the number
@@ -627,7 +650,8 @@ whichever layout needs more room, so in Track with three or more clips an
 empty band sits above the audio rows. Two audio rows show at once; more
 scroll with the wheel over them (over Stacked's rows, only those scroll).
 In a short window Stacked's rows give way first, then the audio rows, down
-to one; the stage keeps at least 300 px.
+to one; the stage keeps at least 344 px, its control row included (a 240 px
+video).
 
 ## Several clips
 
@@ -973,7 +997,7 @@ With no edits the list holds one entry, New edit, beside an empty frame. A
 new edit is called "Untitled edit" (then "Untitled edit 2", …).
 
 **Editing.** The open edit shows the library on the left and the same
-editor as the dialog: stage, transport, rail and timeline, with the same
+editor as the dialog: stage, control row, rail and timeline, with the same
 keys. Click a video or a sound in the library (or press Enter on it) to
 add it at the playhead: in Track after the clip under the playhead (the
 new clip is selected with the playhead at its start, so clicks in a row
@@ -1035,9 +1059,10 @@ yet); the edit menu's and a row's ⋯ show the edit's own file.
 
 ## Frame to canvas
 
-**Frame to canvas**, at the foot of the editor's right-hand rail, puts the
-picture under the playhead on the canvas as an image node. It is there
-whatever is selected.
+**Frame to canvas**, an icon button in the control row under the video,
+puts the picture under the playhead on the canvas as an image node. It is
+there whatever is selected; its hover label says why after its name when it
+is off (that reason is also its description for assistive tech).
 
 - It shows the clips the preview shows at the playhead, with the same
   source frames and blend as Render: in Stacked, the same mix of the clips
@@ -1088,6 +1113,9 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel (in the Edit video view, nothing) |
 | ⇧ while dragging a clip or an edge | No snapping (in Stacked, pressing or releasing ⇧ while the pointer rests takes effect at once) |
 | ⌥ while dragging the curve | Move the whole line |
+| − / = (or +) | Zoom the timeline out / in, as the control row's − and + do |
+| ⇧Z | Fit the timeline, as the control row's Fit does |
+| ? | The keyboard shortcuts, the editor's first (in the node's dialog too) |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
 | ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open; in the Edit video view, saves the edit |
 | E (in the Edit video view) | Back to the canvas (A: Assets, C: Chat, ?: the shortcuts) |
@@ -1138,9 +1166,13 @@ snaps its start only.
   same moment can both pass that check, and the later write wins. Listing
   edits never writes, so browsing from both is safe.
 - The Edit video view is laid out for windows 1100 px wide and more. Below
-  that the header shortens a long edit name with an ellipsis; a stage column under
-  760 px (the view at 1280 px with the library shown, or the dialog in a
-  window under about 1088 px) drops the zoom slider and keeps −, + and Fit.
+  that the header shortens a long edit name with an ellipsis. The control
+  row is as wide as the video, so a smaller video gives it less room: under
+  695 px it drops Fit, then under 628 px − and + (in Stacked, which adds
+  Crossfade, under 763 and 696 px), keeping Play centred under the video.
+  Their keys still work: − and = zoom, ⇧Z fits.
+  Under 500 px it shows the playhead's time without the length, and Play
+  moves off centre rather than the buttons overlapping.
 - A project made by name before Edit video existed and called "Edits"
   shares its folder with the edit files; both keep working.
 - **The preview is an approximation.** It switches between one `<video>` per
@@ -1207,9 +1239,10 @@ snaps its start only.
   did this.
 - The timeline grows to 303 px for four or more clips, in either layout,
   and by 72 px while an audio row is taller, taking room from the stage
-  down to 300 px; on a window about 900 px tall the rail then scrolls, more
-  with a clip selected, since Stacked's rail adds Start above Trim and six
-  key hints.
+  down to 344 px (its padding and the control row under the video included:
+  a 240 px video). The rail
+  scrolls in a short window; its actions sit at its foot while there is
+  room.
 - A clip starts at most at 10:00 (600 s); a later start, typed or dragged,
   stops there.
 - An edit that places the clips while a clip's source is still loading (a

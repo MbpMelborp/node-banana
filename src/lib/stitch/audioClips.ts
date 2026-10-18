@@ -1,7 +1,7 @@
 import { ASSET_ID_PATTERN } from "@/lib/assets/types";
 import type { StitchAudioClip, StitchAudioSource, VideoStitchNodeData, VolumePoint } from "@/types";
 import type { ClipboardAudioItem } from "./clipboard";
-import { fadeInRange, fadeOutRange, followEndFade, sameCurve, sortCurve } from "./curve";
+import { fadeInRange, fadeOutRange, followEndFade, gainAt, sameCurve, sortCurve } from "./curve";
 import { counted } from "./labels";
 import { END_EPSILON_SEC, MAX_START_SEC } from "./timeline";
 
@@ -537,6 +537,31 @@ export function audioFadeIn(clip: StitchAudioClip, span: AudioSpan, loopSec: num
 export function audioFadeOut(clip: StitchAudioClip, span: AudioSpan, loopSec: number): VolumePoint[] {
   const heard = heardRange(span, loopSec);
   return heard ? fadeOutRange(clip.curve, heard.fromSrc, heard.toSrc) : clip.curve.slice();
+}
+
+/** Below −120 dB a curve is silent, whatever float error a shifted fade's last point picked up. */
+const SILENT_GAIN = 1e-6;
+
+/**
+ * Which of the rail's quick shapes the clip's curve has over the part one loop hears: Flat with no points; Fade in when
+ * it is silent where the clip starts being heard (its In); Fade out when it is silent where the clip stops being heard
+ * (its Out, or the loop's end). So a fade a trim or a split has cut away, which is no longer heard, does not count,
+ * and a drawn curve can read as a fade. Both fades at once after Fade in and Fade out. Fade in is judged from In while
+ * the length is unknown, as Fade in itself works; Fade out needs the length.
+ */
+export function audioCurveShape(
+  clip: StitchAudioClip,
+  span: AudioSpan,
+  loopSec: number,
+): { flat: boolean; fadeIn: boolean; fadeOut: boolean } {
+  if (clip.curve.length === 0) return { flat: true, fadeIn: false, fadeOut: false };
+  const window = fadeInWindow(clip, span, loopSec);
+  const heard = heardRange(span, loopSec);
+  return {
+    flat: false,
+    fadeIn: window !== null && gainAt(clip.curve, window.from) <= SILENT_GAIN,
+    fadeOut: heard !== null && gainAt(clip.curve, heard.toSrc) <= SILENT_GAIN,
+  };
 }
 
 /**

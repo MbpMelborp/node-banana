@@ -171,12 +171,12 @@ describe("Timeline", () => {
   it("selects a clip on a click, and the rail shows it", () => {
     seed();
     openEditor();
-    expect(within(rail()).getByText("1 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 1 of 2")).toBeInTheDocument();
     click(clipBox("Clip 2"), 400);
-    expect(within(rail()).getByText("2 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 2 of 2")).toBeInTheDocument();
     expect(clipBox("Clip 2")).toHaveAttribute("aria-selected", "true");
     click(clipBox("Clip 1"), 100);
-    expect(within(rail()).getByText("1 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 1 of 2")).toBeInTheDocument();
     // A click is no edit
     expect(editor().past).toHaveLength(0);
   });
@@ -186,7 +186,7 @@ describe("Timeline", () => {
     openEditor();
     fireEvent.contextMenu(clipBox("Clip 2"), { clientX: 400, clientY: 500 });
     const menu = screen.getByRole("menu", { name: "Clip 2" });
-    expect(within(rail()).getByText("2 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 2 of 2")).toBeInTheDocument();
     for (const name of ["Mute clip audio", "Split at playhead", "Reset trim", "Reveal source node", "Remove clip"]) {
       expect(within(menu).getByRole("menuitem", { name: new RegExp(name) })).toBeInTheDocument();
     }
@@ -517,11 +517,11 @@ describe("Timeline", () => {
     expect(clipBox("Clip 2")).toHaveAttribute("tabindex", "-1");
     act(() => first.focus());
     fireEvent.keyDown(first, { key: "ArrowRight" });
-    expect(within(rail()).getByText("2 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 2 of 2")).toBeInTheDocument();
     expect(document.activeElement).toBe(clipBox("Clip 2"));
     expect(clipBox("Clip 2")).toHaveAttribute("tabindex", "0");
     fireEvent.keyDown(clipBox("Clip 2"), { key: "Home" });
-    expect(within(rail()).getByText("1 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 1 of 2")).toBeInTheDocument();
     fireEvent.keyDown(clipBox("Clip 1"), { key: "End" });
     fireEvent.keyDown(clipBox("Clip 2"), { key: "F10", shiftKey: true });
     expect(screen.getByRole("menu", { name: "Clip 2" })).toBeInTheDocument();
@@ -602,7 +602,7 @@ describe("Timeline", () => {
     expect(editor().past).toHaveLength(1);
     expect(screen.queryByTestId("stitch-insertion-bar")).toBeNull();
     // The moved clip is now Clip 1, and selected
-    expect(within(rail()).getByText("1 / 2")).toBeInTheDocument();
+    expect(within(rail()).getByText("Clip 1 of 2")).toBeInTheDocument();
     expect(within(clipBox("Clip 1")).getByText("4.0 s")).toBeInTheDocument();
   });
 
@@ -2298,7 +2298,7 @@ describe("Timeline, several clips", () => {
       pointer("pointerup", 700, { shiftKey: true });
       expect(editor().selection).toEqual({ kind: "clip", clipId: id(2), clipIds: [id(0), id(1), id(2)], anchorId: id(0) });
       expect(within(rail()).getByText("3 clips")).toBeInTheDocument();
-      expect(within(rail()).getByText("3 / 3")).toBeInTheDocument();
+      expect(within(rail()).getByText("Clip 1, Clip 2 and Clip 3")).toBeInTheDocument();
       // Every selected box is ringed; the lane says it takes several
       expect(lane()).toHaveAttribute("aria-multiselectable", "true");
       for (const name of ["Clip 1", "Clip 2", "Clip 3"]) {
@@ -2425,7 +2425,7 @@ describe("Timeline, several clips", () => {
     it("clears a text selection on a press in the lane, so ⌘C copies clips, not old rail text", () => {
       seedLengths([5, 4, 6]);
       openEditor();
-      const text = within(rail()).getByText("1 / 3").firstChild!;
+      const text = within(rail()).getByText("Clip 1 of 3").firstChild!;
       const range = document.createRange();
       range.setStart(text, 0);
       range.setEnd(text, 3);
@@ -2496,7 +2496,7 @@ describe("Timeline, several clips", () => {
       fireEvent.pointerDown(lane(), { button: 0, clientX: 400, clientY: 110, pointerId: 1 });
       pointer("pointerup", 402, { clientY: 110 });
       expect(editor().selection).toBeNull();
-      expect(within(rail()).getByText("Select a clip to trim it.")).toBeInTheDocument();
+      expect(within(rail()).getByText("Select a clip to edit it.")).toBeInTheDocument();
     });
 
     it("waits with the ⌘ wheel from the press, and takes neither clip in the join between two", () => {

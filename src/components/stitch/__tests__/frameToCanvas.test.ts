@@ -88,7 +88,7 @@ const view = (clipId: string, key: SourceKey, src: string): ClipMediaView => ({
   frames: [],
   sourceNodeId: null,
   sourceLabel: "",
-  railSubtitle: "",
+  railSource: { kind: "Video", detail: null },
   missing: false,
 });
 

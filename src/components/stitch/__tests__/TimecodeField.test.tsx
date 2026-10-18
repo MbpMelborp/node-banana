@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { formatSeconds, parseSeconds } from "@/lib/stitch/timecode";
-import { SECONDS_WELL, TIMECODE_WELL } from "../editorStyles";
+import { TIMECODE_WELL } from "../editorStyles";
+
+/** A caller's own well: the class it passes is the field's whole class. */
+const OWN_WELL = "h-8 w-16 rounded-md bg-edit-field";
 import { TimecodeField } from "../TimecodeField";
 
 function setup(value = 0.8) {
@@ -109,7 +112,7 @@ describe("TimecodeField", () => {
           value={value}
           format={(s) => formatSeconds(s, 1)}
           parse={parseSeconds}
-          className={SECONDS_WELL}
+          className={OWN_WELL}
           onCommit={onCommit}
           onNudge={onNudge}
         />,
@@ -120,7 +123,7 @@ describe("TimecodeField", () => {
     it("shows and parses seconds in its own well", () => {
       const { field, onCommit } = seconds(1);
       expect(field.value).toBe("1.0 s");
-      expect(field.className).toBe(SECONDS_WELL);
+      expect(field.className).toBe(OWN_WELL);
       fireEvent.focus(field);
       fireEvent.change(field, { target: { value: "2s" } });
       fireEvent.keyDown(field, { key: "Enter" });

@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState, type MouseEvent } from "react";
 import { ImagePlus, LoaderCircle } from "lucide-react";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { shownAt } from "@/lib/stitch/framePlan";
 import { isPlaced, type ClipSpan } from "@/lib/stitch/timeline";
+import { CONTROL_BUTTON } from "./editorStyles";
 import { frameToCanvas } from "./frameToCanvas";
-import { RailButton } from "./railParts";
 import type { ClipMediaView } from "./useStitchEditorMedia";
 
 export interface FrameButtonInput {
@@ -23,7 +24,8 @@ export interface FrameButtonInput {
 
 /**
  * The first row that applies wins. Busy comes first, so scrubbing into a gap during a capture neither hides the
- * spinner nor sets `disabled`, which would drop focus.
+ * spinner nor sets `disabled`, which would drop focus. With no clips the whole control row is inert, so that reason is
+ * never shown (the empty stage says how to add clips); it still keeps the button off.
  */
 export function frameButtonState(input: FrameButtonInput): { enabled: boolean; busy: boolean; reason: string | null } {
   if (input.busy) return { enabled: false, busy: true, reason: "Adding the frame…" };
@@ -35,19 +37,25 @@ export function frameButtonState(input: FrameButtonInput): { enabled: boolean; b
 }
 
 /**
- * Frame to canvas, at the foot of the rail: the same button whatever is selected. Click or Enter; Space plays, as
- * everywhere in the editor. While the preview plays the press pauses it and takes the frame where it stopped.
+ * Frame to canvas, an icon button in the control row under the video: the same button whatever is selected. Click or
+ * Enter; Space plays, as everywhere in the editor. While the preview plays the press pauses it and takes the frame
+ * where it stopped. Why it is off (or that it is busy) follows its name in its hover label, and is its accessible
+ * description.
  */
 export function FrameToCanvasButton({
   media,
   spans,
   frameSize,
+  keepFocus,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   spans: readonly ClipSpan[];
   /** The sequence's frame size (the ⋯ menu's line); null while no clip is ready with one. */
   frameSize: { width: number; height: number } | null;
+  /** The row's press handler: a click leaves focus where it was, so Space keeps playing. */
+  keepFocus?: (event: MouseEvent<HTMLElement>) => void;
 }) {
+  const reasonId = useId();
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);
   // Re-renders only when the playhead crosses into or out of a gap
   const gap = useStitchEditorStore((s) => {
@@ -80,19 +88,33 @@ export function FrameToCanvasButton({
   };
 
   return (
-    <RailButton
-      icon={
-        state.busy ? (
-          <LoaderCircle size={14} strokeWidth={1.75} className="animate-spin" />
+    // On the wrapper: a disabled button is never hovered itself
+    <div className="group relative flex">
+      <button
+        type="button"
+        aria-label={state.busy ? "Adding frame…" : "Frame to canvas"}
+        aria-describedby={state.reason ? reasonId : undefined}
+        // Busy stays focusable (aria-disabled, not disabled, which would drop focus) and ignores its clicks
+        aria-busy={state.busy || undefined}
+        aria-disabled={state.busy || undefined}
+        disabled={!state.enabled && !state.busy}
+        className={CONTROL_BUTTON}
+        onMouseDown={keepFocus}
+        onClick={state.busy ? undefined : onClick}
+      >
+        {state.busy ? (
+          <LoaderCircle size={16} strokeWidth={1.5} className="animate-spin motion-reduce:animate-none" />
         ) : (
-          <ImagePlus size={14} strokeWidth={1.75} />
-        )
-      }
-      label={state.busy ? "Adding frame…" : "Frame to canvas"}
-      disabled={!state.enabled && !state.busy}
-      busy={state.busy}
-      title={state.reason ?? undefined}
-      onClick={onClick}
-    />
+          <ImagePlus size={16} strokeWidth={1.5} />
+        )}
+      </button>
+      {state.reason && (
+        <span id={reasonId} className="sr-only">
+          {state.reason}
+        </span>
+      )}
+      {/* Its name always, and why it is off (or that it is busy) after it */}
+      <Tooltip label="Frame to canvas" detail={state.reason ?? undefined} placement="top" />
+    </div>
   );
 }

@@ -116,9 +116,10 @@ const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =
     target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
   });
 
-const toggleClipAudio = () => fireEvent.click(screen.getByRole("switch", { name: "Clip audio" }));
+/** The selected clip's own sound: the rail's Sound switch. */
+const toggleClipAudio = () => fireEvent.click(screen.getByRole("switch", { name: "Sound" }));
 
-/** The sequence's length is shown: the transport's total, "/ 0:09.00" (never the playhead's time beside it). */
+/** The sequence's length is shown: the control row's total, "/ 0:09.00" (never the playhead's time beside it). */
 const totalShown = (text: string) => screen.queryByText(`/ ${text}`) !== null;
 
 /** The header's ⋯ menu, open. */
@@ -194,12 +195,12 @@ describe("StitchEditorModal", () => {
   it("opens on the node's sequence with its length, size and rate", () => {
     seed();
     const dialog = openEditor();
-    // The length in the transport; the clips, size and rate as the ⋯ menu's last line
+    // The length in the control row; the clips, size and rate as the ⋯ menu's last line
     expect(totalShown("0:09.00")).toBe(true);
     expect(menuMeta()).toBe("2 clips · 1920 × 1080 · 24 fps");
-    // The rail shows the first clip (the timeline names it too)
+    // The rail shows the first clip, which of how many, and where it comes from (the timeline names it too)
     const rail = within(within(dialog).getByRole("complementary", { name: "Clip" }));
-    expect(rail.getByText("Clip 1")).toBeInTheDocument();
+    expect(rail.getByText("Clip 1 of 2")).toBeInTheDocument();
     expect(rail.getByText("Generate video · Veo 3.1 · 5.00 s")).toBeInTheDocument();
   });
 
@@ -394,15 +395,66 @@ describe("StitchEditorModal", () => {
     expect(editor().isOpen).toBe(true);
   });
 
-  it("keeps the zoom slider at every width: only the Edit video view drops it when narrow", () => {
+  it("has no zoom slider, and drops Fit, then − and +, when its control row is narrow (Stacked's sooner)", () => {
     seed();
     openEditor();
-    const slider = screen.getByRole("slider", { name: "Timeline zoom" });
-    expect(slider.className).not.toContain("@max-");
-    expect(slider.parentElement!.className).not.toContain("@container");
-    for (const name of ["Zoom out", "Zoom in"]) {
-      expect(screen.getByRole("button", { name }).className).not.toContain("@max-");
-    }
+    expect(screen.queryByRole("slider", { name: "Timeline zoom" })).toBeNull();
+    // The row is its own container; each button's wrapper (it holds the hover label) is what hides
+    const row = screen.getByTestId("stitch-controls");
+    expect(row.parentElement!.className).toContain("@container");
+    const wrapper = (name: string) => screen.getByRole("button", { name }).parentElement!;
+    expect(wrapper("Fit").className).toContain("@max-[695px]:hidden");
+    expect(wrapper("Zoom out").className).toContain("@max-[628px]:hidden");
+    expect(wrapper("Zoom in").className).toContain("@max-[628px]:hidden");
+    // Stacked's row also holds Crossfade
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    expect(wrapper("Fit").className).toContain("@max-[763px]:hidden");
+    expect(wrapper("Zoom in").className).toContain("@max-[696px]:hidden");
+  });
+
+  it("zooms with − and = and fits with ⇧Z, so a row too narrow for −, + and Fit (the 1280 px dialog's) loses none of them", () => {
+    seed();
+    openEditor();
+    // The keys are in the buttons' hover labels, and named for assistive tech
+    const hover = (name: string) => screen.getByRole("button", { name }).parentElement!.querySelector(":scope > [aria-hidden='true']")!;
+    expect(hover("Zoom out")).toHaveTextContent("Zoom out−");
+    expect(hover("Zoom in")).toHaveTextContent("Zoom in=");
+    expect(hover("Fit")).toHaveTextContent("Fit the timeline⇧Z");
+    expect(screen.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-keyshortcuts", "Shift+Z");
+    // Fit to start with (no stored zoom); = zooms in by a step, − back out, ⇧Z fits again
+    expect(editor().pxPerSec).toBeNull();
+    press(document.body, "=");
+    const zoomed = editor().pxPerSec!;
+    expect(zoomed).toBeGreaterThan(0);
+    press(document.body, "=");
+    expect(editor().pxPerSec).toBeCloseTo(zoomed * 1.5);
+    press(document.body, "-");
+    expect(editor().pxPerSec).toBeCloseTo(zoomed);
+    press(document.body, "Z", { shiftKey: true });
+    expect(editor().pxPerSec).toBeNull();
+    // Zooming is no edit
+    expect(editor().past).toHaveLength(0);
+  });
+
+  it("shows the keyboard shortcuts on ?, above the dialog, the editor's first; Escape closes only them", () => {
+    seed();
+    const dialog = openEditor();
+    press(document.body, "?", { shiftKey: true });
+    const list = screen.getByRole("dialog", { name: "Keyboard Shortcuts" });
+    expect(within(list).getAllByRole("heading", { level: 3 })[0]).toHaveTextContent("Edit video");
+    expect(within(list).getByText("Select a range of clips")).toBeInTheDocument();
+    // Later in the page than the editor's overlay, so it is the one on top, and the one Escape closes
+    const overlays = [...document.querySelectorAll("[data-dialog-overlay]")];
+    expect(overlays.at(-1)).toContainElement(list);
+    expect(overlays.at(-1)).not.toContainElement(dialog);
+    // While it is up the editor's keys are its: Space does not play
+    press(list, " ");
+    expect(editor().playing).toBe(false);
+    press(list, "Escape");
+    expect(screen.queryByRole("dialog", { name: "Keyboard Shortcuts" })).toBeNull();
+    expect(editor().isOpen).toBe(true);
+    // The canvas's own list was never asked for
+    expect(wf().shortcutsDialogOpen).toBe(false);
   });
 
   it("types into the In field without the I key, and commits a typed time on Enter", () => {
@@ -438,12 +490,23 @@ describe("StitchEditorModal", () => {
     expect(editor().playhead).toBe(4);
   });
 
-  it("shows the trim keys in the rail", () => {
+  it("puts the trim keys in the In and Out fields' hover labels, and ⇧ in Snap's", () => {
     seed();
     openEditor();
-    expect(screen.getByText("In at the playhead")).toBeInTheDocument();
-    expect(screen.getByText("Out at the playhead")).toBeInTheDocument();
-    expect(screen.getByText("Hold to trim without snapping")).toBeInTheDocument();
+    // Each field's label wraps its field and its hover label (aria-hidden: the keys are the shortcuts list's too)
+    const hover = (name: string) => screen.getByRole("textbox", { name }).closest("label")!.querySelector(":scope > [aria-hidden='true']")!;
+    expect(hover("In")).toHaveTextContent("In at the playheadI");
+    expect(hover("Out")).toHaveTextContent("Out at the playheadO");
+    // The last field's opens from its right edge, inside the rail, so the rail never scrolls sideways
+    expect(hover("In")).toHaveClass("left-0");
+    expect(hover("Out")).toHaveClass("right-0");
+    const rail = screen.getByRole("complementary", { name: "Clip" });
+    expect(within(rail).queryByText("Hold to trim without snapping")).toBeNull();
+    const snap = screen.getByRole("button", { name: "Snap" });
+    expect(snap.parentElement!.querySelector(":scope > [aria-hidden='true']")).toHaveTextContent("Snap · drag freely with⇧");
+    // The actions name their keys for assistive tech, and show them on hover
+    expect(within(rail).getByRole("button", { name: "Split at playhead" })).toHaveAttribute("aria-keyshortcuts", "S");
+    expect(within(rail).getByRole("button", { name: "Remove clip" })).toHaveAttribute("aria-keyshortcuts", "Backspace");
   });
 
   it("undoes a rail change in its own history, not the canvas's", () => {
@@ -587,7 +650,7 @@ describe("StitchEditorModal", () => {
     expect(menuMeta()).toBe("0 clips");
     expect(screen.getByText("No clips yet")).toBeInTheDocument();
     // Nothing to select, so the rail does not ask for a selection
-    expect(screen.queryByText("Select a clip to trim it.")).toBeNull();
+    expect(screen.queryByText("Select a clip to edit it.")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
   });
 
@@ -814,19 +877,21 @@ describe("StitchEditorModal", () => {
       within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name });
     const stack = () => fireEvent.click(layoutButton("Stacked"));
 
-    it("puts Track | Stacked at the transport's right end, after Fit and a divider", () => {
+    it("puts Track | Stacked in the control row under the video, between Mute all and Snap", () => {
       seed();
       openEditor();
       const toggle = screen.getByRole("group", { name: "Timeline layout" });
       const fit = screen.getByRole("button", { name: "Fit" });
-      // The transport's last control, after a divider and Fit
-      const transport = toggle.parentElement!;
-      expect(transport.contains(fit)).toBe(true);
-      expect(transport.lastElementChild).toBe(toggle);
-      const divider = toggle.previousElementSibling!;
-      expect(divider).toHaveAttribute("aria-hidden", "true");
-      expect(divider).toHaveClass("w-px");
-      expect(divider.previousElementSibling).toBe(fit);
+      // The row's right-hand group: Frame to canvas, Mute all, the toggle, Snap, −, + and Fit (in its hover label's wrapper)
+      const group = toggle.parentElement!;
+      expect(group.contains(fit)).toBe(true);
+      expect(group.lastElementChild).toBe(fit.parentElement);
+      expect(toggle.previousElementSibling).toBe(screen.getByRole("button", { name: "Mute all" }).parentElement);
+      expect(toggle.nextElementSibling).toBe(screen.getByRole("button", { name: "Snap" }).parentElement);
+      // The row sits in the stage, under the video
+      const column = screen.getByTestId("stitch-stage-column");
+      expect(column.contains(toggle)).toBe(true);
+      expect(column.firstElementChild).toBe(screen.getByTestId("stitch-preview"));
       // Not in the header, nor in the timeline
       expect(document.querySelector("[data-editor-header]")!.contains(toggle)).toBe(false);
       expect(screen.getByRole("listbox", { name: "Clips" }).closest(".bg-editor-lanes")!.contains(toggle)).toBe(false);
@@ -858,12 +923,14 @@ describe("StitchEditorModal", () => {
       expect(totalShown("0:09.00")).toBe(true);
     });
 
-    it("puts Crossfade in the transport beside Sound, and keeps Loop out of the rail (it is in the header's menu)", () => {
+    it("puts Crossfade in the control row after Mute all, left of the toggle, and keeps Loop out of the rail (it is in the header's menu)", () => {
       seed();
       openEditor();
       stack();
       const crossfade = screen.getByRole("button", { name: "Crossfade" });
-      expect(crossfade.previousElementSibling).toBe(screen.getByRole("button", { name: "Sound" }));
+      // Left of the toggle, so showing it never moves the toggle under the pointer
+      expect(crossfade.parentElement!.previousElementSibling).toBe(screen.getByRole("button", { name: "Mute all" }).parentElement);
+      expect(crossfade.parentElement!.nextElementSibling).toBe(screen.getByRole("group", { name: "Timeline layout" }));
       const rail = screen.getByRole("complementary", { name: "Clip" });
       expect(rail.contains(crossfade)).toBe(false);
       // No Overlap well and no summary line in Stacked; Loop is the header's
@@ -1038,7 +1105,7 @@ describe("StitchEditorModal", () => {
       const startField = () => screen.getByRole("textbox", { name: "Start on the timeline" }) as HTMLInputElement;
       const selectClip2 = () => act(() => editor().select({ kind: "clip", clipId: "clip:eB" }));
 
-      it("shows Start in Stacked only, above Trim", () => {
+      it("shows Start in Stacked only, first of the fields beside In and Out", () => {
         seed();
         openEditor();
         expect(screen.queryByRole("textbox", { name: "Start on the timeline" })).toBeNull();
@@ -1046,8 +1113,13 @@ describe("StitchEditorModal", () => {
         const rail = screen.getByRole("complementary", { name: "Clip" });
         expect(within(rail).getByText("Start")).toBeInTheDocument();
         expect(startField().value).toBe("0:00.00");
-        const trim = within(rail).getByText("Trim");
-        expect(startField().compareDocumentPosition(trim) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        // One row of fields: Start, In, Out
+        const fields = startField().closest("label")!.parentElement!;
+        expect([...fields.querySelectorAll("input")].map((input) => input.getAttribute("aria-label"))).toEqual([
+          "Start on the timeline",
+          "In",
+          "Out",
+        ]);
         selectClip2();
         expect(startField().value).toBe("0:04.00");
       });
@@ -1147,23 +1219,23 @@ describe("StitchEditorModal", () => {
         expect(split).not.toHaveAttribute("title");
       });
 
-      it("lists the placing keys under the clip actions in Stacked, and the trim keys in Track", () => {
+      it("puts [ and ] in Start's hover label in Stacked, beside In's I and Out's O", () => {
         seed();
         openEditor();
-        const rail = () => within(screen.getByRole("complementary", { name: "Clip" }));
-        expect(rail().getByText("Hold to trim without snapping")).toBeInTheDocument();
-        expect(rail().queryByText("Start at the playhead")).toBeNull();
+        const hover = (name: string) =>
+          screen.getByRole("textbox", { name }).closest("label")!.querySelector(":scope > [aria-hidden='true']")!;
+        expect(screen.queryByText("Start or end at the playhead")).toBeNull();
         stack();
-        for (const text of [
-          "In at the playhead",
-          "Out at the playhead",
-          "Start at the playhead",
-          "End at the playhead",
-          "With ← → nudge a frame, with ↑ ↓ change row",
-          "Hold to move or trim without snapping",
-        ]) {
-          expect(rail().getByText(text)).toBeInTheDocument();
-        }
+        // [ and ] are either key, not a chord: each its own cap group, a slash between
+        expect(hover("Start on the timeline")).toHaveTextContent("Start or end at the playhead[/]");
+        const caps = [...hover("Start on the timeline").querySelectorAll("kbd")];
+        expect(caps.map((kbd) => kbd.textContent)).toEqual(["[", "]"]);
+        expect(caps[0].parentElement).not.toBe(caps[1].parentElement);
+        expect(hover("In")).toHaveTextContent("In at the playheadI");
+        expect(hover("Out")).toHaveTextContent("Out at the playheadO");
+        // Three fields: Out's starts some 185px into the 280px rail, so its label opens leftwards from its right edge
+        expect(hover("Out")).toHaveClass("right-0");
+        expect(hover("Start on the timeline")).toHaveClass("left-0");
       });
 
       it("handles ⌥← in Track as a key that does nothing, so the browser does not go back", () => {
@@ -1302,12 +1374,11 @@ describe("StitchEditorModal, several clips", () => {
     selectAll();
     expect(within(rail()).getByText("3 clips")).toBeInTheDocument();
     expect(within(rail()).getByText("Clip 1, Clip 2 and Clip 3")).toBeInTheDocument();
-    expect(within(rail()).getByText("3 / 3")).toBeInTheDocument();
     // No trims, Start or Volume: they are one clip's
     expect(screen.queryByRole("textbox", { name: "In" })).toBeNull();
     expect(screen.queryByRole("slider", { name: "Clip volume" })).toBeNull();
     // One muted and two not: neither On nor Off is pressed, and "Mixed" sits beside them at the row's right
-    const sound = within(rail()).getByRole("group", { name: "Clip audio" });
+    const sound = within(rail()).getByRole("group", { name: "Sound" });
     expect(within(sound).getAllByRole("button").filter((b) => b.getAttribute("aria-pressed") === "true")).toHaveLength(0);
     const wrapper = sound.parentElement!;
     expect(within(wrapper).getByText("Mixed")).toBeInTheDocument();
@@ -1323,10 +1394,13 @@ describe("StitchEditorModal, several clips", () => {
     expect(editor().draft!.timeline.every((c) => !c.muted)).toBe(true);
     expect(editor().past).toHaveLength(2);
 
-    // Clip 1 is trimmed, so Reset trim is on
-    fireEvent.click(within(rail()).getByRole("button", { name: "Reset trim" }));
+    // Clip 1 is trimmed, so Reset trim shows; with nothing left to reset it goes, and focus stays in the editor
+    const reset = within(rail()).getByRole("button", { name: "Reset trim" });
+    act(() => reset.focus());
+    fireEvent.click(reset);
     expect(editor().draft!.timeline[0].inSec).toBe(0);
-    expect(within(rail()).getByRole("button", { name: "Reset trim" })).toBeDisabled();
+    expect(within(rail()).queryByRole("button", { name: "Reset trim" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Edit video" }));
     fireEvent.click(within(rail()).getByRole("button", { name: /Remove 3 clips/ }));
     expect(order()).toEqual([]);
     expect(editor().past).toHaveLength(4);
@@ -1507,6 +1581,22 @@ describe("StitchEditorModal, audio clips", () => {
     expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([false, true]);
     act(() => editor().select(null));
     press(document.body, "m");
+    expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([true, true]);
+  });
+
+  it("names the rail's mute for the selected audio clips, so it never shares a name with the preview's Mute all", () => {
+    seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }), toneClip("t", { row: 1, startSec: 2 })]);
+    openEditor();
+    act(() => editor().select(audioSelectionOf({ clipId: "t", clipIds: [MUSIC_CLIP_ID, "t"] })));
+    // One button each: the control row's mutes the preview (no edit), the rail's the two clips (an edit)
+    expect(screen.getAllByRole("button", { name: "Mute all" })).toHaveLength(1);
+    const rail = screen.getByRole("complementary", { name: "Audio clip" });
+    fireEvent.click(within(rail).getByRole("button", { name: "Mute 2 clips" }));
+    expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([true, true]);
+    expect(editor().soundOn).toBe(true);
+    expect(within(rail).getByRole("button", { name: "Unmute 2 clips" })).toHaveAttribute("aria-keyshortcuts", "M");
+    fireEvent.click(screen.getByRole("button", { name: "Mute all" }));
+    expect(editor().soundOn).toBe(false);
     expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([true, true]);
   });
 
