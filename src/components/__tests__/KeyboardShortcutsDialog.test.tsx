@@ -3,6 +3,17 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 import { KeyboardShortcutsDialog } from "../KeyboardShortcutsDialog";
 import { useAssetStore } from "@/store/assetStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
+import type { StitchDraft } from "@/lib/stitch/draft";
+
+const emptyDraft = (): StitchDraft => ({
+  timeline: [],
+  audioClips: [],
+  legacyAudio: { curve: [], muted: false },
+  loopCount: 1,
+  sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
+});
 
 describe("KeyboardShortcutsDialog", () => {
   it("renders nothing when closed", () => {
@@ -52,13 +63,30 @@ describe("KeyboardShortcutsDialog", () => {
     expect(screen.queryByText("Save the edit")).toBeNull();
   });
 
-  it("puts the view switches and the edit's keys first when opened from the Edit video view", () => {
+  it("puts the view switches and the open edit's keys first in the Edit video view, the canvas's said to be its", () => {
+    useAssetStore.setState({ appView: "edit" });
+    useStitchEditorStore.getState().openEdit({ editId: "ed0000000000a1", draft: emptyDraft() });
+    render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(headings.slice(0, 3)).toEqual(["Views", "Edit video", "On the canvas"]);
+    expect(headings).not.toContain("General");
+    expect(headings.at(-1)).toBe("Assets");
+    expect(screen.getByText("Save the edit")).toBeInTheDocument();
+    // Every clip key the editor handles is listed
+    for (const row of ["Copy the selected clips", "Cut the selected clips", "Paste clips", "Select every clip"]) {
+      expect(screen.getByText(row)).toBeInTheDocument();
+    }
+    expect(screen.getByText("Move the selected clips a row")).toBeInTheDocument();
+    useStitchEditorStore.getState().close();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+
+  it("lists no edit keys on the Edit video home screen, where none of them works", () => {
     useAssetStore.setState({ appView: "edit" });
     render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
     const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(headings.slice(0, 3)).toEqual(["Views", "Edit video", "General"]);
-    expect(headings.at(-1)).toBe("Assets");
-    expect(screen.getByText("Save the edit")).toBeInTheDocument();
+    expect(headings.slice(0, 2)).toEqual(["Views", "On the canvas"]);
+    expect(screen.queryByText("Save the edit")).toBeNull();
     useAssetStore.setState({ appView: "canvas" });
   });
 

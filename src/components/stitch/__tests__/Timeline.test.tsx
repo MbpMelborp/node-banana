@@ -17,6 +17,7 @@ import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { moveClipTo, removeSelection, setClipStart, setCrossfade, setOverlapSec } from "../editorActions";
 import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { restoreStoreActions } from "@/test/storeActions";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -146,6 +147,7 @@ afterEach(() => {
   __setMediaExtractorForTests(null);
   __resetMediaInfoForTests();
   vi.restoreAllMocks();
+  restoreStoreActions(useStitchEditorStore);
 });
 
 describe("Timeline", () => {

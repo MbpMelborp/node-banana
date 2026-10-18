@@ -152,7 +152,11 @@ describe("move", () => {
     expect(await validateMoveTarget(root, left)).toBe(left);
     // Another library's edits: the copy would write over them.
     const edits = path.join(base, "Edits left");
-    fs.mkdirSync(path.join(edits, "Edits"), { recursive: true });
+    fs.mkdirSync(path.join(edits, "Edits", "generations"), { recursive: true });
+    expect(await validateMoveTarget(root, edits)).toBe(edits);
+    // Finder's clutter, or a project called Edits, is no other library's edits.
+    fs.writeFileSync(path.join(edits, "Edits", ".DS_Store"), "x");
+    fs.writeFileSync(path.join(edits, "Edits", "Edits.json"), "{}");
     expect(await validateMoveTarget(root, edits)).toBe(edits);
     fs.writeFileSync(path.join(edits, "Edits", "Trip.nbedit"), "{}");
     await expect(validateMoveTarget(root, edits)).rejects.toMatchObject({ code: "conflict" });

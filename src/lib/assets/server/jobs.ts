@@ -718,6 +718,17 @@ async function isNonEmptyDir(dir: string, ignore: readonly string[] = []): Promi
   }
 }
 
+/** Whether `dir` holds an edit file (what the move copies from Edits/), not only Finder clutter or a project's files. */
+async function holdsEditFiles(dir: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(dir, { withFileTypes: true })).some(
+      (dirent) => dirent.isFile() && dirent.name.toLowerCase().endsWith(".nbedit"),
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Checks a move destination before the job starts: absolute, not the
  * current root, neither inside the other (after resolving symlinks such as
@@ -746,7 +757,7 @@ export async function validateMoveTarget(fromRoot: string, target: unknown, plat
   if (
     (await isNonEmptyDir(path.join(to, DATA_DIR), [WRITERS_DIR])) ||
     (await isNonEmptyDir(path.join(to, GENERATIONS_DIR))) ||
-    (await isNonEmptyDir(path.join(to, EDITS_DIR)))
+    (await holdsEditFiles(path.join(to, EDITS_DIR)))
   ) {
     throw new LibraryError(
       "That folder already holds a Node Banana library. Use it as it is, or choose an empty folder.",

@@ -23,7 +23,7 @@ import { useLibraryAvailable } from "@/components/stitch/library/useLibraryAvail
 import { useLibraryVideos } from "@/components/stitch/library/useLibraryVideos";
 import { useEditProjectStore, type EditPaneKind } from "@/store/editProjectStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { useLibraryDrag, type LibraryDragGhost } from "./useLibraryDrag";
+import { useLibraryDrag, useLibraryDragGhost } from "./useLibraryDrag";
 
 const NO_PROJECTS: AssetFacets["projects"] = [];
 const KIND_OPTIONS: { value: EditPaneKind; label: string }[] = [
@@ -44,8 +44,7 @@ let focusHandled = 0;
 
 /** Why a video cannot be added at the playhead now (one answer for every video tile), or null. */
 function useVideoAddBlocked(): string | null {
-  const loading = useEditProjectStore((s) => s.clipsLoading);
-  return useStitchEditorStore((s) => libraryAddBlockedReason(VIDEO_ITEM, s, loading));
+  return useStitchEditorStore((s) => libraryAddBlockedReason(VIDEO_ITEM, s));
 }
 
 /**
@@ -248,6 +247,12 @@ export function LibraryPane() {
           aria-label="Search the library"
           value={query.q}
           onChange={(event) => update({ q: event.target.value })}
+          // Escape leaves the field, as in Assets, so E, Space and the editor's keys work again
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.currentTarget.blur();
+          }}
           disabled={!libraryOn}
         />
         <div className="flex min-w-0 items-center gap-1">
@@ -274,14 +279,14 @@ export function LibraryPane() {
           <div className="group relative flex">
             <button
               type="button"
-              aria-label="Favourites"
+              aria-label="Favorites"
               aria-pressed={query.favourites}
               onClick={() => update({ favourites: !query.favourites })}
               className={cn(FILTER_BUTTON, "h-7 w-7 justify-center px-0", query.favourites ? FILTER_ON : FILTER_OFF)}
             >
               <Star size={12} strokeWidth={2} fill={query.favourites ? "currentColor" : "none"} />
             </button>
-            <Tooltip label="Favourites" placement="bottom" />
+            <Tooltip label="Favorites" placement="bottom" />
           </div>
         </div>
       </div>
@@ -291,7 +296,7 @@ export function LibraryPane() {
       <p className="shrink-0 border-t border-chrome-border px-4 py-2.5 text-[11px] leading-4 text-neutral-500">
         Click to add at the playhead, or drag onto the timeline.
       </p>
-      {drag.ghost && <DragGhost ghost={drag.ghost} />}
+      <DragGhost />
     </aside>
   );
 }
@@ -301,7 +306,9 @@ function Notice({ children }: { children: ReactNode }) {
 }
 
 /** What follows the pointer while a tile is dragged: its poster (or the audio mark), name and length. */
-function DragGhost({ ghost }: { ghost: LibraryDragGhost }) {
+function DragGhost() {
+  const ghost = useLibraryDragGhost();
+  if (!ghost) return null;
   const { asset } = ghost;
   const duration = typeof asset.durationSec === "number" && asset.durationSec > 0 ? asset.durationSec : null;
   return (

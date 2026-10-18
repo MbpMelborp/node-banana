@@ -3,6 +3,7 @@
 import { Dialog, DialogBody, DialogHeader, DialogSectionHeader, DialogTitle } from "@/components/ui/Dialog";
 import { KbdGroup } from "@/components/ui/Kbd";
 import { useAssetStore } from "@/store/assetStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
 
 interface ShortcutItem {
   keys: string[];
@@ -87,7 +88,15 @@ const editVideoGroup: ShortcutGroup = {
     { keys: ["S"], description: "Split at the playhead" },
     { keys: ["Delete"], description: "Remove the selected clips" },
     { keys: ["M"], description: "Mute the selected audio clips" },
+    { keys: ["⌥", "M"], description: "Mute the selected clips' own audio" },
+    { keys: [`${modKey}`, "C"], description: "Copy the selected clips" },
+    { keys: [`${modKey}`, "X"], description: "Cut the selected clips" },
+    { keys: [`${modKey}`, "V"], description: "Paste clips" },
     { keys: [`${modKey}`, "D"], description: "Duplicate the selected clips" },
+    { keys: [`${modKey}`, "A"], description: "Select every clip" },
+    { keys: ["⌥", "←", "→"], description: "Nudge the selected clips a frame" },
+    { keys: ["⌥", "↑", "↓"], description: "Move the selected clips a row" },
+    { keys: ["[", "]"], description: "Start / end the selected clip at the playhead" },
     { keys: [`${modKey}`, "Z"], description: "Undo" },
     { keys: [`${modKey}`, "Shift", "Z"], description: "Redo" },
     { keys: ["Esc"], description: "Close a menu, cancel a drag" },
@@ -115,15 +124,21 @@ interface KeyboardShortcutsDialogProps {
   onClose: () => void;
 }
 
+/** The canvas's keys under another view's: General is retitled, so ⌘S, ⌘C and ⌘V read as the canvas's there. */
+const canvasGroups: ShortcutGroup[] = shortcutGroups.map((group) =>
+  group.title === "General" ? { ...group, title: "On the canvas" } : group,
+);
+
 export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDialogProps) {
   // Opened over another view, the view switches come first, then that view's
-  // own keys (Assets', or the open edit's)
+  // own keys (Assets', or the open edit's: none on the Edit video home screen)
   const appView = useAssetStore((state) => state.appView);
+  const editOpen = useStitchEditorStore((s) => s.isOpen && s.editId !== null);
   const groups =
     appView === "assets"
       ? [viewGroup, assetsGroup, ...shortcutGroups]
       : appView === "edit"
-        ? [viewGroup, editVideoGroup, ...shortcutGroups, assetsGroup]
+        ? [viewGroup, ...(editOpen ? [editVideoGroup] : []), ...canvasGroups, assetsGroup]
         : appView === "chat"
           ? [viewGroup, ...shortcutGroups, assetsGroup]
           : [...shortcutGroups, viewGroup, assetsGroup];

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useAssetStore } from "@/store/assetStore";
 import { FrameCaptureError, type FrameCapture, type FrameCaptureJob } from "@/lib/stitch/frameCapture";
 import * as mediaBlob from "@/lib/assets/client/mediaBlob";
@@ -14,6 +14,7 @@ import {
   addFrameNode,
   canvasCentrePosition,
   CAPTURE_TIMEOUT_MS,
+  FRAME_BESIDE_GAP,
   frameFileName,
   frameNodePosition,
   frameToCanvas,
@@ -157,7 +158,7 @@ describe("frameToCanvas", () => {
       dimensions: SIZE,
     });
     expect(frame.position.x).toBeGreaterThanOrEqual(STITCH_AT.x + STITCH_WIDTH);
-    expect(frame.position).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + 20, y: STITCH_AT.y });
+    expect(frame.position).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + FRAME_BESIDE_GAP, y: STITCH_AT.y });
     expect(wf().nodes.filter((n) => n.selected).map((n) => n.id)).toEqual([frame.id]);
     expect(show).toHaveBeenCalledWith("Frame added to the canvas", "success");
 
@@ -222,17 +223,17 @@ describe("frameToCanvas", () => {
         expect(frame.position.y).toBe(previous.position.y + getNodeSize(previous).height + 20);
       }
     });
-    expect(column[0].position).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + 20, y: STITCH_AT.y });
+    expect(column[0].position).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + FRAME_BESIDE_GAP, y: STITCH_AT.y });
     expect(wf().nodes.filter((n) => n.selected).map((n) => n.id)).toEqual([column[4].id]);
 
     const noted = { id: "stitch", position: STITCH_AT, width: STITCH_WIDTH };
-    expect(frameNodePosition(noted)).not.toEqual({ x: STITCH_AT.x + STITCH_WIDTH + 20, y: STITCH_AT.y });
+    expect(frameNodePosition(noted)).not.toEqual({ x: STITCH_AT.x + STITCH_WIDTH + FRAME_BESIDE_GAP, y: STITCH_AT.y });
     // A replaced canvas, or a fresh session, starts beside the node again
     useWorkflowStore.setState({ canvasGeneration: wf().canvasGeneration + 1 });
-    expect(frameNodePosition(noted)).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + 20, y: STITCH_AT.y });
+    expect(frameNodePosition(noted)).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + FRAME_BESIDE_GAP, y: STITCH_AT.y });
     useWorkflowStore.setState({ canvasGeneration: wf().canvasGeneration - 1 });
     __resetFramePlacementForTests();
-    expect(frameNodePosition(noted)).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + 20, y: STITCH_AT.y });
+    expect(frameNodePosition(noted)).toEqual({ x: STITCH_AT.x + STITCH_WIDTH + FRAME_BESIDE_GAP, y: STITCH_AT.y });
   });
 
   it("pauses a playing preview and takes the frame where it stopped", async () => {
@@ -366,7 +367,7 @@ describe("frameToCanvas", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(await done).toBe("failed");
     expect((reason as DOMException).name).toBe("TimeoutError");
-    expect(show).toHaveBeenCalledWith("Reading clip 1's video took too long.", "error", true, null);
+    expect(show).toHaveBeenCalledWith("Reading Clip 1's video took too long.", "error", true, null);
     expect(frames()).toHaveLength(0);
     expect(recordUiAsset).not.toHaveBeenCalled();
   });
@@ -375,14 +376,14 @@ describe("frameToCanvas", () => {
     [new FrameCaptureError("empty", "Nothing plays", undefined), ["Nothing plays at the playhead.", "warning"]],
     [
       new FrameCaptureError("crossOrigin", "Failed to fetch", 1),
-      ["Can't read clip 1's video from its site: the site blocks copying, or the file is gone.", "error", true, null],
+      ["Can't read Clip 1's video from its site: the site blocks copying, or the file is gone.", "error", true, null],
     ],
-    [new FrameCaptureError("timeout", "Too long", 2), ["Reading clip 2's video took too long.", "error", true, null]],
+    [new FrameCaptureError("timeout", "Too long", 2), ["Reading Clip 2's video took too long.", "error", true, null]],
     [new FrameCaptureError("timeout", "x", undefined), ["Reading a clip's video took too long.", "error", true, null]],
     [new FrameCaptureError("unreadable", "x", undefined), ["Couldn't read the video at the playhead.", "error", true, "x"]],
     [
       new FrameCaptureError("unreadable", "Decoder failed", 2),
-      ["Couldn't read clip 2's video at the playhead.", "error", true, "Decoder failed"],
+      ["Couldn't read Clip 2's video at the playhead.", "error", true, "Decoder failed"],
     ],
     [new Error("Something else"), ["Couldn't read the video at the playhead.", "error", true, "Something else"]],
   ])("shows the toast for %s and adds nothing", async (error, toast) => {
@@ -531,6 +532,29 @@ describe("frameToCanvas from an edit project (the Edit video view)", () => {
     const [[, , , , actions]] = show.mock.calls;
     actions[0].onClick();
     expect(useAssetStore.getState().appView).toBe("canvas");
+  });
+
+  it("drops the frame when the canvas is replaced during the capture (a tab switch from the view)", async () => {
+    capture.mockImplementation(async (job) => {
+      useWorkflowStore.setState({ canvasGeneration: wf().canvasGeneration + 1 });
+      return captured(job);
+    });
+    editor().setPlayhead(1);
+    expect(await press()).toBe("dropped");
+    expect(frames()).toHaveLength(0);
+    expect(recordUiAsset).not.toHaveBeenCalled();
+    expect(show).toHaveBeenCalledWith("The canvas changed while the frame was being made, so it was not added.", "warning");
+  });
+
+  it("leaves the edit alone: same draft, same history, nothing to save", async () => {
+    editor().setPlayhead(1);
+    const { draft, past, future, initial } = editor();
+    expect(await press()).toBe("added");
+    expect(editor().draft).toBe(draft);
+    expect(editor().past).toBe(past);
+    expect(editor().future).toBe(future);
+    expect(editor().initial).toBe(initial);
+    expect(selectIsDirty(editor())).toBe(false);
   });
 
   it("records the frame against the edit, not a node", async () => {

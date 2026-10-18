@@ -145,7 +145,7 @@ export function EditHome({ newEditRef }: { newEditRef: RefObject<HTMLButtonEleme
         </div>
         {body}
         {list.problems.length > 0 && (
-          <ul aria-label="Files that are not open edits" className="mt-8 flex flex-col gap-2 border-t border-chrome-border pt-4">
+          <ul aria-label="Other files in the Edits folder" className="mt-8 flex flex-col gap-2 border-t border-chrome-border pt-4">
             {list.problems.map((problem) => (
               <li key={problem.fileName} className="flex items-center gap-3 text-[12px] text-neutral-400">
                 <span className="min-w-0 truncate">{problemText(problem)}</span>

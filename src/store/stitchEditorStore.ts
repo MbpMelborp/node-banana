@@ -3,7 +3,7 @@ import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/a
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
 import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
-import { edgeIdsInOrder, type SourceDurations } from "@/lib/stitch/timeline";
+import { edgeIdsInOrder, type SourceDurations, type SourceKey } from "@/lib/stitch/timeline";
 
 /**
  * The Stitch editor's working state: the draft being edited with its own
@@ -74,6 +74,11 @@ export interface StitchEditorState {
   durations: SourceDurations;
   /** The audio sources' decoded lengths, apart from durations so video layouts do not recompute when audio loads. */
   audioDurations: AudioDurations;
+  /**
+   * The video sources whose media is still loading, pushed by the editor. An edit that pins a lined-up stack (a
+   * Stacked add, paste or duplicate) waits for them: the pins would come from a length not known yet.
+   */
+  clipsLoading: ReadonlySet<SourceKey>;
   /** The one audio row grown to edit its volume lines, by its header's toggle only; not undoable, never written. */
   audioExpandedRow: number | null;
   /**
@@ -144,6 +149,8 @@ export interface StitchEditorState {
   select(selection: StitchSelection): void;
   setDurations(durations: SourceDurations): void;
   setAudioDurations(durations: AudioDurations): void;
+  /** Kept when the keys are the same. */
+  setClipsLoading(keys: ReadonlySet<SourceKey>): void;
   setAudioExpandedRow(row: number | null): void;
   /** Clamped to >= 0. */
   setPlayhead(t: number): void;
@@ -165,6 +172,7 @@ export const STITCH_HISTORY_LIMIT = 100;
 
 const EMPTY_DURATIONS: SourceDurations = new Map();
 const EMPTY_AUDIO_DURATIONS: AudioDurations = new Map();
+const NO_LOADING: ReadonlySet<SourceKey> = new Set();
 const NO_ORIGINS: ReadonlyMap<string, ClipOrigin> = new Map();
 
 type SessionState = Pick<
@@ -181,6 +189,7 @@ type SessionState = Pick<
   | "selection"
   | "durations"
   | "audioDurations"
+  | "clipsLoading"
   | "audioExpandedRow"
   | "musicEdgeIdAtOpen"
   | "musicHeld"
@@ -209,6 +218,7 @@ const closedSession = (): SessionState => ({
   selection: null,
   durations: EMPTY_DURATIONS,
   audioDurations: EMPTY_AUDIO_DURATIONS,
+  clipsLoading: NO_LOADING,
   audioExpandedRow: null,
   musicEdgeIdAtOpen: null,
   musicHeld: false,
@@ -245,6 +255,7 @@ export const TRANSIENT_KEYS = [
   "nodeId",
   "canvasGeneration",
   "gestureKey",
+  "clipsLoading",
   "musicEdgeIdAtOpen",
   "musicHeld",
   "edgeIdsAtOpen",
@@ -419,6 +430,10 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
 
     select: (selection) => set({ selection }),
     setDurations: (durations) => set({ durations }),
+    setClipsLoading: (keys) => {
+      const now = get().clipsLoading;
+      if (keys.size !== now.size || [...keys].some((key) => !now.has(key))) set({ clipsLoading: keys });
+    },
     setAudioDurations: (audioDurations) => set({ audioDurations }),
     setAudioExpandedRow: (audioExpandedRow) => set({ audioExpandedRow }),
     setPlayhead: (t) => set({ playhead: Number.isFinite(t) ? Math.max(0, t) : 0 }),

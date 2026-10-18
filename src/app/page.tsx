@@ -15,17 +15,17 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { FTUXModal } from "@/components/onboarding/FTUXModal";
 import { getFTUXCompleted, setFTUXCompleted } from "@/store/utils/localStorage";
 import { useFTUXStore } from "@/store/ftuxStore";
-import { anyWorkflowTabUnsaved } from "@/store/utils/workflowTabs";
 import { useAssetStore } from "@/store/assetStore";
 import { AssetsView } from "@/components/assets/AssetsView";
 import { EditVideoView } from "@/components/edit/EditVideoView";
-import { EDIT_UNSAVED_WARNING, editHasUnsavedWork, handleDesktopSave } from "@/store/editProjectStore";
+import { RenderCanvasAdder } from "@/components/edit/RenderCanvasAdder";
+import { handleDesktopSave } from "@/store/editProjectStore";
+import { pageUnloadWarning } from "@/store/utils/pageUnloadWarning";
 import { startEditAutoSave } from "@/store/utils/editAutoSave";
 import { AgentSessionProvider } from "@/components/agent/AgentSession";
 import { clearGenerationToasts } from "@/components/GenerationToast";
 import { watchFirstRecording } from "@/components/assets/FirstRunHint";
-import { unloadWarning } from "@/components/assets/unloadWarning";
-import { initAssetLibrary, pendingRecordings } from "@/lib/assets/client/recorder";
+import { initAssetLibrary } from "@/lib/assets/client/recorder";
 import { fetchLibraryStatus, reportProjects } from "@/lib/assets/client/api";
 import { watchMovedProjects } from "@/lib/assets/client/movedProjects";
 import { collectProjectReport } from "@/lib/assets/client/projects";
@@ -118,14 +118,7 @@ function Editor() {
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const { tabs, hasUnsavedChanges } = useWorkflowStore.getState();
-      // Unsaved tabs, or generations still on their way to the library, each said as what it is;
-      // else an edit with changes not on disk
-      const warning =
-        unloadWarning({
-          unsavedTabs: anyWorkflowTabUnsaved(tabs, { hasUnsavedChanges }),
-          pendingRecordings: pendingRecordings(),
-        }) ?? (editHasUnsavedWork() ? EDIT_UNSAVED_WARNING : null);
+      const warning = pageUnloadWarning();
       if (warning) {
         e.preventDefault();
         // Browsers show their own words; this is the reason for anything that reads it
@@ -248,6 +241,7 @@ function Editor() {
         </div>
         <AnnotationModal />
         <StitchEditorModal />
+        <RenderCanvasAdder />
         {showFTUX && (
           <FTUXModal
             onComplete={handleFTUXComplete}

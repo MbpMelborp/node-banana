@@ -18,6 +18,7 @@ import {
   revealEdit,
   revealEditsFolder,
   saveEdit,
+  trashEditFile,
   type EditsDeps,
 } from "../server";
 import type { EditDocument, EditSequence, SaveEditRequest } from "../types";
@@ -308,6 +309,31 @@ describe("deleting and revealing (T-SRV-8, T-SRV-9)", () => {
     await deleteEdit(edit.id);
     expect(bridge.calls).toContainEqual({ type: "trash", path: path.join(edits, "Binned.nbedit") });
     expect(files()).toEqual([]);
+  });
+
+  it("keeps the file when no trash route moves it, never unlinking it", async () => {
+    const edit = await createEdit({ name: "Trip" }, deps);
+    const file = path.join(edits, "Trip.nbedit");
+    const missing = Object.assign(new Error("spawn gio ENOENT"), { code: "ENOENT" });
+    const commands: string[] = [];
+    const linux = { platform: "linux" as const, bridge: null, exec: async (command: string) => {
+      commands.push(command);
+      throw missing;
+    } };
+    await expect(deleteEdit(edit.id, { trash: (f) => trashEditFile(f, linux) })).rejects.toMatchObject({
+      status: 500,
+      code: "trash_failed",
+    });
+    expect(commands).toEqual(["gio"]);
+    expect(fs.existsSync(file)).toBe(true);
+    expect((await readEdit(edit.id)).name).toBe("Trip");
+
+    const refused = Object.assign(new Error("Not authorized to send Apple events to Finder. (-1743)"), { code: 1 });
+    const mac = { platform: "darwin" as const, bridge: null, exec: async (command: string) => {
+      throw command === "/usr/bin/trash" ? missing : refused;
+    } };
+    await expect(trashEditFile(file, mac)).rejects.toMatchObject({ code: "trash_failed" });
+    expect(fs.existsSync(file)).toBe(true);
   });
 
   it("reveals the edit's file, and opens the Edits folder, creating it when missing", async () => {

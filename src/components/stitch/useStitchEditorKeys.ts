@@ -203,8 +203,11 @@ export function useStitchEditorKeys(
         return;
       }
 
-      // A timecode field keeps its keys (Enter commits, Escape reverts, native undo)
-      if (isTypingTarget(e.target)) return;
+      // A timecode field keeps its keys (Enter commits, Escape reverts, native undo); ⌘D still does not bookmark
+      if (isTypingTarget(e.target)) {
+        if (isBrowserKey(e)) e.preventDefault();
+        return;
+      }
 
       const action = editorKeyAction(e);
       // Rail text selected with the mouse: the browser copies it, and nothing behind the dialog hears the key

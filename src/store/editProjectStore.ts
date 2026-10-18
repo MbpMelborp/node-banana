@@ -22,7 +22,6 @@ import type {
 import { getAssetInfo, requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { sameDraft, type StitchDraft } from "@/lib/stitch/draft";
 import { provisionalDurations } from "@/lib/stitch/libraryInsert";
-import type { SourceKey } from "@/lib/stitch/timeline";
 import { useAssetStore } from "./assetStore";
 import { requestSave } from "./saveRequestStore";
 import { parkedSessionOf, useStitchEditorStore, type StitchParkedSession } from "./stitchEditorStore";
@@ -80,8 +79,6 @@ export interface EditProjectState {
   parked: StitchParkedSession | null;
   render: { state: "idle" | "rendering" | "failed"; editId: string | null; progress: number; message: string | null };
   pane: { open: boolean; kind: EditPaneKind; focusRequest: number };
-  /** The source keys whose media is still loading; a Stacked add that pins waits for them. */
-  clipsLoading: ReadonlySet<SourceKey>;
   /** The unsaved-changes sheet's question: what to do once it is answered. */
   pendingSwitch: EditSwitch | null;
   /** The edit the delete confirmation asks about. */
@@ -122,7 +119,6 @@ export interface EditProjectState {
   setPaneKind(kind: EditPaneKind): void;
   /** "+" in the view: the pane opens, takes the kind and focuses its search. */
   requestPaneFocus(kind?: "video" | "audio"): void;
-  setClipsLoading(keys: ReadonlySet<SourceKey>): void;
 }
 
 export const LAST_EDIT_KEY = "node-banana-edit-last";
@@ -133,7 +129,6 @@ export const EDIT_UNSAVED_WARNING = "An edit in the Edit video view has changes 
 export const EDIT_PAUSED_MIN_WAIT_MS = 3_000;
 
 const SAVED: EditProjectState["save"] = { state: "saved", error: null, conflict: null, retryAt: null };
-const NO_LOADING: ReadonlySet<SourceKey> = new Set();
 
 function readStorage(key: string): string | null {
   try {
@@ -384,7 +379,8 @@ async function createAndOpen(from?: string): Promise<void> {
 
 /**
  * Before New, Open, Duplicate or All edits: the queue is waited for; changes are saved first with Save automatically
- * on, else the sheet asks. A refused or gone edit always asks (its save cannot succeed), so it can still be left.
+ * on, else the sheet asks. A refused or gone edit always asks (its save cannot succeed), and so does one whose save
+ * just failed or has to wait, so it can still be left.
  */
 async function readyToSwitch(next: EditSwitch): Promise<boolean> {
   await editWritesIdle();
@@ -392,7 +388,7 @@ async function readyToSwitch(next: EditSwitch): Promise<boolean> {
   const state = get().save.state;
   if (useWorkflowStore.getState().autoSaveEnabled && state !== "conflict" && state !== "gone") {
     const outcome = await saveNow("manual");
-    return outcome === "saved" || outcome === "unchanged";
+    if (outcome === "saved" || outcome === "unchanged") return true;
   }
   set({ pendingSwitch: next });
   return false;
@@ -426,8 +422,6 @@ function initialPane(): EditProjectState["pane"] {
   return { open: readStorage(LIBRARY_PANE_KEY) !== "closed", kind: "all", focusRequest: 0 };
 }
 
-const sameKeys = (a: ReadonlySet<SourceKey>, b: ReadonlySet<SourceKey>) => a.size === b.size && [...a].every((k) => b.has(k));
-
 export const useEditProjectStore = create<EditProjectState>(() => ({
   list: { status: "idle", edits: [], problems: [], folder: null, error: null },
   open: null,
@@ -438,7 +432,6 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
   parked: null,
   render: { state: "idle", editId: null, progress: 0, message: null },
   pane: initialPane(),
-  clipsLoading: NO_LOADING,
   pendingSwitch: null,
   confirmDelete: null,
   renameError: null,
@@ -480,7 +473,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
   leaveView: () => {
     ++openSeq;
     const parked = useStitchEditorStore.getState().park();
-    set({ opening: null, pendingSwitch: null, clipsLoading: NO_LOADING, ...(parked ? { parked } : {}) });
+    set({ opening: null, pendingSwitch: null, ...(parked ? { parked } : {}) });
     if (parked && useWorkflowStore.getState().autoSaveEnabled && sessionIsDirty(parked)) void saveNow("auto");
   },
 
@@ -677,10 +670,6 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
     if (!pane.open) writeStorage(LIBRARY_PANE_KEY, "open");
     set({ pane: { open: true, kind: kind ?? pane.kind, focusRequest: pane.focusRequest + 1 } });
   },
-
-  setClipsLoading: (keys) => {
-    if (!sameKeys(keys, get().clipsLoading)) set({ clipsLoading: keys });
-  },
 }));
 
 /** For tests: the queue, the chained save and the tokens back to their start. */
@@ -700,7 +689,6 @@ export function __resetEditProjectForTests(): void {
     parked: null,
     render: { state: "idle", editId: null, progress: 0, message: null },
     pane: initialPane(),
-    clipsLoading: NO_LOADING,
     pendingSwitch: null,
     confirmDelete: null,
     renameError: null,

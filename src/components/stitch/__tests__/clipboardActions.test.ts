@@ -7,6 +7,7 @@ import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge } from "@/types";
+import { restoreStoreActions } from "@/test/storeActions";
 import {
   canPaste,
   copySelection,
@@ -83,6 +84,7 @@ beforeEach(() => {
 afterEach(() => {
   editor().close();
   vi.restoreAllMocks();
+  restoreStoreActions(useWorkflowStore);
 });
 
 describe("copy and paste", () => {
@@ -201,6 +203,39 @@ describe("copy and paste", () => {
     expect(copy).toMatchObject({ source: { kind: "edge", edgeId: "e2" }, inSec: 1, outSec: 4 });
     expect(editor().clipOrigins.get(copy.id)).toBe("duplicated");
     expect(editor().selection).toEqual({ kind: "clip", clipId: copy.id });
+  });
+
+  it("waits in a lined-up stack while a clip is still loading: paste and duplicate would pin it at 0 s", () => {
+    open([edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")], { stacked: true });
+    // Only b has been measured; a and c are still loading
+    editor().setDurations(new Map<SourceKey, number>([["edge:e2", 5]]));
+    editor().setClipsLoading(new Set<SourceKey>(["edge:e1", "edge:e3"]));
+    select("c");
+    copySelection();
+    pasteClipboard();
+    duplicateSelection();
+    expect(steps()).toBe(0);
+    expect(editor().draft!.timeline.map((c) => c.startSec)).toEqual([undefined, undefined, undefined]);
+    expect(show.mock.calls).toEqual([
+      ["Waiting for the clips to load", "info"],
+      ["Waiting for the clips to load", "info"],
+    ]);
+
+    // Once they have loaded, the pins are where the clips play: a 0, b 4, c 8 (overlap 1)
+    editor().setDurations(DURATIONS);
+    editor().setClipsLoading(new Set());
+    duplicateSelection();
+    expect(steps()).toBe(1);
+    expect(editor().draft!.timeline.slice(0, 3).map((c) => c.startSec)).toEqual([0, 4, 8]);
+  });
+
+  it("pastes into a placed stack while a clip loads: nothing needs pinning", () => {
+    open([edgeClip("a", "e1", { startSec: 0 }), edgeClip("b", "e2", { startSec: 3 })], { stacked: true });
+    editor().setClipsLoading(new Set<SourceKey>(["edge:e1"]));
+    select("b");
+    duplicateSelection();
+    expect(steps()).toBe(1);
+    expect(show).not.toHaveBeenCalled();
   });
 
   it("does nothing on ⌘V with nothing copied", () => {

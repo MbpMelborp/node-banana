@@ -118,7 +118,7 @@ describe("addLibraryItemAt", () => {
   it("waits while a clip is loading and the add would pin, and adds once it has loaded", () => {
     openEdit({ sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true } });
     editor().setPlayhead(2);
-    useEditProjectStore.getState().setClipsLoading(new Set<SourceKey>(["asset:aclipaaaaaaaa2"]));
+    editor().setClipsLoading(new Set<SourceKey>(["asset:aclipaaaaaaaa2"]));
     const item = view("anewvideo00001", "video", 3);
     expect(libraryAddBlockedReason({ assetId: item.id, kind: "video", durationSec: 3 })).toBe(WAITING_FOR_CLIPS);
     expect(addLibraryItemAt(item)).toBeNull();
@@ -127,7 +127,7 @@ describe("addLibraryItemAt", () => {
     // Audio never waits
     expect(libraryAddBlockedReason({ assetId: "asound0000001", kind: "audio", durationSec: 2 })).toBeNull();
 
-    useEditProjectStore.getState().setClipsLoading(new Set());
+    editor().setClipsLoading(new Set());
     const id = addLibraryItemAt(item);
     expect(editor().draft!.timeline.map((c) => [c.id, c.startSec])).toEqual([
       ["v1", 0],

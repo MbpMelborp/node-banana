@@ -39,8 +39,6 @@ vi.mock("@/lib/assets/client/recorder", async (importOriginal) => ({
 }));
 
 vi.mock("@/hooks/useStitchVideos", () => ({ checkEncoderSupport: async () => true, stitchVideosAsync: vi.fn() }));
-const addMedia = vi.hoisted(() => vi.fn());
-vi.mock("@/hooks/useAddMediaNode", () => ({ useAddMediaNode: () => addMedia }));
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: toast }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -584,6 +582,12 @@ describe("keys", () => {
     search.focus();
     press(search, "e");
     expect(useAssetStore.getState().appView).toBe("edit");
+    // Escape leaves the field, and E is the view's again
+    press(search, "Escape");
+    expect(search).not.toHaveFocus();
+    press(document.body, "e");
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    act(() => useAssetStore.setState({ appView: "edit" }));
 
     // Mid-drag the view keys are swallowed (and no home-screen listener is there to hear them)
     fireEvent.pointerDown(tile(C), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });

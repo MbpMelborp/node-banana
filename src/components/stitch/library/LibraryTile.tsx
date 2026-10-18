@@ -86,7 +86,7 @@ export const LibraryTile = memo(function LibraryTile({
     adding ? `Add ${asset.filename}` : asset.filename,
     duration !== null ? formatTimecode(duration, 1) : null,
     project,
-    asset.favorite ? "favourite" : null,
+    asset.favorite ? "favorite" : null,
     missing ? "file missing" : null,
   ]
     .filter(Boolean)

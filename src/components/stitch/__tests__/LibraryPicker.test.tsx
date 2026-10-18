@@ -250,7 +250,7 @@ describe("LibraryPicker", () => {
   it("narrows to favourites and to this workflow", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favourites" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true }));
     fireEvent.click(within(dialog()).getByRole("button", { name: "This workflow" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ favorite: true, workflowIds: ["wf_1"] }));
@@ -395,9 +395,9 @@ describe("LibraryPicker", () => {
     api.fetchAssetPage.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
     api.fetchAssetPage.mockResolvedValueOnce(page([asset("fav", { favorite: true })]));
     openPicker();
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favourites" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
     expect(await within(dialog()).findByRole("button", { name: named("fav.mp4") })).toBeInTheDocument();
-    expect(tile("fav.mp4")).toHaveAccessibleName("fav.mp4, 0:05.0, Launch film, favourite");
+    expect(tile("fav.mp4")).toHaveAccessibleName("fav.mp4, 0:05.0, Launch film, favorite");
     await act(async () => answerFirst(page([asset("stale")])));
     expect(within(dialog()).queryByRole("button", { name: named("stale.mp4") })).toBeNull();
     expect(tile("fav.mp4")).toBeInTheDocument();
@@ -408,7 +408,7 @@ describe("LibraryPicker", () => {
     openPicker();
     expect(await within(dialog()).findByText("No videos match")).toBeInTheDocument();
     api.fetchAssetPage.mockRejectedValueOnce(new Error("The library is moving."));
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favourites" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
     expect(await within(dialog()).findByText("The library is moving.")).toBeInTheDocument();
   });
 
@@ -429,7 +429,7 @@ describe("LibraryPicker", () => {
     const grid = screen.getByTestId("stitch-library-grid");
     grid.scrollTop = 300;
     api.fetchAssetPage.mockResolvedValueOnce(page([asset("fav", { favorite: true }), asset("a2"), asset("a3")]));
-    fireEvent.click(within(dialog()).getByRole("button", { name: "Favourites" }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Favorites" }));
     await within(dialog()).findByRole("button", { name: named("fav.mp4") });
     expect(grid.scrollTop).toBe(0);
   });
@@ -472,7 +472,7 @@ describe("LibraryPicker", () => {
       await within(dialog()).findByRole("button", { name: named("a1.mp4") });
       await fireSentinel(observers, 0);
       await within(dialog()).findByRole("button", { name: named("a2.mp4") });
-      const favourites = within(dialog()).getByRole("button", { name: "Favourites" });
+      const favourites = within(dialog()).getByRole("button", { name: "Favorites" });
       fireEvent.click(favourites);
       fireEvent.click(favourites);
       expect(api.fetchAssetPage).toHaveBeenCalledTimes(4);
@@ -736,7 +736,7 @@ describe("LibraryPicker over the editor", () => {
       api.fetchAssetPage.mockResolvedValue(page([]));
       openPicker({ kind: "audio" });
       expect(await within(audioDialog()).findByText("No audio in the library yet")).toBeInTheDocument();
-      fireEvent.click(within(audioDialog()).getByRole("button", { name: "Favourites" }));
+      fireEvent.click(within(audioDialog()).getByRole("button", { name: "Favorites" }));
       expect(await within(audioDialog()).findByText("No audio matches")).toBeInTheDocument();
     });
 

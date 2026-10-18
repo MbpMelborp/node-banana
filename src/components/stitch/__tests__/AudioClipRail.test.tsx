@@ -78,7 +78,7 @@ describe("AudioClipRail", () => {
     expect(screen.getByRole("textbox", { name: "In" })).toHaveValue("0:00.50");
     expect(screen.getByRole("textbox", { name: "Out" })).toHaveValue("0:03.00");
     expect(screen.getByText("2.50 s")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Clip sound" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Sound" })).toHaveAttribute("aria-checked", "true");
     for (const name of ["Fade in", "Fade out", "Split at playhead", "Reset trim", "Remove clip"]) {
       expect(screen.getByRole("button", { name: new RegExp(name) })).toBeInTheDocument();
     }
@@ -118,11 +118,11 @@ describe("AudioClipRail", () => {
     act(() => editor().setPlayhead(5.5));
     again();
     expect(screen.getByRole("button", { name: /Split at playhead/ })).toBeEnabled();
-    fireEvent.click(screen.getByRole("switch", { name: "Clip sound" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Sound" }));
     expect(clipsNow()[0].muted).toBe(true);
     again();
     expect(screen.getByRole("button", { name: "Fade in" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("switch", { name: "Clip sound" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Sound" }));
     again();
     fireEvent.click(screen.getByRole("button", { name: "Fade in" }));
     // A ramp from its In (0.5), in its source seconds, over half the 1.5 s clip

@@ -28,8 +28,8 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 - **Rail**: the selected clip's name and source, in Stacked its Start (where
   it starts on the timeline), Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
-  node, Remove clip; with an audio clip selected, its Start, Trim, Clip
-  sound and the curve's quick buttons (Fade in, Fade out, Flat). With several clips
+  node, Remove clip; with an audio clip selected, its Start, Trim,
+  Sound and the curve's quick buttons (Fade in, Fade out, Flat). With several clips
   selected the rail shows how many, and what applies to all of them: Clip
   audio (On or Off, with neither pressed while some are muted and some
   not), Split at playhead, Reset trim and Remove. At the foot of the
@@ -38,8 +38,8 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
   videos from the library) and the audio rows (each audio clip's waveform
-  and volume line; a row's volume-line button makes it taller to edit the
-  line) and, under them, **+ Add audio**. In Stacked the Clips lane is one
+  and volume curve; a row's volume-curve button makes it taller to edit the
+  curve) and, under them, **+ Add audio**. In Stacked the Clips lane is one
   row per clip; the rows scroll between a fixed ruler and the audio rows.
   The timeline's height does not change with the layout or the selection
   (see Audio clips). A clip's box drags in time and up or down to another row in one
@@ -237,8 +237,8 @@ agree. A library clip
 whose asset is gone, or a file mediabunny cannot open, stops the run instead
 (see Library clips and Limits).
 
-Render needs at least two clips with a video ("Need at least 2 video clips to
-render"); the two pieces of a split clip count as two. The check runs before
+The node's Render needs at least two clips with a video ("Need at least 2 video clips to
+render"); an edit in the Edit video view renders from one; the two pieces of a split clip count as two. The check runs before
 the files are read, so a clip trimmed past its end or a file with no video
 track still counts, and the output can then hold a single clip.
 
@@ -589,7 +589,7 @@ every video clip's start and end, every other audio clip's start and end,
 and the clip's own start. ⇧ turns snapping off.
 
 **The volume curve.** Each clip has its own curve, drawn over its waveform.
-The volume-line button in a row's header makes the row taller (one row at a
+The volume-curve button in a row's header makes the row taller (one row at a
 time; selecting a clip never changes a row's height). On a taller row, with
 one clip selected: click the line to add a point, drag a point, double-click
 a point to remove it (the point before it is then selected, so ⌫ removes
@@ -666,7 +666,9 @@ after the last selected clip, or at the end. In Stacked they go on new rows
 below the lowest selected row (after the last piece, when that row is a
 piece of a split, so the split still changes nothing), or at the bottom,
 and the first starts at the playhead with the others at the same distances
-as before; like any placing edit, this first fixes every clip's start. ⌘D
+as before; like any placing edit, this first fixes every clip's start, so
+while a clip is still loading it waits ("Waiting for the clips to load")
+rather than place the clips from a length not known yet. ⌘D
 duplicates the selection without touching what you copied: in Track right
 after it, in Stacked on new rows starting where the selection ends. Pasted
 and duplicated clips become the selection, and each paste, cut or
@@ -674,7 +676,7 @@ duplicate is one undo step. The clip menu has Copy, Cut, Paste and
 Duplicate too.
 
 What you copy stays until you copy again or reload the app, so it can be
-pasted into another Edit video node, in this workflow or another. A library
+pasted into another Edit Video node, in this workflow or another. A library
 clip pastes anywhere. A clip from a connected video pastes only into the
 node it is connected to, in the same workflow and tab, while it is still
 connected; any other is left out, and a notice says how many and why.
@@ -932,7 +934,7 @@ Bare **E** (or **Edit video** in the tab strip or the menu) shows the Edit
 video view over the canvas, as A shows Assets and C the chat. It edits
 **edit projects**: timelines of their own, not tied to any node or
 workflow, with videos and audio from the asset library of any project.
-The Edit video node and its dialog are unchanged; the two never share a
+The Edit Video node and its dialog are unchanged; the two never share a
 timeline. E, A or C in the view go to the canvas, Assets or the chat;
 Escape never leaves it.
 
@@ -1125,8 +1127,9 @@ snaps its start only.
 - The preview plays one `<audio>` per audio clip, set once a frame; it can
   drift up to 0.25 s before it is seeked back.
 - Each audio file is decoded whole while a render runs: about 115 MB for 5
-  minutes of 48 kHz stereo.
-- A row taller for its volume line needs its header's button; editing
+  minutes of 48 kHz stereo. For the waveforms the editor decodes at most two
+  files at a time and keeps only their peaks.
+- A row taller for its volume curve needs its header's button; editing
   points needs it.
 - Pasting and duplicating add elements the same way: ⌘A then ⌘D doubles
   them each time. Past 24 clips in Stacked a notice says so; nothing is
@@ -1182,15 +1185,17 @@ snaps its start only.
   key hints.
 - A clip starts at most at 10:00 (600 s); a later start, typed or dragged,
   stops there.
-- An edit that places the clips while a clip's source is still loading
-  counts that clip as 0 s, so the clips after it are placed as if it took
-  no time, and they stay there once it loads. Undo of that edit puts the
-  stack back.
+- An edit that places the clips while a clip's source is still loading (a
+  nudge, a trim, a drag) counts that clip as 0 s, so the clips after it are
+  placed as if it took no time, and they stay there once it loads. Undo of
+  that edit puts the stack back. A Stacked add, paste or duplicate waits
+  instead.
 - A file mediabunny cannot open is shown at the `<video>` element's
   duration (an unreadable slot if that is not finite either), but Render
   reads files with mediabunny and stops on it. A file mediabunny opens with
   no video track is an unreadable slot and is left out of the encode.
-- Render needs at least two clips with a video. A clip trimmed past its end
+- The node's Render needs at least two clips with a video (the Edit video
+  view's needs one). A clip trimmed past its end
   or a file with no video track still counts, so the output can hold a
   single clip.
 - A Done made while a workflow runs cannot be undone on the canvas unless it

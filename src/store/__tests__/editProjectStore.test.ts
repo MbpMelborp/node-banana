@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetEditProjectForTests,
   EDIT_PAUSED_MIN_WAIT_MS,
+  EDIT_UNSAVED_WARNING,
   editHasUnsavedWork,
   editWritesIdle,
   handleDesktopSave,
@@ -21,6 +22,8 @@ import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import type { EditDocument, EditSequence, SaveEditRequest } from "@/lib/edits/types";
 import type { AssetView } from "@/lib/assets/types";
 import type { WorkflowNode } from "@/types";
+import { restoreStoreActions } from "@/test/storeActions";
+import { pageUnloadWarning } from "@/store/utils/pageUnloadWarning";
 
 const api = vi.hoisted(() => ({
   fetchEditList: vi.fn(),
@@ -145,6 +148,7 @@ afterEach(async () => {
   await editWritesIdle();
   editor().close();
   vi.useRealTimers();
+  restoreStoreActions(useStitchEditorStore);
 });
 
 describe("saving", () => {
@@ -413,6 +417,42 @@ describe("an edit that is gone", () => {
     expect(store().save.state).toBe("saved");
     expect(localStorage.getItem(LAST_EDIT_KEY)).toBe(OTHER);
   });
+
+  it("stays gone, still offering Save as a new edit, when that save fails", async () => {
+    await openDoc();
+    edit();
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
+    await store().saveNow("auto");
+    api.createEdit.mockRejectedValueOnce(new Error("Disk full"));
+    await store().saveAsNew();
+    expect(store().save).toMatchObject({ state: "gone", error: "Disk full" });
+    expect(editor().editId).toBe(ID);
+    expect(editHasUnsavedWork()).toBe(true);
+  });
+
+  it("moves a parked session to the new edit when the view was left during Save as a new edit", async () => {
+    await openDoc();
+    edit();
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
+    await store().saveNow("auto");
+    const created = deferred<EditDocument>();
+    api.createEdit.mockReturnValueOnce(created.promise);
+    const saving = store().saveAsNew();
+    useWorkflowStore.setState({ autoSaveEnabled: false });
+    store().leaveView();
+    created.resolve(doc(OTHER, { name: "Trip", updatedAt: 9000 }));
+    await saving;
+    const parked = store().parked!;
+    expect(parked.editId).toBe(OTHER);
+    expect(parked.initial).toBe(parked.draft);
+    expect(store().open?.id).toBe(OTHER);
+    expect(editHasUnsavedWork()).toBe(false);
+
+    await store().enterView();
+    expect(api.fetchEdit).toHaveBeenCalledTimes(1);
+    expect(editor().editId).toBe(OTHER);
+    expect(editor().past).toHaveLength(1);
+  });
 });
 
 describe("a library that is moving", () => {
@@ -540,6 +580,33 @@ describe("unsaved work", () => {
     edit();
     expect(editHasUnsavedWork()).toBe(true);
   });
+
+  it("warns on closing the page while an edit has unsaved changes, in the view or parked, after the workflows", async () => {
+    useWorkflowStore.setState({ autoSaveEnabled: false, hasUnsavedChanges: false, tabs: [] });
+    expect(pageUnloadWarning()).toBeNull();
+    await openDoc();
+    expect(pageUnloadWarning()).toBeNull();
+    edit();
+    expect(pageUnloadWarning()).toBe(EDIT_UNSAVED_WARNING);
+    store().leaveView();
+    expect(store().parked).not.toBeNull();
+    expect(pageUnloadWarning()).toBe(EDIT_UNSAVED_WARNING);
+    // An unsaved workflow is named first
+    useWorkflowStore.setState({ hasUnsavedChanges: true });
+    expect(pageUnloadWarning()).toBe("You have unsaved workflows.");
+    useWorkflowStore.setState({ hasUnsavedChanges: false });
+
+    await store().enterView();
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(pageUnloadWarning()).toBeNull();
+    // A conflict still warns once the draft is undone back to the saved one
+    edit();
+    useEditProjectStore.setState({ save: { state: "conflict", error: null, conflict: doc(), retryAt: null } });
+    editor().undo();
+    expect(selectIsDirty(editor())).toBe(false);
+    expect(pageUnloadWarning()).toBe(EDIT_UNSAVED_WARNING);
+  });
 });
 
 describe("File › Save in the desktop app", () => {
@@ -590,7 +657,7 @@ describe("switching edits", () => {
     expect(store().open).toBeNull();
   });
 
-  it("saves first with autosave on, and stays when that save fails", async () => {
+  it("saves first with autosave on, and asks when that save fails, so the edit can still be left", async () => {
     await openDoc();
     edit();
     api.saveEdit.mockRejectedValueOnce(new EditApiError("Disk full", 500));
@@ -598,11 +665,27 @@ describe("switching edits", () => {
     expect(api.createEdit).not.toHaveBeenCalled();
     expect(editor().editId).toBe(ID);
     expect(store().save).toMatchObject({ state: "failed", error: "Disk full" });
+    expect(store().pendingSwitch).toEqual({ action: "new" });
+
+    // Don't save leaves it
+    api.createEdit.mockResolvedValueOnce(doc(OTHER));
+    await store().resolveSwitch("discard");
+    expect(editor().editId).toBe(OTHER);
+  });
+
+  it("asks when the save has to wait (the library is moving), and Save on the sheet retries", async () => {
+    await openDoc();
+    edit();
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("The library is moving", 503, "paused"));
+    await store().goHome();
+    expect(store().save.state).toBe("waiting");
+    expect(store().pendingSwitch).toEqual({ action: "home" });
+    expect(editor().editId).toBe(ID);
 
     api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
-    api.createEdit.mockResolvedValueOnce(doc(OTHER));
-    await store().newEdit();
-    expect(editor().editId).toBe(OTHER);
+    await store().resolveSwitch("save");
+    expect(api.saveEdit).toHaveBeenCalledTimes(2);
+    expect(editor().isOpen).toBe(false);
   });
 
   it("asks rather than saving a gone edit, so it can still be left", async () => {
@@ -731,13 +814,6 @@ describe("the library pane", () => {
     expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 1 });
     store().requestPaneFocus();
     expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 2 });
-  });
-
-  it("keeps the loading set when its keys are the same", () => {
-    const keys = new Set<SourceKey>(["asset:aclipaaaaaaaa1"]);
-    store().setClipsLoading(keys);
-    store().setClipsLoading(new Set(keys));
-    expect(store().clipsLoading).toBe(keys);
   });
 });
 

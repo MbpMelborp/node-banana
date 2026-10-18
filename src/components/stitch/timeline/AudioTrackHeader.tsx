@@ -72,7 +72,7 @@ function AudioRowHeader({
   const muted = placeholder ? legacyMuted : (info?.muted ?? false);
   const canMute = placeholder ? legacyMuted : (info?.hasClips ?? false);
   const muteLabel = muted ? `Unmute ${audioRowName(row)}` : `Mute ${audioRowName(row)}`;
-  const toggleLabel = expanded ? "Hide volume line" : "Show volume line";
+  const toggleLabel = expanded ? "Hide volume curve" : "Show volume curve";
   const controlsTop = height - GEOMETRY.audioControlsBottom - CONTROLS_HEIGHT;
   return (
     <div

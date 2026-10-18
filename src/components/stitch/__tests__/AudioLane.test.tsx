@@ -139,7 +139,7 @@ const click = (el: HTMLElement, clientX = x(4), clientY = 30) => {
 };
 const toggle = (row = 0) =>
   fireEvent.click(
-    screen.getAllByRole("button", { name: /^(Show|Hide) volume line$/ })[row] as HTMLElement,
+    screen.getAllByRole("button", { name: /^(Show|Hide) volume curve$/ })[row] as HTMLElement,
   );
 /** The music selected on an expanded row: its curve takes presses. */
 const editMusic = () => {
@@ -228,7 +228,7 @@ describe("Audio section", () => {
     expect(rows()[0].style.height).toBe("64px");
     expect(timelineEl().style.height).toBe("225px");
     expect(rail()).toBeInTheDocument();
-    const show = screen.getByRole("button", { name: "Show volume line" });
+    const show = screen.getByRole("button", { name: "Show volume curve" });
     expect(show).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(show);
     expect(editor().audioExpandedRow).toBe(0);
@@ -240,7 +240,7 @@ describe("Audio section", () => {
     // The labels stand above the header's controls: −∞ sits at their level, so it is left out
     expect(screen.getAllByTestId("stitch-db-label").map((el) => el.textContent)).toEqual(["0 dB", "−12"]);
     // The same button, now the one that hides it
-    expect(screen.getByRole("button", { name: "Hide volume line" })).toBe(show);
+    expect(screen.getByRole("button", { name: "Hide volume curve" })).toBe(show);
     expect(show).toHaveAttribute("aria-expanded", "true");
     // Selecting a video clip leaves the row as it is
     click(screen.getByRole("option", { name: "Clip 1" }), 100, 0);
@@ -324,8 +324,8 @@ describe("Audio section", () => {
     expect(music().muted).toBe(false);
     expect(editor().past).toHaveLength(2);
     click(musicBox());
-    expect(within(rail()).getByRole("switch", { name: "Clip sound" })).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(rail()).getByRole("switch", { name: "Clip sound" }));
+    expect(within(rail()).getByRole("switch", { name: "Sound" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(rail()).getByRole("switch", { name: "Sound" }));
     expect(music().muted).toBe(true);
     expect(within(rail()).getByRole("button", { name: "Fade in" })).toBeDisabled();
   });
@@ -353,7 +353,7 @@ describe("Audio section", () => {
     expect(placeholder.style.width).toBe("260px");
     expect(screen.queryAllByRole("option").filter((el) => el.dataset.audioClipId)).toHaveLength(0);
     expect(screen.queryByRole("button", { name: /^Mute Audio/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show volume line" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show volume curve" })).toBeNull();
     expect(screen.getByRole("button", { name: "Add audio" })).toBeEnabled();
   });
 

@@ -167,8 +167,8 @@ export function AudioClipRail({
 
       <section className="flex flex-col gap-0.5 px-5">
         <DialogSectionHeader className="mb-1 leading-[13px]">Audio</DialogSectionHeader>
-        <RailRow label="Clip sound">
-          <Switch label="Clip sound" checked={!clip.muted} onChange={(on) => setSelectedAudioMuted(!on)} />
+        <RailRow label="Sound">
+          <Switch label="Sound" checked={!clip.muted} onChange={(on) => setSelectedAudioMuted(!on)} />
         </RailRow>
       </section>
 

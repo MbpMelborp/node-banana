@@ -354,6 +354,16 @@ describe("stitchEditorStore", () => {
     expect(s.soundOn).toBe(false);
   });
 
+  it("keeps the loading set when its keys are the same, and drops it on close", () => {
+    openOn();
+    const keys = new Set<SourceKey>(["edge:e1"]);
+    store().setClipsLoading(keys);
+    store().setClipsLoading(new Set(keys));
+    expect(store().clipsLoading).toBe(keys);
+    store().close();
+    expect(store().clipsLoading.size).toBe(0);
+  });
+
   it("clamps the playhead at 0", () => {
     openOn();
     store().setPlayhead(-2);

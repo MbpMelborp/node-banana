@@ -179,6 +179,41 @@ describe("renderEdit", () => {
     expect(useAssetStore.getState().detailAsset).toBe(asset);
   });
 
+  it("closes a node's editor dialog before Show in Assets switches the view under it", async () => {
+    await renderEdit();
+    const showInAssets = () => m.show.mock.calls[0][4][0].onClick();
+    const nodeDraft = { ...doc().sequence, legacyAudio: { curve: [], muted: false } };
+    const openDialog = () => {
+      editor().close();
+      editor().open({ nodeId: "n1", draft: nodeDraft, canvasGeneration: 1 });
+      useAssetStore.setState({ appView: "canvas", detailId: null, detailAsset: null });
+    };
+
+    // Nothing changed: it closes as Cancel does, and Assets shows
+    openDialog();
+    showInAssets();
+    expect(editor().isOpen).toBe(false);
+    expect(useAssetStore.getState()).toMatchObject({ appView: "assets", detailId: asset.id });
+
+    // Changed: the discard sheet asks; Keep editing stays, and a later close switches nothing
+    openDialog();
+    editor().apply((d) => ({ ...d, loopCount: 3 }));
+    showInAssets();
+    expect(editor().discardOpen).toBe(true);
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    editor().setDiscardOpen(false);
+    editor().close();
+    expect(useAssetStore.getState().appView).toBe("canvas");
+
+    // Changed, then Discard: Assets shows once the dialog has closed
+    openDialog();
+    editor().apply((d) => ({ ...d, loopCount: 3 }));
+    showInAssets();
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    editor().close();
+    expect(useAssetStore.getState()).toMatchObject({ appView: "assets", detailId: asset.id });
+  });
+
   it("offers no Add to canvas when the view has not handed in the canvas", async () => {
     await renderEdit();
     expect(m.show.mock.calls[0][4].map((a: { label: string }) => a.label)).toEqual(["Show in Assets"]);

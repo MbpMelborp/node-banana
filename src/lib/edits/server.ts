@@ -23,7 +23,7 @@ import type { Dirent } from "fs";
 import { promises as fs } from "fs";
 import path from "path";
 import { getAsset, LibraryError, libraryRootForRead, writeInLibraryRoot } from "@/lib/assets/server";
-import { openFolder, revealFile, trashFile } from "@/lib/assets/server/desktop";
+import { openFolder, revealFile, trashFiles, type TrashOptions } from "@/lib/assets/server/desktop";
 import { errnoCode } from "@/lib/assets/server/errors";
 import { atomicWriteFile, KeyedMutex, mapConcurrent, renameWithRetry } from "@/lib/assets/server/fsutil";
 import { sanitiseFolderName } from "@/lib/assets/server/known";
@@ -245,7 +245,8 @@ async function writeDocument(file: string, document: EditDocument): Promise<void
   const json = `${JSON.stringify(document, null, 2)}\n`;
   if (Buffer.byteLength(json) > EDIT_BODY_LIMIT) throw new LibraryError("This edit is too large to save.", 413, "too_large");
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await atomicWriteFile(file, json, { fsync: true });
+  // An 80-character name in CJK is 240 bytes: the usual "<file>.<uuid>.tmp" would pass ext4's 255
+  await atomicWriteFile(file, json, { fsync: true, shortTemp: true });
 }
 
 /**
@@ -529,13 +530,22 @@ async function addRender(id: string, render: EditRender): Promise<PatchEditRespo
   );
 }
 
+/**
+ * Sends an edit's file to the OS Trash, never unlinking it: an edit has no trash in the app, so the OS Trash is its
+ * only way back. Throws trash_failed, the file kept, when no route moved it.
+ */
+export async function trashEditFile(file: string, options: TrashOptions = {}): Promise<void> {
+  if ((await trashFiles([file], { ...options, unlinkFallback: false })).has(file)) return;
+  throw new LibraryError("Couldn't move the edit to the Trash.", 500, "trash_failed");
+}
+
 /** Sends the edit's file to the OS Trash. Its renders stay in the library. */
 export async function deleteEdit(id: string, deps: EditsDeps = {}): Promise<void> {
   const editId = checkEditId(id);
   await withLocks([idLock(editId)], () =>
     writeInLibraryRoot(async (root) => {
       const edit = requireEdit(await readFolder(editsDir(root)), editId);
-      await (deps.trash ?? trashFile)(edit.file);
+      await (deps.trash ?? trashEditFile)(edit.file);
       runtime().files.delete(edit.file);
     }),
   );

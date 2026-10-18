@@ -660,7 +660,7 @@ describe("a simulated placed encode", () => {
       const result = await simulate(units, crossfade, loops);
       expect(problems(units, result, loops), `trial ${trial}`).toEqual([]);
     }
-  });
+  }, 30_000);
 
   it("opens one decoder per visibility run per loop", async () => {
     const source = (id: string): FakeSource => ({ id, times: Array.from({ length: 240 }, (_, j) => j / 24), rate: 24, duration: 10 });

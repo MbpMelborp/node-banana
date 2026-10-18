@@ -76,6 +76,7 @@ import {
   updateClipAudio,
   updateClipsAudio,
   type ClipSpan,
+  type SourceDurations,
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
@@ -680,9 +681,13 @@ export function openLibraryPicker(kind: "video" | "audio" = "video"): void {
   s.setPickerOpen(kind);
 }
 
-/** The lengths a library add places with: measured, else the clip's record, else the open edit's snapshot. */
-function placementDurations(s: StitchEditorState) {
-  return provisionalDurations(s.draft ?? { timeline: [] }, s.durations, getAssetInfo, useEditProjectStore.getState().open?.assets ?? {});
+/**
+ * The lengths a library add, paste or duplicate places with: measured, else the clip's record, else (an edit
+ * project) the open edit's snapshot.
+ */
+export function placementDurations(s: StitchEditorState): SourceDurations {
+  const open = s.editId !== null ? useEditProjectStore.getState().open : null;
+  return provisionalDurations(s.draft ?? { timeline: [] }, s.durations, getAssetInfo, open?.id === s.editId ? open.assets : {});
 }
 
 function playheadTargetOf(s: StitchEditorState, item: LibraryItem): LibraryDropTarget | null {
@@ -697,16 +702,12 @@ export function libraryPlayheadTarget(item: LibraryItem): LibraryDropTarget | nu
 }
 
 /**
- * Why a library item cannot be added at the playhead now ("Waiting for the clips to load"), or null. The state and
- * the loading clips default to the stores' own; the pane passes them from its selectors.
+ * Why a library item cannot be added at the playhead now ("Waiting for the clips to load"), or null. The state
+ * defaults to the store's own; the pane passes it from its selector.
  */
-export function libraryAddBlockedReason(
-  item: LibraryItem,
-  s: StitchEditorState = editor(),
-  loading: ReadonlySet<SourceKey> = useEditProjectStore.getState().clipsLoading,
-): string | null {
+export function libraryAddBlockedReason(item: LibraryItem, s: StitchEditorState = editor()): string | null {
   const target = playheadTargetOf(s, item);
-  return s.draft && target ? stackedAddBlocked(s.draft, target, loading) : null;
+  return s.draft && target ? stackedAddBlocked(s.draft, target, s.clipsLoading) : null;
 }
 
 /**
@@ -719,7 +720,7 @@ export function addLibraryItemAt(view: AssetView, target?: LibraryDropTarget | n
   const item = libraryItemOf(view);
   if (!s.draft || !item) return null;
   const at = target ?? libraryPlayheadTarget(item);
-  if (!at || stackedAddBlocked(s.draft, at, useEditProjectStore.getState().clipsLoading)) return null;
+  if (!at || stackedAddBlocked(s.draft, at, s.clipsLoading)) return null;
   primeAssetInfo([view]);
   const durations = placementDurations(s);
   const inserted = insertLibraryItem(s.draft, durations, item, at);

@@ -212,16 +212,22 @@ export function sanitizeEditSummary(raw: unknown, seq: EditSequence): EditSummar
   };
 }
 
+/** The first `max` UTF-16 units of `value`, less a surrogate pair's first half the cut would leave alone. */
+function cutUnits(value: string, max: number): string {
+  const cut = value.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
 /** Trim, collapse whitespace, NFC, cut to EDIT_NAME_MAX; empty → EDIT_DEFAULT_NAME. */
 export function normalizeEditName(input: string): string {
   const clean = (value: string) => value.replace(/\s+/g, " ").trim();
-  const name = clean(clean(String(input ?? "").normalize("NFC")).slice(0, EDIT_NAME_MAX));
+  const name = clean(cutUnits(clean(String(input ?? "").normalize("NFC")), EDIT_NAME_MAX));
   return name || EDIT_DEFAULT_NAME;
 }
 
 /** `base` cut so `suffix` fits in EDIT_NAME_MAX. */
 function withSuffix(base: string, suffix: string): string {
-  return `${base.slice(0, EDIT_NAME_MAX - suffix.length).trimEnd()}${suffix}`;
+  return `${cutUnits(base, EDIT_NAME_MAX - suffix.length).trimEnd()}${suffix}`;
 }
 
 /** The first of base, "base 2", "base 3", … whose key is not in taken (keys compare file names, case-insensitively). */

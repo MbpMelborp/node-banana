@@ -60,7 +60,7 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
-- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`)
+- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`); an open edit in the Edit video view follows the same setting (`src/store/utils/editAutoSave.ts`)
 
 ### Execution Flow
 
@@ -159,7 +159,7 @@ Returns `{ images: string[], text: string | null }`.
 ## Keyboard Shortcuts
 
 - `Cmd/Ctrl + Enter` - Run workflow (as many times as the Run menu's Runs count)
-- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`)
+- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`), except while the Edit video view shows, where both save the open edit (`handleDesktopSave` in `src/store/editProjectStore.ts`)
 - `Cmd/Ctrl + C/V` - Copy/paste nodes
 - `Shift + P` - Add prompt node at center
 - `Shift + I` - Add image input node

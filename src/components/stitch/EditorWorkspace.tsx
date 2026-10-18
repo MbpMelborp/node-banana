@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { SourceKey } from "@/lib/stitch/timeline";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { EditorRail } from "./EditorRail";
 import { EditorStage } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
@@ -16,23 +17,20 @@ import type { EditorComposition } from "./useEditorComposition";
  */
 export function EditorWorkspace({
   composition,
-  onLoadingChange,
   narrowHidesZoom = false,
 }: {
   composition: EditorComposition;
-  /** The source keys of the video clips whose media is still loading, whenever that set changes. */
-  onLoadingChange?: (keys: ReadonlySet<SourceKey>) => void;
   /** The transport drops its zoom slider when its column is narrow (the Edit video view, beside its library). */
   narrowHidesZoom?: boolean;
 }) {
   const { byClip, audioByClip, spans, total, empty, stacked, zoom } = composition;
 
+  // An edit that pins a lined-up stack waits for these (clipsLoading)
   useEffect(() => {
-    if (!onLoadingChange) return;
     const loading = new Set<SourceKey>();
     for (const view of byClip.values()) if (view.status === "loading") loading.add(view.key);
-    onLoadingChange(loading);
-  }, [byClip, onLoadingChange]);
+    useStitchEditorStore.getState().setClipsLoading(loading);
+  }, [byClip]);
 
   return (
     <>

@@ -36,6 +36,9 @@ export interface NotedNode {
 /** The last frame node each Edit Video node added, and the canvas it was added on: the next one goes under it. */
 const lastFrame = new Map<string, { frameNodeId: string; generation: number }>();
 
+/** Between the node and its first frame: clear of the node's Output socket and its label, as between connected nodes. */
+export const FRAME_BESIDE_GAP = 100;
+
 export function __resetFramePlacementForTests(): void {
   lastFrame.clear();
 }
@@ -46,7 +49,7 @@ export function frameNodePosition(noted: NotedNode): XYPosition {
   const last = lastFrame.get(noted.id);
   const frame = last && last.generation === wf.canvasGeneration ? wf.nodes.find((n) => n.id === last.frameNodeId) : undefined;
   if (frame) return { x: frame.position.x, y: frame.position.y + getNodeSize(frame).height + STACK_GAP };
-  return { x: noted.position.x + noted.width + STACK_GAP, y: noted.position.y };
+  return { x: noted.position.x + noted.width + FRAME_BESIDE_GAP, y: noted.position.y };
 }
 
 /**
@@ -81,7 +84,7 @@ export function frameFileName(t: number): string {
 
 /** What the toast says when a capture fails. */
 export function frameErrorText(error: FrameCaptureError): string {
-  const clip = error.clipNumber !== undefined ? `clip ${error.clipNumber}'s` : "a clip's";
+  const clip = error.clipNumber !== undefined ? `Clip ${error.clipNumber}'s` : "a clip's";
   switch (error.kind) {
     case "empty":
       return "Nothing plays at the playhead.";
@@ -91,7 +94,7 @@ export function frameErrorText(error: FrameCaptureError): string {
       return `Reading ${clip} video took too long.`;
     case "unreadable":
       return error.clipNumber !== undefined
-        ? `Couldn't read clip ${error.clipNumber}'s video at the playhead.`
+        ? `Couldn't read Clip ${error.clipNumber}'s video at the playhead.`
         : "Couldn't read the video at the playhead.";
   }
 }

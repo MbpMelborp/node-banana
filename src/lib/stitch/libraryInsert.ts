@@ -83,9 +83,17 @@ export function provisionalDurations(
 }
 
 /**
- * Why an add must wait, or null: a Stacked add that would pin the clips (not every clip has a start yet) while some
- * clip's media is still loading, since the pins would come from a length the editor does not know yet. Track, audio
- * and a lined-up append never wait.
+ * Why an edit that pins a stack must wait, or null: not every clip has a start yet while some clip's media is still
+ * loading, so the pins would come from a length the editor does not know yet. A Stacked paste or duplicate asks this.
+ */
+export function pinWaitsForLoading(draft: Pick<StitchDraft, "timeline">, loadingKeys: ReadonlySet<SourceKey>): string | null {
+  if (draft.timeline.every((clip) => clip.startSec !== undefined)) return null;
+  return draft.timeline.some((clip) => loadingKeys.has(sourceKey(clip.source))) ? WAITING_FOR_CLIPS : null;
+}
+
+/**
+ * Why an add must wait, or null: a Stacked add that would pin the clips while one is loading (pinWaitsForLoading).
+ * Track, audio and a lined-up append never wait.
  */
 export function stackedAddBlocked(
   draft: Pick<StitchDraft, "timeline">,
@@ -93,8 +101,7 @@ export function stackedAddBlocked(
   loadingKeys: ReadonlySet<SourceKey>,
 ): string | null {
   if (target.lane !== "clips" || target.mode !== "stacked") return null;
-  if (draft.timeline.every((clip) => clip.startSec !== undefined)) return null;
-  return draft.timeline.some((clip) => loadingKeys.has(sourceKey(clip.source))) ? WAITING_FOR_CLIPS : null;
+  return pinWaitsForLoading(draft, loadingKeys);
 }
 
 /**

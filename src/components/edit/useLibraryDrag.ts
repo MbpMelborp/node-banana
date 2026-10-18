@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import type { AssetView } from "@/lib/assets/types";
 import { libraryItemOf, stackedAddBlocked, WAITING_FOR_CLIPS, type LibraryItem } from "@/lib/stitch/libraryInsert";
 import { addLibraryItemAt } from "@/components/stitch/editorActions";
 import { armed, DRAG_START_PX, edgeSpeed } from "@/components/stitch/timeline/autoScroll";
 import { libraryDrop } from "@/components/stitch/timeline/libraryDrop";
-import { useEditProjectStore } from "@/store/editProjectStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 
 /** The ghost under the pointer while a library tile is dragged. */
@@ -14,6 +13,30 @@ export interface LibraryDragGhost {
   y: number;
   /** "Waiting for the clips to load" over a Stacked place that cannot take it yet. */
   waiting: boolean;
+}
+
+/**
+ * The ghost lives outside React state: a pointer move redraws the ghost
+ * alone (useLibraryDragGhost), never the pane and its tiles.
+ */
+let ghostNow: LibraryDragGhost | null = null;
+const ghostListeners = new Set<() => void>();
+
+function setGhost(ghost: LibraryDragGhost | null): void {
+  ghostNow = ghost;
+  for (const listener of ghostListeners) listener();
+}
+
+function subscribeGhost(listener: () => void): () => void {
+  ghostListeners.add(listener);
+  return () => {
+    ghostListeners.delete(listener);
+  };
+}
+
+/** The ghost of the tile being dragged, or null. */
+export function useLibraryDragGhost(): LibraryDragGhost | null {
+  return useSyncExternalStore(subscribeGhost, () => ghostNow, () => null);
 }
 
 /**
@@ -31,7 +54,6 @@ export interface LibraryDragGhost {
  * also after a cancelled drag.
  */
 export function useLibraryDrag() {
-  const [ghost, setGhost] = useState<LibraryDragGhost | null>(null);
   const dragged = useRef(false);
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
@@ -67,7 +89,7 @@ export function useLibraryDrag() {
       const editor = useStitchEditorStore.getState();
       const target = libraryDrop.probe(lastX, lastY, item, { snap: editor.snap && !shift });
       const waiting =
-        target !== null && editor.draft !== null && stackedAddBlocked(editor.draft, target, useEditProjectStore.getState().clipsLoading) !== null;
+        target !== null && editor.draft !== null && stackedAddBlocked(editor.draft, target, editor.clipsLoading) !== null;
       libraryDrop.set(waiting ? null : target, item);
       setGhost({ asset, x: lastX, y: lastY, waiting });
     };
@@ -153,5 +175,5 @@ export function useLibraryDrag() {
     window.addEventListener("blur", onBlur);
   }, []);
 
-  return { ghost, onPointerDown, consumeClick, waitingText: WAITING_FOR_CLIPS };
+  return { onPointerDown, consumeClick, waitingText: WAITING_FOR_CLIPS };
 }

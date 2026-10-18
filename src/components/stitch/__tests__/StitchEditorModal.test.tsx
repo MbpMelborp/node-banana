@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { useRef } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
@@ -18,12 +17,11 @@ import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { musicAudio } from "@/lib/stitch/draft";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
-import { EditorWorkspace } from "../EditorWorkspace";
-import { useEditorComposition } from "../useEditorComposition";
 import { openStitchEditor } from "../openStitchEditor";
 import { libraryDrop } from "../timeline/libraryDrop";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { restoreStoreActions } from "@/test/storeActions";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -137,6 +135,8 @@ afterEach(() => {
   __setMediaExtractorForTests(null);
   __resetMediaInfoForTests();
   vi.restoreAllMocks();
+  restoreStoreActions(useWorkflowStore);
+  restoreStoreActions(useStitchEditorStore);
 });
 
 describe("StitchEditorModal", () => {
@@ -1180,29 +1180,18 @@ describe("StitchEditorModal", () => {
 });
 
 describe("EditorWorkspace", () => {
-  function Workspace({ onLoadingChange }: { onLoadingChange: (keys: ReadonlySet<string>) => void }) {
-    const rootRef = useRef<HTMLDivElement>(null);
-    const composition = useEditorComposition(rootRef, 0);
-    return (
-      <div ref={rootRef}>
-        <EditorWorkspace composition={composition} onLoadingChange={onLoadingChange} />
-      </div>
-    );
-  }
-
-  it("reports the clips whose media is still loading, and again once it has loaded", () => {
+  it("reports the clips whose media is still loading to the editor, and again once it has loaded", () => {
     seed();
     __resetMediaInfoForTests();
     __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, width: 1920, height: 1080, fps: 24 });
+    render(<StitchEditorModal />);
     act(() => {
       openStitchEditor("stitch");
     });
-    const onLoadingChange = vi.fn();
-    render(<Workspace onLoadingChange={onLoadingChange} />);
-    expect([...onLoadingChange.mock.lastCall![0]]).toEqual(["edge:eB"]);
+    expect([...editor().clipsLoading]).toEqual(["edge:eB"]);
 
     act(() => __setMediaInfoForTests(mediaKeyOf("blob:b"), { status: "ready", duration: 4, width: 1280, height: 720, fps: 24 }));
-    expect([...onLoadingChange.mock.lastCall![0]]).toEqual([]);
+    expect([...editor().clipsLoading]).toEqual([]);
   });
 });
 
@@ -1395,7 +1384,7 @@ describe("StitchEditorModal, several clips", () => {
     expect(order()).toHaveLength(4);
   });
 
-  it("keeps ⌘D from the browser while the clip menu is open, and leaves ⌘A to a text field", () => {
+  it("keeps ⌘D from the browser while the clip menu is open and in a text field, and leaves ⌘A to a text field", () => {
     seedThree();
     openEditor();
     fireEvent.contextMenu(within(screen.getByRole("listbox", { name: "Clips" })).getAllByRole("option")[0], {
@@ -1414,6 +1403,9 @@ describe("StitchEditorModal, several clips", () => {
     const before = editor().selection;
     expect(keyOn(well, "a").prevented).toBe(false);
     expect(editor().selection).toBe(before);
+    // ⌘D in a text field: no bookmark, and no duplicate
+    expect(keyOn(well, "d").prevented).toBe(true);
+    expect(order()).toHaveLength(3);
   });
 
   it("leaves ⌘C and ⌘X to selected text, kept from the canvas, and copies clips once nothing is selected", () => {

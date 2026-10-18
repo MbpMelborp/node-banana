@@ -6,6 +6,7 @@ import { isRecorderEnabled, recordAsset } from "@/lib/assets/client/recorder";
 import type { AssetRunContext, AssetView } from "@/lib/assets/types";
 import { useAssetStore } from "@/store/assetStore";
 import { currentEditSession, useEditProjectStore } from "@/store/editProjectStore";
+import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { assetParameters } from "@/store/execution/assetRecording";
 import { gatherDraftInputs, stitchEngineOptions, stitchRecordParameters } from "@/store/execution/stitchInputs";
 
@@ -33,7 +34,32 @@ export function stopEditRender(): void {
 
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 
+/**
+ * Runs `then` once no node's editor dialog is open. The dialog would stay over the view a toast's action switches to,
+ * so it closes first as Cancel closes it: at once when nothing changed, else after the discard sheet's Discard
+ * (Keep editing drops `then`).
+ */
+function afterNodeDialog(then: () => void): void {
+  const s = useStitchEditorStore.getState();
+  if (!s.isOpen || s.nodeId === null) return then();
+  if (!selectIsDirty(s)) {
+    s.close();
+    return then();
+  }
+  s.setDiscardOpen(true);
+  const stop = useStitchEditorStore.subscribe((now) => {
+    if (!now.isOpen || now.nodeId === null) {
+      stop();
+      then();
+    } else if (!now.discardOpen) stop();
+  });
+}
+
 function showInAssets(asset: AssetView): void {
+  afterNodeDialog(() => revealInAssets(asset));
+}
+
+function revealInAssets(asset: AssetView): void {
   const assets = useAssetStore.getState();
   assets.receiveArrivals([asset]);
   assets.setAppView("assets");

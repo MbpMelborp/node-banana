@@ -269,6 +269,8 @@ describe("names (T-DOC-6)", () => {
     expect(normalizeEditName("   ")).toBe("Untitled edit");
     expect(normalizeEditName("")).toBe("Untitled edit");
     expect(normalizeEditName("x".repeat(81))).toBe("x".repeat(80));
+    // Never half an emoji: a cut through a surrogate pair drops the pair
+    expect(normalizeEditName(`a${"😀".repeat(40)}`)).toBe(`a${"😀".repeat(39)}`);
   });
 
   it("finds the first free name, comparing case-insensitively", () => {
@@ -276,6 +278,8 @@ describe("names (T-DOC-6)", () => {
     expect(firstFreeName("Untitled edit", new Set(), key)).toBe("Untitled edit");
     expect(firstFreeName("Untitled edit", new Set(["untitled edit", "untitled edit 2"]), key)).toBe("Untitled edit 3");
     expect(firstFreeName("x".repeat(80), new Set(["x".repeat(80)]), key)).toBe(`${"x".repeat(78)} 2`);
+    const emoji = `a${"😀".repeat(39)}`;
+    expect(firstFreeName(emoji, new Set([key(emoji)]), key)).toBe(`a${"😀".repeat(38)} 2`);
   });
 
   it("names a copy", () => {

@@ -21,6 +21,7 @@ import {
   selectAllAudioClips,
   selectAllClips,
 } from "../selectionActions";
+import { restoreStoreActions } from "@/test/storeActions";
 
 const store = () => useStitchEditorStore.getState();
 
@@ -63,6 +64,7 @@ describe("selectionActions", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    restoreStoreActions(useStitchEditorStore);
     window.getSelection()?.removeAllRanges();
     document.body.innerHTML = "";
   });
@@ -213,7 +215,6 @@ describe("selectionActions", () => {
   it("writes an audio box's selection once, added to the audio selection when additive", () => {
     store().select({ kind: "clip", clipId: "a" });
     const select = vi.spyOn(store(), "select");
-    select.mockClear();
     applyAudioBoxSelection(["x1", "x2"], false);
     expect(select).toHaveBeenCalledTimes(1);
     // A video selection is replaced, even by an additive box

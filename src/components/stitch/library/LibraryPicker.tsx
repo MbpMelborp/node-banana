@@ -291,7 +291,7 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
           className={cn(FILTER_BUTTON, query.favourites ? FILTER_ON : FILTER_OFF)}
         >
           <Star size={12} strokeWidth={2} />
-          Favourites
+          Favorites
         </button>
         <button
           type="button"

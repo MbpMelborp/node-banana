@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const prepareAudioAsync = vi.hoisted(() => vi.fn());
-vi.mock("@/hooks/useAudioMixing", () => ({ prepareAudioAsync }));
+const { prepareAudioAsync, decodeAudioPieces } = vi.hoisted(() => ({ prepareAudioAsync: vi.fn(), decodeAudioPieces: vi.fn() }));
+vi.mock("@/hooks/useAudioMixing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useAudioMixing")>()),
+  prepareAudioAsync,
+  decodeAudioPieces,
+}));
 import {
   __resetWaveformForTests,
   __setWaveformDecoderForTests,
@@ -9,6 +13,7 @@ import {
   requestWaveform,
   subscribeWaveform,
   type WaveformDecoder,
+  WAVEFORM_DECODES,
   WAVEFORM_LRU_LIMIT,
 } from "../waveformCache";
 
@@ -22,6 +27,24 @@ afterEach(() => {
   __resetWaveformForTests();
   vi.unstubAllGlobals();
   prepareAudioAsync.mockReset();
+  decodeAudioPieces.mockReset();
+});
+
+type Each = { piece: (buffer: unknown) => void; restart: () => void };
+/** The decoder handing over `pieces` (after `before`, which a fallback then restarts from). */
+const handsOver = (pieces: unknown[], before: unknown[] = []) =>
+  decodeAudioPieces.mockImplementation(async (_blob: Blob, each: Each) => {
+    for (const p of before) each.piece(p);
+    if (before.length) each.restart();
+    for (const p of pieces) each.piece(p);
+  });
+
+/** A decoded piece, as the decoder gives it. */
+const piece = (channels: number[][], sampleRate = 10) => ({
+  length: channels[0].length,
+  sampleRate,
+  numberOfChannels: channels.length,
+  getChannelData: (c: number) => new Float32Array(channels[c]),
 });
 
 /** A decoded two-channel buffer, as prepareAudioAsync gives it. */
@@ -101,25 +124,68 @@ describe("waveformCache", () => {
   it("decodes as the stitch does: the data: URL's type on an untyped response, from the start, every channel", async () => {
     const fetchMock = vi.fn(async () => ({ blob: async () => new Blob([new Uint8Array([1, 2, 3])]) }));
     vi.stubGlobal("fetch", fetchMock);
-    prepareAudioAsync.mockResolvedValue(decoded([[0.25, 0, 0.1], [0, -0.75, 0.5]], 3));
+    // Two pieces at 1 Hz: 3 s, the length prepareAudioAsync(blob, 0) gives
+    // MediaBunny gave one piece, then failed: the Web Audio fallback starts again
+    handsOver([piece([[0.25, 0], [0, -0.75]], 1), piece([[0.1], [0.5]], 1)], [piece([[1, 1, 1, 1]], 1)]);
     const src = "data:audio/wav;base64,AAAA";
     requestWaveform("w", src);
     await vi.waitFor(() => expect(getWaveform("w")?.status).toBe("ready"));
     expect(fetchMock).toHaveBeenCalledWith(src);
-    expect(prepareAudioAsync).toHaveBeenCalledTimes(1);
-    const [blob, videoDuration] = prepareAudioAsync.mock.calls[0];
-    expect((blob as Blob).type).toBe("audio/wav");
-    expect(videoDuration).toBe(0);
+    expect(decodeAudioPieces).toHaveBeenCalledTimes(1);
+    expect((decodeAudioPieces.mock.calls[0][0] as Blob).type).toBe("audio/wav");
+    expect(prepareAudioAsync).not.toHaveBeenCalled();
     // The peak of each sample is the louder of the two channels
     expect(Array.from(getWaveform("w")!.peaks!)).toEqual([0.25, 0.75, 0.5]);
     expect(getWaveform("w")!.duration).toBe(3);
   });
 
+  it("reads a file shorter than the stitch's minimum through prepareAudioAsync, which repeats it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ blob: async () => new Blob([new Uint8Array([1])], { type: "audio/wav" }) })));
+    // 0.05 s at 100 Hz: prepareAudioAsync fills 0.1 s
+    handsOver([piece([[0.5, 0.25, 0.1, 0, 0]], 100)]);
+    prepareAudioAsync.mockResolvedValue(decoded([[0.5, 0.25, 0.1, 0, 0, 0.5, 0.25, 0.1, 0, 0]], 0.1));
+    requestWaveform("s", "blob:short");
+    await vi.waitFor(() => expect(getWaveform("s")?.status).toBe("ready"));
+    expect(prepareAudioAsync.mock.calls[0][1]).toBe(0);
+    expect(getWaveform("s")!.duration).toBe(0.1);
+    expect(getWaveform("s")!.peaks).toHaveLength(10);
+  });
+
   it("falls back to MP3 for an untyped response that is not a data: URL, and to an error when nothing decodes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ blob: async () => new Blob([new Uint8Array([1])]) })));
-    prepareAudioAsync.mockResolvedValue(null);
+    handsOver([]);
     requestWaveform("m", "blob:music");
     await vi.waitFor(() => expect(getWaveform("m")?.status).toBe("error"));
-    expect((prepareAudioAsync.mock.calls[0][0] as Blob).type).toBe("audio/mpeg");
+    expect((decodeAudioPieces.mock.calls[0][0] as Blob).type).toBe("audio/mpeg");
+  });
+
+  it("decodes at most WAVEFORM_DECODES sources at a time, and never one evicted while it waited", async () => {
+    const pending = new Map<string, () => void>();
+    const decode = vi.fn<WaveformDecoder>(
+      (src) =>
+        new Promise((resolve) => {
+          pending.set(src, () => resolve({ channels: [new Float32Array([0.5])], duration: 1 }));
+        }),
+    );
+    __setWaveformDecoderForTests(decode);
+    for (let i = 0; i < 4; i++) requestWaveform(`k${i}`, `src${i}`);
+    await flush();
+    expect(decode.mock.calls.map(([src]) => src)).toEqual(["src0", "src1"].slice(0, WAVEFORM_DECODES));
+    pending.get("src0")!();
+    await flush();
+    expect(getWaveform("k0")?.status).toBe("ready");
+    expect(decode.mock.calls.map(([src]) => src)).toEqual(["src0", "src1", "src2"]);
+    // k3 waits; pushed out of the cache before its turn, it is never decoded
+    for (let i = 4; i < 4 + WAVEFORM_LRU_LIMIT; i++) {
+      requestWaveform(`k${i}`, `src${i}`);
+      // Keep k1 and k2, which are decoding, the newest
+      requestWaveform("k1", "src1");
+      requestWaveform("k2", "src2");
+    }
+    expect(getWaveform("k3")).toBeUndefined();
+    pending.get("src1")!();
+    pending.get("src2")!();
+    await flush();
+    expect(decode.mock.calls.map(([src]) => src)).not.toContain("src3");
   });
 });

@@ -7,7 +7,6 @@ import { isTypingTarget } from "@/components/stitch/editorKeys";
 import { STITCH_EDITOR_PANEL } from "@/components/stitch/editorStyles";
 import { useEditorComposition } from "@/components/stitch/useEditorComposition";
 import { useStitchEditorKeys, type StitchEditorKeyOptions } from "@/components/stitch/useStitchEditorKeys";
-import { useAddMediaNode } from "@/hooks/useAddMediaNode";
 import { useEditProjectStore } from "@/store/editProjectStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { insideAgentWindow, isSaveShortcut } from "@/utils/saveShortcut";
@@ -16,7 +15,6 @@ import { EditHome } from "./EditHome";
 import { EDIT_BANNER_PX, EditBanner, EditSheets, useEditBanner } from "./EditSheets";
 import { editViewKeyAction, runEditViewKey } from "./editViewKeys";
 import { LibraryPane } from "./LibraryPane";
-import { setRenderCanvasAdder } from "./renderEdit";
 
 /** The header's height (its h-12). */
 const HEADER_PX = 48;
@@ -95,15 +93,6 @@ export function EditVideoView() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [editOpen]);
 
-  // A render's "Add to canvas" puts the video on the open workflow's canvas, which needs React Flow's context
-  const addMedia = useAddMediaNode();
-  useEffect(() => {
-    setRenderCanvasAdder(({ src, filename }) => {
-      addMedia({ kind: "video", src, filename });
-    });
-    return () => setRenderCanvasAdder(null);
-  }, [addMedia]);
-
   // On the home screen New edit takes focus, so Enter starts one (it moves into the empty list once that is read)
   const home = !editOpen && opening === null;
   useEffect(() => {
@@ -131,7 +120,6 @@ function OpenEdit() {
   const rootRef = useRef<HTMLDivElement>(null);
   const paneOpen = useEditProjectStore((s) => s.pane.open);
   const snapshot = useEditProjectStore((s) => s.open?.assets);
-  const setClipsLoading = useEditProjectStore((s) => s.setClipsLoading);
   const banner = useEditBanner();
 
   useStitchEditorKeys(rootRef, stayOpen, KEY_OPTIONS);
@@ -142,7 +130,6 @@ function OpenEdit() {
   // Space plays at once: the editor takes focus as it opens
   useEffect(() => {
     rootRef.current?.focus({ preventScroll: true });
-    return () => useEditProjectStore.getState().setClipsLoading(new Set());
   }, []);
 
   return (
@@ -156,7 +143,7 @@ function OpenEdit() {
       >
         <EditHeader composition={composition} />
         {banner && <EditBanner banner={banner} />}
-        <EditorWorkspace composition={composition} onLoadingChange={setClipsLoading} narrowHidesZoom />
+        <EditorWorkspace composition={composition} narrowHidesZoom />
       </div>
     </div>
   );

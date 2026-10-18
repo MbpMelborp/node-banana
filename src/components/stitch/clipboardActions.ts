@@ -24,10 +24,12 @@ import { copyAudioItems, duplicateAudioClips, pasteAudioClips, type AudioRowMap 
 import { draftSpans, type ClipOrigin } from "@/lib/stitch/draft";
 import { makeSelection } from "@/lib/stitch/selection";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
+import { pinWaitsForLoading } from "@/lib/stitch/libraryInsert";
 import {
   drawnPlayhead,
   editorAudioLengthOf,
   keepZoom,
+  placementDurations,
   remapExpandedRow,
   removeAudioClipsById,
   removeClipsById,
@@ -141,6 +143,14 @@ function manyClipsNotice(before: number, after: number, stacked: boolean): strin
   return `${after} clips: in Stacked each clip loads its own video, so the preview may slow down.`;
 }
 
+/** Whether a Stacked paste or duplicate must wait: it pins every clip, and some clip is still loading. A notice says so. */
+function stackedPinWaits(s: StitchEditorState): boolean {
+  if (!s.draft || s.draft.sequenceLayout.mode !== "stacked") return false;
+  const reason = pinWaitsForLoading(s.draft, s.clipsLoading);
+  if (reason) useToast.getState().show(reason, "info");
+  return reason !== null;
+}
+
 /**
  * Inserts copies in one step (pasteIntoTimeline), tags them, and selects them, the first leading. One notice holds
  * `skipped` and, in Stacked, the many-clips sentence.
@@ -154,7 +164,8 @@ function insertCopies(
   const s = editor();
   const draft = s.draft;
   if (!draft) return;
-  const { timeline, ids } = pasteIntoTimeline(draft.timeline, s.durations, draft.sequenceLayout, items, at);
+  const durations = placementDurations(s);
+  const { timeline, ids } = pasteIntoTimeline(draft.timeline, durations, draft.sequenceLayout, items, at);
   if (ids.length > 0) {
     keepZoom(s, timeline);
     s.apply((d) => ({ ...d, timeline }));
@@ -196,6 +207,7 @@ export function pasteClipboard(): void {
   switch (track) {
     case undefined:
     case "video": {
+      if (items.length > 0 && stackedPinWaits(s)) return;
       const at = { afterIndex: lastSelectedIndex(s), startSec: drawnPlayhead(s) };
       return insertCopies(videoItems(items), at, "pasted", skippedMessage(skipped));
     }
@@ -226,7 +238,8 @@ export function duplicateSelection(): void {
     return insertAudioCopies(duplicateAudioClips(s.draft.audioClips, editorAudioLengthOf(s), ids), "duplicated");
   }
   const ids = selectedClipIds(s);
-  if (!s.draft || ids.length === 0) return;
-  const items = copyItems(s.draft, s.durations, ids);
-  insertCopies(items, duplicateAt(draftSpans(s.draft, s.durations), new Set(ids)), "duplicated", null);
+  if (!s.draft || ids.length === 0 || stackedPinWaits(s)) return;
+  const durations = placementDurations(s);
+  const items = copyItems(s.draft, durations, ids);
+  insertCopies(items, duplicateAt(draftSpans(s.draft, durations), new Set(ids)), "duplicated", null);
 }
