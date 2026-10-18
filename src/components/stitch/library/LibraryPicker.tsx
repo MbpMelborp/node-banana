@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogButton,
+  DialogCloseButton,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -19,7 +20,7 @@ import { clipName } from "@/lib/stitch/labels";
 import { isPlaced } from "@/lib/stitch/timeline";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { addAssetClips, addAudioFromLibrary, drawnPlayhead } from "../editorActions";
-import { STITCH_EDITOR_PANEL } from "../editorStyles";
+import { DIALOG_BUTTON_RING, STITCH_EDITOR_PANEL } from "../editorStyles";
 import { LibraryResults } from "./LibraryResults";
 import { FilterDivider, FilterRow, FilterSegments, FilterSwitch, LibrarySearch, SORT_OPTIONS } from "./LibrarySearch";
 import { LibraryTile } from "./LibraryTile";
@@ -32,9 +33,6 @@ const VIDEO_KINDS: readonly AssetKind[] = ["video"];
 const AUDIO_KINDS: readonly AssetKind[] = ["audio"];
 
 const closePicker = () => useStitchEditorStore.getState().setPickerOpen(false);
-
-/** The footer's buttons take the editor's white focus ring, not the dialogs' blue one. */
-const FOOTER_RING = "focus-visible:ring-white/40";
 
 /**
  * The clip new ones go after: the last row, or in a placed stack the clip that ends last (they start Overlap before
@@ -173,7 +171,8 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
       }}
       className="max-w-[880px] h-[min(580px,85vh)]"
     >
-      <DialogHeader divider>
+      {/* Its own Close, for the editor's white ring (the header's would be the dialogs' blue) */}
+      <DialogHeader divider closeButton={false} actions={<DialogCloseButton className={DIALOG_BUTTON_RING} />}>
         <DialogTitle>{audio ? "Add audio from the library" : "Add from library"}</DialogTitle>
         <DialogDescription>
           {audio
@@ -247,10 +246,10 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
             <span className="text-neutral-400">{audio ? "Pick audio files to add" : "Pick videos to add"}</span>
           )}
         </div>
-        <DialogButton variant="ghost" className={FOOTER_RING} onClick={closePicker}>
+        <DialogButton variant="ghost" className={DIALOG_BUTTON_RING} onClick={closePicker}>
           Cancel
         </DialogButton>
-        <DialogButton variant="primary" className={FOOTER_RING} disabled={n === 0} onClick={add}>
+        <DialogButton variant="primary" className={DIALOG_BUTTON_RING} disabled={n === 0} onClick={add}>
           {n === 0
             ? "Add clips"
             : audio

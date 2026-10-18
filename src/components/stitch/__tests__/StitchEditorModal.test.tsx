@@ -334,6 +334,11 @@ describe("StitchEditorModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
     expect(within(sheet).getByText("A muted clip will be lost. The node keeps what it had.")).toBeInTheDocument();
+    // Its buttons take the editor's white focus ring, not the dialogs' blue one
+    for (const button of within(sheet).getAllByRole("button")) {
+      expect(button.className).not.toMatch(/ring-selection/);
+      expect(button.className.split(" ")).toContain("focus-visible:ring-white/40");
+    }
 
     fireEvent.click(within(sheet).getByRole("button", { name: "Keep editing" }));
     expect(screen.queryByRole("dialog", { name: "Discard changes?" })).toBeNull();

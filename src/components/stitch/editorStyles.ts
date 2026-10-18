@@ -25,6 +25,9 @@ export const ICON_BUTTON =
 export const TEXT_GHOST =
   "h-6 px-1.5 inline-flex items-center gap-1 rounded-md text-xs text-ink-3 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
 
+/** A DialogButton or DialogCloseButton in the editor (the picker's Close and footer, the sheets, the banner's actions): the editor's white focus ring, not the dialogs' blue one. */
+export const DIALOG_BUTTON_RING = "focus-visible:ring-white/40";
+
 /** The quiet text button under a notice that something failed: Try again (the home, the library). */
 export const QUIET_BUTTON =
   "inline-flex h-7 shrink-0 items-center rounded-md px-2 text-[12px] text-neutral-400 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";

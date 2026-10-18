@@ -1014,25 +1014,33 @@ library folder leaves it behind, as it leaves Generations.
 
 **Home.** With no edit open, the view is an index of the edits, newest
 first: one name to a row, in large type with its length, beside a preview
-of the active edit (its poster, then "4 clips · 1:07 · edited 12m ago").
+of the active edit (its poster, then "4 clips · 1:07 · edited 12m ago"; an
+edit with no poster shows the empty frame, grey with a faint film glyph).
 The preview fits a short window, and a view too narrow for it shows that
 line under the list instead. The active edit is the row under the pointer
 or with focus; it stays on the last one hovered when the pointer leaves,
-and starts on the newest. Focus in the list goes along with the row the
+and starts on the newest. Until a row is chosen (hovered, reached with the
+keys, or focus taken to another row or a row's ⋯) it follows the newest:
+back home from an edit just saved, the list read again puts that edit
+first, and the light, the preview and the focus on the row go to it.
+Focus in the list goes along with the row the
 pointer takes, so the focused row is always the lit one; a row the list
 scrolls under a pointer that has not moved does not take over from the
 keys. Only the active row is lit and carries ⋯, which renames it in place,
 duplicates it, shows its file or deletes it (the preview stays on it while
 the menu or the name field is open). ↑ and ↓ move between the rows, Home
-and End jump to the ends, Enter opens; ↑ or ↓ from New edit, which has
-focus when the home shows, goes to the active row. That first focus is
-unmarked; after a key, keyboard focus shows (a faint fill across the row).
-A long list scrolls in its column. Above it, New edit and the Edits
-folder's button (the heading "Edits" shows the folder's path on hover);
-under it, the files the view cannot open, also under the message when the
-list cannot be read again, with Make it a separate edit on a Finder copy.
-With no edits the list holds one entry, New edit, beside an empty frame. A
-new edit is called "Untitled edit" (then "Untitled edit 2", …).
+and End jump to the ends, Enter opens; ↑ or ↓ from New edit or the folder
+button goes to the active row. Focus starts on the newest edit's row as
+the home shows, so Enter opens it (with no edits, on New edit, so Enter
+starts one); it never takes focus back from where it was moved. That first
+focus is unmarked; after a key, keyboard focus shows (a faint fill across
+the row). A long list scrolls in its column. Above it, New edit and the
+Edits folder's button (the heading "Edits" shows the folder's path on
+hover); under it, the files the view cannot open, also under the message
+when the list cannot be read again, with Make it a separate edit on a
+Finder copy. With no edits the list holds one entry, New edit, beside an
+empty frame. A new edit is called "Untitled edit" (then "Untitled edit 2",
+…).
 
 **Editing.** The open edit shows the library on the left and the same
 editor as the dialog: stage, control row, rail and timeline, with the same

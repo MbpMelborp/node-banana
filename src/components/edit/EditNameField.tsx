@@ -9,7 +9,8 @@ import { inputClass } from "@/components/ui/Controls";
  * Enter (or the menu's Rename, through `editing`) turns into a field with the
  * name selected. Enter or leaving the field commits; Escape puts the name
  * back. A refused name ("Another edit has that name") keeps the field open
- * with the note under it.
+ * with the note under it. Its focus rings are the editor's white, not the
+ * app's blue.
  */
 export function EditNameField({
   name,
@@ -35,7 +36,7 @@ export function EditNameField({
         type="button"
         title="Rename"
         className={cn(
-          "min-w-0 max-w-[200px] truncate rounded-md px-1.5 py-0.5 text-left text-[13px] font-semibold text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
+          "min-w-0 max-w-[200px] truncate rounded-md px-1.5 py-0.5 text-left text-[13px] font-semibold text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
           buttonClassName,
         )}
         onClick={() => onEditingChange(true)}
@@ -103,7 +104,7 @@ function NameInput({
           }
         }}
         onBlur={() => void commit()}
-        className={cn(inputClass, "h-7 w-[200px] px-2 text-[13px] font-semibold")}
+        className={cn(inputClass, "h-7 w-[200px] px-2 text-[13px] font-semibold focus-visible:ring-white/40")}
       />
       {error && (
         <div role="alert" className="absolute left-0 top-full z-20 mt-1 whitespace-nowrap rounded-md bg-neutral-950 px-2 py-1 text-[11px] text-red-400 shadow-menu">

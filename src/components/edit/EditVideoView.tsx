@@ -38,7 +38,8 @@ const KEY_OPTIONS: StitchEditorKeyOptions = {
 /**
  * The Edit video view, laid over the canvas while `appView` is "edit" (bare E,
  * the tab strip's toggle, the menu's row). It edits edit projects, not nodes:
- * with none open it lists them (EditHome); with one open, the library pane
+ * with none open it lists them (EditHome, which takes focus as it shows: on
+ * the newest edit, so Enter opens it); with one open, the library pane
  * runs down the left beside the editor (header, stage with its control row,
  * rail and timeline, the dialog's own body and keys), all on the pane colour.
  *
@@ -54,8 +55,6 @@ const KEY_OPTIONS: StitchEditorKeyOptions = {
 export function EditVideoView() {
   const editOpen = useStitchEditorStore((s) => s.isOpen && s.editId !== null);
   const opening = useEditProjectStore((s) => s.opening);
-  const listStatus = useEditProjectStore((s) => s.list.status);
-  const newEditRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const store = useEditProjectStore.getState();
@@ -91,12 +90,6 @@ export function EditVideoView() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [editOpen]);
 
-  // On the home screen New edit takes focus, so Enter starts one (it moves into the empty list once that is read)
-  const home = !editOpen && opening === null;
-  useEffect(() => {
-    if (home) newEditRef.current?.focus({ preventScroll: true });
-  }, [home, listStatus]);
-
   return (
     <section role="region" aria-label="Edit video" className="flex min-w-0 flex-1 bg-pane">
       {editOpen ? (
@@ -106,7 +99,7 @@ export function EditVideoView() {
           <DialogSpinner />
         </div>
       ) : (
-        <EditHome newEditRef={newEditRef} />
+        <EditHome />
       )}
       <EditSheets />
     </section>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { FolderOpen, Plus } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
@@ -23,10 +23,13 @@ const PRELOAD_POSTERS = 24;
 /** Marks the list of edits: ↑ and ↓ inside it are its own. */
 const INDEX_LIST = "data-edit-index";
 
+/** The active row's open button: the list's one tab stop. */
+const ACTIVE_ROW = "[data-edit-row][tabindex='0']";
+
 /**
  * New edit: the one white button. Its focus ring, like the rows' and the
  * empty entry's fill, shows only once a key has been pressed (`data-keyed`):
- * the focus the home gives it as it shows stays unmarked.
+ * the focus the home gives as it shows stays unmarked.
  */
 const NEW_EDIT_BUTTON =
   "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-100 pl-2.5 pr-3.5 text-[13px] font-semibold text-neutral-950 transition-colors hover:bg-white focus-visible:outline-none in-data-[keyed]:focus-visible:ring-2 in-data-[keyed]:focus-visible:ring-white/40 in-data-[keyed]:focus-visible:ring-offset-2 in-data-[keyed]:focus-visible:ring-offset-pane disabled:cursor-not-allowed disabled:opacity-50";
@@ -53,14 +56,31 @@ function problemText(problem: EditListProblem): string {
  * Above them New edit and the Edits folder; under them the files that are not
  * edits it can open (unreadable, from a newer Node Banana, a copy made in
  * Finder). With no edits the list holds New edit, beside an empty frame.
+ *
+ * Focus starts where Enter does what the home is for: on the active row (the
+ * newest) when there are edits, so Enter opens it, else on New edit (the top
+ * row's while the list is read, the empty list's entry once it is).
  */
-export function EditHome({ newEditRef }: { newEditRef: RefObject<HTMLButtonElement | null> }) {
+export function EditHome() {
   const list = useEditProjectStore((s) => s.list);
   const creating = useEditProjectStore((s) => s.creating);
   const libraryOn = useLibraryAvailable();
   const store = useEditProjectStore.getState;
-  // A key pressed since the home showed: from then on keyboard focus is marked (the focus New edit takes on arrival is not)
+  const homeRef = useRef<HTMLDivElement>(null);
+  const newEditRef = useRef<HTMLButtonElement>(null);
+  const hasEdits = list.edits.length > 0;
+  // A key pressed since the home showed: from then on keyboard focus is marked (the focus it gives on arrival is not)
   const [keyed, setKeyed] = useState(false);
+
+  // Focus on arrival, and again once what it waits for is there (the list read, the library on). It never takes focus
+  // from anything else in the home it was moved to (a rename field, the folder button), only from the page, from
+  // outside the home or from the New edit it gave focus to while the list was read.
+  useEffect(() => {
+    const home = homeRef.current;
+    const focused = document.activeElement;
+    if (home && focused && focused !== document.body && focused !== newEditRef.current && home.contains(focused)) return;
+    (home?.querySelector<HTMLElement>(ACTIVE_ROW) ?? newEditRef.current)?.focus({ preventScroll: true });
+  }, [list.status, hasEdits, libraryOn]);
 
   useEffect(() => {
     if (keyed) return;
@@ -71,12 +91,12 @@ export function EditHome({ newEditRef }: { newEditRef: RefObject<HTMLButtonEleme
     return () => document.removeEventListener("keydown", onKey, { capture: true });
   }, [keyed]);
 
-  // ↑ or ↓ from New edit (which takes focus as the home shows) or the other buttons goes to the active row
+  // ↑ or ↓ from New edit or the other buttons goes to the active row
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const target = event.target as HTMLElement;
     if (target.tagName !== "BUTTON" || target.closest(`[${INDEX_LIST}]`)) return;
-    const row = event.currentTarget.querySelector<HTMLElement>("[data-edit-row][tabindex='0']");
+    const row = event.currentTarget.querySelector<HTMLElement>(ACTIVE_ROW);
     if (!row) return;
     event.preventDefault();
     row.focus();
@@ -124,7 +144,7 @@ export function EditHome({ newEditRef }: { newEditRef: RefObject<HTMLButtonEleme
   }
 
   return (
-    <div data-keyed={keyed || undefined} className="@container flex min-h-0 min-w-0 flex-1 flex-col bg-pane" onKeyDown={onKeyDown}>
+    <div ref={homeRef} data-keyed={keyed || undefined} className="@container flex min-h-0 min-w-0 flex-1 flex-col bg-pane" onKeyDown={onKeyDown}>
       <div className="flex min-h-0 flex-1 flex-col px-24 pb-12 pt-12 @max-[1280px]:px-12">
         <div className="flex h-8 shrink-0 items-center justify-between gap-6">
           {/* Where the edits are, on hover, as the old home's line said */}
@@ -169,8 +189,16 @@ export function EditHome({ newEditRef }: { newEditRef: RefObject<HTMLButtonEleme
  * the active row stay together: the pointer taking another row takes focus
  * in the list with it, so the focused row is always the lit one and its ⋯
  * never goes away under focus.
+ *
+ * Until a row is chosen (the pointer over it, the keys moving to it, focus
+ * taken to another row or into a row's ⋯ or name field) the newest is the
+ * active one, so a read again that puts another edit first (the one just
+ * saved, on the way back home) moves the light, the preview and the focus
+ * on the old newest row to it. Focus coming to the active row's own button,
+ * as the home gives it on arrival or Tab brings it back, chooses nothing.
  */
 function EditIndex({ edits, problems }: { edits: EditSummary[]; problems: EditListProblem[] }) {
+  // The row chosen; null follows the newest
   const [activeId, setActiveId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -194,6 +222,15 @@ function EditIndex({ edits, problems }: { edits: EditSummary[]; problems: EditLi
     const focused = document.activeElement;
     if (row && focused !== row && listRef.current?.contains(focused)) row.focus({ preventScroll: true });
   };
+
+  // Following the newest, focus on the row it was goes along to the one it is now
+  const shownId = useRef(active.id);
+  useEffect(() => {
+    const was = shownId.current;
+    shownId.current = active.id;
+    if (was === active.id || activeId !== null) return;
+    if (document.activeElement === rows.current.get(was)) rows.current.get(active.id)?.focus({ preventScroll: true });
+  }, [active.id, activeId]);
 
   useEffect(() => {
     for (const edit of edits.slice(0, PRELOAD_POSTERS)) {
@@ -252,7 +289,9 @@ function EditIndex({ edits, problems }: { edits: EditSummary[]; problems: EditLi
               else rows.current.delete(edit.id);
             }}
             onPointer={(at) => onPointer(edit.id, at)}
-            onFocusIn={() => setActiveId(edit.id)}
+            onFocusIn={(onOpen) => {
+              if (!onOpen || edit.id !== active.id) setActiveId(edit.id);
+            }}
             onMenuChange={(open) => setMenuId(open ? edit.id : null)}
             onRenamingChange={(renaming) => setRenaming(edit.id, renaming)}
           />

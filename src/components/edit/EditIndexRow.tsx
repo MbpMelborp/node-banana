@@ -21,12 +21,11 @@ export const INDEX_SCROLLER = "data-edit-index-scroller";
 /** Where the pointer is, in the window's pixels. */
 export type PointerSpot = { x: number; y: number };
 
-/** The name field, set in the row's own type: 22 px display, the text where the name was. */
+/** The name field, set in the row's own type: 22 px display on the editor's field ground, the text where the name was. */
 const RENAME_FIELD = cn(
   "-ml-2 flex-1",
-  "[&_input]:h-10 [&_input]:w-full [&_input]:border-neutral-800 [&_input]:bg-neutral-900 [&_input]:px-[7px]",
+  "[&_input]:h-10 [&_input]:w-full [&_input]:border-0 [&_input]:bg-edit-field [&_input]:px-2",
   "[&_input]:font-display [&_input]:text-[22px] [&_input]:font-medium [&_input]:tracking-[-0.02em]",
-  "[&_input:focus-visible]:ring-white/40",
 );
 
 /**
@@ -34,7 +33,7 @@ const RENAME_FIELD = cn(
  * row (hovered or focused; the preview shows it) is lit and carries ⋯, which
  * renames it in place, duplicates it, shows its file or deletes it. A press
  * or Enter opens it. With keyboard focus on it (after a key, not the focus
- * the home gives New edit as it shows) the whole row takes a faint fill.
+ * the home gives the newest row as it shows) the whole row takes a faint fill.
  */
 export function EditIndexRow({
   edit,
@@ -55,8 +54,8 @@ export function EditIndexRow({
   openRef: Ref<HTMLButtonElement>;
   /** The pointer came over the row or moved on it. */
   onPointer: (at: PointerSpot) => void;
-  /** Focus came into the row. */
-  onFocusIn: () => void;
+  /** Focus came into the row: onto its open button (`true`), or its ⋯ or name field. */
+  onFocusIn: (onOpen: boolean) => void;
   onMenuChange: (open: boolean) => void;
   onRenamingChange: (renaming: boolean) => void;
 }) {
@@ -92,7 +91,7 @@ export function EditIndexRow({
       className="-mx-2 flex h-12 items-center gap-4 rounded-md px-2 transition-colors in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6"
       onPointerEnter={pointed}
       onPointerMove={pointed}
-      onFocus={onFocusIn}
+      onFocus={(event) => onFocusIn((event.target as HTMLElement).dataset.editRow !== undefined)}
     >
       {renaming ? (
         <div className="flex min-w-0 flex-1 items-center gap-4">

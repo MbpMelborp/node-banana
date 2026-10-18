@@ -655,6 +655,19 @@ describe("LibraryPicker", () => {
     expect(within(tile("a1.mp4")).queryByLabelText("Selected")).toBeNull();
   });
 
+  it("rings its own buttons in the editor's white, Close in the header as well as the footer's", async () => {
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    const own = ["Close", "Cancel", "Add clips"].map((name) => within(dialog()).getByRole("button", { name }));
+    for (const button of own) {
+      expect(button.className).not.toMatch(/ring-selection/);
+      expect(button.className.split(" ")).toContain("focus-visible:ring-white/40");
+    }
+    expect(within(dialog()).getAllByRole("button", { name: "Close" })).toHaveLength(1);
+    fireEvent.click(own[0]);
+    expect(editor().pickerOpen).toBe(false);
+  });
+
   it("draws a cover it has no picture for as a grey frame, never a tinted placeholder", async () => {
     api.fetchAssetPage.mockResolvedValue(page([asset("gone", { missing: true }), asset("a2")]));
     openPicker();

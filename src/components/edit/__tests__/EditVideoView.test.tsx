@@ -241,6 +241,13 @@ function pressAt(target: HTMLElement) {
   fireEvent.click(target);
 }
 const tileIds = () => Array.from(document.querySelectorAll<HTMLElement>("aside [data-asset-id]")).map((el) => el.dataset.assetId);
+/** A sheet's buttons take the editor's white focus ring, never the dialogs' blue one. */
+function expectWhiteRings(sheet: HTMLElement) {
+  for (const button of within(sheet).getAllByRole("button")) {
+    expect(button.className).not.toMatch(/ring-selection/);
+    expect(button.className.split(" ")).toContain("focus-visible:ring-white/40");
+  }
+}
 const timelineIds = () => editor().draft!.timeline.map((c) => c.source.kind === "asset" ? c.source.assetId : c.id);
 
 beforeEach(() => {
@@ -274,7 +281,7 @@ afterEach(() => {
 });
 
 describe("the home screen", () => {
-  it("lists the edits as rows, with New edit and Show in Finder", async () => {
+  it("lists the edits as rows, with New edit and Show in Finder; focus starts on the newest row", async () => {
     const other = doc({ id: OTHER, name: "Launch cut", updatedAt: 5000 });
     await renderHome(listOf([other, doc()]));
     const list = screen.getByRole("list", { name: "Edits" });
@@ -282,7 +289,8 @@ describe("the home screen", () => {
     expect(rows.map((c) => c.getAttribute("aria-label")?.split(",")[0])).toEqual(["Open Launch cut", "Open Trip"]);
     expect(rows[1]).toHaveAccessibleName(/^Open Trip, 2 clips, 0:10, edited /);
     expect(screen.getByRole("button", { name: "New edit" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "New edit" })).toHaveFocus();
+    // Enter opens the newest
+    expect(rows[0]).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Show in Finder" }));
     await waitFor(() => expect(edits.revealEditsFolder).toHaveBeenCalledTimes(1));
     fireEvent.click(rows[1]);
@@ -308,8 +316,12 @@ describe("the home screen", () => {
     edits.fetchEditList.mockRejectedValueOnce(new Error("The library could not be read")).mockResolvedValue(listOf([doc()]));
     render(<EditVideoView />);
     await screen.findByText("The library could not be read");
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await screen.findByRole("button", { name: /^Open Trip/ });
+    expect(screen.getByRole("button", { name: "New edit" })).toHaveFocus();
+    const again = screen.getByRole("button", { name: "Try again" });
+    act(() => again.focus());
+    fireEvent.click(again);
+    // Try again goes with the message; focus goes to the edit it found
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Open Trip/ })).toHaveFocus());
   });
 
   it("with the library off, says so and offers neither New edit nor Show in Finder", async () => {
@@ -1094,6 +1106,28 @@ describe("the header", () => {
     fireEvent.click(within(crumb).getByRole("button", { name: "Edits" }));
     await screen.findByRole("button", { name: "New edit" });
     expect(editor().isOpen).toBe(false);
+    // Back home, focus is on the newest edit
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Open Trip/ })).toHaveFocus());
+  });
+
+  it("back home from an edit that was not the newest, once saved, starts on it as the list read again puts it first", async () => {
+    const other = doc({ id: OTHER, name: "Launch cut", updatedAt: 5000 });
+    storage[LAST_EDIT_KEY] = ID;
+    edits.fetchEdit.mockResolvedValue(doc());
+    edits.fetchEditList.mockResolvedValue(listOf([other, doc()]));
+    render(<EditVideoView />);
+    await screen.findByRole("button", { name: "Edit menu" });
+    // Trip was saved since the list was read: the home shows the old list until the read on the way home lands
+    let land!: (list: ReturnType<typeof listOf>) => void;
+    edits.fetchEditList.mockReturnValue(new Promise((resolve) => (land = resolve)));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("button", { name: "Edits" }));
+    await screen.findByRole("button", { name: "New edit" });
+    expect(screen.getByRole("button", { name: /^Open Launch cut/ })).toHaveFocus();
+    await act(async () => land(listOf([doc({ updatedAt: 9000 }), other])));
+    const trip = screen.getByRole("button", { name: /^Open Trip/ });
+    expect(trip).toHaveFocus();
+    expect(trip.closest("li")).toHaveAttribute("data-active");
+    expect(document.querySelector("[data-edit-preview]")).toHaveAttribute("data-edit-preview", ID);
   });
 
   it("shows Save only with Save automatically off; ⌘S saves either way", async () => {
@@ -1247,6 +1281,7 @@ describe("the edit menu", () => {
     fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Delete…" }));
     const sheet = await screen.findByRole("dialog", { name: "Delete edit?" });
     expect(sheet).toHaveTextContent("Delete “Trip”?");
+    expectWhiteRings(sheet);
     fireEvent.click(within(sheet).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(edits.deleteEdit).toHaveBeenCalledWith(ID));
     await screen.findByText("An edit puts videos and audio from any project on one timeline.");
@@ -1260,6 +1295,7 @@ describe("the edit menu", () => {
     fireEvent.click(home());
     const sheet = await screen.findByRole("dialog", { name: "Save changes?" });
     expect(sheet).toHaveTextContent("Save changes to “Trip”?");
+    expectWhiteRings(sheet);
     fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(editor().editId).toBe(ID);

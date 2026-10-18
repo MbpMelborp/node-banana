@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createRef } from "react";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import type { LibraryStatus } from "@/lib/assets/types";
@@ -47,9 +46,12 @@ const actions = {
 
 function renderHome(edits = EDITS, problems: EditListProblem[] = []) {
   useEditProjectStore.setState({ list: { status: "ready", edits, problems, folder: "/Users/me/Node Banana/Edits", error: null }, ...actions });
-  const newEditRef = createRef<HTMLButtonElement>();
-  render(<EditHome newEditRef={newEditRef} />);
-  return newEditRef;
+  return render(<EditHome />);
+}
+
+/** The list read again with the home showing: its status stays "ready". */
+function readAgain(edits: EditSummary[]) {
+  act(() => useEditProjectStore.setState({ list: { ...useEditProjectStore.getState().list, status: "ready", edits } }));
 }
 
 const row = (name: string) => screen.getByRole("button", { name: new RegExp(`^Open ${name},`) });
@@ -58,6 +60,21 @@ const lit = () => Array.from(document.querySelectorAll("li[data-active]")).map((
 const previewOf = () => document.querySelector("[data-edit-preview]")?.getAttribute("data-edit-preview");
 const caption = () => document.querySelector("[data-edit-preview] figcaption")?.textContent;
 const previewImage = () => document.querySelector<HTMLImageElement>("[data-edit-preview] img");
+// The preview's frame: the poster's, or the empty frame's
+const previewFrame = () => {
+  const preview = document.querySelector<HTMLElement>("[data-edit-preview]")!;
+  return preview.tagName === "FIGURE" ? (preview.firstElementChild as HTMLElement) : preview;
+};
+/** The empty frame's look: the editor's well inside a hairline, a faint film glyph, nothing tinted. */
+function expectBlankFrame(frame: HTMLElement) {
+  const classes = frame.className.split(" ");
+  expect(classes).toEqual(expect.arrayContaining(["bg-editor-well", "border", "border-edit-line"]));
+  expect(frame.className).not.toMatch(/neutral-900|sky|violet|purple|amber|emerald|rose/);
+  expect(frame.querySelector("img")).toBeNull();
+  const glyph = frame.querySelector("svg.lucide-film")!;
+  expect(glyph.getAttribute("class")).toContain("text-neutral-600");
+}
+const newEdit = () => screen.getByRole("button", { name: "New edit" });
 const moreButtons = () => screen.queryAllByRole("button", { name: /^More for / }).map((b) => b.getAttribute("aria-label"));
 const more = (name: string) => screen.getByRole("button", { name: `More for ${name}` });
 // The caption under the list, for a view with no room for the preview
@@ -92,9 +109,78 @@ describe("the Index", () => {
     expect(within(item("Vesper opening")).getByText("1:07")).toBeInTheDocument();
     expect(previewOf()).toBe("ed1");
     expect(previewImage()?.getAttribute("src")).toBe(tileThumbUrl(VESPER.poster!, 640));
+    // The poster sits on the field ground
+    expect(previewFrame().className.split(" ")).toContain("bg-edit-field");
     expect(caption()).toBe(editCardMeta(VESPER).text);
     expect(caption()).toMatch(/^4 clips · 1:07 · edited /);
     expect(listCaption()).toBe(editCardMeta(VESPER).text);
+  });
+
+  it("takes focus as it shows on the newest edit's row, so Enter opens it; the focus is unmarked", () => {
+    renderHome();
+    expect(row("Vesper opening")).toHaveFocus();
+    expect(row("Vesper opening").tagName).toBe("BUTTON");
+    expect(lit()).toEqual(["ed1"]);
+    expect(document.querySelector("[data-keyed]")).toBeNull();
+    fireEvent.click(row("Vesper opening"));
+    expect(actions.openEditById).toHaveBeenCalledWith("ed1");
+  });
+
+  it("while the list is read, focus waits on New edit, then goes to the newest row once it is", () => {
+    useEditProjectStore.setState({ list: { status: "loading", edits: [], problems: [], folder: null, error: null }, ...actions });
+    render(<EditHome />);
+    expect(newEdit()).toHaveFocus();
+    act(() => useEditProjectStore.setState({ list: { status: "ready", edits: EDITS, problems: [], folder: null, error: null } }));
+    expect(row("Vesper opening")).toHaveFocus();
+  });
+
+  it("never takes focus back from where it was moved in the home", () => {
+    renderHome();
+    const folder = screen.getByRole("button", { name: "Show in Finder" });
+    act(() => folder.focus());
+    // A read again that fails, then one that works: focus stays on the folder button
+    act(() => useEditProjectStore.setState({ list: { ...useEditProjectStore.getState().list, status: "error", error: "x" } }));
+    act(() => useEditProjectStore.setState({ list: { ...useEditProjectStore.getState().list, status: "ready", error: null } }));
+    expect(folder).toHaveFocus();
+  });
+
+  it("follows the newest through a read again until a row is chosen: an edit saved since the last read takes the light, the preview and focus", () => {
+    // Back home from Museum: the list shown is the one read before it was saved
+    renderHome([VESPER, MUSEUM]);
+    expect(row("Vesper opening")).toHaveFocus();
+    readAgain([{ ...MUSEUM, updatedAt: T0 + 60_000 }, VESPER]);
+    expect(row("Museum teaser")).toHaveFocus();
+    expect(lit()).toEqual(["ed2"]);
+    expect(previewOf()).toBe("ed2");
+    expect([row("Museum teaser"), row("Vesper opening")].map((b) => b.tabIndex)).toEqual([0, -1]);
+    expect(document.querySelector("[data-keyed]")).toBeNull();
+  });
+
+  it("a row chosen with the keys, the pointer or its ⋯ stays active through a read again", () => {
+    // The keys
+    const keys = renderHome();
+    fireEvent.keyDown(row("Vesper opening"), { key: "ArrowDown" });
+    readAgain([SALT, VESPER, MUSEUM]);
+    expect(row("Museum teaser")).toHaveFocus();
+    expect(lit()).toEqual(["ed2"]);
+    expect(previewOf()).toBe("ed2");
+    keys.unmount();
+
+    // The pointer
+    const pointer = renderHome();
+    fireEvent.pointerEnter(item("Salt flats"), { clientX: 40, clientY: 110 });
+    readAgain([MUSEUM, SALT, VESPER]);
+    expect(row("Salt flats")).toHaveFocus();
+    expect(lit()).toEqual(["ed3"]);
+    pointer.unmount();
+
+    // Its ⋯, reached with Tab: it stays, with focus on it
+    renderHome();
+    act(() => more("Vesper opening").focus());
+    readAgain([MUSEUM, VESPER, SALT]);
+    expect(more("Vesper opening")).toHaveFocus();
+    expect(lit()).toEqual(["ed1"]);
+    expect(previewOf()).toBe("ed1");
   });
 
   it("the row under the pointer becomes the active one, and stays so when the pointer leaves", () => {
@@ -104,8 +190,8 @@ describe("the Index", () => {
     expect(moreButtons()).toEqual(["More for Museum teaser"]);
     expect(row("Museum teaser").tabIndex).toBe(0);
     expect(previewOf()).toBe("ed2");
-    // No poster: the placeholder
-    expect(previewImage()).toBeNull();
+    // No poster: the empty frame, grey
+    expectBlankFrame(previewFrame());
     expect(caption()).toBe(editCardMeta(MUSEUM).text);
     expect(listCaption()).toBe(editCardMeta(MUSEUM).text);
     fireEvent.pointerLeave(item("Museum teaser"));
@@ -115,10 +201,9 @@ describe("the Index", () => {
   });
 
   it("↑ ↓ Home End move focus and the preview along the rows, ↓ from New edit goes to the active row, and a press opens", () => {
-    const newEditRef = renderHome();
-    expect(newEditRef.current).toHaveAccessibleName("New edit");
-    act(() => newEditRef.current!.focus());
-    fireEvent.keyDown(newEditRef.current!, { key: "ArrowDown" });
+    renderHome();
+    act(() => newEdit().focus());
+    fireEvent.keyDown(newEdit(), { key: "ArrowDown" });
     expect(row("Vesper opening")).toHaveFocus();
 
     fireEvent.keyDown(row("Vesper opening"), { key: "ArrowUp" });
@@ -202,20 +287,20 @@ describe("the Index", () => {
     expect(row("Museum teaser")).toHaveFocus();
   });
 
-  it("marks keyboard focus only once a key is pressed, not the focus New edit takes as the home shows", () => {
-    const newEditRef = renderHome();
-    act(() => newEditRef.current!.focus());
+  it("marks keyboard focus only once a key is pressed, not the focus the home gives as it shows", () => {
+    renderHome();
     // The fills and the ring wait for the home's data-keyed
+    expect(row("Vesper opening")).toHaveFocus();
     expect(document.querySelector("[data-keyed]")).toBeNull();
-    expect(newEditRef.current!.className.split(" ")).not.toContain("focus-visible:ring-2");
-    expect(newEditRef.current!.className.split(" ")).toContain("in-data-[keyed]:focus-visible:ring-2");
+    expect(newEdit().className.split(" ")).not.toContain("focus-visible:ring-2");
+    expect(newEdit().className.split(" ")).toContain("in-data-[keyed]:focus-visible:ring-2");
     // One fill for the whole row, ⋯ included, and only on keyboard focus
     expect(item("Vesper opening").className.split(" ")).toContain("in-data-[keyed]:has-[[data-edit-row]:focus-visible]:bg-white/6");
     expect(row("Vesper opening").className).not.toMatch(/bg-white/);
-    fireEvent.keyDown(newEditRef.current!, { key: "s", metaKey: true });
+    fireEvent.keyDown(row("Vesper opening"), { key: "s", metaKey: true });
     expect(document.querySelector("[data-keyed]")).toBeNull();
-    fireEvent.keyDown(newEditRef.current!, { key: "ArrowDown" });
-    expect(document.querySelector("[data-keyed]")).toContainElement(row("Vesper opening"));
+    fireEvent.keyDown(row("Vesper opening"), { key: "ArrowDown" });
+    expect(document.querySelector("[data-keyed]")).toContainElement(row("Museum teaser"));
   });
 
   it("⋯ opens its menu under the row while the list has room there, else over it", () => {
@@ -266,6 +351,10 @@ describe("the Index", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     let field = screen.getByRole("textbox", { name: "Edit name" });
     expect(field).toHaveValue("Vesper opening");
+    // On the editor's field ground, with its white focus ring
+    expect(field.className).not.toMatch(/ring-selection/);
+    expect(field.className.split(" ")).toContain("focus-visible:ring-white/40");
+    expect(field.parentElement!.className.split(" ")).toEqual(expect.arrayContaining(["[&_input]:bg-edit-field", "[&_input]:border-0"]));
     // The field takes focus a frame later, from ⋯, which had it back from the closed menu
     await waitFor(() => expect(field).toHaveFocus());
     fireEvent.pointerEnter(item("Salt flats"));
@@ -284,10 +373,10 @@ describe("the Index", () => {
     expect(actions.rename).toHaveBeenCalledWith("Vesper, cut 2", "ed1");
   });
 
-  it("a poster that fails to load gives way to the placeholder", () => {
+  it("a poster that fails to load gives way to the empty frame, grey", () => {
     renderHome();
     fireEvent.error(previewImage()!);
-    expect(previewImage()).toBeNull();
+    expectBlankFrame(previewFrame());
     expect(caption()).toBe(editCardMeta(VESPER).text);
   });
 
@@ -323,7 +412,7 @@ describe("the Index", () => {
       },
       ...actions,
     });
-    render(<EditHome newEditRef={createRef<HTMLButtonElement>()} />);
+    render(<EditHome />);
     expect(screen.getByText("The Edits folder could not be read.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(actions.refreshList).toHaveBeenCalledTimes(1);
@@ -333,13 +422,15 @@ describe("the Index", () => {
 
 describe("the empty Index", () => {
   it("holds New edit as its one entry, with the blurb, an empty frame and the Edits folder", () => {
-    const newEditRef = renderHome([]);
+    renderHome([]);
     expect(screen.queryByRole("list", { name: "Edits" })).toBeNull();
     const entries = screen.getAllByRole("button", { name: "New edit" });
     expect(entries).toHaveLength(1);
-    expect(newEditRef.current).toBe(entries[0]);
+    // Focus starts on it, so Enter starts an edit
+    expect(entries[0]).toHaveFocus();
     expect(screen.getByText("An edit puts videos and audio from any project on one timeline.")).toBeInTheDocument();
     expect(previewOf()).toBe("");
+    expectBlankFrame(previewFrame());
     fireEvent.click(entries[0]);
     expect(actions.newEdit).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Show in Finder" }));

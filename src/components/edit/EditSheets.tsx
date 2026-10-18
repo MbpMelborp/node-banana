@@ -2,6 +2,7 @@
 
 import { useRef, type ReactNode, type RefObject } from "react";
 import { cn } from "@/components/nodes/ui/cn";
+import { DIALOG_BUTTON_RING } from "@/components/stitch/editorStyles";
 import { Dialog, DialogButton, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
 import { useEditProjectStore } from "@/store/editProjectStore";
 
@@ -73,7 +74,7 @@ export function EditBanner({ banner }: { banner: NonNullable<ReturnType<typeof u
       <span className="min-w-0 truncate">{banner.text}</span>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {banner.actions.map((action) => (
-          <DialogButton key={action.label} compact variant="ghost" className="h-6 focus-visible:ring-offset-editor-chrome" onClick={action.onClick}>
+          <DialogButton key={action.label} compact variant="ghost" className={cn("h-6 focus-visible:ring-offset-pane", DIALOG_BUTTON_RING)} onClick={action.onClick}>
             {action.label}
           </DialogButton>
         ))}
@@ -114,7 +115,8 @@ function Sheet({
  * The view's two questions: "Save changes to …?" before switching away from
  * an edit with changes while Save automatically is off, and "Delete …?"
  * before an edit goes to the Trash. Each is a sheet over the view: Escape
- * and the backdrop mean Cancel.
+ * and the backdrop mean Cancel. Their buttons take the editor's white focus
+ * ring.
  */
 export function EditSheets() {
   const pendingSwitch = useEditProjectStore((s) => s.pendingSwitch);
@@ -136,13 +138,13 @@ export function EditSheets() {
         onClose={cancel}
         initialFocusRef={saveRef}
       >
-        <DialogButton compact variant="danger" className="mr-auto" onClick={() => void store().resolveSwitch("discard")}>
+        <DialogButton compact variant="danger" className={cn("mr-auto", DIALOG_BUTTON_RING)} onClick={() => void store().resolveSwitch("discard")}>
           Don&apos;t save
         </DialogButton>
-        <DialogButton compact variant="ghost" onClick={cancel}>
+        <DialogButton compact variant="ghost" className={DIALOG_BUTTON_RING} onClick={cancel}>
           Cancel
         </DialogButton>
-        <DialogButton compact variant="primary" className="px-3" ref={saveRef} onClick={() => void store().resolveSwitch("save")}>
+        <DialogButton compact variant="primary" className={cn("px-3", DIALOG_BUTTON_RING)} ref={saveRef} onClick={() => void store().resolveSwitch("save")}>
           Save
         </DialogButton>
       </Sheet>
@@ -159,10 +161,10 @@ export function EditSheets() {
         onClose={cancel}
         initialFocusRef={cancelRef}
       >
-        <DialogButton compact variant="ghost" ref={cancelRef} onClick={cancel}>
+        <DialogButton compact variant="ghost" className={DIALOG_BUTTON_RING} ref={cancelRef} onClick={cancel}>
           Cancel
         </DialogButton>
-        <DialogButton compact variant="danger" onClick={() => void store().confirmDeleteEdit()}>
+        <DialogButton compact variant="danger" className={DIALOG_BUTTON_RING} onClick={() => void store().confirmDeleteEdit()}>
           Delete
         </DialogButton>
       </Sheet>
