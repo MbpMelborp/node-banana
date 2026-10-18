@@ -3,7 +3,7 @@ import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/a
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
 import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
-import type { SourceDurations } from "@/lib/stitch/timeline";
+import { edgeIdsInOrder, type SourceDurations } from "@/lib/stitch/timeline";
 
 /**
  * The Stitch editor's working state: the draft being edited with its own
@@ -14,6 +14,11 @@ import type { SourceDurations } from "@/lib/stitch/timeline";
  * `future` the ones Undo stepped back over. A pointer gesture applies once,
  * on pointer up; a slider or a run of arrow keys shares a `gestureKey`, so it
  * coalesces into one step until endGesture.
+ *
+ * A session edits an Edit Video node (`nodeId`, the dialog) or an edit
+ * project (`editId`, the Edit video view), never both. The view parks its
+ * session when it is left (`park`), which frees the store for the dialog,
+ * and puts it back on return (`restore`).
  */
 
 /** Several audio clips selected; shaped like ClipSelection so its pure maths (selection.ts) apply. */
@@ -54,6 +59,8 @@ export interface StitchContextMenu {
 export interface StitchEditorState {
   isOpen: boolean;
   nodeId: string | null;
+  /** The edit project this session edits; null for a node session or none. */
+  editId: string | null;
   canvasGeneration: number | null;
   /** As opened or last saved; the editor is dirty while the draft differs from it. */
   initial: StitchDraft | null;
@@ -79,6 +86,11 @@ export interface StitchEditorState {
    * the music only then, never for music a Save picked up that the draft never held. Unlike `past`, never capped.
    */
   musicHeld: boolean;
+  /**
+   * The video edges the draft referenced when the dialog opened. Done disconnects only these when their clips are
+   * gone: a Save moves `initial`, and an edge it picked up was never in the draft, so it must not count as removed.
+   */
+  edgeIdsAtOpen: readonly string[];
   /** Sequence seconds. */
   playhead: number;
   playing: boolean;
@@ -107,6 +119,17 @@ export interface StitchEditorState {
     /** Absent = null (no music edge, or an edit without a node). */
     musicEdgeIdAtOpen?: string | null;
   }): void;
+  /** An edit project's session: editId set, nodeId null; the first clip selected, as open does. */
+  openEdit(payload: { editId: string; draft: StitchDraft }): void;
+  /**
+   * Leaves an edit session: cancels a running gesture, stops playing, closes, and hands back what restore needs.
+   * Null, changing nothing, when no edit session is open.
+   */
+  park(): StitchParkedSession | null;
+  /** Puts a parked session back (isOpen, nodeId null). */
+  restore(parked: StitchParkedSession): void;
+  /** "Save as a new edit": the session now edits that edit, its history kept. */
+  setEditId(editId: string): void;
   /** Resets all but snap and soundOn. Asks nothing: the UI confirms first. */
   close(): void;
   /**
@@ -148,6 +171,7 @@ type SessionState = Pick<
   StitchEditorState,
   | "isOpen"
   | "nodeId"
+  | "editId"
   | "canvasGeneration"
   | "initial"
   | "draft"
@@ -160,6 +184,7 @@ type SessionState = Pick<
   | "audioExpandedRow"
   | "musicEdgeIdAtOpen"
   | "musicHeld"
+  | "edgeIdsAtOpen"
   | "playhead"
   | "playing"
   | "pxPerSec"
@@ -174,6 +199,7 @@ type SessionState = Pick<
 const closedSession = (): SessionState => ({
   isOpen: false,
   nodeId: null,
+  editId: null,
   canvasGeneration: null,
   initial: null,
   draft: null,
@@ -186,6 +212,7 @@ const closedSession = (): SessionState => ({
   audioExpandedRow: null,
   musicEdgeIdAtOpen: null,
   musicHeld: false,
+  edgeIdsAtOpen: [],
   playhead: 0,
   playing: false,
   pxPerSec: null,
@@ -195,6 +222,56 @@ const closedSession = (): SessionState => ({
   cancelGesture: null,
   clipOrigins: NO_ORIGINS,
 });
+
+/** What a parked edit session keeps: its editing state, history and view of the timeline. */
+export const PARKED_KEYS = [
+  "editId",
+  "initial",
+  "draft",
+  "past",
+  "future",
+  "selection",
+  "durations",
+  "audioDurations",
+  "audioExpandedRow",
+  "playhead",
+  "pxPerSec",
+  "clipOrigins",
+] as const satisfies readonly (keyof SessionState)[];
+
+/** What parking drops: whether a session is open, a node session's links to the canvas, and passing UI state. */
+export const TRANSIENT_KEYS = [
+  "isOpen",
+  "nodeId",
+  "canvasGeneration",
+  "gestureKey",
+  "musicEdgeIdAtOpen",
+  "musicHeld",
+  "edgeIdsAtOpen",
+  "playing",
+  "menu",
+  "discardOpen",
+  "pickerOpen",
+  "cancelGesture",
+] as const satisfies readonly (keyof SessionState)[];
+
+export type StitchParkedSession = Pick<StitchEditorState, (typeof PARKED_KEYS)[number]>;
+
+// A session field that is neither parked nor transient fails the typecheck here (and the guard test)
+type Unclassified = Exclude<keyof SessionState, (typeof PARKED_KEYS)[number] | (typeof TRANSIENT_KEYS)[number]>;
+const everyKeyClassified: [Unclassified] extends [never] ? true : Unclassified = true;
+void everyKeyClassified;
+
+/** The fields one session owns, for the parking guard test. */
+export const sessionKeys = (): string[] => Object.keys(closedSession());
+
+/** The session's PARKED_KEYS, as they are now. */
+export function parkedSessionOf(s: StitchEditorState): StitchParkedSession {
+  return Object.fromEntries(PARKED_KEYS.map((key) => [key, s[key]])) as StitchParkedSession;
+}
+
+const firstClipSelection = (draft: StitchDraft): StitchSelection =>
+  draft.timeline[0] ? { kind: "clip", clipId: draft.timeline[0].id } : null;
 
 const sameIds = (a: SelectionIds, b: SelectionIds) =>
   a.clipId === b.clipId && a.anchorId === b.anchorId && (a.clipIds ?? []).join("\n") === (b.clipIds ?? []).join("\n");
@@ -249,10 +326,30 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         canvasGeneration,
         musicEdgeIdAtOpen,
         musicHeld: hasMusicClip(draft.audioClips),
+        edgeIdsAtOpen: edgeIdsInOrder(draft.timeline),
         initial: draft,
         draft,
-        selection: draft.timeline[0] ? { kind: "clip", clipId: draft.timeline[0].id } : null,
+        selection: firstClipSelection(draft),
       });
+    },
+
+    openEdit: ({ editId, draft }) => {
+      set({ ...closedSession(), isOpen: true, editId, initial: draft, draft, selection: firstClipSelection(draft) });
+    },
+
+    park: () => {
+      const s = get();
+      if (!s.isOpen || s.editId === null) return null;
+      s.cancelGesture?.();
+      const parked = parkedSessionOf(get());
+      set(closedSession());
+      return parked;
+    },
+
+    restore: (parked) => set({ ...closedSession(), ...parked, isOpen: true }),
+
+    setEditId: (editId) => {
+      if (get().editId !== null) set({ editId });
     },
 
     close: () => set(closedSession()),

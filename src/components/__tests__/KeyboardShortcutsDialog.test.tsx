@@ -46,6 +46,22 @@ describe("KeyboardShortcutsDialog", () => {
     useAssetStore.setState({ appView: "canvas" });
   });
 
+  it("lists E with the view switches, and the open edit's keys only from the Edit video view", () => {
+    render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
+    expect(screen.getByText("Show or hide Edit video")).toBeInTheDocument();
+    expect(screen.queryByText("Save the edit")).toBeNull();
+  });
+
+  it("puts the view switches and the edit's keys first when opened from the Edit video view", () => {
+    useAssetStore.setState({ appView: "edit" });
+    render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(headings.slice(0, 3)).toEqual(["Views", "Edit video", "General"]);
+    expect(headings.at(-1)).toBe("Assets");
+    expect(screen.getByText("Save the edit")).toBeInTheDocument();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+
   it("closes from the header button and on Escape", () => {
     const onClose = vi.fn();
     render(<KeyboardShortcutsDialog isOpen onClose={onClose} />);

@@ -9,7 +9,7 @@ import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { goToEnd, goToStart, setCrossfade, togglePlay } from "./editorActions";
 import { isTypingTarget } from "./editorKeys";
-import { ICON_BUTTON, TEXT_GHOST, TOGGLE_ON } from "./editorStyles";
+import { ICON_BUTTON, TEXT_GHOST, TOGGLE_ON, EDITOR_PANEL_SELECTOR } from "./editorStyles";
 import { LayoutToggle } from "./LayoutToggle";
 import type { TimelineZoom } from "./timeline/useTimelineZoom";
 
@@ -20,7 +20,7 @@ import type { TimelineZoom } from "./timeline/useTimelineZoom";
  */
 const keepFocus = (event: MouseEvent<HTMLElement>) => {
   if (isTypingTarget(document.activeElement)) {
-    const panel = event.currentTarget.closest<HTMLElement>('[role="dialog"]');
+    const panel = event.currentTarget.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
     if (panel) panel.focus();
     else (document.activeElement as HTMLElement).blur();
   }
@@ -37,10 +37,13 @@ export function EditorTransport({
   total,
   empty,
   zoom,
+  narrowHidesZoom = false,
 }: {
   total: number;
   empty: boolean;
   zoom: Pick<TimelineZoom, "slider" | "setSlider" | "zoomIn" | "zoomOut" | "fit" | "pxPerSec">;
+  /** Below a 760px row, drop the slider and keep −, + and Fit (the Edit video view, beside its library). */
+  narrowHidesZoom?: boolean;
 }) {
   const playing = useStitchEditorStore((s) => s.playing);
   const playhead = useStitchEditorStore((s) => s.playhead);
@@ -55,6 +58,7 @@ export function EditorTransport({
     <div
       className={cn(
         "h-11 shrink-0 flex items-center gap-1 px-3 border-t border-chrome-border/50 bg-editor-chrome",
+        narrowHidesZoom && "@container",
         empty && "opacity-50 pointer-events-none",
       )}
       inert={empty}
@@ -119,11 +123,12 @@ export function EditorTransport({
         </button>
       )}
       <MenuDivider variant="bar" className="mx-2" aria-hidden="true" />
-      {/* -mx-[7px]: each takes its 14px icon's room in the row, as drawn, and keeps the 28px hit area */}
+      {/* -mx-[7px]: each takes its 14px icon's room in the row, as drawn, and keeps the 28px hit area. Without the
+          slider between them the two would overlap, so there they take their full width */}
       <button
         type="button"
         aria-label="Zoom out"
-        className={cn(ICON_BUTTON, "-mx-[7px]")}
+        className={cn(ICON_BUTTON, "-mx-[7px]", narrowHidesZoom && "@max-[760px]:mx-0")}
         disabled={zoom.pxPerSec <= MIN_PX_PER_SEC}
         onMouseDown={keepFocus}
         onClick={zoom.zoomOut}
@@ -133,7 +138,7 @@ export function EditorTransport({
       <input
         type="range"
         aria-label="Timeline zoom"
-        className="range-ink mx-1.5 w-24"
+        className={cn("range-ink mx-1.5 w-24", narrowHidesZoom && "@max-[760px]:hidden")}
         min={0}
         max={100}
         step={0.5}
@@ -144,7 +149,7 @@ export function EditorTransport({
       <button
         type="button"
         aria-label="Zoom in"
-        className={cn(ICON_BUTTON, "-mx-[7px]")}
+        className={cn(ICON_BUTTON, "-mx-[7px]", narrowHidesZoom && "@max-[760px]:mx-0")}
         disabled={zoom.pxPerSec >= MAX_PX_PER_SEC}
         onMouseDown={keepFocus}
         onClick={zoom.zoomIn}

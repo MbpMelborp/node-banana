@@ -34,6 +34,7 @@ import { FrameToCanvasButton } from "./FrameToCanvasButton";
 import { KeyHints, RailButton, RailRow } from "./railParts";
 import { TimecodeField } from "./TimecodeField";
 import type { AudioClipView, ClipMediaView } from "./useStitchEditorMedia";
+import { EDITOR_PANEL_SELECTOR } from "./editorStyles";
 
 const LOOP_OPTIONS = [
   { value: "1", label: "1×" },
@@ -113,6 +114,8 @@ export function EditorRail({
   const splitBlocked = useStitchEditorStore(splitBlockedReason);
   const stacked = useStitchEditorStore((s) => s.draft?.sequenceLayout.mode === "stacked");
   const endGesture = useStitchEditorStore((s) => s.endGesture);
+  // An edit project's clips come from the library: there is no source node to reveal
+  const inEdit = useStitchEditorStore((s) => s.editId !== null);
   const railRef = useRef<HTMLElement>(null);
 
   const clipId = selection?.kind === "clip" ? selection.clipId : null;
@@ -141,7 +144,7 @@ export function EditorRail({
   useEffect(() => {
     const active = document.activeElement;
     if (active === null || active === document.body) {
-      railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+      railRef.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
     }
   }, [hasClip, audioSelected, stacked, multi]);
 
@@ -269,12 +272,14 @@ export function EditorRail({
                 disabled={!isTrimmed(clip)}
                 onClick={resetSelectedTrim}
               />
-              <RailButton
-                icon={<Crosshair size={14} strokeWidth={1.75} />}
-                label="Reveal source node"
-                disabled={!canRevealSource(clip, view)}
-                onClick={revealSelectedSource}
-              />
+              {!inEdit && (
+                <RailButton
+                  icon={<Crosshair size={14} strokeWidth={1.75} />}
+                  label="Reveal source node"
+                  disabled={!canRevealSource(clip, view)}
+                  onClick={revealSelectedSource}
+                />
+              )}
               <RailButton
                 icon={<Trash size={14} strokeWidth={1.75} />}
                 label="Remove clip"

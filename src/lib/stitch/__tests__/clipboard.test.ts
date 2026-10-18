@@ -153,6 +153,49 @@ describe("pastableItems and skippedMessage", () => {
   });
 });
 
+describe("pasting with an edit project", () => {
+  const EDIT: PasteTarget = { kind: "edit", editId: "ed0000000000a1" };
+  const video = [item({ kind: "asset", assetId: "x" }), item({ kind: "edge", edgeId: "e1" }), item({ kind: "edge", edgeId: "e2" })];
+  const music: ClipboardAudioItem = {
+    track: "audio",
+    source: { kind: "music" },
+    inSec: 0,
+    outSec: null,
+    muted: false,
+    curve: [],
+    offsetSec: 0,
+    rowOffset: 0,
+  };
+  const tone: ClipboardAudioItem = { ...music, source: { kind: "asset", assetId: "atone00000001" } };
+
+  it("pastes a node's library clips into an edit and skips its connected videos and music", () => {
+    expect(pastableItems({ origin: ORIGIN, items: video }, EDIT)).toEqual({
+      items: [video[0]],
+      skipped: [{ reason: "notInEdit", count: 2 }],
+    });
+    expect(pastableItems({ origin: ORIGIN, items: [tone, music] }, EDIT)).toEqual({
+      items: [tone],
+      skipped: [{ reason: "notInEdit", count: 1 }],
+    });
+  });
+
+  it("pastes an edit's clips into another edit and into any node", () => {
+    const fromEdit: StitchClipboard = { origin: { kind: "edit", editId: "ed0000000000b2" }, items: [video[0]] };
+    expect(pastableItems(fromEdit, EDIT)).toEqual({ items: [video[0]], skipped: [] });
+    const node: PasteTarget = { kind: "node", nodeId: "n1", tabId: "t1", workflowId: "w1", liveEdgeIds: [] };
+    expect(pastableItems(fromEdit, node)).toEqual({ items: [video[0]], skipped: [] });
+  });
+
+  it("words the reason for one clip and for several", () => {
+    expect(skippedMessage([{ reason: "notInEdit", count: 1 }])).toBe(
+      "1 clip not pasted: an edit holds only clips from the library, not connected videos or music.",
+    );
+    expect(skippedMessage([{ reason: "notInEdit", count: 3 }])).toBe(
+      "3 clips not pasted: an edit holds only clips from the library, not connected videos or music.",
+    );
+  });
+});
+
 describe("audio items", () => {
   const audio = (source: ClipboardAudioItem["source"], offsetSec = 0, rowOffset = 0): ClipboardAudioItem => ({
     track: "audio",

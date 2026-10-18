@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  PARKED_KEYS,
   STITCH_HISTORY_LIMIT,
+  TRANSIENT_KEYS,
+  sessionKeys,
   selectCanRedo,
   selectCanUndo,
   selectIsDirty,
@@ -21,7 +24,7 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
-import { createAudioClip, legacyMusicClip, setAudioClipCurve } from "@/lib/stitch/audioClips";
+import { createAudioClip, legacyMusicClip, setAudioClipCurve, type AudioSourceKey } from "@/lib/stitch/audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
   addAssetClips,
@@ -1040,5 +1043,113 @@ describe("stitchEditorStore: several clips in Stacked", () => {
     expect(startOf("c2")).toBeCloseTo(8, 9);
     moveClipsBody(["c2", "gone"], drawn);
     expect(steps()).toBe(1);
+  });
+});
+
+describe("stitchEditorStore: edit project sessions", () => {
+  const assetClip = (id: string, assetId: string) => createClip({ kind: "asset", assetId }, { id });
+  const editDraft = () => makeDraft({ timeline: [assetClip("v1", "a1"), assetClip("v2", "a2")] });
+  const openEdit = (draft = editDraft()) => store().openEdit({ editId: "ed0123456789ab", draft });
+
+  beforeEach(() => store().close());
+
+  it("T-STORE-1 openEdit sets editId, not nodeId, and selects the first clip", () => {
+    openEdit();
+    const s = store();
+    expect(s.isOpen).toBe(true);
+    expect(s.editId).toBe("ed0123456789ab");
+    expect(s.nodeId).toBeNull();
+    expect(s.canvasGeneration).toBeNull();
+    expect(s.selection).toEqual({ kind: "clip", clipId: "v1" });
+    openOn();
+    expect(store().nodeId).not.toBeNull();
+    expect(store().editId).toBeNull();
+  });
+
+  it("T-STORE-2 park then restore gives the session back, undo included", () => {
+    openEdit();
+    store().apply((d) => ({ ...d, loopCount: 2 }));
+    store().apply((d) => ({ ...d, loopCount: 3 }));
+    store().undo();
+    store().select({ kind: "clip", clipId: "v2" });
+    store().setPlayhead(4.2);
+    store().setZoom(80);
+    store().setDurations(new Map<SourceKey, number>([["asset:a1", 5]]));
+    store().setAudioExpandedRow(0);
+    store().setAudioDurations(new Map<AudioSourceKey, number>([["asset:m1", 7]]));
+    store().tagClips(["v2"], "pasted");
+    const before = store();
+
+    const parked = store().park();
+    expect(parked).not.toBeNull();
+    expect(store().isOpen).toBe(false);
+    expect(store().editId).toBeNull();
+
+    store().restore(parked!);
+    const s = store();
+    expect(s.isOpen).toBe(true);
+    expect(s.nodeId).toBeNull();
+    for (const key of PARKED_KEYS) expect(s[key]).toBe(before[key]);
+    // By value too, outside PARKED_KEYS: a field moved to TRANSIENT_KEYS would leave the loop above and still pass it
+    expect(s.selection).toEqual({ kind: "clip", clipId: "v2" });
+    expect(s.playhead).toBe(4.2);
+    expect(s.pxPerSec).toBe(80);
+    expect(s.durations.get("asset:a1")).toBe(5);
+    expect(s.audioDurations.get("asset:m1")).toBe(7);
+    expect(s.audioExpandedRow).toBe(0);
+    expect(s.past).toHaveLength(1);
+    expect(s.future).toHaveLength(1);
+    expect(s.initial).toBe(before.initial);
+    expect(s.clipOrigins.get("v2")).toBe("pasted");
+    expect(s.draft!.loopCount).toBe(2);
+    store().undo();
+    expect(store().draft!.loopCount).toBe(1);
+    store().redo();
+    store().redo();
+    expect(store().draft!.loopCount).toBe(3);
+  });
+
+  it("T-STORE-3 every session field is parked or transient, never both", () => {
+    const parked = new Set<string>(PARKED_KEYS);
+    const transient = new Set<string>(TRANSIENT_KEYS);
+    expect([...parked].filter((key) => transient.has(key))).toEqual([]);
+    expect(sessionKeys().filter((key) => !parked.has(key) && !transient.has(key))).toEqual([]);
+    expect([...parked, ...transient].sort()).toEqual(sessionKeys().sort());
+  });
+
+  it("T-STORE-4 park cancels a drag and stops playing; it leaves a node session alone and returns null", () => {
+    const cancel = vi.fn();
+    openEdit();
+    store().setPlaying(true);
+    store().setCancelGesture(cancel);
+    const parked = store().park();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(store().playing).toBe(false);
+    expect(store().cancelGesture).toBeNull();
+    expect(parked).not.toHaveProperty("playing");
+
+    openOn();
+    store().setPlaying(true);
+    expect(store().park()).toBeNull();
+    expect(store().isOpen).toBe(true);
+    expect(store().playing).toBe(true);
+    store().close();
+    expect(store().park()).toBeNull();
+  });
+
+  it("setEditId moves an edit session to another edit and never touches a node session", () => {
+    openEdit();
+    store().setEditId("ed9999999999zz");
+    expect(store().editId).toBe("ed9999999999zz");
+    openOn();
+    store().setEditId("ed9999999999zz");
+    expect(store().editId).toBeNull();
+  });
+
+  it("open keeps the video edges the draft referenced; markSaved does not move them", () => {
+    openOn();
+    expect(store().edgeIdsAtOpen).toEqual(["e1"]);
+    store().markSaved(makeDraft({ timeline: [clipA, createClip({ kind: "edge", edgeId: "e9" }, { id: "n" })] }));
+    expect(store().edgeIdsAtOpen).toEqual(["e1"]);
   });
 });

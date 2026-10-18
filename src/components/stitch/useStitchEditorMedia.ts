@@ -7,8 +7,10 @@ import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMedi
 import { modelLabel, operationLabel } from "@/components/assets/assetFormat";
 import { assetFileUrl } from "@/lib/assets/client/api";
 import type { AssetView } from "@/lib/assets/types";
+import type { EditAssetSnapshot } from "@/lib/edits/types";
 import { audioSourceKey, type AudioSourceKey } from "@/lib/stitch/audioClips";
 import { nodeKindLabel, nodeModelLabel } from "@/lib/stitch/labels";
+import { requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { assetMediaKey, mediaKeyOf, retryMediaInfo } from "@/lib/stitch/mediaInfo";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { edgeClipSourcesFromTuple, edgeClipSourceTuple, stitchMusicEdge, stitchMusicMedia } from "@/lib/stitch/sources";
@@ -117,7 +119,17 @@ function waveformState(key: string): string {
   return waveform ? `${waveform.status}:${waveform.duration ?? ""}` : "";
 }
 
-export function useStitchEditorMedia(): {
+export interface StitchEditorMediaOptions {
+  /**
+   * What an edit project's file says about an asset: a library clip the library has lost is named by it ("Not in the
+   * library · sunset.mp4") rather than left as "Library". The node's dialog passes none.
+   */
+  assetFallback?: (assetId: string) => EditAssetSnapshot | undefined;
+}
+
+const NOT_IN_LIBRARY = "Not in the library";
+
+export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions = {}): {
   byClip: ReadonlyMap<string, ClipMediaView>;
   audioByClip: ReadonlyMap<string, AudioClipView>;
 } {
@@ -193,12 +205,21 @@ export function useStitchEditorMedia(): {
   // read it, not counted 0 s for the session. The record a key was last seen with is kept, so a file that still
   // fails is not read in a loop
   const seenRecord = useRef(new Map<string, AssetView>());
+  // The other way round: a file that fails while its record says it is there is asked about once more. The library
+  // checks a file at most every 30 s, so a record read just before the file was deleted still says it is there;
+  // the failed read has since marked it missing, and the clip then says it is not in the library
+  const recheckedRecord = useRef(new Set<string>());
   useEffect(() => {
     for (const { clip, mediaKey } of sources) {
       if (clip.source.kind !== "asset" || !mediaKey) continue;
       const asset = assets.get(clip.source.assetId);
       const info = infos.get(mediaKey);
-      if (!asset || !info || seenRecord.current.get(mediaKey) === asset) continue;
+      if (!asset || !info) continue;
+      if (info.status === "error" && !asset.missing && !recheckedRecord.current.has(mediaKey)) {
+        recheckedRecord.current.add(mediaKey);
+        requestAssetInfo([clip.source.assetId], { refresh: true });
+      }
+      if (seenRecord.current.get(mediaKey) === asset) continue;
       seenRecord.current.set(mediaKey, asset);
       if (info.status === "error") retryMediaInfo(mediaKey);
     }
@@ -219,6 +240,7 @@ export function useStitchEditorMedia(): {
       // An edge clip whose edge went away while the editor was open is still a video, not a library clip
       const kind = clip.source.kind === "asset" ? LIBRARY : edge?.kind || "Video";
       const model = clip.source.kind === "asset" ? assetSourceLabel(asset) : (edge?.model ?? null);
+      const lost = missing && clip.source.kind === "asset" ? assetFallback?.(clip.source.assetId) : undefined;
       views.set(clip.id, {
         clipId: clip.id,
         key: sourceKey(clip.source),
@@ -231,15 +253,17 @@ export function useStitchEditorMedia(): {
         fps: info?.fps ?? null,
         frames: info?.frames ?? NO_FRAMES,
         sourceNodeId: edge?.sourceNodeId ?? null,
-        sourceLabel: model ?? kind,
-        railSubtitle: [kind, model !== kind ? model : null, duration !== null ? formatSeconds(duration) : null]
-          .filter(Boolean)
-          .join(" · "),
+        sourceLabel: lost ? lost.name : (model ?? kind),
+        railSubtitle: lost
+          ? `${NOT_IN_LIBRARY} · ${lost.name}`
+          : [kind, model !== kind ? model : null, duration !== null ? formatSeconds(duration) : null]
+              .filter(Boolean)
+              .join(" · "),
         missing,
       });
     }
     return views;
-  }, [sources, infos, assets]);
+  }, [sources, infos, assets, assetFallback]);
 
   // The ready lengths go to the store, where the timeline maths reads them; only when they change
   useEffect(() => {
@@ -300,17 +324,20 @@ export function useStitchEditorMedia(): {
       const length = duration ?? recordDuration;
       const kind = clip.source.kind === "music" ? musicKind || "Audio" : LIBRARY;
       const model = clip.source.kind === "asset" ? assetSourceLabel(asset) : null;
+      const lost = missing && clip.source.kind === "asset" ? assetFallback?.(clip.source.assetId) : undefined;
       views.set(clip.id, {
         clipId: clip.id,
         key,
         source: clip.source,
         src,
         mediaKey,
-        fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || "Audio",
-        sourceLabel: model ?? kind,
-        railSubtitle: [kind, model !== kind ? model : null, length !== null ? formatSeconds(length) : null]
-          .filter(Boolean)
-          .join(" · "),
+        fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || lost?.name || "Audio",
+        sourceLabel: lost ? lost.name : (model ?? kind),
+        railSubtitle: lost
+          ? `${NOT_IN_LIBRARY} · ${lost.name}`
+          : [kind, model !== kind ? model : null, length !== null ? formatSeconds(length) : null]
+              .filter(Boolean)
+              .join(" · "),
         duration,
         recordDuration,
         status: !src ? "empty" : (waveform?.status ?? "loading"),
@@ -320,7 +347,7 @@ export function useStitchEditorMedia(): {
     return views;
     // waveforms: the cache changed, so read it again
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioClips, audioSources, assets, musicTuple, waveforms]);
+  }, [audioClips, audioSources, assets, musicTuple, waveforms, assetFallback]);
 
   // The decoded lengths go to the store's own map, so video layouts do not recompute when audio loads
   useEffect(() => {

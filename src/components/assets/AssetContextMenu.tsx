@@ -59,6 +59,8 @@ type MenuPart = MenuEntry | "divider";
 
 /** "Open workflow", or for a project's asset "Open project" and "Open as it was when made". */
 export function workflowActions(asset: AssetView): { mode: OpenWorkflowMode; label: string; secondary?: boolean }[] {
+  // A render from the Edit video view has no workflow snapshot to open
+  if (asset.producer?.nodeType === "editProject") return [];
   if (asset.imported) return [{ mode: "project", label: "Open project" }];
   if (asset.workflow.projectPath) {
     return [

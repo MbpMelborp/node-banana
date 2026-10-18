@@ -8,7 +8,7 @@ import { clipName } from "@/lib/stitch/labels";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { canLineUp, lineUpClips, openLibraryPicker } from "../editorActions";
-import { GEOMETRY, TEXT_GHOST } from "../editorStyles";
+import { GEOMETRY, TEXT_GHOST, EDITOR_PANEL_SELECTOR } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { AudioHeaders, type AudioHeaderRows } from "./AudioTrackHeader";
@@ -70,7 +70,7 @@ function LineUpButton() {
         // It is disabled once the clips are lined up: focus on it goes to the panel, never <body>
         const button = event.currentTarget;
         lineUpClips();
-        if (document.activeElement === button) button.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+        if (document.activeElement === button) button.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
       }}
       className={cn(TEXT_GHOST, "-ml-1.5 h-5 px-1.5 text-[11px]")}
     >

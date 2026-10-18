@@ -90,4 +90,18 @@ describe("openStitchEditor", () => {
     expect(openEditorForExpand("gone", "videoStitch")).toBe(true);
     expect(editor().isOpen).toBe(false);
   });
+
+  it("opens nothing while an edit project's session holds the editor", () => {
+    editor().openEdit({
+      editId: "ed0123456789ab",
+      draft: { timeline: [], audioClips: [], legacyAudio: { curve: [], muted: false }, loopCount: 1, sequenceLayout: { mode: "track", overlapSec: 0.5, crossfade: true } },
+    });
+    expect(openStitchEditor("s1")).toBe(false);
+    expect(editor().editId).toBe("ed0123456789ab");
+    expect(editor().nodeId).toBeNull();
+    // Parked, the store is free for the dialog again
+    editor().park();
+    expect(openStitchEditor("s1")).toBe(true);
+    expect(editor().nodeId).toBe("s1");
+  });
 });

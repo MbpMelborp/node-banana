@@ -61,6 +61,7 @@ import {
 } from "../editorActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
+import { EDITOR_PANEL_SELECTOR } from "../editorStyles";
 
 const MENU_WIDTH = 184;
 const EDGE = 8;
@@ -86,7 +87,7 @@ function useMenuChrome(ref: RefObject<HTMLDivElement | null>, x: number, y: numb
 
   useEffect(() => {
     const menu = ref.current;
-    const panel = menu?.closest<HTMLElement>('[role="dialog"]') ?? null;
+    const panel = menu?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR) ?? null;
     menu?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus({ preventScroll: true });
     const dismiss = () => useStitchEditorStore.getState().openMenu(null);
     // Capture phase, and pointerdown: a press whose pointerdown is cancelled fires no mousedown
@@ -113,7 +114,7 @@ function useMenuChrome(ref: RefObject<HTMLDivElement | null>, x: number, y: numb
 
   // Focus goes back to the panel, so the editor's keys work and Tab stays in the dialog
   const close = (run?: () => void) => {
-    const panel = ref.current?.closest<HTMLElement>('[role="dialog"]');
+    const panel = ref.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
     useStitchEditorStore.getState().openMenu(null);
     run?.();
     panel?.focus({ preventScroll: true });
@@ -214,6 +215,8 @@ function OpenMenu({
   // Its own subscription: a copy made elsewhere turns Paste on with no change to the editor's store
   const hasClipboard = useStitchClipboard((c) => c.clipboard !== null);
   const pasteOn = useStitchEditorStore((s) => canPaste(hasClipboard, s));
+  // An edit project's clips come from the library: there is no source node to reveal
+  const inEdit = useStitchEditorStore((s) => s.editId !== null);
   const view = media.get(clipId);
   const group = useMemo(() => {
     if (selection?.kind !== "clip" || !timeline) return [];
@@ -292,10 +295,11 @@ function OpenMenu({
         })}
         {item("Duplicate", <CopyPlus {...ICON} />, duplicateSelection, { shortcut: "⌘D" })}
         <MenuDivider role="separator" className="my-1" />
-        {item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, {
-          disabled: multi || !canRevealSource(clip, view),
-          title: multi ? "Select one clip" : undefined,
-        })}
+        {!inEdit &&
+          item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, {
+            disabled: multi || !canRevealSource(clip, view),
+            title: multi ? "Select one clip" : undefined,
+          })}
         {item(multi ? `Remove ${group.length} clips` : "Remove clip", <Trash {...ICON} />, removeSelection, {
           shortcut: "⌫",
           danger: true,

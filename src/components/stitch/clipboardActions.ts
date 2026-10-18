@@ -46,8 +46,12 @@ export const MANY_STACKED_CLIPS = 24;
 
 const editor = () => useStitchEditorStore.getState();
 
-/** The node the editor edits, as a paste target. The editor is always on the active tab: it closes on a switch. */
-export function pasteTarget(s: Pick<StitchEditorState, "nodeId">): PasteTarget | null {
+/**
+ * What the editor edits, as a paste target: the edit project, or the node (the editor is always on the active tab: it
+ * closes on a switch).
+ */
+export function pasteTarget(s: Pick<StitchEditorState, "nodeId" | "editId">): PasteTarget | null {
+  if (s.editId !== null) return { kind: "edit", editId: s.editId };
   if (!s.nodeId) return null;
   const wf = useWorkflowStore.getState();
   return {
@@ -64,10 +68,15 @@ export function canPaste(hasClipboard: boolean, s: Pick<StitchEditorState, "draf
   return hasClipboard && s.draft !== null;
 }
 
-/** Where the clips are copied: this node in this tab and workflow (an unsaved workflow is given its id first). */
-function copyOrigin(nodeId: string): ClipboardOrigin {
+/**
+ * Where the clips are copied: the edit project, or this node in this tab and workflow (an unsaved workflow is given
+ * its id first). null with neither.
+ */
+function copyOrigin(s: Pick<StitchEditorState, "nodeId" | "editId">): ClipboardOrigin | null {
+  if (s.editId !== null) return { kind: "edit", editId: s.editId };
+  if (!s.nodeId) return null;
   const wf = useWorkflowStore.getState();
-  return { kind: "node", nodeId, tabId: wf.activeTabId, workflowId: wf.ensureWorkflowId() };
+  return { kind: "node", nodeId: s.nodeId, tabId: wf.activeTabId, workflowId: wf.ensureWorkflowId() };
 }
 
 /**
@@ -77,16 +86,19 @@ function copyOrigin(nodeId: string): ClipboardOrigin {
  */
 export function copySelection(): boolean {
   const s = editor();
-  if (!s.draft || !s.nodeId) return false;
-  if (s.selection?.kind === "audio") {
-    const items = copyAudioItems(s.draft.audioClips, selectedAudioIds(s));
+  if (!s.draft) return false;
+  const audio = s.selection?.kind === "audio";
+  const ids = audio ? selectedAudioIds(s) : selectedClipIds(s);
+  if (ids.length === 0) return false;
+  const origin = copyOrigin(s);
+  if (!origin) return false;
+  if (audio) {
+    const items = copyAudioItems(s.draft.audioClips, ids);
     if (items.length === 0) return false;
-    useStitchClipboard.getState().setClipboard({ origin: copyOrigin(s.nodeId), items });
+    useStitchClipboard.getState().setClipboard({ origin, items });
     return true;
   }
-  const ids = selectedClipIds(s);
-  if (ids.length === 0) return false;
-  const clipboard = copyClips(s.draft, s.durations, ids, copyOrigin(s.nodeId));
+  const clipboard = copyClips(s.draft, s.durations, ids, origin);
   if (!clipboard) return false;
   useStitchClipboard.getState().setClipboard(clipboard);
   return true;

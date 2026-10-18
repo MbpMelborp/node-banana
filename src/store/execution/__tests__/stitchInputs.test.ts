@@ -2,7 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import type { NodeExecutionContext } from "../types";
-import { gatherStitchInputs } from "../stitchInputs";
+import type { StitchDraft } from "@/lib/stitch/draft";
+import {
+  gatherDraftInputs,
+  gatherStitchInputs,
+  NO_CLIP_TO_RENDER,
+  stitchEngineOptions,
+  stitchRecordParameters,
+  type GatheredStitch,
+} from "../stitchInputs";
 
 const mocks = vi.hoisted(() => {
   class AssetApiError extends Error {
@@ -467,5 +475,101 @@ describe("gatherStitchInputs", () => {
       const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
       expect(starts(g)).toEqual([0, 2.5, 6]);
     });
+  });
+});
+
+describe("gatherDraftInputs (an edit project's draft)", () => {
+  const TRACK = { mode: "track" as const, overlapSec: 1, crossfade: true };
+  const STACKED = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+  const audioClip = (id: string, assetId: string, extra: Partial<StitchAudioClip> = {}): StitchAudioClip => ({
+    id,
+    source: { kind: "asset", assetId },
+    row: 0,
+    startSec: 0,
+    inSec: 0,
+    outSec: null,
+    muted: false,
+    curve: [],
+    ...extra,
+  });
+  const draftOf = (timeline: StitchTimelineClip[], extra: Partial<StitchDraft> = {}): StitchDraft => ({
+    timeline,
+    audioClips: [],
+    legacyAudio: { curve: [], muted: false },
+    loopCount: 1,
+    sequenceLayout: TRACK,
+    ...extra,
+  });
+  /** What the engine is handed, the blobs by where they came from. */
+  const shape = (g: GatheredStitch) => ({
+    ...g,
+    clips: g.clips.map(({ blob, ...rest }) => ({ ...rest, from: origins.get(blob) })),
+    options: stitchEngineOptions(g),
+    parameters: stitchRecordParameters(g),
+  });
+
+  it("encodes one clip: the view needs no second", async () => {
+    const g = await gatherDraftInputs(draftOf([assetClip("x", "alibrary00001", { inSec: 1, outSec: 3, volume: 0.5 })]));
+    expect(shape(g)).toMatchObject({
+      clips: [{ inSec: 1, outSec: 3, muted: false, volume: 0.5, source: "asset:alibrary00001", from: "asset:alibrary00001" }],
+      music: null,
+      audioClips: null,
+      loopCount: 1,
+      clipCount: 1,
+      stack: null,
+      placed: null,
+    });
+  });
+
+  it("refuses an empty edit before fetching anything", async () => {
+    await expect(gatherDraftInputs(draftOf([]))).rejects.toThrow(NO_CLIP_TO_RENDER);
+    expect(mocks.fetchAssetBlob).not.toHaveBeenCalled();
+  });
+
+  it("says which clip's library video is gone", async () => {
+    mocks.fetchAssetBlob.mockImplementation(async (id: string) => {
+      if (id === "agone00000001") throw new mocks.AssetApiError("gone", 404);
+      return sourced(`asset:${id}`, "video/mp4");
+    });
+    await expect(gatherDraftInputs(draftOf([assetClip("x", "alibrary00001"), assetClip("y", "agone00000001")]))).rejects.toThrow(
+      "Clip 2's library video is no longer in the library",
+    );
+    expect(mocks.requestAssetInfo).toHaveBeenCalledWith(["agone00000001"], { refresh: true });
+  });
+
+  it("passes the signal to every fetch and the audio", async () => {
+    const signal = new AbortController().signal;
+    const audio = [audioClip("s", "asound0000001", { startSec: 2 })];
+    await gatherDraftInputs(draftOf([assetClip("x", "alibrary00001")], { audioClips: audio }), signal);
+    expect(mocks.fetchAssetBlob).toHaveBeenCalledWith("alibrary00001", signal);
+    expect(mocks.gatherAudioClipInputs).toHaveBeenCalledWith(audio, { musicUrl: null, signal });
+  });
+
+  // The same library clips must encode the same in the view as on the node (parent ruling 8)
+  it.each([
+    ["Track", [assetClip("x", "alibrary00001", { inSec: 0.5 }), assetClip("y", "alibrary00002", { muted: true })], TRACK],
+    ["a lined-up stack", [assetClip("x", "alibrary00001"), assetClip("y", "alibrary00002", { outSec: 3 })], STACKED],
+    [
+      "a placed stack",
+      [assetClip("x", "alibrary00001", { startSec: 0 }), assetClip("y", "alibrary00002", { startSec: 2.5 }), assetClip("z", "alibrary00001", { inSec: 4 })],
+      STACKED,
+    ],
+  ] as const)("gathers %s exactly as the node with the same clips", async (_name, timeline, sequenceLayout) => {
+    const audioClips = [audioClip("s", "asound0000001", { startSec: 1, curve: [{ t: 0, gain: 0.5 }] })];
+    mocks.gatherAudioClipInputs.mockImplementation(async (clips: StitchAudioClip[]) => clips.map((c) => ({ id: c.id })));
+    const stitch = stitchNode({ timeline: [...timeline], sequenceLayout, audioClips, loopCount: 2 });
+    const fromNode = await gatherStitchInputs(makeCtx(stitch, [], []), stitch.data as never);
+    const fromDraft = await gatherDraftInputs(draftOf([...timeline], { sequenceLayout, audioClips, loopCount: 2 }));
+    expect(shape(fromDraft)).toEqual(shape(fromNode));
+  });
+
+  it("gathers no audio clips for an edit with none, as the node with none", async () => {
+    const timeline = [assetClip("x", "alibrary00001"), assetClip("y", "alibrary00002")];
+    const stitch = stitchNode({ timeline });
+    const fromNode = await gatherStitchInputs(makeCtx(stitch, [], []), stitch.data as never);
+    const fromDraft = await gatherDraftInputs(draftOf(timeline));
+    expect(shape(fromDraft)).toEqual(shape(fromNode));
+    expect(stitchEngineOptions(fromDraft)).toEqual({ loopCount: 1 });
+    expect(mocks.gatherAudioClipInputs).not.toHaveBeenCalled();
   });
 });

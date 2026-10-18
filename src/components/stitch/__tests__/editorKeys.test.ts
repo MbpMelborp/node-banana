@@ -154,6 +154,15 @@ describe("isCanvasKey", () => {
     expect(isCanvasKey(key("g"))).toBe(true);
     expect(isCanvasKey(key("a"))).toBe(true);
     expect(isCanvasKey(key("c"))).toBe(true);
+    expect(isCanvasKey(key("e"))).toBe(true);
+  });
+
+  it("counts bare E (the Edit video view), but not ⌘E, Ctrl+E or ⌥E", () => {
+    expect(isCanvasKey(key("e"))).toBe(true);
+    expect(isCanvasKey(key("E"))).toBe(true);
+    expect(isCanvasKey(key("e", { metaKey: true }))).toBe(false);
+    expect(isCanvasKey(key("e", { ctrlKey: true }))).toBe(false);
+    expect(isCanvasKey(key("e", { altKey: true }))).toBe(false);
   });
 
   it("counts ⌘C with text selected (the shield never prevents the native copy, and the canvas would copy nodes)", () => {
@@ -350,5 +359,133 @@ describe("the editor's keys with an audio selection", () => {
     store().setPickerOpen("audio");
     press("Backspace");
     expect(audio()).toHaveLength(2);
+  });
+});
+
+describe("useStitchEditorKeys's options (the Edit video view)", () => {
+  const store = () => useStitchEditorStore.getState();
+  const dispatch = (type: "keydown" | "keyup", k: string, target: EventTarget = window, mods: Partial<KeyLike> = {}) => {
+    const event = new KeyboardEvent(type, { key: k, code: mods.code ?? "", bubbles: true, cancelable: true, ...mods });
+    target.dispatchEvent(event);
+    return event;
+  };
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    store().close();
+    const draft: StitchDraft = {
+      timeline: [createClip({ kind: "asset", assetId: "aclip00000001" }, { id: "a" }), createClip({ kind: "asset", assetId: "aclip00000002" }, { id: "b" })],
+      audioClips: [],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
+    };
+    store().openEdit({ editId: "e1", draft });
+    store().setDurations(
+      new Map<SourceKey, number>([
+        ["asset:aclip00000001", 5],
+        ["asset:aclip00000002", 5],
+      ]),
+    );
+    root = document.createElement("div");
+    document.body.appendChild(root);
+  });
+  afterEach(() => {
+    store().close();
+    document.body.innerHTML = "";
+  });
+
+  it("with isStacked true: Escape and Space pass untouched, and no editor action runs", () => {
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    const item = document.createElement("button");
+    menu.appendChild(item);
+    root.appendChild(menu);
+    renderHook(() => useStitchEditorKeys({ current: root }, () => store().close(), { isStacked: () => true }));
+    store().select({ kind: "clip", clipId: "a" });
+    const draft = store().draft;
+
+    expect(dispatch("keydown", "Escape", item).defaultPrevented).toBe(false);
+    expect(dispatch("keydown", " ", item).defaultPrevented).toBe(false);
+    expect(dispatch("keyup", " ", item).defaultPrevented).toBe(false);
+    dispatch("keydown", "Backspace", item);
+    dispatch("keydown", "s", item);
+    expect(store().isOpen).toBe(true);
+    expect(store().playing).toBe(false);
+    expect(store().draft).toBe(draft);
+    expect(store().selection).toMatchObject({ kind: "clip", clipId: "a" });
+  });
+
+  it("with isStacked true, the canvas behind still never hears its keys", () => {
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}, { isStacked: () => true }));
+    const canvas = vi.fn();
+    window.addEventListener("keydown", canvas);
+    try {
+      dispatch("keydown", "a", root);
+      dispatch("keydown", "e", root);
+      expect(canvas).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", canvas);
+    }
+  });
+
+  it("once isStacked turns false, the editor's keys work again", () => {
+    let stacked = true;
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}, { isStacked: () => stacked }));
+    store().select({ kind: "clip", clipId: "a" });
+    dispatch("keydown", "Backspace", root);
+    expect(store().draft!.timeline).toHaveLength(2);
+    stacked = false;
+    dispatch("keydown", "Backspace", root);
+    expect(store().draft!.timeline).toHaveLength(1);
+  });
+
+  it("hands a key that is no editor key to onOtherKey first, and stops it when that handles it", () => {
+    const onOtherKey = vi.fn((e: KeyboardEvent) => e.key === "e");
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}, { onOtherKey }));
+    const behind = vi.fn();
+    window.addEventListener("keydown", behind);
+    try {
+      const handled = dispatch("keydown", "e", root);
+      expect(onOtherKey).toHaveBeenCalledTimes(1);
+      expect(handled.defaultPrevented).toBe(true);
+      // An editor key never reaches it
+      dispatch("keydown", " ", root);
+      expect(onOtherKey).toHaveBeenCalledTimes(1);
+      expect(store().playing).toBe(true);
+      // Not handled: the canvas key is still shielded, without its default prevented
+      const passed = dispatch("keydown", "a", root);
+      expect(onOtherKey).toHaveBeenCalledTimes(2);
+      expect(passed.defaultPrevented).toBe(false);
+      expect(behind).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", behind);
+    }
+  });
+
+  it("never asks onOtherKey while typing or during a drag", () => {
+    const onOtherKey = vi.fn(() => true);
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}, { onOtherKey }));
+    const field = document.createElement("input");
+    root.appendChild(field);
+    dispatch("keydown", "e", field);
+    expect(onOtherKey).not.toHaveBeenCalled();
+
+    store().setCancelGesture(() => {});
+    dispatch("keydown", "e", root);
+    expect(onOtherKey).not.toHaveBeenCalled();
+  });
+
+  it("without options, behaves as the dialog always has: E is shielded, not handled", () => {
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}));
+    const behind = vi.fn();
+    window.addEventListener("keydown", behind);
+    try {
+      const event = dispatch("keydown", "e", root);
+      expect(event.defaultPrevented).toBe(false);
+      expect(behind).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", behind);
+    }
   });
 });

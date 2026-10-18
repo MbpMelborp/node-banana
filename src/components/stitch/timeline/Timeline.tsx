@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { audioRowCount } from "@/lib/stitch/audioClips";
+import { libraryDropAt } from "@/lib/stitch/libraryInsert";
 import { clampAudioScroll, revealAudioRow, scrollKeepingRowBottom, type AudioSectionLayout } from "@/lib/stitch/audioLayout";
 import { clipName } from "@/lib/stitch/labels";
 import { gaps as envelopeGaps, weightPieces, type WeightPiece } from "@/lib/stitch/placement";
@@ -25,12 +26,15 @@ import type { StitchAudioClip, StitchTimelineClip } from "@/types";
 import { buildTimeAxis } from "@/lib/stitch/timeAxis";
 import { insetBox, laneBoxes, liveSpans, stackedBoxes, trimEdgeX } from "@/lib/stitch/laneLayout";
 import { liveFitZoom } from "../liveFitZoom";
-import { GEOMETRY, LANE_TRAILING_PX } from "../editorStyles";
+import { GEOMETRY, LANE_TRAILING_PX, EDITOR_PANEL_SELECTOR } from "../editorStyles";
+import { drawnPlayhead, editorAudioLengthOf } from "../editorActions";
 import { applyAudioBoxSelection, clearClipSelection } from "../selectionActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { AudioLane, audioBoxes } from "./AudioLane";
 import { ClipContextMenu } from "./ClipContextMenu";
 import { ClipsLane } from "./ClipsLane";
+import { libraryDrop } from "./libraryDrop";
+import { LibraryDropMarker } from "./LibraryDropMarker";
 import { MoveOverlay } from "./MoveOverlay";
 import { Playhead } from "./Playhead";
 import { Ruler } from "./Ruler";
@@ -358,6 +362,49 @@ export function Timeline({
     latest.current = latestValues;
   });
 
+  // A drag from the Edit video view's library pane asks where it would drop from the lanes as drawn now
+  useEffect(
+    () =>
+      libraryDrop.register(
+        (clientX, clientY, item, opts) => {
+          const el = scroller.current;
+          const content = contentRef.current;
+          const s = useStitchEditorStore.getState();
+          if (!el || !content || !s.draft) return null;
+          const view = el.getBoundingClientRect();
+          if (clientX < view.left || clientX >= view.left + el.clientWidth) return null;
+          if (clientY < view.top || clientY >= view.top + el.clientHeight) return null;
+          const live = latest.current;
+          const box = content.getBoundingClientRect();
+          const lengthOf = editorAudioLengthOf(s);
+          const snapTimes = [
+            drawnPlayhead(s),
+            ...live.spans.flatMap((span) => (span.length > 0 ? [span.start, span.end] : [])),
+            ...s.draft.audioClips.flatMap((clip) => [clip.startSec, clip.startSec + lengthOf(clip)]),
+          ];
+          return libraryDropAt(
+            s.draft,
+            item,
+            { x: clientX - box.left, viewY: clientY - view.top, contentY: clientY - box.top, snap: opts?.snap ?? false },
+            {
+              stacked: live.stacked,
+              axis: live.zoom.axis,
+              boxes: live.restBoxes,
+              rowHeight: GEOMETRY.stackRow,
+              ruler: GEOMETRY.ruler,
+              sectionTop: live.sectionTop,
+              audioLayout: live.audioLayout,
+              audioScroll: live.audioScroll,
+              snapTimes,
+            },
+            lengthOf,
+          );
+        },
+        () => scroller.current,
+      ),
+    [scroller],
+  );
+
   // A lined-up stack draws a header-lifted clip (or each of a lifted group) at the start it will have in the order it
   // would drop into; a placed one keeps every start, so the lifted boxes keep their x
   const liftId = stacked && reorder ? reorder.clipId : null;
@@ -486,7 +533,7 @@ export function Timeline({
     if (!focusInside.current || (active && active !== document.body && active.isConnected)) return;
     const root = rootRef.current;
     const target =
-      root?.querySelector<HTMLElement>('[role="option"][tabindex="0"]') ?? root?.closest<HTMLElement>('[role="dialog"]');
+      root?.querySelector<HTMLElement>('[role="option"][tabindex="0"]') ?? root?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
     target?.focus({ preventScroll: true });
   }, [stacked]);
 
@@ -820,6 +867,14 @@ export function Timeline({
               />
             )}
             {marqueeBox}
+            <LibraryDropMarker
+              axis={axis}
+              boxes={restBoxes}
+              contentWidth={contentWidth}
+              audioLayout={audioLayout}
+              audioScroll={audioScroll}
+              sectionContentTop={sectionContentTop}
+            />
           </div>
         ) : (
           <div ref={contentRef} className="relative h-full" style={{ width: contentWidth }}>
@@ -854,6 +909,14 @@ export function Timeline({
             {/* Snapped to the playhead, the dashed guide stands in for its line */}
             {!empty && <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} />}
             {marqueeBox}
+            <LibraryDropMarker
+              axis={axis}
+              boxes={restBoxes}
+              contentWidth={contentWidth}
+              audioLayout={audioLayout}
+              audioScroll={audioScroll}
+              sectionContentTop={sectionContentTop}
+            />
           </div>
         )}
       </div>

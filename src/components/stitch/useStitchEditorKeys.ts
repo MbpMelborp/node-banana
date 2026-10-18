@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { isSaveShortcut } from "@/utils/saveShortcut";
 import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
@@ -35,6 +35,13 @@ function stackedDialogOpen(root: HTMLElement | null): boolean {
   const overlays = document.querySelectorAll("[data-dialog-overlay]");
   const top = overlays[overlays.length - 1];
   return Boolean(top && root && !top.contains(root));
+}
+
+export interface StitchEditorKeyOptions {
+  /** A key that is no editor key, before the canvas shield: true means it was handled (it is then prevented and stopped). */
+  onOtherKey?: (e: KeyboardEvent) => boolean;
+  /** Something of the caller's own over the editor (a menu) owns the keys, as a stacked dialog does. */
+  isStacked?: () => boolean;
 }
 
 /**
@@ -142,13 +149,24 @@ function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repea
  * and the other editor keys are swallowed. ⌥ with an arrow is an editor key
  * in Track too, where it does nothing: Alt+← would otherwise go Back in a
  * browser on Windows. ⌘C, ⌘X, ⌘V, ⌘D and ⌘A act on clips, except that with
- * text selected on the page ⌘C and ⌘X copy the text, natively.
+ * text selected on the page ⌘C and ⌘X copy the text, natively. The Edit
+ * video view hands in its own view keys (`onOtherKey`) and menus
+ * (`isStacked`); the node's dialog passes neither.
  */
-export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requestClose: () => void): void {
+export function useStitchEditorKeys(
+  rootRef: RefObject<HTMLElement | null>,
+  requestClose: () => void,
+  options: StitchEditorKeyOptions = {},
+): void {
   const isOpen = useStitchEditorStore((s) => s.isOpen);
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
 
   useEffect(() => {
     if (!isOpen) return;
+    const stacked = () => stackedDialogOpen(rootRef.current) || optionsRef.current.isStacked?.() === true;
 
     const onKeyDown = (e: KeyboardEvent) => {
       const shield = () => {
@@ -157,7 +175,7 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
       if (isSaveShortcut(e)) return;
 
       // A stacked dialog hears its own Escape (its Dialog listener); canvas keys stay off
-      if (stackedDialogOpen(rootRef.current)) {
+      if (stacked()) {
         if (isBrowserKey(e)) e.preventDefault();
         if (e.key !== "Escape") shield();
         return;
@@ -203,13 +221,18 @@ export function useStitchEditorKeys(rootRef: RefObject<HTMLElement | null>, requ
         run(action, e, requestClose);
         return;
       }
+      if (!s.cancelGesture && optionsRef.current.onOtherKey?.(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       shield();
     };
 
     // A focused button would click on Space's keyup; the keydown already played
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== " " || isTypingTarget(e.target)) return;
-      if (stackedDialogOpen(rootRef.current) || useStitchEditorStore.getState().menu) return;
+      if (stacked() || useStitchEditorStore.getState().menu) return;
       e.preventDefault();
     };
 

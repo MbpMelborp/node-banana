@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useRef } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
@@ -17,7 +18,10 @@ import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { musicAudio } from "@/lib/stitch/draft";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
+import { EditorWorkspace } from "../EditorWorkspace";
+import { useEditorComposition } from "../useEditorComposition";
 import { openStitchEditor } from "../openStitchEditor";
+import { libraryDrop } from "../timeline/libraryDrop";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
 import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
@@ -140,6 +144,31 @@ describe("StitchEditorModal", () => {
     seed();
     render(<StitchEditorModal />);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("renders nothing for an edit project's session, which belongs to the Edit video view", () => {
+    seed();
+    render(<StitchEditorModal />);
+    act(() =>
+      editor().openEdit({
+        editId: "e1",
+        draft: {
+          timeline: [createClip({ kind: "asset", assetId: "aclip00000001" })],
+          audioClips: [],
+          legacyAudio: { curve: [], muted: false },
+          loopCount: 1,
+          sequenceLayout: { mode: "track", overlapSec: 0.5, crossfade: true },
+        },
+      }),
+    );
+    expect(editor().isOpen).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Nor does a node's Expand take the session from it
+    act(() => {
+      expect(openStitchEditor("stitch")).toBe(false);
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(editor().editId).toBe("e1");
   });
 
   it("opens on the node's sequence with its length, size and rate", () => {
@@ -346,6 +375,17 @@ describe("StitchEditorModal", () => {
     expect(canvas).not.toHaveBeenCalled();
     expect(editor().menu).toBeNull();
     expect(editor().isOpen).toBe(true);
+  });
+
+  it("keeps the zoom slider at every width: only the Edit video view drops it when narrow", () => {
+    seed();
+    openEditor();
+    const slider = screen.getByRole("slider", { name: "Timeline zoom" });
+    expect(slider.className).not.toContain("@max-");
+    expect(slider.parentElement!.className).not.toContain("@container");
+    for (const name of ["Zoom out", "Zoom in"]) {
+      expect(screen.getByRole("button", { name }).className).not.toContain("@max-");
+    }
   });
 
   it("types into the In field without the I key, and commits a typed time on Enter", () => {
@@ -1136,6 +1176,47 @@ describe("StitchEditorModal", () => {
         expect(videos().map((v) => v.style.opacity)).toEqual(["0", "0"]);
       });
     });
+  });
+});
+
+describe("EditorWorkspace", () => {
+  function Workspace({ onLoadingChange }: { onLoadingChange: (keys: ReadonlySet<string>) => void }) {
+    const rootRef = useRef<HTMLDivElement>(null);
+    const composition = useEditorComposition(rootRef, 0);
+    return (
+      <div ref={rootRef}>
+        <EditorWorkspace composition={composition} onLoadingChange={onLoadingChange} />
+      </div>
+    );
+  }
+
+  it("reports the clips whose media is still loading, and again once it has loaded", () => {
+    seed();
+    __resetMediaInfoForTests();
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, width: 1920, height: 1080, fps: 24 });
+    act(() => {
+      openStitchEditor("stitch");
+    });
+    const onLoadingChange = vi.fn();
+    render(<Workspace onLoadingChange={onLoadingChange} />);
+    expect([...onLoadingChange.mock.lastCall![0]]).toEqual(["edge:eB"]);
+
+    act(() => __setMediaInfoForTests(mediaKeyOf("blob:b"), { status: "ready", duration: 4, width: 1280, height: 720, fps: 24 }));
+    expect([...onLoadingChange.mock.lastCall![0]]).toEqual([]);
+  });
+});
+
+describe("the Timeline and a library drag", () => {
+  it("offers its lanes to a library drag while mounted, and draws no drop marker in the dialog", () => {
+    seed();
+    const view = render(<StitchEditorModal />);
+    act(() => {
+      openStitchEditor("stitch");
+    });
+    expect(libraryDrop.lanes()).toBe(screen.getByTestId("stitch-lanes"));
+    expect(screen.queryByTestId("library-drop-marker")).toBeNull();
+    view.unmount();
+    expect(libraryDrop.lanes()).toBeNull();
   });
 });
 

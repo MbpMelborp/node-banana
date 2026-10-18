@@ -2,7 +2,7 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import { formatTimecode, parseTimecode } from "@/lib/stitch/timecode";
-import { TIMECODE_WELL } from "./editorStyles";
+import { TIMECODE_WELL, EDITOR_PANEL_SELECTOR } from "./editorStyles";
 
 /**
  * An m:ss.cc well (the rail's In and Out). It shows the value, edits as
@@ -57,7 +57,7 @@ export function TimecodeField({
 
   const leave = (input: HTMLInputElement) => {
     settled.current = true;
-    const panel = input.closest<HTMLElement>('[role="dialog"]');
+    const panel = input.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
     if (panel) panel.focus();
     else input.blur();
   };

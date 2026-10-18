@@ -9,15 +9,16 @@ import { saveStitchEdit } from "./commitStitchEdit";
  * the canvas is replaced (load, clear, tab switch) or the node is deleted
  * (an agent's graph ops can do that while the dialog is up). And puts the
  * open edit in the node whenever the workflow is saved (⌘S, File › Save,
- * the header's Save), leaving the editor open.
+ * the header's Save), leaving the editor open. Node sessions only: an edit
+ * project's session belongs to no canvas and saves on its own.
  */
 export function useEditorLifecycle(): void {
-  const isOpen = useStitchEditorStore((s) => s.isOpen);
+  const isOpen = useStitchEditorStore((s) => s.isOpen && s.nodeId !== null);
   useEffect(() => {
     if (!isOpen) return;
     const check = (wf: Pick<WorkflowStore, "canvasGeneration" | "nodes">) => {
       const { nodeId, canvasGeneration, isOpen: open, close } = useStitchEditorStore.getState();
-      if (!open) return;
+      if (!open || nodeId === null) return;
       const gone = !wf.nodes.some((n) => n.id === nodeId && n.type === "videoStitch");
       if (gone || wf.canvasGeneration !== canvasGeneration) close();
     };

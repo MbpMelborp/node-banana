@@ -13,8 +13,10 @@ export type SaveResult = "saved" | "unchanged" | "gone";
 /**
  * Done. Writes the draft to the node and closes the editor; it does not
  * encode. "closed" when nothing changed, so a legacy node stays legacy.
+ * An edit project's session has no node: nothing is written or closed.
  */
 export function commitStitchEdit(): CommitResult {
+  if (useStitchEditorStore.getState().editId !== null) return "closed";
   const written = writeStitchEdit();
   useStitchEditorStore.getState().close();
   return written === "gone" ? "gone" : written === "unchanged" ? "closed" : "written";
@@ -27,6 +29,7 @@ export function commitStitchEdit(): CommitResult {
  * is the save request's to write; this only puts the edit in the node first.
  */
 export function saveStitchEdit(): SaveResult {
+  if (useStitchEditorStore.getState().editId !== null) return "unchanged";
   const written = writeStitchEdit();
   const s = useStitchEditorStore.getState();
   if (written === "gone") {
@@ -58,9 +61,9 @@ function musicEdgeGone(nodeId: string, edges: readonly WorkflowEdge[], id: strin
  *
  * - The node is gone, or the canvas was replaced: writes nothing ("gone").
  * - Nothing changed: writes nothing ("unchanged").
- * - Otherwise: an edge whose every clip the user removed is
- *   disconnected (a live edge with no clip would be appended again on the
- *   next read), and the draft is reconciled once more against the edges that
+ * - Otherwise: an edge the draft referenced when the dialog opened and whose
+ *   every clip the user removed is disconnected (a live edge with no clip
+ *   would be appended again on the next read), and the draft is reconciled once more against the edges that
  *   remain, picking up any that arrived while the editor was open. The edge
  *   removal pushes the canvas undo checkpoint and holds it for this task, so
  *   the data write joins it: one canvas undo step either way.
@@ -83,7 +86,7 @@ function writeStitchEdit(): StitchDraft | "unchanged" | "gone" {
   if (!nodeId || !node || !s.draft || !s.initial || wf.canvasGeneration !== s.canvasGeneration) return "gone";
 
   const live = stitchVideoEdgeIds(nodeId, wf.edges);
-  const referencedAtOpen = new Set(edgeIdsInOrder(s.initial.timeline));
+  const referencedAtOpen = new Set(s.edgeIdsAtOpen);
   const referencedNow = new Set(edgeIdsInOrder(s.draft.timeline));
   const orphaned = live.filter((id) => referencedAtOpen.has(id) && !referencedNow.has(id));
 

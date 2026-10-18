@@ -238,6 +238,66 @@ describe("saveStitchEdit", () => {
     expect(saveStitchEdit()).toBe("gone");
     expect(editor().isOpen).toBe(false);
   });
+
+  it("keeps a video connected while the dialog is open: the Save picks it up and the Done after it leaves its edge", () => {
+    trimA(1);
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-c", "generateVideo", { outputVideo: "blob:c" })],
+      edges: [...wf().edges, edge("eC", "gen-c", "video-2")],
+    });
+    expect(saveStitchEdit()).toBe("saved");
+    expect(data().clipOrder).toEqual(["eA", "eB", "eC"]);
+    trimA(2);
+    expect(commitStitchEdit()).toBe("written");
+    expect(edgeIds()).toEqual(["eA", "eB", "eC"]);
+    expect(data().clipOrder).toEqual(["eA", "eB", "eC"]);
+    expect(data().timeline![0]).toMatchObject({ inSec: 2 });
+  });
+
+  it("still disconnects a video removed after a Save that picked up another", () => {
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-c", "generateVideo", { outputVideo: "blob:c" })],
+      edges: [...wf().edges, edge("eC", "gen-c", "video-2")],
+    });
+    trimA(1);
+    saveStitchEdit();
+    remove("clip:eB");
+    commitStitchEdit();
+    expect(edgeIds()).toEqual(["eA", "eC"]);
+  });
+});
+
+describe("an edit project's session", () => {
+  beforeEach(() => {
+    editor().close();
+    editor().openEdit({
+      editId: "ed0123456789ab",
+      draft: {
+        timeline: [createClip({ kind: "asset", assetId: "a1" }, { id: "v1" })],
+        audioClips: [],
+        legacyAudio: { curve: [], muted: false },
+        loopCount: 1,
+        sequenceLayout: { mode: "track", overlapSec: 0.5, crossfade: true },
+      },
+    });
+    editor().apply((d) => ({ ...d, loopCount: 2 }));
+  });
+
+  it("Done writes nothing and leaves it open", () => {
+    const nodes = wf().nodes;
+    expect(commitStitchEdit()).toBe("closed");
+    expect(editor().isOpen).toBe(true);
+    expect(editor().editId).toBe("ed0123456789ab");
+    expect(wf().nodes).toBe(nodes);
+  });
+
+  it("Save writes nothing and leaves it open and dirty", () => {
+    const nodes = wf().nodes;
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(editor().isOpen).toBe(true);
+    expect(selectIsDirty(editor())).toBe(true);
+    expect(wf().nodes).toBe(nodes);
+  });
 });
 
 describe("audio clips on Done", () => {

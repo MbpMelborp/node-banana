@@ -4,11 +4,12 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { WorkflowCanvas } from "@/components/WorkflowCanvas";
 import { AGENT_BUTTON_MARGIN } from "@/lib/agent/client/layout";
 import { useAssetStore } from "@/store/assetStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
 
 /**
  * The canvas stays mounted (inert, invisible) under the Assets and chat
  * views, and its window-level key handler must not act on the hidden graph;
- * bare A and C are how it opens them. Rendered the
+ * bare A, C and E are how it opens them. Rendered the
  * way WorkflowCanvas.test.tsx renders it, with the store mocked; the
  * Assets view's side of the contract (the modal count it holds) is
  * modelled by `isModalOpen`.
@@ -227,6 +228,69 @@ describe("WorkflowCanvas behind the Assets view", () => {
     fireEvent.keyDown(window, { key: "a" });
     fireEvent.keyDown(window, { key: "c" });
     expect(useAssetStore.getState().appView).toBe("canvas");
+  });
+});
+
+describe("WorkflowCanvas and the Edit video view", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.state = state();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+  afterEach(() => {
+    useAssetStore.setState({ appView: "canvas" });
+    useStitchEditorStore.getState().close();
+  });
+
+  it("shows Edit video on a bare E, but not with Shift, a modifier or on repeat", () => {
+    renderCanvas();
+    fireEvent.keyDown(window, { key: "E", shiftKey: true });
+    fireEvent.keyDown(window, { key: "e", metaKey: true });
+    fireEvent.keyDown(window, { key: "e", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "e", altKey: true });
+    fireEvent.keyDown(window, { key: "e", repeat: true });
+    expect(useAssetStore.getState().appView).toBe("canvas");
+
+    fireEvent.keyDown(window, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("edit");
+  });
+
+  it("keeps the A and C guards: no switch over a dialog, a menu, a text field or the Edit Video dialog", () => {
+    mocks.state = state({ isModalOpen: true });
+    const { unmount } = renderCanvas();
+    fireEvent.keyDown(window, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    unmount();
+
+    mocks.state = state();
+    renderCanvas();
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    document.body.appendChild(menu);
+    try {
+      fireEvent.keyDown(window, { key: "e" });
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    } finally {
+      menu.remove();
+    }
+
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    try {
+      field.focus();
+      fireEvent.keyDown(field, { key: "e" });
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    } finally {
+      field.remove();
+    }
+
+    useStitchEditorStore.setState({ isOpen: true, nodeId: "stitch-1" });
+    fireEvent.keyDown(window, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    useStitchEditorStore.getState().close();
+
+    fireEvent.keyDown(window, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("edit");
   });
 });
 

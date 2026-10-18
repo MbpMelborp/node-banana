@@ -1,4 +1,5 @@
 import { isTypingTarget } from "../editorKeys";
+import { EDITOR_PANEL_SELECTOR } from "../editorStyles";
 
 /**
  * A press on the lanes that cancels its pointerdown (a handle, the ruler)
@@ -10,5 +11,5 @@ import { isTypingTarget } from "../editorKeys";
  */
 export function releaseTypingFocus(from: Element): void {
   if (typeof document === "undefined" || !isTypingTarget(document.activeElement)) return;
-  from.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+  from.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
 }

@@ -9,7 +9,7 @@ import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFr
 import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
 import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
-import { gatherStitchInputs } from "./stitchInputs";
+import { gatherStitchInputs, stitchEngineOptions, stitchRecordParameters } from "./stitchInputs";
 
 const FINGERPRINT_SAMPLES = 8;
 const FINGERPRINT_SAMPLE_BYTES = 4096;
@@ -162,17 +162,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
         updateNodeData(node.id, { progress: progress.progress });
       },
       signal,
-      // A Track node passes the loop count alone, as it always did, and a lined-up stack its overlap as before;
-      // audio clips only when the audio is not legacy-shaped
-      {
-        loopCount: gathered.loopCount,
-        ...(gathered.placed
-          ? { overlapSec: gathered.placed.overlapSec, crossfade: gathered.placed.crossfade, placed: true }
-          : gathered.stack
-            ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade }
-            : {}),
-        ...(gathered.audioClips ? { audioClips: gathered.audioClips } : {}),
-      }
+      stitchEngineOptions(gathered)
     );
 
     if (signal?.aborted) {
@@ -208,21 +198,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
 
     ctx.releaseMediaUrl?.(previousOutput as string | undefined);
 
-    await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
-      clips: gathered.clipCount,
-      loopCount: gathered.loopCount,
-      withAudio: gathered.music !== null || (gathered.audioClips?.length ?? 0) > 0,
-      ...(gathered.audioClips ? { audioClips: gathered.audioClips.length } : {}),
-      ...(gathered.placed
-        ? {
-            crossfade: gathered.placed.crossfade,
-            overlapSec: gathered.placed.overlapSec,
-            starts: gathered.clips.map((clip) => clip.startSec ?? null),
-          }
-        : gathered.stack
-          ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade }
-          : {}),
-    });
+    await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", stitchRecordParameters(gathered));
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });

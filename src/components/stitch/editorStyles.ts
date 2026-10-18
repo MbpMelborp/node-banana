@@ -101,3 +101,9 @@ export const MOVING_CLIP = "z-10 ring-2 ring-selection shadow-[0_8px_20px_rgba(0
 
 /** The editor's panel, marked for code outside it that hands focus back (the library picker): not its label. */
 export const STITCH_EDITOR_PANEL = "data-stitch-editor";
+
+/**
+ * The element focus goes back to inside the editor: the dialog's panel, or the Edit video view's editor column (which
+ * carries STITCH_EDITOR_PANEL and is no dialog). The same element in the dialog, so nothing changes there.
+ */
+export const EDITOR_PANEL_SELECTOR = `[role="dialog"], [${STITCH_EDITOR_PANEL}]`;

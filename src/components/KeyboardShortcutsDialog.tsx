@@ -72,6 +72,25 @@ const viewGroup: ShortcutGroup = {
   shortcuts: [
     { keys: ["C"], description: "Show or hide the chat" },
     { keys: ["A"], description: "Show or hide Assets" },
+    { keys: ["E"], description: "Show or hide Edit video" },
+  ],
+};
+
+/** The open edit's own keys: the editor's, as in the Edit Video node's dialog, but ⌘S saves the edit. */
+const editVideoGroup: ShortcutGroup = {
+  title: "Edit video",
+  shortcuts: [
+    { keys: [`${modKey}`, "S"], description: "Save the edit" },
+    { keys: ["Space"], description: "Play or pause" },
+    { keys: ["J", "K", "L"], description: "Back 1 s / pause / play" },
+    { keys: ["I", "O"], description: "Set In / Out at the playhead" },
+    { keys: ["S"], description: "Split at the playhead" },
+    { keys: ["Delete"], description: "Remove the selected clips" },
+    { keys: ["M"], description: "Mute the selected audio clips" },
+    { keys: [`${modKey}`, "D"], description: "Duplicate the selected clips" },
+    { keys: [`${modKey}`, "Z"], description: "Undo" },
+    { keys: [`${modKey}`, "Shift", "Z"], description: "Redo" },
+    { keys: ["Esc"], description: "Close a menu, cancel a drag" },
   ],
 };
 
@@ -97,15 +116,17 @@ interface KeyboardShortcutsDialogProps {
 }
 
 export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDialogProps) {
-  // Opened over another view, the view switches come first, then the Assets
-  // view's own keys when it is that one
+  // Opened over another view, the view switches come first, then that view's
+  // own keys (Assets', or the open edit's)
   const appView = useAssetStore((state) => state.appView);
   const groups =
     appView === "assets"
       ? [viewGroup, assetsGroup, ...shortcutGroups]
-      : appView === "chat"
-        ? [viewGroup, ...shortcutGroups, assetsGroup]
-        : [...shortcutGroups, viewGroup, assetsGroup];
+      : appView === "edit"
+        ? [viewGroup, editVideoGroup, ...shortcutGroups, assetsGroup]
+        : appView === "chat"
+          ? [viewGroup, ...shortcutGroups, assetsGroup]
+          : [...shortcutGroups, viewGroup, assetsGroup];
   return (
     <Dialog open={isOpen} onClose={onClose} className="w-[520px] max-h-[80vh]">
       <DialogHeader>

@@ -202,6 +202,8 @@ export function AudioLane({
   onViewScroll: (event: UIEvent<HTMLDivElement>) => void;
 }) {
   const { rowRef, onFocus, onBlur } = useLaneFocus();
+  // An edit project has no node to connect music to
+  const inEdit = useStitchEditorStore((s) => s.editId !== null);
   const clips = boxes.map((b) => b.clip);
   const tabStop = clips.some((c) => c.id === leadId) ? leadId : (clips[0]?.id ?? null);
   const multi = selectedIds.size > 1;
@@ -365,7 +367,7 @@ export function AudioLane({
               }}
             >
               <Plus size={12} strokeWidth={2} className="shrink-0 text-handle-audio" />
-              Connect audio to the node, or add it from the library
+              {inEdit ? "Add audio from the library" : "Connect audio to the node, or add it from the library"}
             </div>
           )}
           {boxes.map((box) => (moving.has(box.clip.id) ? null : boxFor(box, { moving: false, top: blockTop(box.clip.row) })))}

@@ -14,6 +14,16 @@ export interface LibraryVideoQuery {
   sort: AssetSort;
 }
 
+/** Which kinds a library list holds: the Edit video view's pane shows both, or one. */
+export type LibraryKind = "all" | "video" | "audio";
+
+const KINDS: Record<LibraryKind, readonly AssetKind[]> = { all: ["video", "audio"], video: ["video"], audio: ["audio"] };
+
+/** The asset kinds a LibraryKind asks for. */
+export function libraryKinds(kind: LibraryKind): readonly AssetKind[] {
+  return KINDS[kind];
+}
+
 export const LIBRARY_PAGE_SIZE = 60;
 
 export const DEFAULT_LIBRARY_QUERY: LibraryVideoQuery = {

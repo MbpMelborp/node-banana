@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Film } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
 
 /** Room left around the frame on its limiting axis. */
 const STAGE_PADDING = 32;
@@ -93,6 +94,8 @@ export function EditorStage({
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  // An edit project has no node: its clips come from the library pane
+  const inEdit = useStitchEditorStore((s) => s.editId !== null);
 
   // Measured by observation, not getBoundingClientRect: the dialog opens with a scale transform
   useEffect(() => {
@@ -119,7 +122,9 @@ export function EditorStage({
           <Film size={22} strokeWidth={1.5} className="text-neutral-600" aria-hidden="true" />
           <p className="mt-1 text-xs font-medium text-neutral-300">No clips yet</p>
           <p className="text-[11px] leading-[15px] text-neutral-500">
-            Connect videos to the node&apos;s inputs on the canvas. They line up here in socket order.
+            {inEdit
+              ? "Click a video in the library to add it at the playhead, or drag it onto the timeline."
+              : "Connect videos to the node's inputs on the canvas. They line up here in socket order."}
           </p>
         </div>
       ) : (

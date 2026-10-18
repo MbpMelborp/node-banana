@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { useAssetStore } from "@/store/assetStore";
 import { FrameCaptureError, type FrameCapture, type FrameCaptureJob } from "@/lib/stitch/frameCapture";
 import * as mediaBlob from "@/lib/assets/client/mediaBlob";
 import { frameOptions, shownAt } from "@/lib/stitch/framePlan";
@@ -11,6 +12,7 @@ import { openStitchEditor } from "../openStitchEditor";
 import {
   __resetFramePlacementForTests,
   addFrameNode,
+  canvasCentrePosition,
   CAPTURE_TIMEOUT_MS,
   frameFileName,
   frameNodePosition,
@@ -412,6 +414,139 @@ describe("frameToCanvas", () => {
     expect((wf().nodes.find((n) => n.id === id)!.data as ImageInputNodeData).dimensions).toEqual(SIZE);
     wf().undo();
     expect(wf().nodes.some((n) => n.id === id)).toBe(false);
+  });
+});
+
+describe("frameToCanvas from an edit project (the Edit video view)", () => {
+  const BOX = { width: 1200, height: 800 };
+  let flow: HTMLElement;
+
+  beforeEach(() => {
+    editor().close();
+    editor().openEdit({
+      editId: "ed0123456789ab",
+      draft: {
+        timeline: [createClip({ kind: "asset", assetId: "lib1" }, { id: "v1" }), createClip({ kind: "asset", assetId: "lib2" }, { id: "v2" })],
+        audioClips: [],
+        legacyAudio: { curve: [], muted: false },
+        loopCount: 1,
+        sequenceLayout: { mode: "track", overlapSec: 0.5, crossfade: true },
+      },
+    });
+    editor().setDurations(new Map<SourceKey, number>([["asset:lib1", 5], ["asset:lib2", 4]]));
+    // The canvas, panned and zoomed, laid out under the covering view
+    flow = document.createElement("div");
+    flow.className = "react-flow";
+    flow.getBoundingClientRect = () => ({ ...BOX, x: 0, y: 0, left: 0, top: 0, right: BOX.width, bottom: BOX.height, toJSON: () => ({}) });
+    const viewport = document.createElement("div");
+    viewport.className = "react-flow__viewport";
+    viewport.style.transform = "translate(-1000px, -2000px) scale(2)";
+    flow.appendChild(viewport);
+    document.body.appendChild(flow);
+    useAssetStore.setState({ appView: "edit" });
+  });
+
+  afterEach(() => {
+    flow.remove();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+
+  it("puts the Image Input in the middle of the canvas's viewport, selected", async () => {
+    editor().setPlayhead(1);
+    expect(await press()).toBe("added");
+    expect(frames()).toHaveLength(1);
+    const frame = frames()[0];
+    // Viewport centre (600, 400) in flow coordinates is ((600 + 1000) / 2, (400 + 2000) / 2), less half the node
+    expect(frame.position).toEqual({ x: 800 - 150, y: 1200 - 140 });
+    expect(frame.selected).toBe(true);
+    expect(wf().nodes.filter((n) => n.selected).map((n) => n.id)).toEqual([frame.id]);
+  });
+
+  it("centres the node on its measured size once the canvas has drawn it; one undo still takes it away", async () => {
+    const queued: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => queued.push(cb));
+    const flushFrames = async () => {
+      for (let i = 0; i < 40; i++) {
+        for (const cb of queued.splice(0)) cb(0);
+        await Promise.resolve();
+      }
+    };
+    try {
+      editor().setPlayhead(1);
+      expect(await press()).toBe("added");
+      const id = frames()[0].id;
+      await flushFrames();
+      expect(frames()[0].position).toEqual({ x: 650, y: 1060 });
+      // Not measured within its frames: it stays where it was put. Measured: a 16:9 frame at 300 wide is shorter
+      expect(await press()).toBe("added");
+      const second = frames()[1].id;
+      useWorkflowStore.setState({
+        nodes: wf().nodes.map((n) => (n.id === second ? { ...n, measured: { width: 300, height: 211 } } : n)),
+      });
+      await flushFrames();
+      // Moved down by half what it lost, from wherever addNode put it (clear of the first)
+      expect(frames().find((n) => n.id === second)!.position).toEqual({ x: 970, y: 1060 + (280 - 211) / 2 });
+      expect(frames().find((n) => n.id === id)!.position).toEqual({ x: 650, y: 1060 });
+      wf().undo();
+      expect(frames().map((n) => n.id)).toEqual([id]);
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+    }
+  });
+
+  it("leaves a node moved before it was measured where it was moved", async () => {
+    const queued: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => queued.push(cb));
+    try {
+      editor().setPlayhead(1);
+      await press();
+      const id = frames()[0].id;
+      useWorkflowStore.setState({
+        nodes: wf().nodes.map((n) => (n.id === id ? { ...n, position: { x: 5, y: 5 }, measured: { width: 300, height: 211 } } : n)),
+      });
+      for (let i = 0; i < 40; i++) {
+        for (const cb of queued.splice(0)) cb(0);
+        await Promise.resolve();
+      }
+      expect(frames()[0].position).toEqual({ x: 5, y: 5 });
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+    }
+  });
+
+  it("says so in a toast that offers Go to canvas, and stays in the view", async () => {
+    editor().setPlayhead(1);
+    await press();
+    expect(show).toHaveBeenCalledWith("Frame added to the canvas", "success", false, null, [
+      { label: "Go to canvas", onClick: expect.any(Function) },
+    ]);
+    expect(useAssetStore.getState().appView).toBe("edit");
+    expect(editor().isOpen).toBe(true);
+    const [[, , , , actions]] = show.mock.calls;
+    actions[0].onClick();
+    expect(useAssetStore.getState().appView).toBe("canvas");
+  });
+
+  it("records the frame against the edit, not a node", async () => {
+    editor().setPlayhead(6);
+    await press();
+    const input = recordUiAsset.mock.calls[0][0];
+    expect(input.parameters).toMatchObject({ fromEditId: "ed0123456789ab", layers: [{ clip: 2, assetId: "lib2" }] });
+    expect(input.parameters).not.toHaveProperty("fromNodeId");
+  });
+
+  it("falls back to the stored viewport, then to no pan, when the canvas has not drawn one", () => {
+    flow.querySelector(".react-flow__viewport")!.remove();
+    useWorkflowStore.setState({ canvasViewport: { x: 100, y: 0, zoom: 0.5 } });
+    expect(canvasCentrePosition({ width: 300, height: 280 })).toEqual({ x: (600 - 100) / 0.5 - 150, y: 400 / 0.5 - 140 });
+    useWorkflowStore.setState({ canvasViewport: null });
+    expect(canvasCentrePosition({ width: 300, height: 280 })).toEqual({ x: 450, y: 260 });
   });
 });
 

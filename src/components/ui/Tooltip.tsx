@@ -3,8 +3,8 @@
 import { KbdGroup } from "@/components/ui/Kbd";
 
 export type TooltipPlacement = "top" | "bottom";
-/** "end" keeps the label inside the window for a button on the right edge. */
-export type TooltipAlign = "center" | "end";
+/** "start" and "end" keep the label inside the window for a button on the left or right edge. */
+export type TooltipAlign = "start" | "center" | "end";
 
 /**
  * Hover label for an icon-only button. CSS-driven (300ms delay, fades in on
@@ -23,7 +23,7 @@ export function Tooltip({
   align?: TooltipAlign;
 }) {
   const side = placement === "bottom" ? "top-full mt-2.5" : "bottom-full mb-2.5";
-  const edge = align === "end" ? "right-0" : "left-1/2 -translate-x-1/2";
+  const edge = align === "end" ? "right-0" : align === "start" ? "left-0" : "left-1/2 -translate-x-1/2";
   return (
     <span
       aria-hidden="true"

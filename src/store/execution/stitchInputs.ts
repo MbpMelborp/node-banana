@@ -2,15 +2,18 @@
  * What a Stitch run encodes: the node's timeline resolved to video Blobs, and
  * its audio: the music as before when the audio has the legacy shape, else
  * every audio clip. Read the way the card and the editor read it
- * (readStitchDraft), so the encode is the sequence they show.
+ * (readStitchDraft), so the encode is the sequence they show. An edit
+ * project's draft (the Edit video view) is gathered by the same rules from
+ * its library clips (gatherDraftInputs), and both build the engine's options
+ * and the recorded parameters with the same two functions.
  */
 
-import type { VideoStitchNodeData } from "@/types";
+import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { AssetApiError, fetchAssetBlob } from "@/lib/assets/client/api";
-import type { StitchAudioClipInput, StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes";
+import type { StitchAudioClipInput, StitchClipInput, StitchMusicInput, StitchOptions } from "@/lib/stitch/engineTypes";
 import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { requestAssetInfo } from "@/lib/stitch/assetInfo";
-import { musicAudio, readStitchDraft } from "@/lib/stitch/draft";
+import { musicAudio, readStitchDraft, type StitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { isPlaced, sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
@@ -39,11 +42,99 @@ export interface GatheredStitch {
 
 type ClipMedia = { kind: "url"; url: string } | { kind: "asset"; assetId: string; position: number };
 
-interface PendingClip extends Omit<StitchClipInput, "blob"> {
+/** A clip to encode before its video is fetched: where the video comes from (asset position = timeline index + 1). */
+export interface PendingClip extends Omit<StitchClipInput, "blob"> {
   media: ClipMedia;
 }
 
 const TOO_FEW_CLIPS = "Need at least 2 video clips to render";
+export const NO_CLIP_TO_RENDER = "Add a clip to render";
+
+type Placed = GatheredStitch["placed"];
+
+/** A timeline clip's trim and sound, and its start when the stack is placed. */
+function clipTrim(clip: StitchTimelineClip, placed: Placed): Omit<StitchClipInput, "blob" | "source"> {
+  return {
+    inSec: clip.inSec,
+    outSec: clip.outSec,
+    muted: clip.muted,
+    volume: clip.volume,
+    // A clip dropped below takes its start with it; no other clip moves
+    ...(placed && clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+  };
+}
+
+/**
+ * Each pending clip's video, fetched once per source however many pieces of it play. A library video that is gone
+ * stops the run with "Clip N's library video is no longer in the library", and its record is read again.
+ */
+export async function fetchClipBlobs(pending: readonly PendingClip[], signal?: AbortSignal): Promise<StitchClipInput[]> {
+  const fetches = new Map<string, Promise<Blob>>();
+  const blobFor = (media: ClipMedia): Promise<Blob> => {
+    const key = media.kind === "url" ? `url:${media.url}` : `asset:${media.assetId}`;
+    let blob = fetches.get(key);
+    if (!blob) {
+      blob =
+        media.kind === "url"
+          ? fetch(media.url).then((r) => r.blob())
+          : fetchAssetBlob(media.assetId, signal).catch((error: unknown) => {
+              if (error instanceof AssetApiError && error.status === 404) {
+                // The card and the editor read its record again, so they count it as the run found it
+                requestAssetInfo([media.assetId], { refresh: true });
+                throw new Error(`Clip ${media.position}'s library video is no longer in the library`);
+              }
+              throw error;
+            });
+      fetches.set(key, blob);
+    }
+    return blob;
+  };
+  const blobs = await Promise.all(pending.map((clip) => blobFor(clip.media)));
+  return pending.map((clip, i) => ({
+    blob: blobs[i],
+    inSec: clip.inSec,
+    outSec: clip.outSec,
+    muted: clip.muted,
+    volume: clip.volume,
+    ...(clip.source !== undefined ? { source: clip.source } : {}),
+    ...(clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+  }));
+}
+
+/**
+ * The engine's options for a gathered stitch. A Track sequence passes the loop count alone, as it always did, and a
+ * lined-up stack its overlap as before; audio clips only when the audio is not legacy-shaped.
+ */
+export function stitchEngineOptions(g: Pick<GatheredStitch, "loopCount" | "placed" | "stack" | "audioClips">): StitchOptions {
+  return {
+    loopCount: g.loopCount,
+    ...(g.placed
+      ? { overlapSec: g.placed.overlapSec, crossfade: g.placed.crossfade, placed: true }
+      : g.stack
+        ? { overlapSec: g.stack.overlapSec, crossfade: g.stack.crossfade }
+        : {}),
+    ...(g.audioClips ? { audioClips: g.audioClips } : {}),
+  };
+}
+
+/** What the asset library records about a stitch's settings. */
+export function stitchRecordParameters(g: GatheredStitch): Record<string, unknown> {
+  return {
+    clips: g.clipCount,
+    loopCount: g.loopCount,
+    withAudio: g.music !== null || (g.audioClips?.length ?? 0) > 0,
+    ...(g.audioClips ? { audioClips: g.audioClips.length } : {}),
+    ...(g.placed
+      ? {
+          crossfade: g.placed.crossfade,
+          overlapSec: g.placed.overlapSec,
+          starts: g.clips.map((clip) => clip.startSec ?? null),
+        }
+      : g.stack
+        ? { overlapSec: g.stack.overlapSec, crossfade: g.stack.crossfade }
+        : {}),
+  };
+}
 
 /** Everything a stitch needs, in timeline order. Throws before any fetch when fewer than 2 clips can play. */
 export async function gatherStitchInputs(
@@ -79,14 +170,7 @@ export async function gatherStitchInputs(
     }
   } else {
     draft.timeline.forEach((clip, index) => {
-      const trim = {
-        inSec: clip.inSec,
-        outSec: clip.outSec,
-        muted: clip.muted,
-        volume: clip.volume,
-        // A clip dropped below takes its start with it; no other clip moves
-        ...(placed && clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
-      };
+      const trim = clipTrim(clip, placed);
       if (clip.source.kind === "asset") {
         pending.push({
           media: { kind: "asset", assetId: clip.source.assetId, position: index + 1 },
@@ -109,37 +193,7 @@ export async function gatherStitchInputs(
   if (pending.length < 2) throw new Error(TOO_FEW_CLIPS);
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  // One fetch per source, however many pieces of it play
-  const fetches = new Map<string, Promise<Blob>>();
-  const blobFor = (media: ClipMedia): Promise<Blob> => {
-    const key = media.kind === "url" ? `url:${media.url}` : `asset:${media.assetId}`;
-    let blob = fetches.get(key);
-    if (!blob) {
-      blob =
-        media.kind === "url"
-          ? fetch(media.url).then((r) => r.blob())
-          : fetchAssetBlob(media.assetId, signal).catch((error: unknown) => {
-              if (error instanceof AssetApiError && error.status === 404) {
-                // The card and the editor read its record again, so they count it as the run found it
-                requestAssetInfo([media.assetId], { refresh: true });
-                throw new Error(`Clip ${media.position}'s library video is no longer in the library`);
-              }
-              throw error;
-            });
-      fetches.set(key, blob);
-    }
-    return blob;
-  };
-  const blobs = await Promise.all(pending.map((clip) => blobFor(clip.media)));
-  const clips: StitchClipInput[] = pending.map((clip, i) => ({
-    blob: blobs[i],
-    inSec: clip.inSec,
-    outSec: clip.outSec,
-    muted: clip.muted,
-    volume: clip.volume,
-    ...(clip.source !== undefined ? { source: clip.source } : {}),
-    ...(clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
-  }));
+  const clips = await fetchClipBlobs(pending, signal);
 
   let music: StitchMusicInput | null = null;
   let audioClips: StitchAudioClipInput[] | null = null;
@@ -167,4 +221,39 @@ export async function gatherStitchInputs(
       : null;
 
   return { clips, music, audioClips, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
+}
+
+/**
+ * What an edit project's draft encodes: its library clips (one is enough) and its library audio clips, by the
+ * node's rules for a non-legacy node with no edges or music, so the same asset clips encode the same as the node.
+ */
+export async function gatherDraftInputs(draft: StitchDraft, signal?: AbortSignal): Promise<GatheredStitch> {
+  const layout = draft.sequenceLayout;
+  const placed =
+    layout.mode === "stacked" && isPlaced(draft.timeline)
+      ? { crossfade: layout.crossfade, overlapSec: layout.overlapSec }
+      : null;
+  const pending: PendingClip[] = draft.timeline.flatMap((clip, index) =>
+    clip.source.kind === "asset"
+      ? [
+          {
+            media: { kind: "asset", assetId: clip.source.assetId, position: index + 1 },
+            ...clipTrim(clip, placed),
+            source: sourceKey(clip.source),
+          },
+        ]
+      : [],
+  );
+  if (pending.length === 0) throw new Error(NO_CLIP_TO_RENDER);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  const clips = await fetchClipBlobs(pending, signal);
+  const audioClips = isLegacyAudioShape(draft.audioClips)
+    ? null
+    : await gatherAudioClipInputs(draft.audioClips, { musicUrl: null, signal });
+  const stack =
+    layout.mode === "stacked" && layout.overlapSec > 0
+      ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
+      : null;
+  return { clips, music: null, audioClips, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
 }

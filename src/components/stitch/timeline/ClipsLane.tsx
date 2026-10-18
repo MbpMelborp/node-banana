@@ -15,7 +15,7 @@ import { blockInsertionX, insertionX } from "@/lib/stitch/reorder";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import { openLibraryPicker } from "../editorActions";
-import { GEOMETRY } from "../editorStyles";
+import { GEOMETRY, EDITOR_PANEL_SELECTOR } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { ClipBox, keepFocus, type ClipBoxMode } from "./ClipBox";
@@ -117,7 +117,7 @@ export function useLaneFocus() {
     if (!row || (active && active !== document.body && active.isConnected)) return;
     focusInside.current = false;
     const stop = row.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
-    (stop ?? row.closest<HTMLElement>('[role="dialog"]'))?.focus({ preventScroll: true });
+    (stop ?? row.closest<HTMLElement>(EDITOR_PANEL_SELECTOR))?.focus({ preventScroll: true });
   });
   return { rowRef, onFocus, onBlur };
 }

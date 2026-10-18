@@ -7,6 +7,7 @@ import {
   type StitchEditorState,
 } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useEditProjectStore } from "@/store/editProjectStore";
 import { flat, followEndFade, removePoint } from "@/lib/stitch/curve";
 import { getAssetInfo, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { draftDuration, draftSpans, sameLayout, type StitchDraft } from "@/lib/stitch/draft";
@@ -32,6 +33,15 @@ import {
 } from "@/lib/stitch/audioClips";
 import { clampOverlapSec, effectiveOverlapSec } from "@/lib/stitch/stack";
 import { FRAME_RATE } from "@/lib/stitch/sequencePlan";
+import {
+  insertLibraryItem,
+  libraryItemOf,
+  playheadTarget,
+  provisionalDurations,
+  stackedAddBlocked,
+  type LibraryDropTarget,
+  type LibraryItem,
+} from "@/lib/stitch/libraryInsert";
 import { makeSelection } from "@/lib/stitch/selection";
 import {
   appendClips,
@@ -654,14 +664,82 @@ export function lineUpClips(): void {
 
 /**
  * The library picker over a paused preview: for video (the Clips track's +, the slot after the last clip and the
- * empty lane) or audio (the audio strip's +).
+ * empty lane) or audio (the audio strip's +). In the Edit video view the library pane beside the timeline takes its
+ * place: it opens if hidden, shows that kind and focuses its search.
  */
 export function openLibraryPicker(kind: "video" | "audio" = "video"): void {
   const s = editor();
   if (!s.draft) return;
+  if (s.editId !== null) {
+    s.openMenu(null);
+    useEditProjectStore.getState().requestPaneFocus(kind);
+    return;
+  }
   s.setPlaying(false);
   s.openMenu(null);
   s.setPickerOpen(kind);
+}
+
+/** The lengths a library add places with: measured, else the clip's record, else the open edit's snapshot. */
+function placementDurations(s: StitchEditorState) {
+  return provisionalDurations(s.draft ?? { timeline: [] }, s.durations, getAssetInfo, useEditProjectStore.getState().open?.assets ?? {});
+}
+
+function playheadTargetOf(s: StitchEditorState, item: LibraryItem): LibraryDropTarget | null {
+  if (!s.draft) return null;
+  const selected = new Set(selectedClipIds(s));
+  return playheadTarget(s.draft, placementDurations(s), drawnPlayhead(s), item, editorAudioLengthOf(s), selected);
+}
+
+/** Where a click on this library item adds it now (at the playhead). */
+export function libraryPlayheadTarget(item: LibraryItem): LibraryDropTarget | null {
+  return playheadTargetOf(editor(), item);
+}
+
+/**
+ * Why a library item cannot be added at the playhead now ("Waiting for the clips to load"), or null. The state and
+ * the loading clips default to the stores' own; the pane passes them from its selectors.
+ */
+export function libraryAddBlockedReason(
+  item: LibraryItem,
+  s: StitchEditorState = editor(),
+  loading: ReadonlySet<SourceKey> = useEditProjectStore.getState().clipsLoading,
+): string | null {
+  const target = playheadTargetOf(s, item);
+  return s.draft && target ? stackedAddBlocked(s.draft, target, loading) : null;
+}
+
+/**
+ * The library pane's add: one video or sound at the target (the playhead's when none is given: a click), as one undo
+ * step. The new clip is selected and the playhead goes to its start. A Stacked add that would pin while a clip is
+ * still loading does nothing. Returns the new clip's id, or null when nothing was added.
+ */
+export function addLibraryItemAt(view: AssetView, target?: LibraryDropTarget | null): string | null {
+  const s = editor();
+  const item = libraryItemOf(view);
+  if (!s.draft || !item) return null;
+  const at = target ?? libraryPlayheadTarget(item);
+  if (!at || stackedAddBlocked(s.draft, at, useEditProjectStore.getState().clipsLoading)) return null;
+  primeAssetInfo([view]);
+  const durations = placementDurations(s);
+  const inserted = insertLibraryItem(s.draft, durations, item, at);
+  const clipId = inserted.clipId;
+  if (clipId === null) return null;
+  s.openMenu(null);
+  s.apply(() => inserted.draft);
+  if (item.kind === "audio") {
+    if (inserted.rowMap) remapExpandedRow(inserted.rowMap);
+    selectAudioClips([clipId]);
+    const clip = inserted.draft.audioClips.find((c) => c.id === clipId);
+    editor().setPlayhead(clip?.startSec ?? drawnPlayhead(s));
+    return clipId;
+  }
+  const withNew = new Map(durations);
+  if (item.durationSec !== null) withNew.set(sourceKey({ kind: "asset", assetId: item.assetId }), item.durationSec);
+  const span = draftSpans(inserted.draft, withNew).find((sp) => sp.clip.id === clipId);
+  editor().select({ kind: "clip", clipId });
+  editor().setPlayhead(span?.start ?? drawnPlayhead(s));
+  return clipId;
 }
 
 /**

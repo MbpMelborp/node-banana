@@ -12,6 +12,7 @@ vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.f
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
+import { createClip } from "@/lib/stitch/timeline";
 import { __resetAssetInfoForTests } from "@/lib/stitch/assetInfo";
 import type { StitchDraft } from "@/lib/stitch/draft";
 import { nodeKindLabel } from "@/lib/stitch/labels";
@@ -148,5 +149,49 @@ describe("useStitchEditorMedia's audio clips", () => {
     seed(false);
     const { result } = renderHook(() => useStitchEditorMedia());
     expect(result.current.audioByClip.get(MUSIC_CLIP_ID)).toMatchObject({ src: null, status: "empty", fileName: "Audio" });
+  });
+});
+
+describe("useStitchEditorMedia's snapshot fallback (an edit project's file)", () => {
+  const snapshot = {
+    [GONE]: { name: "sunset.mp4", kind: "video" as const, project: "Launch film", durationSec: 5 },
+    agonesound0001: { name: "waves.m4a", kind: "audio" as const, project: null, durationSec: 4 },
+  };
+  const assetFallback = (id: string) => snapshot[id as keyof typeof snapshot];
+
+  function openEdit() {
+    useWorkflowStore.setState({ nodes: [], edges: [] });
+    const draft: StitchDraft = {
+      timeline: [createClip({ kind: "asset", assetId: GONE }, { id: "v" })],
+      audioClips: [createAudioClip({ kind: "asset", assetId: "agonesound0001" }, { id: "w" })],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
+    };
+    editor().openEdit({ editId: "ed0000000000a1", draft });
+  }
+
+  it("names a clip the library lost by what the file says about it", async () => {
+    openEdit();
+    const { result } = renderHook(() => useStitchEditorMedia({ assetFallback }));
+    await waitFor(() => expect(result.current.byClip.get("v")?.missing).toBe(true));
+    expect(result.current.byClip.get("v")).toMatchObject({
+      sourceLabel: "sunset.mp4",
+      railSubtitle: "Not in the library · sunset.mp4",
+      duration: null,
+    });
+    await waitFor(() => expect(result.current.audioByClip.get("w")?.missing).toBe(true));
+    expect(result.current.audioByClip.get("w")).toMatchObject({
+      fileName: "waves.m4a",
+      railSubtitle: "Not in the library · waves.m4a",
+    });
+  });
+
+  it("without the fallback (the node's dialog), a lost clip reads as before", async () => {
+    openEdit();
+    const { result } = renderHook(() => useStitchEditorMedia());
+    await waitFor(() => expect(result.current.byClip.get("v")?.missing).toBe(true));
+    expect(result.current.byClip.get("v")).toMatchObject({ sourceLabel: "Library", railSubtitle: "Library" });
+    expect(result.current.audioByClip.get("w")?.fileName).toBe("Audio");
   });
 });

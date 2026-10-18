@@ -924,7 +924,85 @@ does not read) counts 0 s with "not in the library" on the card and in the
 editor, and a run fails with the message above until it is removed. Library clips have no
 socket, so they never disconnect anything. **This workflow** means assets
 recorded under the current workflow's id only, not under an earlier copy of
-it.
+it. In the Edit video view the library pane replaces the picker.
+
+## The Edit video view
+
+Bare **E** (or **Edit video** in the tab strip or the menu) shows the Edit
+video view over the canvas, as A shows Assets and C the chat. It edits
+**edit projects**: timelines of their own, not tied to any node or
+workflow, with videos and audio from the asset library of any project.
+The Edit video node and its dialog are unchanged; the two never share a
+timeline. E, A or C in the view go to the canvas, Assets or the chat;
+Escape never leaves it.
+
+**Edit projects.** Each is one file, `<Node Banana folder>/Edits/<name>.nbedit`
+(JSON): a stable id, the name, when it was made and last changed, the
+sequence (video clips, audio clips, loop count, Track or Stacked), what
+the library said about each asset it uses (name, kind, project, length,
+so a clip the library lost can still be named), a summary for the list,
+and the renders made from it. Media are referenced by asset id only. A
+library move carries the Edits folder with it; switching to another
+library folder leaves it behind, as it leaves Generations.
+
+**Home.** With no edit open, the view lists the edits, newest first, with
+New edit. A new edit is called "Untitled edit" (then "Untitled edit 2", …).
+Each card's ⋯ menu renames, duplicates, shows the file or deletes the edit.
+The arrow keys move between the cards.
+
+**Editing.** The open edit shows the library on the left and the same
+editor as the dialog: stage, transport, rail and timeline, with the same
+keys. Click a video or a sound in the library (or press Enter on it) to
+add it at the playhead: in Track after the clip under the playhead (the
+new clip is selected with the playhead at its start, so clicks in a row
+add in the order clicked), in Stacked on a new bottom row starting at the playhead, or after the last
+clip when the stack is lined up and the playhead is at the end. Drag it
+onto the timeline to put it exactly there: a bar between clips in Track, a
+new row at the row boundary nearest the pointer in Stacked, or an audio
+row (a new row under it when the sound would overlap a clip there). Its
+start snaps to the playhead and the clips' edges, and ⇧ turns that off.
+Escape cancels a drag. While a clip of a Stacked edit is still loading,
+adding a video there waits ("Waiting for the clips to load"), so nothing
+is placed from a length the editor does not know yet. Videos recorded
+while the view is open wait behind "N new · Show" at the top of the
+library, so the tiles never move under the pointer. `+` on the timeline
+goes to the library's search. The library pane hides with the button in
+its corner and stays hidden until shown again. The header names the edit
+(click to rename), and its menu offers New, Open, Duplicate, Rename, Show
+in Finder and Delete (to the Trash; renders stay in the library). The rail
+has no Reveal source node: an edit's clips come from the library.
+
+**Saving.** An edit is a document. With "Save automatically" on (Settings
+› Project) it saves 3 s after the last change; ⌘S and File › Save save it
+now while the view shows (they save the workflow everywhere else; on the
+home screen ⌘S does nothing). The header says Saved, Saving…, Unsaved,
+Waiting… (the library is being moved), Save failed, Changed elsewhere or
+Not in Edits. Saves run one at a time, so ⌘S during an automatic save
+never looks like a conflict. Leaving the view keeps the edit as it was,
+undo history and playhead included, and saves it first when Save
+automatically is on. With it off, switching to another edit asks whether
+to save. Closing the window with unsaved edits asks first. If another
+window changed the same edit, saving stops and asks: keep yours, or use
+the other version. If the edit's file is gone (deleted or renamed
+elsewhere), saving offers **Save as a new edit**. A file copied in Finder
+keeps the original's id; the list shows it as a copy, with **Make it a
+separate edit**.
+
+**Render.** Encodes the edit with the same engine and options as the node
+(one clip is enough), with progress and Stop in the header. The video goes
+into the asset library as an edited video under the edit's name, not under
+any workflow, and in no project; a toast offers Show in Assets and Add to
+canvas. Assets lists an edit's renders together under the edit's current
+name (a rename updates the name Assets shows) and offers no Open workflow
+for them. Render is off, and says why, while a clip's video is no longer in
+the library ("Not in the library · sunset.mp4" in the rail).
+
+**Frame to canvas** from the view adds the image node to the middle of the
+open workflow's canvas, and its toast offers Go to canvas.
+
+**Show in Finder.** The home screen's Show in Finder opens the Edits
+folder (it is created if it is not there yet); the edit menu's shows the
+edit's own file.
 
 ## Frame to canvas
 
@@ -978,11 +1056,12 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too), or along the audio clips with one focused (↑ / ↓ too) |
 | ↑ / ↓ in the Start well | 0.1 s later or earlier (⇧: 1 s), one undo step until the well is left |
 | Context menu key / ⇧F10 | Open the clip menu |
-| Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel |
+| Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel (in the Edit video view, nothing) |
 | ⇧ while dragging a clip or an edge | No snapping (in Stacked, pressing or releasing ⇧ while the pointer rests takes effect at once) |
 | ⌥ while dragging the curve | Move the whole line |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
-| ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open |
+| ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open; in the Edit video view, saves the edit |
+| E (in the Edit video view) | Back to the canvas (A: Assets, C: Chat, ?: the shortcuts) |
 | ⌘C / ⌘X / ⌘V | Copy, cut, paste clips or audio clips |
 | ⌘D | Duplicate the selected clips or audio clips |
 | ⌘A | Select every clip, or every audio clip when audio is selected |
@@ -1024,6 +1103,17 @@ snaps its start only.
 
 ## Limits
 
+- **Two servers on one library.** The desktop app and a dev server can
+  share one Node Banana folder. Each checks an edit's last change before
+  it saves, but two saves of the same edit from the two servers at the
+  same moment can both pass that check, and the later write wins. Listing
+  edits never writes, so browsing from both is safe.
+- The Edit video view is laid out for windows 1100 px wide and more. Below
+  1100 px its header drops the clip count and size; a stage column under
+  760 px (the view at 1280 px with the library shown, or the dialog in a
+  window under about 1088 px) drops the zoom slider and keeps −, + and Fit.
+- A project made by name before Edit video existed and called "Edits"
+  shares its folder with the edit files; both keep working.
 - **The preview is an approximation.** It switches between one `<video>` per
   source, so a join can freeze briefly; clip volume and the curve are applied
   to the elements once a frame; it plays one loop. A video served without

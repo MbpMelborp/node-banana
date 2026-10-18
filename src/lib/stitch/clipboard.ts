@@ -52,10 +52,13 @@ export interface ClipboardAudioItem {
 export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem;
 
 /**
- * Where the clips were copied. tabId: the workflow store's activeTabId; workflowId: ensureWorkflowId() at the copy.
- * Together they tell this node from one with the same id in another workflow or tab, and survive a tab switch.
+ * Where the clips were copied. A node: tabId is the workflow store's activeTabId, workflowId ensureWorkflowId() at
+ * the copy; together they tell this node from one with the same id in another workflow or tab, and survive a tab
+ * switch. An edit project (the Edit video view) holds only library clips, which paste anywhere.
  */
-export type ClipboardOrigin = { kind: "node"; nodeId: string; tabId: string; workflowId: string };
+export type ClipboardOrigin =
+  | { kind: "node"; nodeId: string; tabId: string; workflowId: string }
+  | { kind: "edit"; editId: string };
 
 export interface StitchClipboard {
   origin: ClipboardOrigin;
@@ -64,17 +67,19 @@ export interface StitchClipboard {
 }
 
 /** Where a paste lands. workflowId as the store holds it (null for a workflow never given one). */
-export type PasteTarget = {
-  kind: "node";
-  nodeId: string;
-  tabId: string;
-  workflowId: string | null;
-  liveEdgeIds: readonly string[];
-};
+export type PasteTarget =
+  | {
+      kind: "node";
+      nodeId: string;
+      tabId: string;
+      workflowId: string | null;
+      liveEdgeIds: readonly string[];
+    }
+  | { kind: "edit"; editId: string };
 
-export type SkipReason = "otherNode" | "disconnected" | "music";
+export type SkipReason = "otherNode" | "disconnected" | "music" | "notInEdit";
 
-const SKIP_ORDER: readonly SkipReason[] = ["otherNode", "disconnected", "music"];
+const SKIP_ORDER: readonly SkipReason[] = ["otherNode", "disconnected", "music", "notInEdit"];
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
@@ -111,30 +116,29 @@ export function copyClips(
 }
 
 /** The same node, tab and workflow the clips were copied from. */
-function isOwnNode(origin: ClipboardOrigin, target: PasteTarget): boolean {
-  const kind = target.kind;
-  switch (kind) {
-    case "node":
-      return origin.nodeId === target.nodeId && origin.tabId === target.tabId && origin.workflowId === target.workflowId;
-    default: {
-      const unknown: never = kind;
-      return unknown;
-    }
-  }
+function isOwnNode(origin: ClipboardOrigin, target: Extract<PasteTarget, { kind: "node" }>): boolean {
+  return (
+    origin.kind === "node" &&
+    origin.nodeId === target.nodeId &&
+    origin.tabId === target.tabId &&
+    origin.workflowId === target.workflowId
+  );
 }
 
 /** Whether an item may be pasted into the target, or why not. */
 function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteTarget): SkipReason | null {
+  if (item.source.kind === "asset") return null;
+  // An edit holds only library clips: a connected video or the music has no node there to come from
+  if (target.kind === "edit") return "notInEdit";
   const track = item.track;
   switch (track) {
     case "video": {
-      if (item.source.kind === "asset") return null;
-      if (!isOwnNode(origin, target)) return "otherNode";
+      if (item.source.kind !== "edge" || !isOwnNode(origin, target)) return "otherNode";
       return target.liveEdgeIds.includes(item.source.edgeId) ? null : "disconnected";
     }
     case "audio":
       // Whether the music is connected does not matter: a music clip with none is kept, drawn dashed and silent
-      return item.source.kind === "asset" || isOwnNode(origin, target) ? null : "music";
+      return isOwnNode(origin, target) ? null : "music";
     default: {
       const unknown: never = track;
       return unknown;
@@ -145,8 +149,8 @@ function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteT
 /**
  * Asset items always pass. An edge item passes only into its own node (the same node, tab and workflow) while its
  * edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item passes only
- * into its own node, else "music". Skipped counts come in the order otherNode, disconnected, music, leaving out a
- * reason with no clip.
+ * into its own node, else "music". Into an edit, every item that is not an asset is "notInEdit". Skipped counts come
+ * in the order otherNode, disconnected, music, notInEdit, leaving out a reason with no clip.
  */
 export function pastableItems(
   clipboard: StitchClipboard,
@@ -177,6 +181,8 @@ function skippedSentence(reason: SkipReason, count: number): string {
         : `${clips} not pasted: their videos are no longer connected.`;
     case "music":
       return `${count === 1 ? "1 music clip" : `${count} music clips`} not pasted: music clips paste only into their own node.`;
+    case "notInEdit":
+      return `${clips} not pasted: an edit holds only clips from the library, not connected videos or music.`;
     default: {
       const unknown: never = reason;
       return unknown;

@@ -1958,12 +1958,12 @@ export function WorkflowCanvas() {
       return;
     }
 
-    // A (bare) shows the Assets view and C the chat; Shift+letters add nodes.
+    // A (bare) shows the Assets view, C the chat and E Edit video; Shift+letters add nodes.
     // Not while a dialog, the annotation editor or the tutorial is up over the
     // canvas, nor while a menu or dropdown is open: it would stay mounted (and
     // keep its document key listener, e.g. Enter adding a node) under the view.
     const lowerKey = event.key.toLowerCase();
-    const view = lowerKey === "a" ? "assets" : lowerKey === "c" ? "chat" : null;
+    const view = lowerKey === "a" ? "assets" : lowerKey === "c" ? "chat" : lowerKey === "e" ? "edit" : null;
     if (
       view &&
       !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&

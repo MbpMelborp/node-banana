@@ -4,8 +4,12 @@ import { readStitchDraft } from "@/lib/stitch/draft";
 import { stitchMusicEdge, stitchReadContext } from "@/lib/stitch/sources";
 import type { VideoStitchNodeData } from "@/types";
 
-/** Opens the editor on a Stitch node with its migrated, reconciled draft. false if the node is gone. */
+/**
+ * Opens the editor on a Stitch node with its migrated, reconciled draft. false if the node is gone, or while an edit
+ * project's session holds the editor (the Edit video view covers the canvas, so no Expand reaches here then).
+ */
 export function openStitchEditor(nodeId: string): boolean {
+  if (useStitchEditorStore.getState().editId !== null) return false;
   const wf = useWorkflowStore.getState();
   const node = wf.nodes.find((n) => n.id === nodeId && n.type === "videoStitch");
   if (!node) return false;

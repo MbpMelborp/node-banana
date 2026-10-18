@@ -1,7 +1,9 @@
 import type { NodeChange, XYPosition } from "@xyflow/react";
 import { useToast } from "@/components/Toast";
+import { useAssetStore } from "@/store/assetStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { blobToDataUrl } from "@/lib/assets/client/mediaBlob";
 import type { FrameCapture, FrameCaptureError } from "@/lib/stitch/frameCapture";
 import { frameClips, frameOptions, shownAt } from "@/lib/stitch/framePlan";
@@ -99,21 +101,75 @@ const DROPPED = "The canvas changed while the frame was being made, so it was no
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-/**
- * Where the frame goes. Item 3 has one target, beside the Edit Video node the editor edits; an editor not tied to a
- * node (the Edit video view) adds its own branch here, with its own position and toast.
- */
-function frameTarget(): NotedNode | null {
-  const nodeId = useStitchEditorStore.getState().nodeId;
+/** Beside the Edit Video node the dialog edits, or (the Edit video view, tied to no node) the open canvas's middle. */
+type FrameTarget = { kind: "beside"; node: NotedNode } | { kind: "canvas"; editId: string };
+
+function frameTarget(): FrameTarget | null {
+  const { nodeId, editId } = useStitchEditorStore.getState();
+  if (editId !== null) return { kind: "canvas", editId };
   const node = nodeId ? useWorkflowStore.getState().nodes.find((n) => n.id === nodeId) : undefined;
   if (!node) return null;
-  return { id: node.id, position: { ...node.position }, width: getNodeSize(node).width };
+  return { kind: "beside", node: { id: node.id, position: { ...node.position }, width: getNodeSize(node).width } };
+}
+
+const VIEWPORT_TRANSFORM = /translate\(\s*(-?[\d.e+-]+)px\s*,\s*(-?[\d.e+-]+)px\s*\)\s*scale\(\s*([\d.e+-]+)\s*\)/;
+
+/** React Flow's live pan and zoom, read from its viewport element (the store keeps it only per tab). */
+function liveViewport(): { x: number; y: number; zoom: number } | null {
+  const element = document.querySelector<HTMLElement>(".react-flow__viewport");
+  const match = element?.style.transform.match(VIEWPORT_TRANSFORM);
+  if (!match) return null;
+  const [x, y, zoom] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  return Number.isFinite(x) && Number.isFinite(y) && zoom > 0 ? { x, y, zoom } : null;
+}
+
+/**
+ * Where a node of this size sits centred in the canvas's viewport, in flow coordinates. The canvas stays laid out
+ * under a covering view, so its box and pan are the ones it shows when it comes back.
+ */
+export function canvasCentrePosition(size: { width: number; height: number }): XYPosition {
+  const box = document.querySelector<HTMLElement>(".react-flow")?.getBoundingClientRect();
+  const width = box && box.width > 0 ? box.width : window.innerWidth;
+  const height = box && box.height > 0 ? box.height : window.innerHeight;
+  const viewport = liveViewport() ?? useWorkflowStore.getState().canvasViewport ?? { x: 0, y: 0, zoom: 1 };
+  return {
+    x: (width / 2 - viewport.x) / viewport.zoom - size.width / 2,
+    y: (height / 2 - viewport.y) / viewport.zoom - size.height / 2,
+  };
+}
+
+/** How many frames the canvas gets to measure a new node. */
+const MEASURE_FRAMES = 30;
+
+/**
+ * Keeps the node's centre where it is once the canvas has measured it: it was placed for `assumed`, and the image's
+ * aspect makes it shorter or taller. A position change outside a drag is no undo step, so one undo still takes the
+ * node away. Left alone when it was moved or removed, or the canvas replaced, meanwhile.
+ */
+async function centreWhenMeasured(id: string, assumed: { width: number; height: number }, generation: number): Promise<void> {
+  const placed = useWorkflowStore.getState().nodes.find((n) => n.id === id)?.position;
+  if (!placed) return;
+  for (let i = 0; i < MEASURE_FRAMES; i++) {
+    await nextFrame();
+    const wf = useWorkflowStore.getState();
+    const node = wf.nodes.find((n) => n.id === id);
+    if (wf.canvasGeneration !== generation || !node || node.position.x !== placed.x || node.position.y !== placed.y) return;
+    const measured = node.measured;
+    if (!measured?.width || !measured.height) continue;
+    const dx = (assumed.width - measured.width) / 2;
+    const dy = (assumed.height - measured.height) / 2;
+    if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) {
+      wf.onNodesChange([{ type: "position", id, position: { x: placed.x + dx, y: placed.y + dy } }]);
+    }
+    return;
+  }
 }
 
 /**
  * The press. Pauses a playing preview and takes the frame where it stopped, then: capture (given up after
  * CAPTURE_TIMEOUT_MS) → Image Input node → asset record → toast. "dropped" when the canvas was replaced meanwhile
- * (or there is nowhere to put the frame), "failed" when the frame could not be made.
+ * (or there is nowhere to put the frame), "failed" when the frame could not be made. From an edit project's session
+ * the node goes to the middle of the open canvas, and the toast offers Go to canvas.
  */
 export async function frameToCanvas(a: {
   spans: readonly ClipSpan[];
@@ -122,8 +178,8 @@ export async function frameToCanvas(a: {
 }): Promise<"added" | "failed" | "dropped"> {
   const toast = useToast.getState();
   const generation = useWorkflowStore.getState().canvasGeneration;
-  const noted = frameTarget();
-  if (!noted) return "dropped";
+  const target = frameTarget();
+  if (!target) return "dropped";
 
   if (useStitchEditorStore.getState().playing) {
     useStitchEditorStore.getState().setPlaying(false);
@@ -193,14 +249,22 @@ export async function frameToCanvas(a: {
     toast.show(DROPPED, "warning");
     return "dropped";
   }
-  const node = wf.nodes.find((n) => n.id === noted.id);
-  if (!node) lastFrame.delete(noted.id);
-  const position = frameNodePosition(
-    node ? { id: node.id, position: node.position, width: getNodeSize(node).width } : noted,
-  );
   const size = { width: capture.width, height: capture.height };
-  const frameNodeId = addFrameNode({ dataUrl, filename: frameFileName(t), size, position });
-  if (node) lastFrame.set(noted.id, { frameNodeId, generation });
+  let frameNodeId: string;
+  if (target.kind === "canvas") {
+    const assumed = defaultNodeDimensions.imageInput;
+    frameNodeId = addFrameNode({ dataUrl, filename: frameFileName(t), size, position: canvasCentrePosition(assumed) });
+    void centreWhenMeasured(frameNodeId, assumed, generation);
+  } else {
+    const noted = target.node;
+    const node = wf.nodes.find((n) => n.id === noted.id);
+    if (!node) lastFrame.delete(noted.id);
+    const position = frameNodePosition(
+      node ? { id: node.id, position: node.position, width: getNodeSize(node).width } : noted,
+    );
+    frameNodeId = addFrameNode({ dataUrl, filename: frameFileName(t), size, position });
+    if (node) lastFrame.set(noted.id, { frameNodeId, generation });
+  }
 
   // After the node exists, so the run's graph snapshot holds it. The image node is the producer: the agent looks up
   // an Edit Video node's results by producer, and this frame is not one of its renders
@@ -212,7 +276,7 @@ export async function frameToCanvas(a: {
     ...size,
     producer: { nodeId: frameNodeId, nodeType: "imageInput", operation: "frameGrab" },
     parameters: {
-      fromNodeId: noted.id,
+      ...(target.kind === "canvas" ? { fromEditId: target.editId } : { fromNodeId: target.node.id }),
       atSec: t,
       slot: capture.plan.slot,
       mode: !stacked ? "track" : placed ? "placed" : "stacked",
@@ -229,6 +293,13 @@ export async function frameToCanvas(a: {
     },
   });
 
-  toast.show("Frame added to the canvas", "success");
+  if (target.kind === "canvas") {
+    // The view stays; the new node is selected in the middle of the canvas, so it is in sight when the canvas shows
+    toast.show("Frame added to the canvas", "success", false, null, [
+      { label: "Go to canvas", onClick: () => useAssetStore.getState().setAppView("canvas") },
+    ]);
+  } else {
+    toast.show("Frame added to the canvas", "success");
+  }
   return "added";
 }

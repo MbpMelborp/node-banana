@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLibraryRequest, DEFAULT_LIBRARY_QUERY, type LibraryVideoQuery } from "../libraryRequest";
+import { buildLibraryRequest, DEFAULT_LIBRARY_QUERY, libraryKinds, type LibraryVideoQuery } from "../libraryRequest";
 
 const query = (patch: Partial<LibraryVideoQuery> = {}): LibraryVideoQuery => ({ ...DEFAULT_LIBRARY_QUERY, ...patch });
 
@@ -62,5 +62,13 @@ describe("buildLibraryRequest", () => {
         }
       }
     }
+  });
+
+  it("asks for videos and audio together for the Edit video view's All, or one kind", () => {
+    expect(buildLibraryRequest(query(), null, undefined, libraryKinds("all")).kinds).toEqual(["video", "audio"]);
+    expect(buildLibraryRequest(query(), null, undefined, libraryKinds("video")).kinds).toEqual(["video"]);
+    expect(buildLibraryRequest(query(), null, undefined, libraryKinds("audio")).kinds).toEqual(["audio"]);
+    // The default stays videos
+    expect(buildLibraryRequest(query(), null).kinds).toEqual(["video"]);
   });
 });

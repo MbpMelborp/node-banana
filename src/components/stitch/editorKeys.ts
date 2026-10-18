@@ -59,7 +59,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * tidier subset): ? (any modifier but ⌘/Ctrl), ⌥↵ and ⌘↵, ⌘C, ⌘V and ⌘Z
  * (Alt or Shift allowed), Shift+letter without ⌘/Ctrl (adds a node, Alt
  * allowed), V and G with any modifiers (arranges the selected nodes), and
- * bare A and C. Shielding only stops propagation, never the default, so a
+ * bare A, C and E (the views). Shielding only stops propagation, never the default, so a
  * wide net costs nothing: ⌘C still copies selected text natively.
  */
 export function isCanvasKey(e: KeyLike): boolean {
@@ -70,7 +70,7 @@ export function isCanvasKey(e: KeyLike): boolean {
   if (mod && (key === "c" || key === "v" || key === "z")) return true;
   if (e.shiftKey && !mod && /^[a-z]$/.test(key)) return true;
   if (key === "v" || key === "g") return true;
-  return !mod && !e.altKey && !e.shiftKey && (key === "a" || key === "c");
+  return !mod && !e.altKey && !e.shiftKey && (key === "a" || key === "c" || key === "e");
 }
 
 /**
