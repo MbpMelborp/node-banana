@@ -1,5 +1,17 @@
-import type { StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
+import type { StitchAudioClip, StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
+import {
+  compactAudioRows,
+  describeAudioChanges,
+  isLegacyAudio,
+  isLegacyAudioShape,
+  legacyCopy,
+  legacyMusicClip,
+  reconcileMusicClip,
+  sameAudioClips,
+  sanitizeAudioClips,
+} from "./audioClips";
 import { sameCurve, sortCurve } from "./curve";
+import { counted } from "./labels";
 import { isLegacyStitch, migrateStitchTimeline, reconcileTimelineWithEdges, sanitizeTimeline } from "./migrate";
 import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT } from "./stack";
 import {
@@ -19,8 +31,13 @@ import {
  */
 export interface StitchDraft {
   timeline: StitchTimelineClip[];
-  audioCurve: VolumePoint[];
-  audioMuted: boolean;
+  audioClips: StitchAudioClip[];
+  /**
+   * The node's audioCurve and audioMuted when it is read as legacy (no audioClips key): written back by Done only when
+   * the audio is legacy-shaped with no music clip. On a node that stores audioClips they are a copy for older builds,
+   * never read back: { curve: [], muted: false }.
+   */
+  legacyAudio: { curve: VolumePoint[]; muted: boolean };
   loopCount: 1 | 2 | 3;
   sequenceLayout: StitchSequenceLayout;
 }
@@ -77,9 +94,14 @@ export function draftDuration(d: Pick<StitchDraft, "timeline" | "sequenceLayout"
  * otherwise: reconcileTimelineWithEdges(sanitizeTimeline(data.timeline), live, { muteNew }), where
  *   muteNew = ctx.hasMusic && at least one edge clip survives reconciliation && every such clip is muted
  *   (a video connected later to a node whose clips are all muted under music follows them, so the mix stays uniform).
+ * Audio: without audioClips, the music (when connected) as one clip with audioCurve and audioMuted; with them, the
+ * stored clips with a music clip added on row 0 when music is connected and none is stored.
  */
 export function readStitchDraft(
-  data: Pick<VideoStitchNodeData, "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "loopCount" | "sequenceLayout">,
+  data: Pick<
+    VideoStitchNodeData,
+    "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "audioClips" | "loopCount" | "sequenceLayout"
+  >,
   ctx: StitchReadContext,
 ): StitchDraft {
   let timeline: StitchTimelineClip[];
@@ -93,13 +115,28 @@ export function readStitchDraft(
     const muteNew = ctx.hasMusic && edgeClips.length > 0 && edgeClips.every((c) => c.muted);
     timeline = reconcileTimelineWithEdges(stored, ctx.liveEdgeIds, { muteNew }).timeline;
   }
+  let audioClips: StitchAudioClip[];
+  let legacyAudio: StitchDraft["legacyAudio"];
+  if (isLegacyAudio(data)) {
+    legacyAudio = { curve: sortCurve(data.audioCurve), muted: data.audioMuted === true };
+    audioClips = ctx.hasMusic ? [legacyMusicClip(legacyAudio.curve, legacyAudio.muted)] : [];
+  } else {
+    legacyAudio = { curve: [], muted: false };
+    audioClips = reconcileMusicClip(sanitizeAudioClips(data.audioClips), ctx.hasMusic);
+  }
   return {
     timeline,
-    audioCurve: sortCurve(data.audioCurve),
-    audioMuted: data.audioMuted === true,
+    audioClips,
+    legacyAudio,
     loopCount: readLoopCount(data.loopCount),
     sequenceLayout: readSequenceLayout(data.sequenceLayout, legacy),
   };
+}
+
+/** The music's curve and mute: the first music clip's, else legacyAudio's (a legacy node without music connected). */
+export function musicAudio(d: Pick<StitchDraft, "audioClips" | "legacyAudio">): { curve: VolumePoint[]; muted: boolean } {
+  const music = d.audioClips.find((clip) => clip.source.kind === "music");
+  return music ? { curve: music.curve, muted: music.muted } : d.legacyAudio;
 }
 
 function sameClip(a: StitchTimelineClip, b: StitchTimelineClip): boolean {
@@ -118,42 +155,53 @@ function sameClip(a: StitchTimelineClip, b: StitchTimelineClip): boolean {
   );
 }
 
+/**
+ * Whether legacyAudio can reach the node: draftPatch writes it only when there is no audio clip. A Save re-reads a
+ * legacy node's edited music into legacyAudio, so it would differ from the draft's while both hold the music clip.
+ */
+function legacyAudioCounts(a: StitchDraft, b: StitchDraft): boolean {
+  return a.audioClips.length === 0 && b.audioClips.length === 0;
+}
+
 export function sameDraft(a: StitchDraft, b: StitchDraft): boolean {
   return (
     a.loopCount === b.loopCount &&
-    a.audioMuted === b.audioMuted &&
     sameLayout(a.sequenceLayout, b.sequenceLayout) &&
     a.timeline.length === b.timeline.length &&
     a.timeline.every((clip, i) => sameClip(clip, b.timeline[i])) &&
-    sameCurve(a.audioCurve, b.audioCurve)
+    sameAudioClips(a.audioClips, b.audioClips) &&
+    (!legacyAudioCounts(a, b) ||
+      (a.legacyAudio.muted === b.legacyAudio.muted && sameCurve(a.legacyAudio.curve, b.legacyAudio.curve)))
   );
 }
 
 /**
- * What Done writes: timeline, audioCurve, audioMuted, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline).
+ * What Done writes: timeline, the audio, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline).
  * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it.
+ *
+ * Audio, rows compacted: legacy-shaped (none, or one untouched music clip) → audioClips undefined (the node keeps or
+ * goes back to no audioClips), audioCurve and audioMuted from the music clip, else from legacyAudio. Otherwise
+ * audioClips, with audioCurve and audioMuted as legacyCopy gives them for older builds.
  */
 export function draftPatch(
   d: StitchDraft,
 ): Required<Pick<VideoStitchNodeData, "timeline" | "audioCurve" | "audioMuted" | "sequenceLayout">> &
-  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> {
+  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> & { audioClips: StitchAudioClip[] | undefined } {
+  const audioClips = compactAudioRows(d.audioClips).clips;
+  const audio = isLegacyAudioShape(audioClips)
+    ? {
+        audioClips: undefined,
+        audioCurve: audioClips[0]?.curve ?? d.legacyAudio.curve,
+        audioMuted: audioClips[0]?.muted ?? d.legacyAudio.muted,
+      }
+    : { audioClips, ...legacyCopy(audioClips) };
   return {
     timeline: d.timeline,
-    audioCurve: d.audioCurve,
-    audioMuted: d.audioMuted,
+    ...audio,
     loopCount: d.loopCount,
     sequenceLayout: { ...d.sequenceLayout },
     clipOrder: edgeIdsInOrder(d.timeline),
   };
-}
-
-const COUNT_WORDS = ["", "", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-
-/** "a trim" / "two trims" / "12 trims": `one` is the singular with its article. */
-function counted(n: number, one: string, many: string): string | null {
-  if (n <= 0) return null;
-  if (n === 1) return one;
-  return `${n < COUNT_WORDS.length ? COUNT_WORDS[n] : n} ${many}`;
 }
 
 function joinWithAnd(items: string[]): string {
@@ -216,6 +264,9 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * `origins` names clips by what made them: an added clip tagged "pasted" or
  * "duplicated" is a pasted or duplicated clip (never a split, though its
  * source is in the sequence), and a removed clip tagged "cut" is a cut clip.
+ *
+ * Audio clips are named by describeAudioChanges; a legacy node's music curve and mute without music connected, as
+ * "the volume curve" and "the music mute".
  */
 export function describeDraftChanges(
   initial: StitchDraft,
@@ -267,8 +318,11 @@ export function describeDraftChanges(
     counted(duplicated, "a duplicated clip", "duplicated clips"),
     counted(removed, "a removed clip", "removed clips"),
     counted(cut, "a cut clip", "cut clips"),
-    sameCurve(initial.audioCurve, draft.audioCurve) ? null : "the volume curve",
-    initial.audioMuted === draft.audioMuted ? null : "the music mute",
+    ...describeAudioChanges(initial.audioClips, draft.audioClips, origins),
+    !legacyAudioCounts(initial, draft) || sameCurve(initial.legacyAudio.curve, draft.legacyAudio.curve)
+      ? null
+      : "the volume curve",
+    !legacyAudioCounts(initial, draft) || initial.legacyAudio.muted === draft.legacyAudio.muted ? null : "the music mute",
     initial.loopCount === draft.loopCount ? null : "the loop count",
     ...layoutChanges(initial.sequenceLayout, draft.sequenceLayout),
   ].filter((part): part is string => part !== null);

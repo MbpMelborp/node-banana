@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { requestSave, useSaveRequestStore } from "@/store/saveRequestStore";
 import {
@@ -13,11 +13,13 @@ import {
 } from "@/lib/stitch/mediaInfo";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { createClip } from "@/lib/stitch/timeline";
+import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
+import { musicAudio } from "@/lib/stitch/draft";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
-import type { VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -195,7 +197,7 @@ describe("StitchEditorModal", () => {
     seed();
     openEditor();
     press(document.body, "m");
-    expect(editor().draft!.audioMuted).toBe(false);
+    expect(musicAudio(editor().draft!).muted).toBe(false);
     act(() => editor().close());
 
     seed({ stitch: { audioMuted: true } });
@@ -203,7 +205,7 @@ describe("StitchEditorModal", () => {
       openStitchEditor("stitch");
     });
     press(document.body, "m");
-    expect(editor().draft!.audioMuted).toBe(false);
+    expect(musicAudio(editor().draft!).muted).toBe(false);
     act(() => editor().close());
 
     seed({ music: true });
@@ -211,7 +213,7 @@ describe("StitchEditorModal", () => {
       openStitchEditor("stitch");
     });
     press(document.body, "m");
-    expect(editor().draft!.audioMuted).toBe(true);
+    expect(musicAudio(editor().draft!).muted).toBe(true);
   });
 
   it("closes on Done without touching a node nothing was changed on", () => {
@@ -332,7 +334,7 @@ describe("StitchEditorModal", () => {
   it("keeps canvas keys away while the clip menu is open, and Escape closes only the menu", () => {
     seed();
     openEditor();
-    act(() => editor().openMenu({ clipId: "clip:eA", x: 10, y: 10 }));
+    act(() => editor().openMenu({ kind: "clip", clipId: "clip:eA", x: 10, y: 10 }));
     const canvas = vi.fn();
     document.addEventListener("keydown", canvas);
     press(document.body, "z", { metaKey: true });
@@ -723,7 +725,7 @@ describe("StitchEditorModal", () => {
     // No separate slot while the lane is empty
     expect(screen.queryByTestId("stitch-add-slot")).toBeNull();
     fireEvent.click(placeholder);
-    expect(editor().pickerOpen).toBe(true);
+    expect(editor().pickerOpen).toBe("video");
     expect(screen.getByRole("dialog", { name: "Add from library" })).toBeInTheDocument();
     expect(screen.getByText("Pick videos to add")).toBeInTheDocument();
   });
@@ -1361,5 +1363,75 @@ describe("StitchEditorModal, several clips", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
     expect(within(sheet).getByText("A pasted clip and a cut clip will be lost. The node keeps what it had.")).toBeInTheDocument();
+  });
+});
+
+describe("StitchEditorModal, audio clips", () => {
+  const TONE = "atone00000001";
+  const toneClip = (id: string, init: Partial<StitchAudioClip> = {}) =>
+    createAudioClip({ kind: "asset", assetId: TONE }, { id, ...init });
+
+  /** Two video clips, music on the audio socket, and the node's audio clips as stored. */
+  function seedAudio(audioClips: StitchAudioClip[]) {
+    seed({ stitch: { audioClips } });
+    useWorkflowStore.setState((s) => ({
+      nodes: [
+        ...s.nodes,
+        node("music", "audioInput", { audioFile: "blob:m", filename: "score.mp3", duration: 20, format: "audio/mpeg" }),
+      ],
+      edges: [...s.edges, { id: "eM", source: "music", target: "stitch", sourceHandle: "audio", targetHandle: "audio" }],
+    }));
+    primeAssetInfo([{ id: TONE, kind: "audio", filename: "tone1320.m4a", durationSec: 3 } as unknown as AssetView]);
+  }
+  const audioIds = () => editor().draft!.audioClips.map((c) => c.id);
+
+  it("plays each audio clip from its own hidden <audio>, two pieces of one file included", () => {
+    seedAudio([
+      createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, outSec: 4 }),
+      createAudioClip({ kind: "music" }, { id: "piece", inSec: 4, startSec: 4 }),
+      toneClip("t", { row: 1, startSec: 2 }),
+    ]);
+    openEditor();
+    const elements = Array.from(document.querySelectorAll("audio"));
+    expect(elements).toHaveLength(3);
+    expect(elements.map((el) => el.getAttribute("src"))).toEqual(["blob:m", "blob:m", `/api/assets/${TONE}/file`]);
+  });
+
+  it("mutes the selected audio clips with M, and the music with none selected", () => {
+    seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }), toneClip("t", { row: 1, startSec: 2 })]);
+    openEditor();
+    act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+    press(document.body, "m");
+    expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([false, true]);
+    act(() => editor().select(null));
+    press(document.body, "m");
+    expect(editor().draft!.audioClips.map((c) => c.muted)).toEqual([true, true]);
+  });
+
+  it("names audio edits in the discard sheet", () => {
+    seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }), toneClip("t", { row: 1, startSec: 2 })]);
+    openEditor();
+    act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+    press(document.body, "ArrowRight", { altKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const sheet = screen.getByRole("dialog", { name: "Discard changes?" });
+    expect(within(sheet).getByText("A moved audio clip will be lost. The node keeps what it had.")).toBeInTheDocument();
+  });
+
+  it("writes the audio clips on Done, with the music's copy for older builds", () => {
+    seedAudio([createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, curve: [{ t: 1, gain: 0.5 }] })]);
+    openEditor();
+    // A legacy-shaped node keeps no audioClips key once read: add a library clip
+    act(() =>
+      editor().apply((d) => ({ ...d, audioClips: [...d.audioClips, toneClip("t", { row: 1, startSec: 2 })] })),
+    );
+    expect(audioIds()).toEqual([MUSIC_CLIP_ID, "t"]);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(stitchData().audioClips).toEqual([
+      expect.objectContaining({ id: MUSIC_CLIP_ID, row: 0 }),
+      expect.objectContaining({ id: "t", row: 1, startSec: 2 }),
+    ]);
+    expect(stitchData().audioCurve).toEqual([{ t: 1, gain: 0.5 }]);
+    expect(stitchData().audioMuted).toBe(false);
   });
 });

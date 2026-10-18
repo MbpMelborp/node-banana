@@ -1,14 +1,16 @@
 /**
  * The editor's clip selection: one lead clip, and any others selected with
- * it. A selection holds one kind of clip; this one is the video clips of the
- * timeline. Pure: ids and an order, no store.
+ * it. A selection holds video clips or audio clips, never both; the
+ * functions here work on either, given its order (the timeline's for video,
+ * row then start then id for audio). They return a video selection; the
+ * audio one takes the same ids. Pure: ids and an order, no store.
  */
 
 /** The ids a selection holds, whatever kind of clip it selects. */
 export interface SelectionIds {
   /** The lead: the rail's single-clip view, the lane's tab stop, the clip a single-clip key acts on. */
   clipId: string;
-  /** Every selected clip in timeline order, the lead among them. Absent (or one id) = the lead alone. */
+  /** Every selected clip in its order, the lead among them. Absent (or one id) = the lead alone. */
   clipIds?: readonly string[];
   /** Where ⇧-click ranges from. Absent = the lead. */
   anchorId?: string;

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
-import type { StitchTimelineClip, WorkflowEdge } from "@/types";
+import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge } from "@/types";
 import {
   canPaste,
   copySelection,
@@ -45,11 +46,14 @@ const DURATIONS = new Map<SourceKey, number>([
 const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true } as const;
 const OTHER_NODE = "1 clip not pasted: clips from connected videos paste only into their own node.";
 
-function open(timeline: StitchTimelineClip[], opts: { nodeId?: string; stacked?: boolean; generation?: number } = {}) {
+function open(
+  timeline: StitchTimelineClip[],
+  opts: { nodeId?: string; stacked?: boolean; generation?: number; audioClips?: StitchAudioClip[] } = {},
+) {
   const draft: StitchDraft = {
     timeline,
-    audioCurve: [],
-    audioMuted: false,
+    audioClips: opts.audioClips ?? [],
+    legacyAudio: { curve: [], muted: false },
     loopCount: 1,
     sequenceLayout: opts.stacked ? STACKED : DEFAULT_SEQUENCE_LAYOUT,
   };
@@ -330,5 +334,136 @@ describe("many clips in Stacked", () => {
     expect(ids()).toHaveLength(25);
     expect(show).toHaveBeenCalledTimes(1);
     expect(show).toHaveBeenCalledWith(`${OTHER_NODE} ${MANY(25)}`, "info");
+  });
+});
+
+describe("audio clips", () => {
+  const TONE = "atone00000001";
+  const RAIN = "arain00000001";
+  const audioClips = () => [
+    createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, curve: [{ t: 1, gain: 0.5 }] }),
+    createAudioClip({ kind: "asset", assetId: TONE }, { id: "t", row: 1, startSec: 2, inSec: 0.5, muted: true }),
+    createAudioClip({ kind: "asset", assetId: RAIN }, { id: "r", row: 2, startSec: 3 }),
+  ];
+  const audio = () => editor().draft!.audioClips;
+  const selectAudio = (...clipIds: string[]) =>
+    editor().select(audioSelectionOf({ clipId: clipIds[0], ...(clipIds.length > 1 ? { clipIds } : {}) }));
+  const openAudio = (nodeId = "n1") => {
+    open(track(), { nodeId, audioClips: audioClips() });
+    editor().setAudioDurations(
+      new Map([
+        ["music", 20],
+        [`asset:${TONE}`, 3],
+        [`asset:${RAIN}`, 2],
+      ]),
+    );
+  };
+
+  beforeEach(() => openAudio());
+
+  it("copies the selected audio clips as audio items, with their time and row offsets, one kind per copy", () => {
+    selectAudio("t", "r");
+    expect(copySelection()).toBe(true);
+    expect(clipboard()).toEqual({
+      origin: { kind: "node", nodeId: "n1", tabId: "t1", workflowId: "w1" },
+      items: [
+        { track: "audio", source: { kind: "asset", assetId: TONE }, inSec: 0.5, outSec: null, muted: true, curve: [], offsetSec: 0, rowOffset: 0 },
+        { track: "audio", source: { kind: "asset", assetId: RAIN }, inSec: 0, outSec: null, muted: false, curve: [], offsetSec: 1, rowOffset: 1 },
+      ],
+    });
+  });
+
+  it("pastes audio on new rows under the last, the first at the playhead, whatever is selected, as one step", () => {
+    selectAudio("t", "r");
+    copySelection();
+    select("a");
+    editor().setPlayhead(5);
+    pasteClipboard();
+    expect(steps()).toBe(1);
+    expect(ids()).toEqual(["a", "b", "c"]);
+    const pasted = audio().slice(3);
+    expect(pasted.map((c) => [c.source, c.row, c.startSec, c.inSec, c.muted])).toEqual([
+      [{ kind: "asset", assetId: TONE }, 3, 5, 0.5, true],
+      [{ kind: "asset", assetId: RAIN }, 4, 6, 0, false],
+    ]);
+    expect(editor().selection).toEqual({
+      kind: "audio",
+      clipId: pasted[0].id,
+      clipIds: pasted.map((c) => c.id),
+      point: null,
+      onCurve: false,
+    });
+    expect(pasted.every((c) => editor().clipOrigins.get(c.id) === "pasted")).toBe(true);
+  });
+
+  it("cuts audio in one step: the rows close up, the next clip is selected, the cut ones are tagged", () => {
+    selectAudio("t");
+    cutSelection();
+    expect(steps()).toBe(1);
+    expect(audio().map((c) => [c.id, c.row])).toEqual([
+      [MUSIC_CLIP_ID, 0],
+      ["r", 1],
+    ]);
+    expect(editor().selection).toMatchObject({ kind: "audio", clipId: "r" });
+    expect(editor().clipOrigins.get("t")).toBe("cut");
+    expect(clipboard()!.items).toHaveLength(1);
+  });
+
+  it("duplicates audio from where the selection ends, on its own row when it fits, never at the same time", () => {
+    selectAudio("t");
+    duplicateSelection();
+    expect(steps()).toBe(1);
+    const copy = audio().find((c) => !["t", "r", MUSIC_CLIP_ID].includes(c.id))!;
+    // The tone plays 2.5 s (3 s from In 0.5) from 2: the copy starts at 4.5, on row 1
+    expect(copy).toMatchObject({ row: 1, startSec: 4.5, inSec: 0.5 });
+    expect(editor().clipOrigins.get(copy.id)).toBe("duplicated");
+    expect(editor().selection).toMatchObject({ kind: "audio", clipId: copy.id });
+    expect(clipboard()).toBeNull();
+  });
+
+  it("duplicates onto a new row under the selection when a copy would overlap, and the expanded row follows its row", () => {
+    // The rain plays 3–5 on row 2; its copy at 5 would overlap r2 at 5.5 there
+    editor().apply((d) => ({
+      ...d,
+      audioClips: [
+        ...d.audioClips,
+        createAudioClip({ kind: "asset", assetId: RAIN }, { id: "r2", row: 2, startSec: 5.5 }),
+        createAudioClip({ kind: "asset", assetId: TONE }, { id: "t2", row: 3 }),
+      ],
+    }));
+    editor().setAudioExpandedRow(3);
+    selectAudio("r");
+    duplicateSelection();
+    const copy = audio().find((c) => !["t", "t2", "r", "r2", MUSIC_CLIP_ID].includes(c.id))!;
+    expect(copy).toMatchObject({ row: 3, startSec: 5 });
+    expect(audio().find((c) => c.id === "t2")!.row).toBe(4);
+    expect(editor().audioExpandedRow).toBe(4);
+  });
+
+  it("pastes a music clip only into its own node, and says why elsewhere", () => {
+    selectAudio(MUSIC_CLIP_ID, "t");
+    copySelection();
+    openAudio("n2");
+    editor().setPlayhead(1);
+    pasteClipboard();
+    expect(audio().slice(3).map((c) => c.source)).toEqual([{ kind: "asset", assetId: TONE }]);
+    expect(show).toHaveBeenCalledWith("1 music clip not pasted: music clips paste only into their own node.", "info");
+
+    show.mockClear();
+    openAudio("n1");
+    pasteClipboard();
+    expect(audio().slice(3).map((c) => c.source.kind)).toEqual(["music", "asset"]);
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it("copies video again once a video clip is selected", () => {
+    selectAudio("t");
+    copySelection();
+    select("a");
+    copySelection();
+    expect(clipboard()!.items.map((item) => item.track)).toEqual(["video"]);
+    pasteClipboard();
+    expect(ids()).toHaveLength(4);
+    expect(audio()).toHaveLength(3);
   });
 });

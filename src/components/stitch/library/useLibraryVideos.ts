@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchAssetPage } from "@/lib/assets/client/api";
-import type { AssetPageRequest, AssetView } from "@/lib/assets/types";
+import type { AssetKind, AssetPageRequest, AssetView } from "@/lib/assets/types";
 import { buildLibraryRequest, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 
 /** The Assets view's own search delay. */
@@ -27,8 +27,10 @@ function message(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "The library could not be read.";
 }
 
+const VIDEO: readonly AssetKind[] = ["video"];
+
 /**
- * The library's videos for the picker, a page at a time, in the picker's own
+ * The library's videos (or the kinds asked for: audio for the audio picker) for the picker, a page at a time, in the picker's own
  * state (never the Assets view's store, whose list and filters it would
  * change). The search waits 200 ms after the last key; the toggles ask at
  * once. Each query has its own request: a newer one aborts the older, and an
@@ -43,6 +45,7 @@ export function useLibraryVideos(
   query: LibraryVideoQuery,
   workflowId: string | null,
   enabled = true,
+  kinds: readonly AssetKind[] = VIDEO,
 ): {
   assets: AssetView[];
   total: number;
@@ -69,7 +72,7 @@ export function useLibraryVideos(
 
   const q = searchText.trim();
   const { project, favourites, thisWorkflow, sort } = query;
-  const key = JSON.stringify(buildLibraryRequest({ q, project, favourites, thisWorkflow, sort }, workflowId));
+  const key = JSON.stringify(buildLibraryRequest({ q, project, favourites, thisWorkflow, sort }, workflowId, undefined, kinds));
   // One request per distinct query: a change that leaves it as it was (the workflow's id while This workflow is
   // off) asks nothing again
   const request = useMemo(() => JSON.parse(key) as AssetPageRequest, [key]);

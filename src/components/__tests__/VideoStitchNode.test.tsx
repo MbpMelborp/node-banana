@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { VideoStitchNodeData } from "@/types";
+import { StitchAudioClip, VideoStitchNodeData } from "@/types";
 
 // Mock the workflow store
 const mockUpdateNodeData = vi.fn();
@@ -92,6 +92,7 @@ vi.mock("@/components/nodes/BaseNode", () => {
 import { VideoStitchNode } from "@/components/nodes/VideoStitchNode";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import { createClip } from "@/lib/stitch/timeline";
+import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { __resetAssetInfoForTests, requestAssetInfo } from "@/lib/stitch/assetInfo";
 import {
   FILMSTRIP_FRAMES,
@@ -818,6 +819,36 @@ describe("VideoStitchNode", () => {
       it("reads Track whatever the overlap", () => {
         renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: { ...stacked(1), mode: "track" } });
         expect(summaryText()).toBe("0:16 · loop 1×");
+      });
+
+      it("counts the audio clips only once the audio is more than the music alone", () => {
+        const track = { ...stacked(1), mode: "track" as const };
+        const toneClip = (id: string, startSec: number) =>
+          createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id, startSec });
+        renderCard(threeClips, {
+          clipOrder: ["e1", "e2", "e3"],
+          timeline: timeline(),
+          sequenceLayout: track,
+          audioClips: [toneClip("t1", 0), toneClip("t2", 4)],
+        });
+        expect(summaryText()).toBe("0:16 · loop 1× · 2 audio clips");
+        cleanup();
+        // An empty list (a disconnect left it) reads as the music alone
+        renderCard(threeClips, { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: track, audioClips: [] });
+        expect(summaryText()).toBe("0:16 · loop 1×");
+        cleanup();
+        // With music connected: a stored lone untouched music clip is the music alone; a moved one is counted
+        const withMusic = {
+          edges: [...threeClips.edges, edge("eM", "music", "audio")],
+          nodes: [...threeClips.nodes, { id: "music", type: "generateAudio", data: { outputAudio: null } }],
+        };
+        const musicClip = (init: Partial<StitchAudioClip>) => createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, ...init });
+        const base = { clipOrder: ["e1", "e2", "e3"], timeline: timeline(), sequenceLayout: track };
+        renderCard(withMusic, { ...base, audioClips: [musicClip({ row: 1, curve: [{ t: 1, gain: 0.5 }] })] });
+        expect(summaryText()).toBe("0:16 · loop 1×");
+        cleanup();
+        renderCard(withMusic, { ...base, audioClips: [musicClip({ startSec: 2 })] });
+        expect(summaryText()).toBe("0:16 · loop 1× · 1 audio clip");
       });
 
       it("keeps the layout through a removal and a reorder: their writes leave it out", () => {

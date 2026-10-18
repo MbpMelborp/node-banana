@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   isMusicInput,
+  normalizeAudioClips,
   normalizeLoopCount,
   normalizePlacement,
   normalizeStack,
   normalizeStitchArgs,
+  type StitchAudioClipInput,
   type StitchAudioData,
   type StitchClipInput,
 } from "../engineTypes";
@@ -121,5 +123,35 @@ describe("placed stacks", () => {
     expect(normalizePlacement({ placed: true, overlapSec: 0 })).toEqual({ crossfade: true, overlapSec: 0 });
     expect(normalizePlacement({ placed: true, overlapSec: Number.NaN })).toEqual({ crossfade: true, overlapSec: 0 });
     expect(normalizePlacement({ placed: true, overlapSec: 12 })).toEqual({ crossfade: true, overlapSec: 10 });
+  });
+});
+
+describe("normalizeAudioClips", () => {
+  const clip = (init: Record<string, unknown>) => ({ audio, startSec: 0, inSec: 0, outSec: null, curve: [], ...init }) as unknown as StitchAudioClipInput;
+
+  it("is null when the options carry no audioClips: the old music rule", () => {
+    expect(normalizeAudioClips(undefined)).toBeNull();
+    expect(normalizeAudioClips({ loopCount: 2 })).toBeNull();
+  });
+
+  it("keeps an empty list: the new rule with nothing to play", () => {
+    expect(normalizeAudioClips({ audioClips: [] })).toEqual([]);
+  });
+
+  it("clamps the start to 0..600, In to >= 0, and keeps Out only after In", () => {
+    const read = (init: Record<string, unknown>) => normalizeAudioClips({ audioClips: [clip(init)] })![0];
+    expect(read({ startSec: -1, inSec: -2, outSec: 3 })).toMatchObject({ startSec: 0, inSec: 0, outSec: 3 });
+    expect(read({ startSec: 700, inSec: 2, outSec: 2 })).toMatchObject({ startSec: 600, inSec: 2, outSec: null });
+    expect(read({ startSec: Number.NaN, inSec: "1", outSec: Infinity })).toMatchObject({ startSec: 0, inSec: 0, outSec: null });
+    expect(read({ startSec: 2.5, inSec: 0.5, outSec: 1 })).toMatchObject({ startSec: 2.5, inSec: 0.5, outSec: 1 });
+  });
+
+  it("sorts the curve and drops a clip without decoded audio", () => {
+    const [first, ...rest] = normalizeAudioClips({
+      audioClips: [clip({ curve: [{ t: 2, gain: 1 }, { t: 1, gain: 3 }] }), clip({ audio: null }), clip({ audio: {} })],
+    })!;
+    expect(first.curve).toEqual([{ t: 1, gain: 1 }, { t: 2, gain: 1 }]);
+    expect(first.audio).toBe(audio);
+    expect(rest).toEqual([]);
   });
 });

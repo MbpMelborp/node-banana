@@ -409,10 +409,28 @@ export interface StitchTimelineClip {
                               // from Overlap. Track ignores it.
 }
 
-/** A point on the music's volume curve: t in sequence seconds (one loop), gain 0..1 (1 = 0 dB). */
+/**
+ * A point on a volume curve, gain 0..1 (1 = 0 dB). t: sequence seconds (one loop) for audioCurve, the clip's source
+ * seconds on an audio clip.
+ */
 export interface VolumePoint {
   t: number;
   gain: number;
+}
+
+/** Where an audio clip's sound comes from: the node's `audio` socket, or a library asset. */
+export type StitchAudioSource = { kind: "music" } | { kind: "asset"; assetId: string };
+
+/** One clip on an audio row of the Edit Video sequence. See docs/edit-video.md. */
+export interface StitchAudioClip {
+  id: string;                 // Stable within the node; "audio:music" for the music read from a node without audioClips
+  source: StitchAudioSource;
+  row: number;                // 0-based audio row; stored with no empty row (the editor's draft may hold some)
+  startSec: number;           // Where its In plays on the timeline, 0–600 s
+  inSec: number;              // Trim start, source seconds
+  outSec: number | null;      // Trim end, source seconds; null = the source's end
+  muted: boolean;
+  curve: VolumePoint[];       // t in the clip's source seconds; empty = flat at 0 dB
 }
 
 /** How a Stitch sequence is laid out. See docs/edit-video.md. */
@@ -439,10 +457,12 @@ export interface VideoStitchNodeData extends BaseNodeData {
   clipOrder: string[];            // Edge ids in sequence order; with a timeline, kept equal to edgeIdsInOrder(timeline) for older readers
   /** The sequence. Absent = the editor never wrote this node (a "legacy" node); read it with readStitchDraft. */
   timeline?: StitchTimelineClip[];
-  /** Music volume curve over one loop; empty or absent = flat at 0 dB. */
+  /** Music volume curve over one loop; empty or absent = flat at 0 dB. Read only while audioClips is absent. */
   audioCurve?: VolumePoint[];
-  /** The music track is muted (the clips' own sound still plays). */
+  /** The music track is muted (the clips' own sound still plays). Read only while audioClips is absent. */
   audioMuted?: boolean;
+  /** Audio clips. Absent = the audio is the connected music alone, read from audioCurve and audioMuted. */
+  audioClips?: StitchAudioClip[];
   /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
   sequenceLayout?: StitchSequenceLayout;
   outputVideo: string | null;     // Rendered video blob URL or data URL

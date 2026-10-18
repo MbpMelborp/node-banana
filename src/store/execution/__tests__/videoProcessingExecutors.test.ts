@@ -7,6 +7,8 @@ import { trimVideoAsync } from "@/hooks/useTrimVideo";
 import { applySpeedCurveAsync } from "@/hooks/useApplySpeedCurve";
 
 vi.mock("@/hooks/useTrimVideo", () => ({ trimVideoAsync: vi.fn() }));
+const audioInputs = vi.hoisted(() => ({ gatherAudioClipInputs: vi.fn() }));
+vi.mock("../audioClipInputs", () => audioInputs);
 vi.mock("@/hooks/useApplySpeedCurve", () => ({ applySpeedCurveAsync: vi.fn() }));
 
 // Mock the stitch helper so the executor's cancellation wiring can be asserted
@@ -311,6 +313,73 @@ describe("executeVideoStitch", () => {
       expect(clips.map((c: { startSec?: number }) => c.startSec)).toEqual([4, 0, undefined]);
       expect("startSec" in clips[2]).toBe(false);
     }
+  });
+
+  describe("audio clips", () => {
+    const clip = (id: string, edgeId: string) => ({ id, source: { kind: "edge", edgeId }, inSec: 0, outSec: null, muted: false, volume: 1 });
+    const music = (startSec: number) => ({
+      id: "audio:music",
+      source: { kind: "music" },
+      row: 0,
+      startSec,
+      inSec: 0,
+      outSec: null,
+      muted: true,
+      curve: [],
+    });
+    function run(audioClips: unknown[]) {
+      mockFetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(["v"], { type: "video/mp4" })) });
+      mockStitchVideosAsync.mockResolvedValue({ size: 21 * 1024 * 1024, type: "video/mp4" } as Blob);
+      const node = makeStitchNode({ loopCount: 2, timeline: [clip("a", "e1"), clip("b", "e2")], audioClips });
+      const sources = [1, 2].map(
+        (n) => ({ id: `g${n}`, type: "generateVideo", position: { x: 0, y: 0 }, data: { outputVideo: `v${n}` } }) as WorkflowNode
+      );
+      const edges = [1, 2].map((n) => ({ id: `e${n}`, source: `g${n}`, sourceHandle: "video", target: "vs-1", targetHandle: `video-${n - 1}` }));
+      const recordAsset = vi.fn().mockReturnValue(null);
+      const ctx = makeCtx(node, {
+        getNodes: vi.fn().mockReturnValue([node, ...sources]),
+        getEdges: vi.fn().mockReturnValue(edges),
+        getConnectedInputs: vi.fn().mockReturnValue({ images: [], videos: ["v1", "v2"], audio: [], text: null, dynamicInputs: {}, easeCurve: null }),
+        recordAsset,
+      });
+      return { ctx, recordAsset };
+    }
+
+    it("passes the gathered audio clips in the options and records how many played", async () => {
+      const inputs = [{ audio: { buffer: {}, duration: 3 }, startSec: 2, inSec: 0, outSec: null, curve: [] }];
+      audioInputs.gatherAudioClipInputs.mockResolvedValue(inputs);
+      const tone = { ...music(2), id: "aclip_1", source: { kind: "asset", assetId: "atone00000001" }, muted: false };
+      const { ctx, recordAsset } = run([tone]);
+
+      await executeVideoStitch(ctx);
+
+      const [, musicArg, , , options] = mockStitchVideosAsync.mock.calls[0];
+      expect(musicArg).toBeNull();
+      expect(options).toEqual({ loopCount: 2, audioClips: inputs });
+      expect(recordAsset.mock.calls[0][0].parameters).toMatchObject({ withAudio: true, audioClips: 1 });
+    });
+
+    it("leaves audioClips out of the options for legacy-shaped audio", async () => {
+      const { ctx, recordAsset } = run([]);
+
+      await executeVideoStitch(ctx);
+
+      const options = mockStitchVideosAsync.mock.calls[0][4];
+      expect(options).toEqual({ loopCount: 2 });
+      expect(audioInputs.gatherAudioClipInputs).not.toHaveBeenCalled();
+      expect(recordAsset.mock.calls[0][0].parameters).toMatchObject({ withAudio: false });
+      expect("audioClips" in recordAsset.mock.calls[0][0].parameters).toBe(false);
+    });
+
+    it("records no audio when every audio clip is muted", async () => {
+      audioInputs.gatherAudioClipInputs.mockResolvedValue([]);
+      const { ctx, recordAsset } = run([music(2)]);
+
+      await executeVideoStitch(ctx);
+
+      expect(mockStitchVideosAsync.mock.calls[0][4]).toEqual({ loopCount: 2, audioClips: [] });
+      expect(recordAsset.mock.calls[0][0].parameters).toMatchObject({ withAudio: false, audioClips: 0 });
+    });
   });
 
   it("should set loading status with 0 progress", async () => {

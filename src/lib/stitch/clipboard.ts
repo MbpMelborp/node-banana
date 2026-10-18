@@ -1,4 +1,10 @@
-import type { StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type {
+  StitchAudioSource,
+  StitchClipSource,
+  StitchSequenceLayout,
+  StitchTimelineClip,
+  VolumePoint,
+} from "@/types";
 import type { StitchDraft } from "./draft";
 import {
   createClip,
@@ -28,8 +34,22 @@ export interface ClipboardVideoItem {
   offsetSec: number;
 }
 
-/** Every kind of copied clip. One copy holds one kind. */
-export type ClipboardItem = ClipboardVideoItem;
+/** One copied audio clip. */
+export interface ClipboardAudioItem {
+  track: "audio";
+  source: StitchAudioSource;
+  inSec: number;
+  outSec: number | null;
+  muted: boolean;
+  curve: VolumePoint[];
+  /** Its start less the earliest copied start (>= 0). */
+  offsetSec: number;
+  /** Its row less the top copied row (>= 0). */
+  rowOffset: number;
+}
+
+/** Every kind of copied clip. One copy holds one kind: a selection holds video clips or audio clips, never both. */
+export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem;
 
 /**
  * Where the clips were copied. tabId: the workflow store's activeTabId; workflowId: ensureWorkflowId() at the copy.
@@ -52,9 +72,9 @@ export type PasteTarget = {
   liveEdgeIds: readonly string[];
 };
 
-export type SkipReason = "otherNode" | "disconnected";
+export type SkipReason = "otherNode" | "disconnected" | "music";
 
-const SKIP_ORDER: readonly SkipReason[] = ["otherNode", "disconnected"];
+const SKIP_ORDER: readonly SkipReason[] = ["otherNode", "disconnected", "music"];
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
@@ -90,27 +110,31 @@ export function copyClips(
   return items.length > 0 ? { origin, items } : null;
 }
 
+/** The same node, tab and workflow the clips were copied from. */
+function isOwnNode(origin: ClipboardOrigin, target: PasteTarget): boolean {
+  const kind = target.kind;
+  switch (kind) {
+    case "node":
+      return origin.nodeId === target.nodeId && origin.tabId === target.tabId && origin.workflowId === target.workflowId;
+    default: {
+      const unknown: never = kind;
+      return unknown;
+    }
+  }
+}
+
 /** Whether an item may be pasted into the target, or why not. */
 function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteTarget): SkipReason | null {
   const track = item.track;
   switch (track) {
     case "video": {
       if (item.source.kind === "asset") return null;
-      const edgeId = item.source.edgeId;
-      const kind = target.kind;
-      switch (kind) {
-        case "node": {
-          const own =
-            origin.nodeId === target.nodeId && origin.tabId === target.tabId && origin.workflowId === target.workflowId;
-          if (!own) return "otherNode";
-          return target.liveEdgeIds.includes(edgeId) ? null : "disconnected";
-        }
-        default: {
-          const unknown: never = kind;
-          return unknown;
-        }
-      }
+      if (!isOwnNode(origin, target)) return "otherNode";
+      return target.liveEdgeIds.includes(item.source.edgeId) ? null : "disconnected";
     }
+    case "audio":
+      // Whether the music is connected does not matter: a music clip with none is kept, drawn dashed and silent
+      return item.source.kind === "asset" || isOwnNode(origin, target) ? null : "music";
     default: {
       const unknown: never = track;
       return unknown;
@@ -120,8 +144,9 @@ function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteT
 
 /**
  * Asset items always pass. An edge item passes only into its own node (the same node, tab and workflow) while its
- * edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. Skipped counts come in
- * the order otherNode, disconnected, leaving out a reason with no clip.
+ * edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item passes only
+ * into its own node, else "music". Skipped counts come in the order otherNode, disconnected, music, leaving out a
+ * reason with no clip.
  */
 export function pastableItems(
   clipboard: StitchClipboard,
@@ -150,6 +175,8 @@ function skippedSentence(reason: SkipReason, count: number): string {
       return count === 1
         ? `${clips} not pasted: its video is no longer connected.`
         : `${clips} not pasted: their videos are no longer connected.`;
+    case "music":
+      return `${count === 1 ? "1 music clip" : `${count} music clips`} not pasted: music clips paste only into their own node.`;
     default: {
       const unknown: never = reason;
       return unknown;

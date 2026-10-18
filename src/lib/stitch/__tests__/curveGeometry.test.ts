@@ -104,6 +104,39 @@ describe("curvePolyline", () => {
   it("draws nothing for a sequence with no length", () => {
     expect(curvePolyline([{ t: 0, gain: 1 }], 0, plainAxis(), EXPANDED_CURVE)).toEqual([]);
   });
+
+  it("gives the same vertices with the default window spelled out", () => {
+    const curve = [
+      { t: 0, gain: 1 },
+      { t: 4, gain: 0.25 },
+      { t: 8, gain: 0 },
+    ];
+    for (const axis of [plainAxis(), slotAxis()]) {
+      expect(curvePolyline(curve, 10, axis, EXPANDED_CURVE, { offset: 0, from: 0, to: 10 })).toEqual(
+        curvePolyline(curve, 10, axis, EXPANDED_CURVE),
+      );
+    }
+  });
+
+  it("draws a window of the curve's own clock, shifted by its offset", () => {
+    // A clip with In 1 that starts at 3 s: source t sits at sequence t − (1 − 3) = t + 2
+    const curve = [
+      { t: 0, gain: 0 },
+      { t: 2, gain: 1 },
+      { t: 3, gain: 0.25 },
+      { t: 9, gain: 0 },
+    ];
+    const poly = curvePolyline(curve, 10, plainAxis(), EXPANDED_CURVE, { offset: -2, from: 1, to: 4 });
+    // from 1 → seq 3 (x 46), the points at 2 and 3 (x 56, 66), to 4 → seq 6 (x 76)
+    expect(poly.map((v) => v.x)).toEqual([46, 56, 66, 76]);
+    expect(poly[0].y).toBeCloseTo(16 + 0.5 * 90);
+    expect(poly[1].y).toBe(16);
+    expect(poly[2].y).toBe(levelToY(gainToLevel(0.25), EXPANDED_CURVE));
+  });
+
+  it("draws nothing for an empty window", () => {
+    expect(curvePolyline([], 10, plainAxis(), EXPANDED_CURVE, { offset: 0, from: 3, to: 3 })).toEqual([]);
+  });
 });
 
 describe("distanceToPolyline", () => {
@@ -137,5 +170,13 @@ describe("pointerToPoint", () => {
 
   it("reads a pointer inside a slot as the slot's instant", () => {
     expect(pointerToPoint(150, 16, slotAxis(), EXPANDED_CURVE, 10).t).toBe(4);
+  });
+
+  it("reads time in the window's clock, clamped to it", () => {
+    const window = { offset: -2, from: 1, to: 4 };
+    // x 56 is sequence 4 s, source 2 s
+    expect(pointerToPoint(56, 16, plainAxis(), EXPANDED_CURVE, 10, window).t).toBeCloseTo(2);
+    expect(pointerToPoint(-100, 16, plainAxis(), EXPANDED_CURVE, 10, window).t).toBe(1);
+    expect(pointerToPoint(5000, 16, plainAxis(), EXPANDED_CURVE, 10, window).t).toBe(4);
   });
 });

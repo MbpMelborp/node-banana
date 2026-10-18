@@ -3,6 +3,7 @@ import type { StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import {
   dropRemovedStitchEdges,
   dropStitchEdges,
+  dropStitchMusicClips,
   isLegacyStitch,
   legacyClipId,
   migrateStitchTimeline,
@@ -12,6 +13,7 @@ import {
   stitchOrderPatch,
   stitchVideoEdgeIds,
 } from "../migrate";
+import { createAudioClip, MUSIC_CLIP_ID } from "../audioClips";
 import { createClip } from "../timeline";
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
@@ -243,5 +245,56 @@ describe("dropStitchEdges", () => {
     expect((next[0].data as { clipOrder: string[] }).clipOrder).toEqual([]);
     expect(next[1]).toBe(nodes[1]);
     expect(dropRemovedStitchEdges(nodes, [{ id: "e1", source: "g", target: "other" }] as WorkflowEdge[])).toBe(nodes);
+  });
+});
+
+describe("dropStitchMusicClips", () => {
+  const musicClip = createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, startSec: 1 });
+  const tone = createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id: "t", row: 1 });
+
+  it("drops the music clips, compacts the rows and resets the older-build copy", () => {
+    const data = { clipOrder: [], audioClips: [musicClip, tone], audioCurve: [{ t: 0, gain: 0.5 }], audioMuted: true };
+    expect(dropStitchMusicClips(data)).toEqual({
+      clipOrder: [],
+      audioClips: [{ ...tone, row: 0 }],
+      audioCurve: [],
+      audioMuted: false,
+    });
+  });
+
+  it("removes the key when nothing is left, so the node reads as legacy with fresh music", () => {
+    const next = dropStitchMusicClips({ audioClips: [musicClip], audioCurve: [], audioMuted: true });
+    expect(next).toEqual({ audioCurve: [], audioMuted: false });
+    expect("audioClips" in next).toBe(false);
+  });
+
+  it("leaves library clips, empty lists and legacy nodes alone", () => {
+    const library = { audioClips: [tone] };
+    expect(dropStitchMusicClips(library)).toBe(library);
+    const empty = { audioClips: [] };
+    expect(dropStitchMusicClips(empty)).toBe(empty);
+    const legacy = { audioCurve: [{ t: 1, gain: 0 }], audioMuted: true };
+    expect(dropStitchMusicClips(legacy)).toBe(legacy);
+  });
+
+  it("runs for a removed non-loop audio edge only, with the video edges' drop in the same node", () => {
+    const stitch = (id: string) =>
+      ({
+        id,
+        type: "videoStitch",
+        position: { x: 0, y: 0 },
+        data: { clipOrder: ["e1"], timeline: [edgeClip("a", "e1")], audioClips: [musicClip, tone] },
+      }) as unknown as WorkflowNode;
+    const nodes = [stitch("s1")];
+    const audio = { id: "m", source: "a", target: "s1", targetHandle: "audio" } as WorkflowEdge;
+    const loop = { ...audio, id: "loop", data: { isLoop: true } } as WorkflowEdge;
+    const videoEdge = { id: "e1", source: "g", target: "s1", targetHandle: "video-0" } as WorkflowEdge;
+
+    const both = dropRemovedStitchEdges(nodes, [audio, videoEdge])[0].data as Record<string, unknown>;
+    expect(both.audioClips).toEqual([{ ...tone, row: 0 }]);
+    expect(both.timeline).toEqual([]);
+    expect(dropRemovedStitchEdges(nodes, [loop])).toBe(nodes);
+    const videoOnly = dropRemovedStitchEdges(nodes, [videoEdge])[0].data as Record<string, unknown>;
+    expect(videoOnly.audioClips).toEqual([musicClip, tone]);
   });
 });

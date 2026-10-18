@@ -8,6 +8,19 @@ describe("buildLibraryRequest", () => {
     expect(buildLibraryRequest(query(), "wf_1")).toEqual({ kinds: ["video"], limit: 60 });
   });
 
+  it("asks for another kind when told, the rest unchanged", () => {
+    expect(buildLibraryRequest(query({ q: "rain" }), "wf_1", undefined, ["audio"])).toEqual({
+      kinds: ["audio"],
+      limit: 60,
+      q: "rain",
+    });
+    expect(buildLibraryRequest(query(), null, "c2", ["video", "audio"])).toEqual({
+      kinds: ["video", "audio"],
+      limit: 60,
+      cursor: "c2",
+    });
+  });
+
   it("sends a search only when it has something in it, trimmed", () => {
     expect(buildLibraryRequest(query({ q: "  veo sunset " }), null)).toEqual({ kinds: ["video"], limit: 60, q: "veo sunset" });
     expect(buildLibraryRequest(query({ q: "   " }), null)).not.toHaveProperty("q");

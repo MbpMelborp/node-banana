@@ -43,35 +43,49 @@ export function yToLevel(y: number, m: CurveMetrics): number {
 }
 
 /**
- * Vertices at x(0), at each point inside the sequence, at each slot's entry and exit (a flat run across the
- * slot), and at x(sequenceSec), in order. Points past the end are not drawn, but they still shape the line up to
- * the end (the last vertex reads gainAt there).
+ * The part of a curve a lane draws, in the curve's own clock: [from, to], drawn at sequence time t − offset (an audio
+ * clip's curve is in its source seconds: offset = In − start). The music's curve over one loop is
+ * { offset: 0, from: 0, to: sequenceSec }.
+ */
+export interface CurveWindow {
+  offset: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * Vertices at the window's start, at each point inside it, at each slot's entry and exit (a flat run across the
+ * slot), and at its end, in order. Points outside the window are not drawn, but they still shape the line up to its
+ * ends (the end vertices read gainAt there). The window defaults to [0, sequenceSec].
  */
 export function curvePolyline(
   curve: readonly VolumePoint[],
   sequenceSec: number,
   axis: Pick<TimeAxis, "timeToX" | "slots">,
   m: CurveMetrics,
+  window: CurveWindow = { offset: 0, from: 0, to: sequenceSec },
 ): CurveVertex[] {
-  if (!(sequenceSec > 0) || !Number.isFinite(sequenceSec)) return [];
+  const { offset, from, to } = window;
+  if (!(to > from) || !Number.isFinite(from) || !Number.isFinite(to) || !Number.isFinite(offset)) return [];
   const yAt = (t: number) => levelToY(gainToLevel(gainAt(curve, t)), m);
-  const vertices: CurveVertex[] = [{ x: axis.timeToX(0), y: yAt(0) }];
-  const inside = curve.filter((p) => p.t > 0 && p.t < sequenceSec);
+  const xAt = (t: number) => axis.timeToX(t - offset);
+  const vertices: CurveVertex[] = [{ x: xAt(from), y: yAt(from) }];
+  const inside = curve.filter((p) => p.t > from && p.t < to);
   // A slot sits at one instant: its entry is timeToX(t), its exit that plus its width
-  const slots = axis.slots.filter((s) => s.t < sequenceSec);
+  const slots = axis.slots.filter((s) => s.t + offset >= from && s.t + offset < to);
   let p = 0;
   for (const slot of slots) {
-    while (p < inside.length && inside[p].t <= slot.t) {
-      vertices.push({ x: axis.timeToX(inside[p].t), y: levelToY(gainToLevel(inside[p].gain), m) });
+    while (p < inside.length && inside[p].t <= slot.t + offset) {
+      vertices.push({ x: xAt(inside[p].t), y: levelToY(gainToLevel(inside[p].gain), m) });
       p++;
     }
-    const y = yAt(slot.t);
+    const y = yAt(slot.t + offset);
     vertices.push({ x: slot.x, y }, { x: slot.x + slot.width, y });
   }
   for (; p < inside.length; p++) {
-    vertices.push({ x: axis.timeToX(inside[p].t), y: levelToY(gainToLevel(inside[p].gain), m) });
+    vertices.push({ x: xAt(inside[p].t), y: levelToY(gainToLevel(inside[p].gain), m) });
   }
-  vertices.push({ x: axis.timeToX(sequenceSec), y: yAt(sequenceSec) });
+  vertices.push({ x: xAt(to), y: yAt(to) });
   return vertices;
 }
 
@@ -92,15 +106,20 @@ export function distanceToPolyline(p: CurveVertex, poly: readonly CurveVertex[])
   return best;
 }
 
-/** The point a pointer at (x, y) means: t = clamp(xToTime(x), 0, seq), gain = levelToGain(yToLevel(y)). */
+/**
+ * The point a pointer at (x, y) means: t = clamp(xToTime(x) + offset, from, to), gain = levelToGain(yToLevel(y)). The
+ * window defaults to [0, sequenceSec].
+ */
 export function pointerToPoint(
   x: number,
   y: number,
   axis: Pick<TimeAxis, "xToTime">,
   m: CurveMetrics,
   sequenceSec: number,
+  window?: CurveWindow,
 ): VolumePoint {
   const end = Number.isFinite(sequenceSec) && sequenceSec > 0 ? sequenceSec : 0;
-  const t = axis.xToTime(x);
-  return { t: clamp(Number.isFinite(t) ? t : 0, 0, end), gain: levelToGain(yToLevel(y, m)) };
+  const { offset, from, to } = window ?? { offset: 0, from: 0, to: end };
+  const t = axis.xToTime(x) + offset;
+  return { t: clamp(Number.isFinite(t) ? t : from, from, Math.max(from, to)), gain: levelToGain(yToLevel(y, m)) };
 }

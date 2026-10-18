@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { gainAt } from "@/lib/stitch/curve";
 import { clipSpans, createClip, layoutSpans, spansEnd, type SourceKey } from "@/lib/stitch/timeline";
-import { useSequencePlayback, type SequencePlaybackOptions } from "../useSequencePlayback";
+import { useSequencePlayback, type AudioPlaybackClip, type SequencePlaybackOptions } from "../useSequencePlayback";
 
 // The preview engine against stand-in media elements and a hand-driven frame loop.
 
@@ -76,7 +77,7 @@ function twoSourceOptions(): SequencePlaybackOptions {
     spans,
     total: 10,
     srcFor: (clipId) => (clipId === "c1" ? "blob:a" : "blob:b"),
-    music: { src: null, curve: [], muted: false },
+    audio: { clips: [] },
     soundOn: true,
   };
 }
@@ -94,15 +95,27 @@ const flushFrame = (now = 0) =>
 
 const editor = () => useStitchEditorStore.getState();
 
+/** An audio clip as the editor passes it: the music read from a node without audio clips by default. */
+const audioClip = (init: Partial<AudioPlaybackClip> = {}): AudioPlaybackClip => ({
+  id: "audio:music",
+  src: "music.mp3",
+  startSec: 0,
+  inSec: 0,
+  outSec: null,
+  muted: false,
+  curve: [],
+  ...init,
+});
+
 /** One 10 s clip of source "a" (served at `url`), with music from "music.mp3". */
-function options(url = "blob:a", music: string | null = "music.mp3"): SequencePlaybackOptions {
+function options(url = "blob:a", music: string | null = "music.mp3", clips?: AudioPlaybackClip[]): SequencePlaybackOptions {
   const clip = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1" });
   const spans = clipSpans([clip], new Map<SourceKey, number>([["edge:e1", 10]]), 0);
   return {
     spans,
     total: 10,
     srcFor: () => url,
-    music: { src: music, curve: [], muted: false },
+    audio: { clips: clips ?? [audioClip({ src: music })] },
     soundOn: true,
   };
 }
@@ -152,7 +165,7 @@ describe("useSequencePlayback", () => {
     const music = fakeMedia(3);
     act(() => {
       result.current.registerVideo("blob:a", asVideo(video));
-      result.current.registerAudio(asAudio(music));
+      result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
     expect(music.play).toHaveBeenCalledTimes(1);
@@ -179,7 +192,7 @@ describe("useSequencePlayback", () => {
     music.play.mockImplementation(() => Promise.reject(new Error("NotAllowedError")));
     act(() => {
       result.current.registerVideo("blob:a", asVideo(video));
-      result.current.registerAudio(asAudio(music));
+      result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
     video.currentTime = 1;
@@ -187,6 +200,87 @@ describe("useSequencePlayback", () => {
     video.currentTime = 2;
     flushFrame();
     expect(music.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("drives the music read from a legacy node as the single music element did: its time and its curve's gain", () => {
+    const curve = [
+      { t: 0, gain: 0 },
+      { t: 4, gain: 1 },
+    ];
+    const opts = options("blob:a", "music.mp3", [audioClip({ curve })]);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    const music = fakeMedia(30);
+    act(() => {
+      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlaying(true));
+    expect(music.play).toHaveBeenCalledTimes(1);
+    expect(music.currentTime).toBe(0);
+    for (const t of [1, 2, 3.5]) {
+      video.currentTime = t;
+      // Drifted past 0.25 s: sought back to the playhead
+      music.currentTime = t + 0.5;
+      flushFrame();
+      // The gain at the playhead, on the curve's own clock: sequence seconds for an untouched music clip
+      expect(music.volume).toBeCloseTo(gainAt(curve, t), 6);
+      expect(music.currentTime).toBeCloseTo(t, 6);
+      // Under 0.25 s: left alone
+      music.currentTime = t + 0.1;
+      flushFrame();
+      expect(music.currentTime).toBeCloseTo(t + 0.1, 6);
+    }
+    expect(music.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays a clip that starts at 2 s only from 2 s, from its In, at its curve's gain there", () => {
+    const curve = [
+      { t: 1, gain: 0.25 },
+      { t: 3, gain: 1 },
+    ];
+    const opts = options("blob:a", null, [audioClip({ id: "aclip_1", src: "tone.m4a", startSec: 2, inSec: 1, curve })]);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    const tone = fakeMedia(10);
+    act(() => {
+      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerAudio("aclip_1", asAudio(tone));
+    });
+    act(() => editor().setPlaying(true));
+    expect(tone.play).not.toHaveBeenCalled();
+    video.currentTime = 1.5;
+    flushFrame();
+    expect(tone.paused).toBe(true);
+    expect(tone.play).not.toHaveBeenCalled();
+    // Inside its span: its In plus the time since its start
+    video.currentTime = 2.5;
+    flushFrame();
+    expect(tone.play).toHaveBeenCalledTimes(1);
+    expect(tone.currentTime).toBeCloseTo(1.5, 6);
+    expect(tone.volume).toBeCloseTo(gainAt(curve, 1.5), 6);
+    // A drift past 0.25 s is seeked back
+    tone.currentTime = 2.5;
+    video.currentTime = 3;
+    flushFrame();
+    expect(tone.currentTime).toBeCloseTo(2, 6);
+  });
+
+  it("pauses a clip past its Out and a muted clip stays muted", () => {
+    const opts = options("blob:a", null, [audioClip({ id: "aclip_1", src: "tone.m4a", startSec: 0, inSec: 0, outSec: 2, muted: true })]);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    const tone = fakeMedia(10);
+    act(() => {
+      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerAudio("aclip_1", asAudio(tone));
+    });
+    act(() => editor().setPlaying(true));
+    expect(tone.muted).toBe(true);
+    expect(tone.play).toHaveBeenCalledTimes(1);
+    video.currentTime = 2.5;
+    flushFrame();
+    expect(tone.paused).toBe(true);
   });
 
   it("hands playback to a <video> remounted under the playhead", () => {
@@ -319,7 +413,7 @@ describe("useSequencePlayback", () => {
         spans: clipSpans([first, second], durations, 1),
         total: 9,
         srcFor: (clipId) => (clipId === "c1" ? "blob:a" : "blob:b"),
-        music: { src: null, curve: [], muted: false },
+        audio: { clips: [] },
         soundOn: true,
         stack: { crossfade },
       };
@@ -430,7 +524,7 @@ describe("useSequencePlayback", () => {
         spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 1),
         total: 5,
         srcFor: () => "blob:a",
-        music: { src: null, curve: [], muted: false },
+        audio: { clips: [] },
         soundOn: true,
         stack: { crossfade: true },
       };
@@ -492,7 +586,7 @@ describe("useSequencePlayback", () => {
           spans,
           total: spansEnd(spans),
           srcFor: (clipId) => `blob:${clipId}`,
-          music: { src: null, curve: [], muted: false },
+          audio: { clips: [] },
           soundOn: true,
           stack: { crossfade, placed: true },
         };

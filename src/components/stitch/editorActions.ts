@@ -1,14 +1,35 @@
 import {
+  audioSelectionOf,
+  selectedAudioIds,
   selectedClipIds,
   selectIsMulti,
   useStitchEditorStore,
   type StitchEditorState,
 } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { fadeIn, fadeOut, flat, followEndFade, removePoint } from "@/lib/stitch/curve";
-import { primeAssetInfo } from "@/lib/stitch/assetInfo";
-import { stitchHasMusicEdge } from "@/lib/stitch/sources";
-import { draftDuration, draftSpans, sameLayout } from "@/lib/stitch/draft";
+import { flat, followEndFade, removePoint } from "@/lib/stitch/curve";
+import { getAssetInfo, primeAssetInfo } from "@/lib/stitch/assetInfo";
+import { draftDuration, draftSpans, sameLayout, type StitchDraft } from "@/lib/stitch/draft";
+import {
+  addAudioAt,
+  audioFadeIn,
+  audioFadeOut,
+  audioLengthOf,
+  audioSpans,
+  followEndFades,
+  hasMusicClip,
+  heardRange,
+  moveAudioClips,
+  removeAudioClips,
+  resetAudioTrim,
+  setAudioClipCurve,
+  setAudioClipsMuted,
+  splitAudioClipAt,
+  trimAudioClip,
+  type AudioLengthOf,
+  type AudioRowMap,
+  type AudioSpan,
+} from "@/lib/stitch/audioClips";
 import { clampOverlapSec, effectiveOverlapSec } from "@/lib/stitch/stack";
 import { FRAME_RATE } from "@/lib/stitch/sequencePlan";
 import { makeSelection } from "@/lib/stitch/selection";
@@ -48,7 +69,7 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchSequenceLayout, StitchTimelineClip, VolumePoint } from "@/types";
+import type { StitchAudioClip, StitchAudioSource, StitchSequenceLayout, StitchTimelineClip, VolumePoint } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { liveFitZoom } from "./liveFitZoom";
 
@@ -269,7 +290,7 @@ export function removeClipsById(ids: readonly string[]): string[] {
 export function removeSelection(): void {
   const s = editor();
   if (!s.draft) return;
-  if (s.selection?.kind === "audio") return removeSelectedPoint();
+  if (s.selection?.kind === "audio") return removeAudioSelection();
   if (selectIsMulti(s)) {
     editor().untagCut(removeClipsById(selectedClipIds(s)));
     return;
@@ -285,40 +306,6 @@ export function removeSelection(): void {
   after.untagCut([clipId]);
   const neighbour = timeline[Math.min(index, timeline.length - 1)];
   after.select(neighbour ? { kind: "clip", clipId: neighbour.id } : null);
-}
-
-/**
- * ⌫ on the audio track: the selected curve point, if one is (the store forgets it when the curve changes). Not
- * while the track is muted: the lane draws no curve then.
- */
-export function removeSelectedPoint(): void {
-  const s = editor();
-  const point = s.selection?.kind === "audio" ? s.selection.point : null;
-  if (point === null || s.draft?.audioMuted) return;
-  s.apply((d) => ({ ...d, audioCurve: removePoint(d.audioCurve, point) }));
-}
-
-/** One curve gesture's result (a point added, moved or removed, the line moved), as one undo step. */
-export function setCurve(curve: VolumePoint[]): void {
-  editor().apply((d) => ({ ...d, audioCurve: curve }));
-}
-
-/** The quick buttons place a fade over one loop of the sequence as it is now. */
-export function applyFadeIn(): void {
-  const s = editor();
-  const total = editorTotal(s);
-  s.apply((d) => ({ ...d, audioCurve: fadeIn(d.audioCurve, total) }));
-}
-
-export function applyFadeOut(): void {
-  const s = editor();
-  const total = editorTotal(s);
-  s.apply((d) => ({ ...d, audioCurve: fadeOut(d.audioCurve, total) }));
-}
-
-/** Flat: back to 0 dB all through. */
-export function flattenCurve(): void {
-  editor().apply((d) => ({ ...d, audioCurve: flat() }));
 }
 
 /** ⌥M. With several selected: all muted, or all unmuted when every one already is muted. */
@@ -349,22 +336,21 @@ export function setSelectedClipsMuted(muted: boolean): void {
 }
 
 /**
- * M. Nothing without music connected, since nothing in the editor would show it and a later connection would be
- * left out silently; a muted node can still be unmuted.
+ * M with no audio clip selected: every music clip muted, or unmuted when all are. With no music clip, a legacy
+ * node's music mute can only be turned off: muting music that is not there would be left out silently by a later
+ * connection.
  */
 export function toggleMusicMute(): void {
   const s = editor();
-  if (!s.draft || !s.nodeId) return;
-  if (!s.draft.audioMuted) {
-    const wf = useWorkflowStore.getState();
-    if (!stitchHasMusicEdge(s.nodeId, wf.edges, wf.dimmedNodeIds, wf.nodes)) return;
+  if (!s.draft) return;
+  if (hasMusicClip(s.draft.audioClips)) {
+    const music = s.draft.audioClips.filter((c) => c.source.kind === "music");
+    const muted = !music.every((c) => c.muted);
+    s.apply((d) => ({ ...d, audioClips: setAudioClipsMuted(d.audioClips, new Set(music.map((c) => c.id)), muted) }));
+    forgetPointOfMutedLead();
+    return;
   }
-  s.apply((d) => ({ ...d, audioMuted: !d.audioMuted }));
-  // A muted track draws no curve, so no point of it stays selected
-  const after = editor();
-  if (after.draft?.audioMuted && after.selection?.kind === "audio" && after.selection.point !== null) {
-    after.select({ kind: "audio", point: null });
-  }
+  if (s.draft.legacyAudio.muted) s.apply((d) => ({ ...d, legacyAudio: { ...d.legacyAudio, muted: false } }));
 }
 
 /**
@@ -417,6 +403,15 @@ export function setLoopCount(n: 1 | 2 | 3): void {
   editor().apply((d) => ({ ...d, loopCount: n }));
 }
 
+/** A fade out ending on the old end follows the new end, on every audio clip and on a legacy node's music curve. */
+function followEnd(d: StitchDraft, oldTotal: number, newTotal: number): StitchDraft {
+  return {
+    ...d,
+    audioClips: followEndFades(d.audioClips, oldTotal, newTotal),
+    legacyAudio: { ...d.legacyAudio, curve: followEndFade(d.legacyAudio.curve, oldTotal, newTotal) },
+  };
+}
+
 /**
  * A new layout, as one undo step (or one gesture's): a fade out ending on the old end follows the new end
  * (followEndFade), and the playhead stays on the same frame of the same clip (reanchorTime). Pausing is the
@@ -431,7 +426,7 @@ function applyLayout(layout: StitchSequenceLayout, opts?: { gestureKey?: string;
   const oldTotal = draftDuration(s.draft, s.durations);
   const newTotal = spansEnd(after);
   s.apply(
-    (d) => ({ ...d, timeline, sequenceLayout: layout, audioCurve: followEndFade(d.audioCurve, oldTotal, newTotal) }),
+    (d) => ({ ...followEnd(d, oldTotal, newTotal), timeline, sequenceLayout: layout }),
     opts?.gestureKey !== undefined ? { gestureKey: opts.gestureKey } : undefined,
   );
   editor().setPlayhead(reanchorTime(before, after, s.playhead, selectedClipId(s)));
@@ -653,17 +648,20 @@ export function lineUpClips(): void {
   const after = draftSpans({ timeline, sequenceLayout: s.draft.sequenceLayout }, s.durations);
   const oldTotal = spansEnd(before);
   const newTotal = spansEnd(after);
-  s.apply((d) => ({ ...d, timeline, audioCurve: followEndFade(d.audioCurve, oldTotal, newTotal) }));
+  s.apply((d) => ({ ...followEnd(d, oldTotal, newTotal), timeline }));
   editor().setPlayhead(reanchorTime(before, after, s.playhead, selectedClipId(s)));
 }
 
-/** The Clips track's +, the slot after the last clip and the empty lane: the library picker, over a paused preview. */
-export function openLibraryPicker(): void {
+/**
+ * The library picker over a paused preview: for video (the Clips track's +, the slot after the last clip and the
+ * empty lane) or audio (the audio strip's +).
+ */
+export function openLibraryPicker(kind: "video" | "audio" = "video"): void {
   const s = editor();
   if (!s.draft) return;
   s.setPlaying(false);
   s.openMenu(null);
-  s.setPickerOpen(true);
+  s.setPickerOpen(kind);
 }
 
 /**
@@ -715,4 +713,367 @@ export function revealSelectedSource(): void {
   if (!sourceNodeId) return;
   if (commitStitchEdit() === "gone") return;
   useWorkflowStore.getState().setNavigationTarget(sourceNodeId);
+}
+
+// Audio clips. Each action reads the store, calls one recipe of audioClips.ts and applies once; a recipe that
+// renumbers rows hands back a row map, which the expanded row follows.
+
+/** The single selected audio clip, or null (none, a video selection, or several). */
+function singleAudioClip(s: StitchEditorState): StitchAudioClip | null {
+  const ids = selectedAudioIds(s);
+  if (!s.draft || ids.length !== 1) return null;
+  return s.draft.audioClips.find((c) => c.id === ids[0]) ?? null;
+}
+
+/** The single selected audio clip's span; an unknown length is 0. */
+function singleAudioSpan(s: StitchEditorState): AudioSpan | null {
+  const clip = singleAudioClip(s);
+  return clip ? audioSpans([clip], s.audioDurations)[0] : null;
+}
+
+/** A clip's length for overlap checks: decoded, else its library record's, else Infinity (never placed over). */
+export function editorAudioLengthOf(s: Pick<StitchEditorState, "audioDurations">): AudioLengthOf {
+  return audioLengthOf(s.audioDurations, (clip) =>
+    clip.source.kind === "asset" ? (getAssetInfo(clip.source.assetId)?.durationSec ?? null) : null,
+  );
+}
+
+/** After a recipe that renumbered rows: the expanded row follows its row, and collapses when its row is gone. */
+export function remapExpandedRow(rowMap: AudioRowMap): void {
+  const s = editor();
+  const row = s.audioExpandedRow;
+  if (row === null || row >= rowMap.length) return;
+  const next = rowMap[row] ?? null;
+  if (next !== row) s.setAudioExpandedRow(next);
+}
+
+/** Selects these audio clips (none: nothing selected), `lead` leading, else the first in audio order. */
+export function selectAudioClips(ids: readonly string[], lead?: string): void {
+  const s = editor();
+  const selection = s.draft ? makeSelection(s.draft.audioClips.map((c) => c.id), ids, lead ?? ids[0]) : null;
+  s.select(selection ? audioSelectionOf(selection) : null);
+}
+
+/** A muted lead draws no curve, so no point of it stays selected. */
+function forgetPointOfMutedLead(): void {
+  const s = editor();
+  const selection = s.selection;
+  if (selection?.kind !== "audio" || selection.point === null) return;
+  if (s.draft?.audioClips.find((c) => c.id === selection.clipId)?.muted) s.select({ ...selection, point: null });
+}
+
+/**
+ * The picker's Add for audio: one clip per picked file, each on its own new row at the bottom, each starting at the
+ * playhead, in pick order, as one undo step. The first is selected and the picker closes. The records go to the asset
+ * cache, so the clips are labelled (and their lengths known for overlap checks) at once.
+ */
+export function addAudioFromLibrary(views: readonly AssetView[]): void {
+  const s = editor();
+  if (!s.draft || views.length === 0) return;
+  primeAssetInfo(views);
+  const sources = views.map((view): StitchAudioSource => ({ kind: "asset", assetId: view.id }));
+  const { clips, ids } = addAudioAt(s.draft.audioClips, sources, drawnPlayhead(s));
+  s.apply((d) => ({ ...d, audioClips: clips }));
+  selectAudioClips(ids.slice(0, 1));
+  editor().setPickerOpen(false);
+}
+
+/**
+ * A body drag's release: the clips it drew (moveAudioClips over the clips at the press), as one undo step. Dropped
+ * when the draft's audio changed under the drag.
+ */
+export function moveAudioClipsBody(
+  from: readonly StitchAudioClip[],
+  next: { clips: StitchAudioClip[]; rowMap: AudioRowMap },
+): void {
+  const s = editor();
+  if (!s.draft || s.draft.audioClips !== from || next.clips === from) return;
+  s.apply((d) => ({ ...d, audioClips: next.clips }));
+  remapExpandedRow(next.rowMap);
+}
+
+/**
+ * An edge drag's release: the clip's In or Out as drawn (trimAudioClip over the clips at the press), one undo step.
+ * Dropped when the audio changed under the drag.
+ */
+export function trimAudioClipBody(
+  from: readonly StitchAudioClip[],
+  clipId: string,
+  patch: { inSec?: number; outSec?: number | null },
+): void {
+  const s = editor();
+  if (!s.draft || s.draft.audioClips !== from) return;
+  s.apply((d) => ({ ...d, audioClips: trimAudioClip(d.audioClips, s.audioDurations, clipId, patch) }));
+}
+
+/** The selected audio clips by a time and a row delta (moveAudioClips: an overlap sends them onto new rows). */
+function moveSelectedAudio(deltaSec: number, deltaRow: number, opts?: { gestureKey?: string }): void {
+  const s = editor();
+  const ids = selectedAudioIds(s);
+  if (!s.draft || ids.length === 0) return;
+  const result = moveAudioClips(s.draft.audioClips, editorAudioLengthOf(s), ids, deltaSec, deltaRow);
+  if (result.clips === s.draft.audioClips) return;
+  s.apply((d) => ({ ...d, audioClips: result.clips }), opts);
+  remapExpandedRow(result.rowMap);
+}
+
+/** ⌥← / ⌥→ with audio selected: one output frame (⇧: ten), in Track too. A held key's repeats are one undo step. */
+export function nudgeSelectedAudio(dir: 1 | -1, big: boolean, repeat: boolean): void {
+  const s = editor();
+  const ids = selectedAudioIds(s);
+  if (ids.length === 0) return;
+  if (!repeat) s.endGesture();
+  moveSelectedAudio(dir * (big ? BIG_NUDGE_FRAMES : 1) * NUDGE_SEC, 0, { gestureKey: `audio-nudge:${ids.join(",")}` });
+}
+
+/** ⌥↑ / ⌥↓ and the menu: whether the selected audio clips have a row to go to (down always: a new row). */
+export function canMoveAudioRow(s: StitchEditorState, dir: 1 | -1): boolean {
+  const ids = new Set(selectedAudioIds(s));
+  if (!s.draft || ids.size === 0) return false;
+  return dir === 1 || s.draft.audioClips.every((c) => !ids.has(c.id) || c.row > 0);
+}
+
+/** ⌥↑ / ⌥↓ with audio selected: one row up or down; down from the last row makes a new row. */
+export function moveSelectedAudioRow(dir: 1 | -1): void {
+  moveSelectedAudio(0, dir);
+}
+
+/** The clip starts at `sec`: the Start well, [ and ]. One undo step, or one per gesture with opts.gestureKey. */
+export function setAudioClipStart(clipId: string, sec: number, opts?: { gestureKey?: string }): void {
+  const s = editor();
+  const clip = s.draft?.audioClips.find((c) => c.id === clipId);
+  if (!s.draft || !clip || !Number.isFinite(sec)) return;
+  const result = moveAudioClips(s.draft.audioClips, editorAudioLengthOf(s), [clipId], sec - clip.startSec, 0);
+  if (result.clips === s.draft.audioClips) return;
+  s.apply((d) => ({ ...d, audioClips: result.clips }), opts);
+  remapExpandedRow(result.rowMap);
+}
+
+/**
+ * ↑ / ↓ in the audio rail's Start well: 0.1 s (⇧: 1 s), one undo step until the well is left. Returns the start now
+ * stored, or null when nothing changed.
+ */
+export function nudgeAudioStartWell(dir: 1 | -1, big: boolean): number | null {
+  const s = editor();
+  const clip = singleAudioClip(s);
+  if (!clip) return null;
+  const before = s.draft?.audioClips;
+  setAudioClipStart(clip.id, clip.startSec + dir * (big ? BIG_START_STEP_SEC : START_STEP_SEC), {
+    gestureKey: `audio-start:${clip.id}`,
+  });
+  const after = editor();
+  if (after.draft?.audioClips === before) return null;
+  return after.draft?.audioClips.find((c) => c.id === clip.id)?.startSec ?? null;
+}
+
+/** [ and the menu, with audio selected: one audio clip is selected. */
+export function canStartAudioAtPlayhead(s: StitchEditorState): boolean {
+  return singleAudioClip(s) !== null;
+}
+
+/** ] and the menu: the selected audio clip's length is known and fits before the playhead. */
+export function canEndAudioAtPlayhead(s: StitchEditorState): boolean {
+  const clip = singleAudioClip(s);
+  if (!clip) return false;
+  const length = editorAudioLengthOf(s)(clip);
+  return Number.isFinite(length) && drawnPlayhead(s) - length >= -1e-9;
+}
+
+/** [ with audio selected: the clip starts at the playhead. */
+export function startSelectedAudioAtPlayhead(): void {
+  const s = editor();
+  const clip = singleAudioClip(s);
+  if (clip) setAudioClipStart(clip.id, drawnPlayhead(s));
+}
+
+/** ] with audio selected: the clip ends at the playhead; nothing when it would have to start before 0:00. */
+export function endSelectedAudioAtPlayhead(): void {
+  const s = editor();
+  const clip = canEndAudioAtPlayhead(s) ? singleAudioClip(s) : null;
+  if (clip) setAudioClipStart(clip.id, Math.max(0, drawnPlayhead(s) - editorAudioLengthOf(s)(clip)));
+}
+
+/** The rail's In and Out: the single selected audio clip, its sound kept in place (trimAudioClip). */
+export function trimSelectedAudio(patch: { inSec?: number; outSec?: number | null }): void {
+  const s = editor();
+  const clip = singleAudioClip(s);
+  if (!clip) return;
+  s.apply((d) => ({ ...d, audioClips: trimAudioClip(d.audioClips, s.audioDurations, clip.id, patch) }));
+}
+
+/** Reset trim: the whole file again, the sound kept in place. */
+export function resetSelectedAudioTrim(): void {
+  const s = editor();
+  const clip = singleAudioClip(s);
+  if (!clip) return;
+  s.apply((d) => ({ ...d, audioClips: resetAudioTrim(d.audioClips, s.audioDurations, clip.id) }));
+}
+
+/** I / O with audio selected: the clip's In or Out at the playhead, when the playhead is inside it. */
+export function setAudioEdgeAtPlayhead(edge: "in" | "out"): void {
+  const s = editor();
+  const span = singleAudioSpan(s);
+  const t = drawnPlayhead(s);
+  if (!span || span.length <= 0 || t < span.start || t > span.end) return;
+  if (edge === "out" ? t <= span.start : t >= span.end) return;
+  const at = span.clip.inSec + (t - span.start);
+  trimSelectedAudio(edge === "in" ? { inSec: at } : { outSec: at });
+}
+
+/** The cuts S would make: every selected audio clip under the playhead with room to split, in audio order. */
+function audioSplits(s: StitchEditorState): { clips: StitchAudioClip[]; rightIds: string[] } | null {
+  if (!s.draft) return null;
+  const t = drawnPlayhead(s);
+  let clips = s.draft.audioClips;
+  const rightIds: string[] = [];
+  for (const id of selectedAudioIds(s)) {
+    const split = splitAudioClipAt(clips, s.audioDurations, id, t);
+    if (!split) continue;
+    clips = split.clips;
+    rightIds.push(split.rightId);
+  }
+  return rightIds.length > 0 ? { clips, rightIds } : null;
+}
+
+/** Whether S would split a selected audio clip now. */
+export function canSplitAudioAtPlayhead(s: StitchEditorState): boolean {
+  return audioSplits(s) !== null;
+}
+
+/** S with audio selected: every selected audio clip under the playhead splits; the right pieces are selected. */
+export function splitSelectedAudioAtPlayhead(): void {
+  const s = editor();
+  const split = audioSplits(s);
+  if (!split) return;
+  s.apply((d) => ({ ...d, audioClips: split.clips }));
+  selectAudioClips(split.rightIds);
+}
+
+/**
+ * Removes the listed audio clips in one step, the rows closing up. The clip now at the first removed place (audio
+ * order) takes the selection. Returns the ids removed.
+ */
+export function removeAudioClipsById(ids: readonly string[]): string[] {
+  const s = editor();
+  if (!s.draft) return [];
+  const wanted = new Set(ids);
+  const index = s.draft.audioClips.findIndex((c) => wanted.has(c.id));
+  if (index === -1) return [];
+  const removed = s.draft.audioClips.filter((c) => wanted.has(c.id)).map((c) => c.id);
+  const { clips, rowMap } = removeAudioClips(s.draft.audioClips, wanted);
+  s.apply((d) => ({ ...d, audioClips: clips }));
+  remapExpandedRow(rowMap);
+  const neighbour = clips[Math.min(index, clips.length - 1)];
+  editor().select(neighbour ? audioSelectionOf({ clipId: neighbour.id }) : null);
+  return removed;
+}
+
+/**
+ * ⌫ with audio selected: the selected curve point if there is one; else nothing while the last press was on the
+ * curve (onCurve); else every selected audio clip.
+ */
+export function removeAudioSelection(): void {
+  const s = editor();
+  const selection = s.selection;
+  if (selection?.kind !== "audio") return;
+  // A point or a curve press counts only while the lead's curve is drawn for editing (its row expanded)
+  const leadRow = s.draft?.audioClips.find((c) => c.id === selection.clipId)?.row;
+  if (leadRow === s.audioExpandedRow) {
+    if (selection.point !== null) return removeSelectedPoint();
+    if (selection.onCurve) return;
+  }
+  editor().untagCut(removeAudioClipsById(selectedAudioIds(s)));
+}
+
+/** ⌫ with a curve point selected: removeAudioCurvePoint on the lead. */
+export function removeSelectedPoint(): void {
+  const selection = editor().selection;
+  if (selection?.kind === "audio" && selection.point !== null) removeAudioCurvePoint(selection.clipId, selection.point);
+}
+
+/**
+ * One point off a clip's curve (⌫, a double-click). The point before it is selected next, else the one after, so a
+ * second ⌫ removes the next point and never the clip. Not on a muted clip: it draws no curve.
+ */
+export function removeAudioCurvePoint(clipId: string, index: number): void {
+  const s = editor();
+  const clip = s.draft?.audioClips.find((c) => c.id === clipId);
+  if (!clip || clip.muted || index < 0 || index >= clip.curve.length) return;
+  const curve = removePoint(clip.curve, index);
+  s.apply((d) => ({ ...d, audioClips: setAudioClipCurve(d.audioClips, clipId, curve) }));
+  const point = index > 0 ? index - 1 : curve.length > 0 ? 0 : null;
+  editor().select(audioSelectionOf({ clipId }, point, true));
+}
+
+/** M or ⌥M with audio selected, and the menu's Mute: all muted, or all unmuted when every one already is. */
+export function toggleSelectedAudioMute(): void {
+  const s = editor();
+  const ids = new Set(selectedAudioIds(s));
+  if (!s.draft || ids.size === 0) return;
+  setSelectedAudioMuted(!s.draft.audioClips.filter((c) => ids.has(c.id)).every((c) => c.muted));
+}
+
+/** The rail's Clip sound, Mute all and Unmute all: every selected audio clip, one step. */
+export function setSelectedAudioMuted(muted: boolean): void {
+  const s = editor();
+  const ids = new Set(selectedAudioIds(s));
+  if (ids.size === 0) return;
+  s.apply((d) => ({ ...d, audioClips: setAudioClipsMuted(d.audioClips, ids, muted) }));
+  forgetPointOfMutedLead();
+}
+
+/** A row header's mute: every clip on the row, unmuted when all already are muted. */
+export function toggleRowMute(row: number): void {
+  const s = editor();
+  const onRow = s.draft?.audioClips.filter((c) => c.row === row) ?? [];
+  if (onRow.length === 0) return;
+  const muted = !onRow.every((c) => c.muted);
+  s.apply((d) => ({ ...d, audioClips: setAudioClipsMuted(d.audioClips, new Set(onRow.map((c) => c.id)), muted) }));
+  forgetPointOfMutedLead();
+}
+
+/** One curve gesture's result on an audio clip (a point added, moved or removed, the line moved), one undo step. */
+export function setAudioCurve(clipId: string, curve: VolumePoint[]): void {
+  editor().apply((d) => ({ ...d, audioClips: setAudioClipCurve(d.audioClips, clipId, curve) }));
+}
+
+/** The rail's Fade in, Fade out and Flat on the single selected audio clip: over the part one loop hears (D15). */
+function setSingleAudioCurve(curveOf: (span: AudioSpan, loopSec: number) => VolumePoint[]): void {
+  const s = editor();
+  const span = singleAudioSpan(s);
+  if (!span) return;
+  setAudioCurve(span.clip.id, curveOf(span, editorTotal(s)));
+}
+
+export function applyAudioFadeIn(): void {
+  setSingleAudioCurve((span, loopSec) => audioFadeIn(span.clip, span, loopSec));
+}
+
+export function applyAudioFadeOut(): void {
+  setSingleAudioCurve((span, loopSec) => audioFadeOut(span.clip, span, loopSec));
+}
+
+export function flattenAudioCurve(): void {
+  setSingleAudioCurve(() => flat());
+}
+
+/** Fade out needs the part one loop hears, so it waits for the file's length. */
+export function canFadeOutAudio(s: StitchEditorState): boolean {
+  const span = singleAudioSpan(s);
+  return span !== null && heardRange(span, editorTotal(s)) !== null;
+}
+
+/**
+ * A row header's volume-line toggle: that row expanded, or collapsed when it already is. Not an undo step. A lead
+ * whose row stops being the expanded one draws no editable curve, so its point and curve press are forgotten.
+ */
+export function toggleAudioRowExpanded(row: number): void {
+  const s = editor();
+  const expanded = s.audioExpandedRow === row ? null : row;
+  s.setAudioExpandedRow(expanded);
+  const selection = s.selection;
+  if (selection?.kind !== "audio" || (selection.point === null && !selection.onCurve)) return;
+  if (s.draft?.audioClips.find((c) => c.id === selection.clipId)?.row !== expanded) {
+    s.select({ ...selection, point: null, onCurve: false });
+  }
 }

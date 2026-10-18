@@ -20,6 +20,7 @@ import {
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useShallow } from "zustand/shallow";
 import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
+import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { draftDuration, draftSpans, readStitchDraft, type StitchReadContext } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchOrderPatch } from "@/lib/stitch/migrate";
 import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from "@/lib/stitch/sources";
@@ -116,10 +117,10 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
 
   // The sequence, migrated and reconciled on read (never written just by reading).
   // Keyed on the fields it reads, so a status or output write keeps the same tiles.
-  const { timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout } = nodeData;
+  const { timeline, clipOrder, audioCurve, audioMuted, audioClips, loopCount, sequenceLayout } = nodeData;
   const draft = useMemo(
-    () => readStitchDraft({ timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout }, readContext),
-    [timeline, clipOrder, audioCurve, audioMuted, loopCount, sequenceLayout, readContext]
+    () => readStitchDraft({ timeline, clipOrder, audioCurve, audioMuted, audioClips, loopCount, sequenceLayout }, readContext),
+    [timeline, clipOrder, audioCurve, audioMuted, audioClips, loopCount, sequenceLayout, readContext]
   );
 
   // Write back only when the edges changed what is stored: a legacy node keeps
@@ -226,6 +227,10 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
     if (!spans.some((span) => span.overlapIn > 0)) return [];
     return [`${formatSeconds(layout.overlapSec, 1)} ${layout.crossfade ? "crossfade" : "overlap"}`];
   }, [draft, durations]);
+  // Audio that is more than the music alone, whole from 0:00, is counted (it also loops by the new rule)
+  const audioItem = isLegacyAudioShape(draft.audioClips)
+    ? []
+    : [`${draft.audioClips.length} audio clip${draft.audioClips.length === 1 ? "" : "s"}`];
   // The length is shown once it is settled: every clip with a source read
   // (or found unreadable) and at least one length known. Until then it would
   // read 0:00 and count up as each source is probed.
@@ -411,11 +416,17 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
             icon: SUMMARY_ICON,
             title: `${clipCount} clip${clipCount === 1 ? "" : "s"}`,
             // One loop, in m:ss as the scrub row reads the stitched video, so the two agree at 1×. The clip count stays
-            // whole: a placed stack's longer values give way first, cut at their end
+            // whole: a placed stack's longer values give way first, cut at their end. The audio count comes last, so
+            // the loop count stays in view
             values: (
               <SummaryValues
                 truncate
-                items={[sequenceSettled ? formatTime(sequenceSec) : "", ...stackedItem, `loop ${draft.loopCount}×`]}
+                items={[
+                  sequenceSettled ? formatTime(sequenceSec) : "",
+                  ...stackedItem,
+                  `loop ${draft.loopCount}×`,
+                  ...audioItem,
+                ]}
               />
             ),
             className: "grid-cols-[16px_max-content_minmax(0,1fr)_auto]",

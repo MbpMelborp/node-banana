@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/shallow";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -7,13 +7,15 @@ import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMedi
 import { modelLabel, operationLabel } from "@/components/assets/assetFormat";
 import { assetFileUrl } from "@/lib/assets/client/api";
 import type { AssetView } from "@/lib/assets/types";
+import { audioSourceKey, type AudioSourceKey } from "@/lib/stitch/audioClips";
 import { nodeKindLabel, nodeModelLabel } from "@/lib/stitch/labels";
 import { assetMediaKey, mediaKeyOf, retryMediaInfo } from "@/lib/stitch/mediaInfo";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { edgeClipSourcesFromTuple, edgeClipSourceTuple, stitchMusicEdge, stitchMusicMedia } from "@/lib/stitch/sources";
 import { sourceKey, type SourceKey } from "@/lib/stitch/timeline";
 import { formatSeconds } from "@/lib/stitch/timecode";
-import type { AudioInputNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { getWaveform, requestWaveform, subscribeWaveform } from "@/lib/stitch/waveformCache";
+import type { AudioInputNodeData, StitchAudioSource, WorkflowEdge, WorkflowNode } from "@/types";
 
 /**
  * What the editor shows for each clip of its draft, read live from the
@@ -47,12 +49,29 @@ export interface ClipMediaView {
   missing: boolean;
 }
 
-export interface MusicView {
+/** What the editor shows for one audio clip, read like ClipMediaView. */
+export interface AudioClipView {
+  clipId: string;
+  key: AudioSourceKey;
+  source: StitchAudioSource;
+  /** What an <audio> plays: the connected music, or the library file. null: no music is connected or delivered. */
   src: string | null;
+  /** The waveform cache's key for src. */
   mediaKey: string | null;
+  /** The music's file name, or the library file's. */
   fileName: string;
+  /** Label bar: the music's node kind ("Audio Input"); a library clip's model, else what made it, else "Library". */
   sourceLabel: string;
-  sourceNodeId: string | null;
+  /** "Audio Input · 20.00 s"; "Library · Kling 3 · 3.00 s". */
+  railSubtitle: string;
+  /** The decoded file's length (the encoder's decode); null until then, and for a file that cannot be read. */
+  duration: number | null;
+  /** The library record's length, used for drawing and overlap checks until the decode; null when it has none. */
+  recordDuration: number | null;
+  /** empty: no music connected; error: the file cannot be decoded. */
+  status: "empty" | "loading" | "ready" | "error";
+  /** A library clip the library no longer has. */
+  missing: boolean;
 }
 
 const NO_FRAMES: ReadonlyArray<string | null> = [];
@@ -92,10 +111,21 @@ function musicSourceTuple(nodeId: string, nodes: WorkflowNode[], edges: Workflow
   return [node.id, fileName || "Audio", nodeKindLabel(node)];
 }
 
-export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaView>; music: MusicView | null } {
+/** One waveform's state as a primitive, for a snapshot over several keys. */
+function waveformState(key: string): string {
+  const waveform = getWaveform(key);
+  return waveform ? `${waveform.status}:${waveform.duration ?? ""}` : "";
+}
+
+export function useStitchEditorMedia(): {
+  byClip: ReadonlyMap<string, ClipMediaView>;
+  audioByClip: ReadonlyMap<string, AudioClipView>;
+} {
   const nodeId = useStitchEditorStore((s) => s.nodeId);
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);
+  const audioClips = useStitchEditorStore((s) => s.draft?.audioClips);
   const setDurations = useStitchEditorStore((s) => s.setDurations);
+  const setAudioDurations = useStitchEditorStore((s) => s.setAudioDurations);
 
   const edgeTuple = useWorkflowStore(
     useShallow((s) => (nodeId ? edgeClipSourceTuple(nodeId, s.nodes, s.edges, s.dimmedNodeIds) : EMPTY)),
@@ -143,8 +173,11 @@ export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaV
   );
 
   const assetIds = useMemo(
-    () => (timeline ?? []).flatMap((clip) => (clip.source.kind === "asset" ? [clip.source.assetId] : [])),
-    [timeline],
+    () =>
+      [...(timeline ?? []), ...(audioClips ?? [])].flatMap((clip) =>
+        clip.source.kind === "asset" ? [clip.source.assetId] : [],
+      ),
+    [timeline, audioClips],
   );
   const assets = useStitchAssetInfo(assetIds);
 
@@ -217,17 +250,86 @@ export function useStitchEditorMedia(): { byClip: ReadonlyMap<string, ClipMediaV
     if (!same) setDurations(next);
   }, [byClip, setDurations]);
 
-  const music = useMemo<MusicView | null>(() => {
-    if (musicTuple.length === 0 && !musicMedia) return null;
-    const [sourceNodeId, fileName, kind] = musicTuple;
-    return {
-      src: musicMedia,
-      mediaKey: musicMedia ? mediaKeyOf(musicMedia) : null,
-      fileName: fileName ?? "Audio",
-      sourceLabel: kind ?? "Audio",
-      sourceNodeId: sourceNodeId ?? null,
-    };
-  }, [musicTuple, musicMedia]);
+  // Every audio source in the draft is decoded, rows scrolled out of view too, so every length is known. A file the
+  // library is known no longer to have is not asked for
+  const audioSources = useMemo(() => {
+    const sources = new Map<AudioSourceKey, { src: string | null; mediaKey: string | null }>();
+    for (const clip of audioClips ?? []) {
+      const key = audioSourceKey(clip.source);
+      if (sources.has(key)) continue;
+      const src = clip.source.kind === "music" ? musicMedia : assetFileUrl(clip.source.assetId);
+      sources.set(key, { src, mediaKey: src ? mediaKeyOf(src) : null });
+    }
+    return sources;
+  }, [audioClips, musicMedia]);
+  const wanted = useMemo(
+    () =>
+      [...audioSources].flatMap(([key, { src, mediaKey }]) =>
+        src && mediaKey && !(key.startsWith("asset:") && assets.get(key.slice("asset:".length)) === null)
+          ? [{ src, mediaKey }]
+          : [],
+      ),
+    [audioSources, assets],
+  );
+  const wantedKey = wanted.map((w) => `${w.mediaKey}\t${w.src}`).join("\n");
+  useEffect(() => {
+    for (const { mediaKey, src } of wanted) requestWaveform(mediaKey, src);
+    // The keys are the sources' identity
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantedKey]);
+  const waveformKeys = useMemo(
+    () => [...audioSources.values()].flatMap(({ mediaKey }) => (mediaKey ? [mediaKey] : [])),
+    [audioSources],
+  );
+  const waveformSnapshot = useCallback(() => waveformKeys.map(waveformState).join("|"), [waveformKeys]);
+  const waveforms = useSyncExternalStore(subscribeWaveform, waveformSnapshot, waveformSnapshot);
 
-  return { byClip, music };
+  const audioByClip = useMemo(() => {
+    const views = new Map<string, AudioClipView>();
+    const [, musicFileName, musicKind] = musicTuple;
+    for (const clip of audioClips ?? []) {
+      const key = audioSourceKey(clip.source);
+      const { src, mediaKey } = audioSources.get(key) ?? { src: null, mediaKey: null };
+      const waveform = mediaKey ? getWaveform(mediaKey) : undefined;
+      const asset = clip.source.kind === "asset" ? assets.get(clip.source.assetId) : undefined;
+      // As for video clips: a stale "missing" flag on a file that decodes is not missing
+      const missing =
+        clip.source.kind === "asset" && (asset === null || (asset?.missing === true && waveform?.status !== "ready"));
+      const duration = waveform?.status === "ready" && !missing ? waveform.duration : null;
+      const recordDuration = typeof asset?.durationSec === "number" ? asset.durationSec : null;
+      const length = duration ?? recordDuration;
+      const kind = clip.source.kind === "music" ? musicKind || "Audio" : LIBRARY;
+      const model = clip.source.kind === "asset" ? assetSourceLabel(asset) : null;
+      views.set(clip.id, {
+        clipId: clip.id,
+        key,
+        source: clip.source,
+        src,
+        mediaKey,
+        fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || "Audio",
+        sourceLabel: model ?? kind,
+        railSubtitle: [kind, model !== kind ? model : null, length !== null ? formatSeconds(length) : null]
+          .filter(Boolean)
+          .join(" · "),
+        duration,
+        recordDuration,
+        status: !src ? "empty" : (waveform?.status ?? "loading"),
+        missing,
+      });
+    }
+    return views;
+    // waveforms: the cache changed, so read it again
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioClips, audioSources, assets, musicTuple, waveforms]);
+
+  // The decoded lengths go to the store's own map, so video layouts do not recompute when audio loads
+  useEffect(() => {
+    const next = new Map<AudioSourceKey, number>();
+    for (const view of audioByClip.values()) if (view.duration !== null) next.set(view.key, view.duration);
+    const current = useStitchEditorStore.getState().audioDurations;
+    const same = current.size === next.size && [...next].every(([key, value]) => current.get(key) === value);
+    if (!same) setAudioDurations(next);
+  }, [audioByClip, setAudioDurations]);
+
+  return { byClip, audioByClip };
 }

@@ -6,11 +6,13 @@ import {
   pastableItems,
   pasteIntoTimeline,
   skippedMessage,
+  type ClipboardAudioItem,
   type ClipboardOrigin,
   type ClipboardVideoItem,
   type PasteTarget,
   type StitchClipboard,
 } from "../clipboard";
+import { copyAudioItems, createAudioClip } from "../audioClips";
 import {
   createClip,
   layoutSpans,
@@ -148,6 +150,68 @@ describe("pastableItems and skippedMessage", () => {
       "3 clips not pasted: their videos are no longer connected.",
     );
     expect(skippedMessage([])).toBeNull();
+  });
+});
+
+describe("audio items", () => {
+  const audio = (source: ClipboardAudioItem["source"], offsetSec = 0, rowOffset = 0): ClipboardAudioItem => ({
+    track: "audio",
+    source,
+    inSec: 0,
+    outSec: null,
+    muted: false,
+    curve: [],
+    offsetSec,
+    rowOffset,
+  });
+  const clipboard: StitchClipboard = {
+    origin: ORIGIN,
+    items: [audio({ kind: "asset", assetId: "atone00000001" }), audio({ kind: "music" }, 2, 1), audio({ kind: "music" }, 3, 2)],
+  };
+  const own: PasteTarget = { kind: "node", nodeId: "n1", tabId: "t1", workflowId: "w1", liveEdgeIds: [] };
+
+  it("copies offsets from the earliest start and row offsets from the top row", () => {
+    const clips = [
+      createAudioClip({ kind: "music" }, { id: "m", row: 1, startSec: 4 }),
+      createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id: "t", row: 3, startSec: 1.5, inSec: 0.5, outSec: 2 }),
+    ];
+    expect(copyAudioItems(clips, ["t", "m"])).toEqual([
+      { ...audio({ kind: "music" }, 2.5, 0) },
+      { ...audio({ kind: "asset", assetId: "atone00000001" }, 0, 2), inSec: 0.5, outSec: 2 },
+    ]);
+  });
+
+  it("pastes library audio anywhere, and music only into its own node, whether or not it is connected", () => {
+    expect(pastableItems(clipboard, own)).toEqual({ items: clipboard.items, skipped: [] });
+    for (const other of [
+      { ...own, nodeId: "n2" },
+      { ...own, tabId: "t2" },
+      { ...own, workflowId: "w2" },
+      { ...own, workflowId: null },
+    ]) {
+      expect(pastableItems(clipboard, other)).toEqual({
+        items: [clipboard.items[0]],
+        skipped: [{ reason: "music", count: 2 }],
+      });
+    }
+  });
+
+  it("words the music reason, after the others", () => {
+    expect(skippedMessage([{ reason: "music", count: 1 }])).toBe(
+      "1 music clip not pasted: music clips paste only into their own node.",
+    );
+    expect(skippedMessage([{ reason: "music", count: 2 }])).toBe(
+      "2 music clips not pasted: music clips paste only into their own node.",
+    );
+    expect(
+      skippedMessage([
+        { reason: "otherNode", count: 1 },
+        { reason: "disconnected", count: 2 },
+        { reason: "music", count: 1 },
+      ]),
+    ).toBe(
+      "1 clip not pasted: clips from connected videos paste only into their own node. 2 clips not pasted: their videos are no longer connected. 1 music clip not pasted: music clips paste only into their own node.",
+    );
   });
 });
 

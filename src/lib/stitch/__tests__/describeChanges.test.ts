@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StitchTimelineClip } from "@/types";
 import { describeDraftChanges, type ClipOrigin, type StitchDraft } from "../draft";
+import { createAudioClip, legacyMusicClip } from "../audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import {
   createClip,
@@ -17,8 +18,8 @@ const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}
 
 const draft = (timeline: StitchTimelineClip[], rest: Partial<StitchDraft> = {}): StitchDraft => ({
   timeline,
-  audioCurve: [],
-  audioMuted: false,
+  audioClips: [],
+  legacyAudio: { curve: [], muted: false },
   loopCount: 1,
   sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
   ...rest,
@@ -35,14 +36,14 @@ const durations = new Map<SourceKey, number>([
 describe("describeDraftChanges", () => {
   it("reads the board's sentence", () => {
     const edited = draft([clip("b", "e2", { inSec: 1 }), clip("a", "e1", { outSec: 3 }), clip("c", "e3")], {
-      audioCurve: [{ t: 2, gain: 0.25 }],
+      legacyAudio: { curve: [{ t: 2, gain: 0.25 }], muted: false },
     });
     expect(describeDraftChanges(base, edited)).toBe(`Two trims, a new order and the volume curve${LOST}`);
   });
 
   it("uses the singular with its article", () => {
     const edited = draft([clip("a", "e1", { inSec: 1, muted: true, volume: 0.5 }), clip("b", "e2"), clip("c", "e3")], {
-      audioMuted: true,
+      legacyAudio: { curve: [], muted: true },
       loopCount: 2,
     });
     expect(describeDraftChanges(base, edited)).toBe(
@@ -188,12 +189,33 @@ describe("describeDraftChanges", () => {
         [base, draft([clip("b", "e2", { inSec: 1 }), clip("a", "e1", { outSec: 3 }), clip("c", "e3")])],
         [base, draft(splitClipAt(base.timeline, durations, 2, () => "a2")!.timeline)],
         [base, draft([clip("a", "e1", { outSec: 2 }), clip("a2", "e1", { inSec: 2 }), clip("x", "e9")])],
-        [base, draft([], { loopCount: 3, audioMuted: true })],
+        [base, draft([], { loopCount: 3, legacyAudio: { curve: [], muted: true } })],
         [base, base],
       ];
       for (const [initial, edited] of fixtures) {
         expect(describeDraftChanges(initial, edited, durations, new Map())).toBe(describeDraftChanges(initial, edited, durations));
       }
+    });
+  });
+
+  describe("audio clips", () => {
+    const withMusic = draft(base.timeline, { audioClips: [legacyMusicClip([], false)] });
+    const tone = createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id: "t1", row: 1, startSec: 2 });
+
+    it("names a music clip's curve and mute as audio-clip changes", () => {
+      const edited = draft(base.timeline, { audioClips: [legacyMusicClip([{ t: 1, gain: 0.5 }], true)] });
+      expect(describeDraftChanges(withMusic, edited)).toBe(`A muted audio clip and the volume curve${LOST}`);
+    });
+
+    it("names an added and a pasted audio clip after the video's parts, before the loop count", () => {
+      const pasted = { ...tone, id: "p1", row: 2 };
+      const edited = draft([clip("a", "e1", { inSec: 1 }), clip("b", "e2"), clip("c", "e3")], {
+        audioClips: [legacyMusicClip([], false), tone, pasted],
+        loopCount: 2,
+      });
+      expect(describeDraftChanges(withMusic, edited, durations, new Map([["p1", "pasted" as const]]))).toBe(
+        `A trim, an added audio clip, a pasted audio clip and the loop count${LOST}`,
+      );
     });
   });
 });

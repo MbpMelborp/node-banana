@@ -6,6 +6,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { Segmented, Slider, Switch } from "@/components/ui/Controls";
 import { DialogPaneRule, DialogSectionHeader } from "@/components/ui/Dialog";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { clipIdsOf } from "@/lib/stitch/selection";
@@ -28,11 +29,11 @@ import {
   splitBlockedReason,
   trimSelected,
 } from "./editorActions";
-import { AudioTrackRail } from "./AudioTrackRail";
+import { AudioClipRail } from "./AudioClipRail";
 import { FrameToCanvasButton } from "./FrameToCanvasButton";
 import { KeyHints, RailButton, RailRow } from "./railParts";
 import { TimecodeField } from "./TimecodeField";
-import type { ClipMediaView, MusicView } from "./useStitchEditorMedia";
+import type { AudioClipView, ClipMediaView } from "./useStitchEditorMedia";
 
 const LOOP_OPTIONS = [
   { value: "1", label: "1×" },
@@ -79,22 +80,21 @@ function clipNamesLine(indices: readonly number[]): string {
  * The 280px rail beside the stage: the selected clip's name and source,
  * in Stacked where it starts on the timeline, its trim as In and Out
  * wells, its own sound, the clip actions with the trim keys, and the loop
- * count in the footer. With the audio track selected it shows the track
- * instead (AudioTrackRail), and with several clips what applies to all of
- * them (MultiClipRail). Frame to canvas sits under the body, whatever is
- * selected, so it never moves when the body swaps or scrolls.
+ * count in the footer. With audio clips selected it shows them instead
+ * (AudioClipRail), and with several video clips what applies to all of them
+ * (MultiClipRail). Frame to canvas sits under the body, whatever is
+ * selected, so it never moves when the body swaps or scrolls. While the
+ * loop repeats audio clips, a line over the loop row says so.
  */
 export function EditorRail({
   media,
-  music,
-  total,
+  audio,
   spans,
   frameSize,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
-  music: MusicView | null;
-  /** One loop of the sequence, seconds. */
-  total: number;
+  /** Each audio clip's view. */
+  audio: ReadonlyMap<string, AudioClipView>;
   spans: readonly ClipSpan[];
   /** The header's size; null while no clip is ready with one. */
   frameSize: { width: number; height: number } | null;
@@ -126,8 +126,15 @@ export function EditorRail({
     if (!stacked || !draft || !clipId) return null;
     return draftSpans(draft, durations).find((span) => span.clip.id === clipId)?.start ?? null;
   }, [stacked, draft, durations, clipId]);
-  // The lane's rule (Timeline): the track shows only with music under a sequence with some length
-  const audio = selection?.kind === "audio" && music !== null && total > 0;
+  const selectedAudio = useMemo(() => {
+    if (selection?.kind !== "audio" || !draft) return [];
+    const ids = new Set(clipIdsOf(selection, draft.audioClips.map((c) => c.id)));
+    // The lead first: the single-clip rail is the lead's
+    return draft.audioClips.filter((c) => ids.has(c.id));
+  }, [selection, draft]);
+  const audioSelected = selectedAudio.length > 0;
+  // The loop rule is the new one once the audio is anything but the music alone, whole, from 0:00
+  const loopRepeatsAudio = (draft?.loopCount ?? 1) > 1 && draft !== null && !isLegacyAudioShape(draft.audioClips);
 
   // A swap of the rail's body (the last clip removed, the track for a clip or back, Overlap and Crossfade coming or going
   // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
@@ -136,17 +143,17 @@ export function EditorRail({
     if (active === null || active === document.body) {
       railRef.current?.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
     }
-  }, [hasClip, audio, stacked, multi]);
+  }, [hasClip, audioSelected, stacked, multi]);
 
   return (
     <aside
       ref={railRef}
-      aria-label={audio ? "Audio track" : "Clip"}
+      aria-label={audioSelected ? "Audio clip" : "Clip"}
       className="w-[280px] shrink-0 flex flex-col border-l border-chrome-border/50 bg-editor-chrome"
     >
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-        {audio ? (
-          <AudioTrackRail music={music} total={total} />
+        {audioSelected ? (
+          <AudioClipRail clips={selectedAudio} views={audio} />
         ) : multi && draft ? (
           <MultiClipRail
             timeline={draft.timeline}
@@ -285,10 +292,17 @@ export function EditorRail({
         <FrameToCanvasButton media={media} spans={spans} frameSize={frameSize} />
       </div>
 
+      {/* Over the loop row, so showing it moves nothing under a press on the loop */}
+      {loopRepeatsAudio && (
+        <p className="shrink-0 border-t border-chrome-border/50 px-5 pt-2.5 text-[11px] leading-[14px] text-neutral-500">
+          Each loop plays the audio clips again from their start.
+        </p>
+      )}
       {/* Inert with nothing to loop, like the transport beside it */}
       <div
         className={cn(
-          "h-11 shrink-0 flex items-center justify-between px-5 border-t border-chrome-border/50",
+          "h-11 shrink-0 flex items-center justify-between px-5",
+          !loopRepeatsAudio && "border-t border-chrome-border/50",
           empty && "opacity-50 pointer-events-none",
         )}
         inert={empty}

@@ -120,6 +120,7 @@ function openPicker({
   clips = 2,
   clipSec = 4,
   sequenceLayout = TRACK_LAYOUT as StitchSequenceLayout,
+  kind = "video" as "video" | "audio",
 } = {}) {
   useWorkflowStore.setState({ workflowId });
   act(() => {
@@ -127,8 +128,8 @@ function openPicker({
       nodeId: "stitch",
       draft: {
         timeline: Array.from({ length: clips }, (_, i) => createClip({ kind: "edge", edgeId: `e${i}` }, { id: `c${i}` })),
-        audioCurve: [],
-        audioMuted: false,
+        audioClips: [],
+        legacyAudio: { curve: [], muted: false },
         loopCount: 1,
         sequenceLayout,
       },
@@ -137,7 +138,7 @@ function openPicker({
     editor().setDurations(
       new Map(Array.from({ length: clips }, (_, i) => [sourceKey({ kind: "edge", edgeId: `e${i}` }), clipSec])),
     );
-    editor().setPickerOpen(true);
+    editor().setPickerOpen(kind);
   });
   return render(<LibraryPicker />);
 }
@@ -292,7 +293,7 @@ describe("LibraryPicker", () => {
     const menu = screen.getByRole("menu", { name: "Sort: Newest first" });
     fireEvent.keyDown(within(menu).getByRole("menuitemradio", { name: "Newest first" }), { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
-    expect(editor().pickerOpen).toBe(true);
+    expect(editor().pickerOpen).toBe("video");
     fireEvent.click(within(dialog()).getByRole("button", { name: "Sort: Newest first" }));
     fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "Oldest first" }));
     await waitFor(() => expect(lastRequest()).toMatchObject({ sort: "oldest" }));
@@ -548,7 +549,7 @@ describe("LibraryPicker", () => {
     // Chromium sends the click to the common ancestor: the scrim
     fireEvent.pointerDown(within(dialog()).getByRole("textbox", { name: "Search videos" }));
     fireEvent.click(scrim);
-    expect(editor().pickerOpen).toBe(true);
+    expect(editor().pickerOpen).toBe("video");
     expect(within(dialog()).getByText("1 selected")).toBeInTheDocument();
     fireEvent.pointerDown(scrim);
     fireEvent.click(scrim);
@@ -623,7 +624,7 @@ describe("LibraryPicker over the editor", () => {
     await waitFor(() => expect(document.activeElement).toBe(headerAdd));
 
     fireEvent.click(screen.getByTestId("stitch-add-slot"));
-    expect(editor().pickerOpen).toBe(true);
+    expect(editor().pickerOpen).toBe("video");
   });
 
   it("offers Add from library until the library is known to be off, then turns every entry point off", async () => {
@@ -652,7 +653,7 @@ describe("LibraryPicker over the editor", () => {
       expect(screen.getByTestId("stitch-add-slot")).toBeDisabled();
       expect(screen.getByTestId("stitch-add-slot")).toHaveAttribute("title", "The asset library is off");
       // The picker, if it is up all the same, asks nothing
-      act(() => editor().setPickerOpen(true));
+      act(() => editor().setPickerOpen("video"));
       expect(within(dialog()).getByText("The asset library is off.")).toBeInTheDocument();
       expect(api.fetchAssetPage).not.toHaveBeenCalled();
       act(() => editor().setPickerOpen(false));
@@ -666,5 +667,87 @@ describe("LibraryPicker over the editor", () => {
     }
     expect(screen.getByTestId("stitch-empty-lane")).toBeEnabled();
     expect(screen.getByTestId("stitch-empty-lane").querySelector("svg")).not.toBeNull();
+  });
+
+  describe("set to audio", () => {
+    const audioAsset = (id: string, durationSec: number) =>
+      asset(id, {
+        kind: "audio",
+        mime: "audio/mp4",
+        ext: "m4a",
+        filename: `${id}.m4a`,
+        width: undefined,
+        height: undefined,
+        durationSec,
+        hasPoster: false,
+      });
+    const audioDialog = () => screen.getByRole("dialog", { name: "Add audio from the library" });
+    const audioTile = (file: string) => within(audioDialog()).getByRole("button", { name: named(file) });
+
+    beforeEach(() => {
+      api.fetchAssetPage.mockResolvedValue(page([audioAsset("t1", 3), audioAsset("t2", 9)]));
+    });
+
+    it("lists the library's audio, with its own copy, and asks for no poster", async () => {
+      poster.ensurePoster.mockClear();
+      openPicker({ kind: "audio" });
+      expect(await within(audioDialog()).findByRole("button", { name: named("t1.m4a") })).toBeInTheDocument();
+      expect(api.fetchAssetPage.mock.calls[0][0]).toEqual({ kinds: ["audio"], limit: 60 });
+      expect(
+        within(audioDialog()).getByText(
+          "Audio saved in your Node Banana folder. Each picked file goes on a new audio row, starting at the playhead.",
+        ),
+      ).toBeInTheDocument();
+      expect(within(audioDialog()).getByRole("textbox", { name: "Search audio" })).toHaveAttribute(
+        "placeholder",
+        "Search audio",
+      );
+      expect(within(audioDialog()).getByText("Audio")).toBeInTheDocument();
+      // The audio placeholder, not a thumbnail
+      expect(audioTile("t1.m4a").querySelector("img")).toBeNull();
+      expect(poster.ensurePoster).not.toHaveBeenCalled();
+      expect(within(audioDialog()).getByText("Pick audio files to add")).toBeInTheDocument();
+    });
+
+    it("puts each picked file on a new row at the playhead, in one step, the first selected", async () => {
+      openPicker({ kind: "audio" });
+      act(() => editor().setPlayhead(2.5));
+      await within(audioDialog()).findByRole("button", { name: named("t1.m4a") });
+      fireEvent.click(audioTile("t2.m4a"));
+      expect(within(audioDialog()).getByText("starts at 0:02.50 on a new row")).toBeInTheDocument();
+      fireEvent.click(audioTile("t1.m4a"));
+      expect(within(audioDialog()).getByText("each starts at 0:02.50 on a new row")).toBeInTheDocument();
+      expect(within(audioDialog()).getByText("0:12.00")).toBeInTheDocument();
+      const before = editor().past.length;
+      fireEvent.click(within(audioDialog()).getByRole("button", { name: "Add 2 audio clips" }));
+      const clips = editor().draft!.audioClips;
+      expect(clips.map((c) => [c.source, c.row, c.startSec])).toEqual([
+        [{ kind: "asset", assetId: "t2" }, 0, 2.5],
+        [{ kind: "asset", assetId: "t1" }, 1, 2.5],
+      ]);
+      expect(editor().draft!.timeline).toHaveLength(2);
+      expect(editor().past.length).toBe(before + 1);
+      expect(editor().selection).toMatchObject({ kind: "audio", clipId: clips[0].id });
+      expect(editor().pickerOpen).toBe(false);
+      expect(getAssetInfo("t2")?.filename).toBe("t2.m4a");
+    });
+
+    it("says when the library has no audio, and when nothing matches", async () => {
+      api.fetchAssetPage.mockResolvedValue(page([]));
+      openPicker({ kind: "audio" });
+      expect(await within(audioDialog()).findByText("No audio in the library yet")).toBeInTheDocument();
+      fireEvent.click(within(audioDialog()).getByRole("button", { name: "Favourites" }));
+      expect(await within(audioDialog()).findByText("No audio matches")).toBeInTheDocument();
+    });
+
+    it("opens from + Add audio under the audio rows", async () => {
+      render(<StitchEditorModal />);
+      act(() => {
+        openStitchEditor("stitch");
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add audio" }));
+      expect(editor().pickerOpen).toBe("audio");
+      expect(await within(audioDialog()).findByRole("button", { name: named("t1.m4a") })).toBeInTheDocument();
+    });
   });
 });

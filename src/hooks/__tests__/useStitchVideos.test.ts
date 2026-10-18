@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, type Mock } from "vitest";
 import { checkEncoderSupport, stitchVideosAsync } from "../useStitchVideos";
+import type { StitchAudioClip } from "@/types";
+import { splitAudioClipAt } from "@/lib/stitch/audioClips";
+import type { StitchAudioClipInput } from "@/lib/stitch/engineTypes";
+
+/** The mixer as it is, with its two format choices watched. */
+const mix = vi.hoisted(() => ({ chooseMasterFormat: vi.fn(), chooseLayerMasterFormat: vi.fn() }));
+vi.mock("@/lib/stitch/audioMix", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/stitch/audioMix")>();
+  mix.chooseMasterFormat.mockImplementation(actual.chooseMasterFormat);
+  mix.chooseLayerMasterFormat.mockImplementation(actual.chooseLayerMasterFormat);
+  return { ...actual, chooseMasterFormat: mix.chooseMasterFormat, chooseLayerMasterFormat: mix.chooseLayerMasterFormat };
+});
 
 // ---- AudioBuffer polyfill for jsdom ----
 class MockAudioBuffer {
@@ -710,6 +722,149 @@ describe("useStitchVideos", () => {
       it("refuses a sequence in which every clip is empty", async () => {
         const a = source("a", { duration: 2 });
         await expect(stitchVideosAsync([clip(a, { inSec: 3 })])).rejects.toThrow("Nothing to render: every clip is empty");
+      });
+
+      describe("audio clips", () => {
+        /** A decoded audio file, sample i of channel c = fill(i, c). */
+        function decodedAudio(sampleRate: number, seconds: number, fill: (i: number, c: number) => number, channels = 1) {
+          const buffer = new MockAudioBuffer({ length: Math.round(seconds * sampleRate), numberOfChannels: channels, sampleRate });
+          for (let c = 0; c < channels; c++) {
+            const data = buffer.getChannelData(c);
+            for (let i = 0; i < data.length; i++) data[i] = fill(i, c);
+          }
+          return { buffer: buffer as unknown as AudioBuffer, duration: seconds };
+        }
+        const layer = (audio: ReturnType<typeof decodedAudio>, init: Partial<Omit<StitchAudioClipInput, "audio">> = {}): StitchAudioClipInput => ({
+          audio,
+          startSec: 0,
+          inSec: 0,
+          outSec: null,
+          curve: [],
+          ...init,
+        });
+        const silentVideo = (seconds: number) => clip(source("v", { duration: seconds, level: null }));
+
+        it("leaves the mixer's calls as they were without audioClips", async () => {
+          const a = source("a", { level: 0.5 });
+          const music = decodedAudio(SR / 2, 1, () => 0.25);
+          await stitchVideosAsync([clip(a)], { audio: music, curve: [], muted: false });
+          expect(mix.chooseMasterFormat).toHaveBeenCalledTimes(1);
+          expect(mix.chooseMasterFormat).toHaveBeenCalledWith({ sampleRate: SR / 2, channels: 1 }, [{ sampleRate: SR, channels: 1 }]);
+          expect(mix.chooseLayerMasterFormat).not.toHaveBeenCalled();
+        });
+
+        it("ignores the music argument when audioClips are given, and chooses the format from the clips' sources", async () => {
+          const music = decodedAudio(SR, 1, () => 0.25);
+          const tone = decodedAudio(SR, 1, () => 0.5);
+          await stitchVideosAsync([silentVideo(1)], { audio: music, curve: [], muted: false }, undefined, undefined, {
+            audioClips: [layer(tone)],
+          });
+          expect(mix.chooseMasterFormat).not.toHaveBeenCalled();
+          expect(mix.chooseLayerMasterFormat).toHaveBeenCalledWith([{ sampleRate: SR, channels: 1 }], []);
+          expect(encodedSound().every((v) => Math.abs(v - 0.5) < 1e-6)).toBe(true);
+        });
+
+        it("gives an audio track when every video clip is muted and one audio clip plays", async () => {
+          const a = source("a", { level: 0.5 });
+          const tone = decodedAudio(SR, 0.5, () => 0.5);
+          await stitchVideosAsync([clip(a, { muted: true })], null, undefined, undefined, { audioClips: [layer(tone, { startSec: 0.25 })] });
+          expect(mockAddAudioTrack).toHaveBeenCalled();
+          const sound = encodedSound();
+          expect(sound).toHaveLength(SR);
+          expect(sound.slice(0, 250).every((v) => v === 0)).toBe(true);
+          expect(sound.slice(250, 750).every((v) => Math.abs(v - 0.5) < 1e-6)).toBe(true);
+          expect(sound.slice(750).every((v) => v === 0)).toBe(true);
+        });
+
+        it("adds no audio track for a clip that starts after the loop ends", async () => {
+          const tone = decodedAudio(SR, 1, () => 0.5);
+          await stitchVideosAsync([silentVideo(1)], null, undefined, undefined, { audioClips: [layer(tone, { startSec: 1.5 })] });
+          expect(mockAddAudioTrack).not.toHaveBeenCalled();
+        });
+
+        it("plays the same audio each loop, cut at the loop's end", async () => {
+          const tone = decodedAudio(SR, 3, (i) => (i < 1000 ? 0.5 : 0.25));
+          await stitchVideosAsync([silentVideo(1)], null, undefined, undefined, { loopCount: 2, audioClips: [layer(tone, { startSec: 0.5 })] });
+          const sound = encodedSound();
+          expect(sound).toHaveLength(2 * SR);
+          for (const loop of [0, 1]) {
+            const part = sound.slice(loop * SR, (loop + 1) * SR);
+            expect(part.slice(0, 500).every((v) => v === 0)).toBe(true);
+            expect(part.slice(500).every((v) => Math.abs(v - 0.5) < 1e-6)).toBe(true);
+          }
+        });
+
+        it("never scales the decoded buffer that split pieces share", async () => {
+          const tone = decodedAudio(SR, 1, () => 0.5);
+          await stitchVideosAsync([silentVideo(1)], null, undefined, undefined, {
+            audioClips: [layer(tone, { outSec: 0.4, curve: [{ t: 0, gain: 0 }] }), layer(tone, { startSec: 0.4, inSec: 0.4, curve: [{ t: 0, gain: 0 }] })],
+          });
+          expect(tone.buffer.getChannelData(0).every((v) => v === 0.5)).toBe(true);
+        });
+
+        it("says it is mixing the audio clips", async () => {
+          const onProgress = vi.fn();
+          const tone = decodedAudio(SR, 1, () => 0.5);
+          await stitchVideosAsync([silentVideo(1)], null, onProgress, undefined, { audioClips: [layer(tone), layer(tone, { startSec: 0.5 })] });
+          const messages = onProgress.mock.calls.map((call: Array<{ message: string }>) => call[0].message);
+          expect(messages).toContain("Mixing 2 audio clips...");
+        });
+
+        it("clamps two clips that overlap, and passes the touching pieces of a split through", async () => {
+          const loud = decodedAudio(SR, 1, () => 0.6);
+          await stitchVideosAsync([silentVideo(1)], null, undefined, undefined, { audioClips: [layer(loud), layer(loud, { startSec: 0.5 })] });
+          expect(encodedSound()[750]).toBe(1);
+          mockAudioSourceAdd.mockClear();
+          const over = decodedAudio(SR, 1, () => 1.2);
+          await stitchVideosAsync([silentVideo(1)], null, undefined, undefined, {
+            audioClips: [layer(over, { outSec: 0.5 }), layer(over, { startSec: 0.5, inSec: 0.5 })],
+          });
+          expect(encodedSound().every((v) => Math.abs(v - 1.2) < 1e-6)).toBe(true);
+        });
+
+        // P4: a split changes no sample, with a curve that is not flat, a cut off the 128-sample grid, any rates
+        describe("a split changes no sample (P4)", () => {
+          const curve = [
+            { t: 0.5, gain: 0 },
+            { t: 1.5, gain: 1 },
+            { t: 2.2, gain: 1 },
+            { t: 2.5, gain: 0.2 },
+            { t: 2.8, gain: 1 },
+          ];
+          const whole: StitchAudioClip = {
+            id: "a",
+            source: { kind: "music" },
+            row: 0,
+            startSec: 2.0123,
+            inSec: 0.5,
+            outSec: null,
+            muted: false,
+            curve,
+          };
+          for (const [name, rate] of [["48 kHz", 48000], ["44.1 kHz into a 48 kHz master", 44100]] as const) {
+            it(name, async () => {
+              const song = decodedAudio(rate, 4, (i, c) => Math.sin(i * 0.037 + c) * 0.4, 2);
+              const pieces = splitAudioClipAt([whole], new Map([["music", 4]]), "a", 3.77777, "b")!.clips.map((piece, row) => ({ ...piece, row }));
+              expect(pieces).toHaveLength(2);
+              expect(Math.round(pieces[1].inSec * 48000) % 128).not.toBe(0);
+              const asInput = (c: StitchAudioClip) => layer(song, { startSec: c.startSec, inSec: c.inSec, outSec: c.outSec, curve: c.curve });
+              // Clip sound at 48 kHz (silent) makes the master 48 kHz whatever the song's rate
+              const video = () => clip(source("v", { duration: 6, level: 0, sampleRate: 48000 }));
+              await stitchVideosAsync([video()], null, undefined, undefined, { audioClips: [asInput(whole)] });
+              const one = encodedSound();
+              const [buffer] = encodedBuffers();
+              expect(buffer.sampleRate).toBe(48000);
+              mockAudioSourceAdd.mockClear();
+              await stitchVideosAsync([video()], null, undefined, undefined, { audioClips: pieces.map(asInput) });
+              const two = encodedSound();
+              expect(two).toHaveLength(one.length);
+              expect(one.some((v) => v !== 0)).toBe(true);
+              let differing = 0;
+              for (let i = 0; i < one.length; i++) if (one[i] !== two[i]) differing++;
+              expect(differing).toBe(0);
+            });
+          }
+        });
       });
 
       describe("stacked", () => {

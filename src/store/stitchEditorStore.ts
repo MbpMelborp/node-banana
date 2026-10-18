@@ -1,7 +1,8 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/audioClips";
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
-import { clipIdsOf, makeSelection, type ClipSelection } from "@/lib/stitch/selection";
+import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
 import type { SourceDurations } from "@/lib/stitch/timeline";
 
 /**
@@ -15,9 +16,36 @@ import type { SourceDurations } from "@/lib/stitch/timeline";
  * coalesces into one step until endGesture.
  */
 
-export type StitchSelection = ClipSelection | { kind: "audio"; point: number | null } | null;
+/** Several audio clips selected; shaped like ClipSelection so its pure maths (selection.ts) apply. */
+export interface AudioSelection extends SelectionIds {
+  kind: "audio";
+  /** The lead's selected curve point (single selection, expanded row only). */
+  point: number | null;
+  /**
+   * The last press or key on the lead's curve changed it (a point added, moved or removed, an ⌥ line drag): ⌫ then
+   * removes a point or nothing, never the clip. A press on a box body, a click on another clip, or Escape clears it.
+   */
+  onCurve: boolean;
+}
+
+/** Video clips or audio clips, never both. */
+export type StitchSelection = ClipSelection | AudioSelection | null;
+
+/** An audio selection of the ids selection.ts's maths gave (they come back as a video selection). */
+export function audioSelectionOf(ids: SelectionIds, point: number | null = null, onCurve = false): AudioSelection {
+  return {
+    kind: "audio",
+    clipId: ids.clipId,
+    ...(ids.clipIds !== undefined ? { clipIds: ids.clipIds } : {}),
+    ...(ids.anchorId !== undefined ? { anchorId: ids.anchorId } : {}),
+    point,
+    onCurve,
+  };
+}
 
 export interface StitchContextMenu {
+  /** A video clip's menu or an audio clip's. */
+  kind: "clip" | "audio";
   clipId: string;
   x: number;
   y: number;
@@ -37,6 +65,20 @@ export interface StitchEditorState {
   selection: StitchSelection;
   /** Pushed by the editor from the media caches; not undoable. */
   durations: SourceDurations;
+  /** The audio sources' decoded lengths, apart from durations so video layouts do not recompute when audio loads. */
+  audioDurations: AudioDurations;
+  /** The one audio row grown to edit its volume lines, by its header's toggle only; not undoable, never written. */
+  audioExpandedRow: number | null;
+  /**
+   * The non-loop edge into the node's audio socket at open (dimmed or not), or as of the last Save; null with none.
+   * Done and Save drop the draft's music clips when it is gone by then (the music was disconnected on the canvas).
+   */
+  musicEdgeIdAtOpen: string | null;
+  /**
+   * A draft of this session has held a music clip (at open or after any edit). Removing every music clip disconnects
+   * the music only then, never for music a Save picked up that the draft never held. Unlike `past`, never capped.
+   */
+  musicHeld: boolean;
   /** Sequence seconds. */
   playhead: number;
   playing: boolean;
@@ -48,7 +90,8 @@ export interface StitchEditorState {
   pxPerSec: number | null;
   menu: StitchContextMenu | null;
   discardOpen: boolean;
-  pickerOpen: boolean;
+  /** The library picker, and what it adds. */
+  pickerOpen: false | "video" | "audio";
   /** Set by a drag hook while a pointer gesture runs; Escape calls it. */
   cancelGesture: (() => void) | null;
   /**
@@ -57,17 +100,28 @@ export interface StitchEditorState {
    */
   clipOrigins: ReadonlyMap<string, ClipOrigin>;
 
-  open(payload: { nodeId: string; draft: StitchDraft; canvasGeneration: number }): void;
+  open(payload: {
+    nodeId: string;
+    draft: StitchDraft;
+    canvasGeneration: number;
+    /** Absent = null (no music edge, or an edit without a node). */
+    musicEdgeIdAtOpen?: string | null;
+  }): void;
   /** Resets all but snap and soundOn. Asks nothing: the UI confirms first. */
   close(): void;
-  /** Save wrote this to the node: Cancel and the discard sheet count from it now. The undo history stays. */
-  markSaved(saved: StitchDraft): void;
+  /**
+   * Save wrote this to the node: Cancel and the discard sheet count from it now. The undo history stays. With
+   * musicEdgeId, the music edge after the write is the one the next Save compares against; omitted, it is kept.
+   */
+  markSaved(saved: StitchDraft, musicEdgeId?: string | null): void;
   apply(recipe: (draft: StitchDraft) => StitchDraft, opts?: { gestureKey?: string }): void;
   endGesture(): void;
   undo(): void;
   redo(): void;
   select(selection: StitchSelection): void;
   setDurations(durations: SourceDurations): void;
+  setAudioDurations(durations: AudioDurations): void;
+  setAudioExpandedRow(row: number | null): void;
   /** Clamped to >= 0. */
   setPlayhead(t: number): void;
   setPlaying(playing: boolean): void;
@@ -76,7 +130,7 @@ export interface StitchEditorState {
   setZoom(pxPerSec: number | null): void;
   openMenu(menu: StitchContextMenu | null): void;
   setDiscardOpen(open: boolean): void;
-  setPickerOpen(open: boolean): void;
+  setPickerOpen(open: false | "video" | "audio"): void;
   setCancelGesture(cancel: (() => void) | null): void;
   /** A clip keeps the first tag it gets: a pasted clip cut and brought back by undo is still a pasted clip. */
   tagClips(ids: readonly string[], origin: ClipOrigin): void;
@@ -87,6 +141,7 @@ export interface StitchEditorState {
 export const STITCH_HISTORY_LIMIT = 100;
 
 const EMPTY_DURATIONS: SourceDurations = new Map();
+const EMPTY_AUDIO_DURATIONS: AudioDurations = new Map();
 const NO_ORIGINS: ReadonlyMap<string, ClipOrigin> = new Map();
 
 type SessionState = Pick<
@@ -101,6 +156,10 @@ type SessionState = Pick<
   | "gestureKey"
   | "selection"
   | "durations"
+  | "audioDurations"
+  | "audioExpandedRow"
+  | "musicEdgeIdAtOpen"
+  | "musicHeld"
   | "playhead"
   | "playing"
   | "pxPerSec"
@@ -123,6 +182,10 @@ const closedSession = (): SessionState => ({
   gestureKey: null,
   selection: null,
   durations: EMPTY_DURATIONS,
+  audioDurations: EMPTY_AUDIO_DURATIONS,
+  audioExpandedRow: null,
+  musicEdgeIdAtOpen: null,
+  musicHeld: false,
   playhead: 0,
   playing: false,
   pxPerSec: null,
@@ -133,26 +196,44 @@ const closedSession = (): SessionState => ({
   clipOrigins: NO_ORIGINS,
 });
 
+const sameIds = (a: SelectionIds, b: SelectionIds) =>
+  a.clipId === b.clipId && a.anchorId === b.anchorId && (a.clipIds ?? []).join("\n") === (b.clipIds ?? []).join("\n");
+
 /**
- * After a history move: a clip selection drops the clips that are gone (the
- * first that remains leads when the lead went; none left, none selected), and
- * an audio selection forgets its point, so ⌫ never removes a point by a stale
+ * After a history move: a selection drops the clips that are gone (the first
+ * that remains leads when the lead went; none left, none selected), and an
+ * audio selection forgets its point, so ⌫ never removes a point by a stale
  * index.
  */
 function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
   if (selection?.kind === "clip") {
     const order = draft.timeline.map((c) => c.id);
     const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
-    const same =
-      next !== null &&
-      next.clipId === selection.clipId &&
-      next.anchorId === selection.anchorId &&
-      (next.clipIds ?? []).join("\n") === (selection.clipIds ?? []).join("\n");
-    return same ? selection : next;
+    return next !== null && sameIds(next, selection) ? selection : next;
   }
-  if (selection?.kind === "audio" && selection.point !== null) return { kind: "audio", point: null };
+  if (selection?.kind === "audio") {
+    const order = draft.audioClips.map((c) => c.id);
+    const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
+    if (next === null) return null;
+    if (sameIds(next, selection) && selection.point === null) return selection;
+    return audioSelectionOf(next, null, selection.onCurve);
+  }
   return selection;
 }
+
+/** An expanded row a history move took away collapses. */
+const clampExpandedRow = (row: number | null, draft: StitchDraft) =>
+  row !== null && row >= audioRowCount(draft.audioClips) ? null : row;
+
+/**
+ * sameDraft compares the audio with its rows compacted (a row a move emptied is no change to save), but the editor
+ * draws that row until a removal: a move that empties one is still an edit.
+ */
+const sameAudioRows = (a: StitchDraft, b: StitchDraft) =>
+  a.audioClips.every((clip) => b.audioClips.find((other) => other.id === clip.id)?.row === clip.row);
+
+/** The audio clip's curve, or undefined for a clip that is not there. */
+const curveOf = (draft: StitchDraft, clipId: string) => draft.audioClips.find((c) => c.id === clipId)?.curve;
 
 export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = create<StitchEditorState>(
   (set, get) => ({
@@ -160,12 +241,14 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     snap: true,
     soundOn: true,
 
-    open: ({ nodeId, draft, canvasGeneration }) => {
+    open: ({ nodeId, draft, canvasGeneration, musicEdgeIdAtOpen = null }) => {
       set({
         ...closedSession(),
         isOpen: true,
         nodeId,
         canvasGeneration,
+        musicEdgeIdAtOpen,
+        musicHeld: hasMusicClip(draft.audioClips),
         initial: draft,
         draft,
         selection: draft.timeline[0] ? { kind: "clip", clipId: draft.timeline[0].id } : null,
@@ -174,21 +257,27 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
 
     close: () => set(closedSession()),
 
-    markSaved: (saved) => set({ initial: saved }),
+    markSaved: (saved, musicEdgeId) =>
+      set(musicEdgeId === undefined ? { initial: saved } : { initial: saved, musicEdgeIdAtOpen: musicEdgeId }),
 
     apply: (recipe, opts) => {
-      const { draft, gestureKey, past, selection } = get();
+      const { draft, gestureKey, past, selection, musicHeld } = get();
       if (!draft) return;
       const next = recipe(draft);
       // Most recipes rebuild the draft object, so an unchanged value is told apart by content
-      if (next === draft || sameDraft(next, draft)) return;
-      // A point index means nothing once the curve has changed under it
-      const nextSelection: StitchSelection =
-        selection?.kind === "audio" && selection.point !== null && !sameCurve(draft.audioCurve, next.audioCurve)
-          ? { kind: "audio", point: null }
-          : selection;
+      if (next === draft || (sameDraft(next, draft) && sameAudioRows(next, draft))) return;
+      // A point index means nothing once the lead's curve has changed under it
+      let nextSelection: StitchSelection = selection;
+      if (selection?.kind === "audio" && selection.point !== null) {
+        const before = curveOf(draft, selection.clipId);
+        const after = curveOf(next, selection.clipId);
+        if (before !== after && !(before && after && sameCurve(before, after))) {
+          nextSelection = { ...selection, point: null };
+        }
+      }
+      const held = musicHeld || hasMusicClip(next.audioClips);
       if (opts?.gestureKey !== undefined && opts.gestureKey === gestureKey) {
-        set({ draft: next, future: [], selection: nextSelection });
+        set({ draft: next, future: [], selection: nextSelection, musicHeld: held });
         return;
       }
       set({
@@ -197,13 +286,14 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         future: [],
         gestureKey: opts?.gestureKey ?? null,
         selection: nextSelection,
+        musicHeld: held,
       });
     },
 
     endGesture: () => set({ gestureKey: null }),
 
     undo: () => {
-      const { draft, past, future, selection } = get();
+      const { draft, past, future, selection, audioExpandedRow } = get();
       if (!draft || past.length === 0) return;
       const previous = past[past.length - 1];
       set({
@@ -212,11 +302,12 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         future: [draft, ...future],
         gestureKey: null,
         selection: pruneSelection(selection, previous),
+        audioExpandedRow: clampExpandedRow(audioExpandedRow, previous),
       });
     },
 
     redo: () => {
-      const { draft, past, future, selection } = get();
+      const { draft, past, future, selection, audioExpandedRow } = get();
       if (!draft || future.length === 0) return;
       const [next, ...rest] = future;
       set({
@@ -225,11 +316,14 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         future: rest,
         gestureKey: null,
         selection: pruneSelection(selection, next),
+        audioExpandedRow: clampExpandedRow(audioExpandedRow, next),
       });
     },
 
     select: (selection) => set({ selection }),
     setDurations: (durations) => set({ durations }),
+    setAudioDurations: (audioDurations) => set({ audioDurations }),
+    setAudioExpandedRow: (audioExpandedRow) => set({ audioExpandedRow }),
     setPlayhead: (t) => set({ playhead: Number.isFinite(t) ? Math.max(0, t) : 0 }),
     setPlaying: (playing) => set({ playing }),
     setSnap: (on) => set({ snap: on }),
@@ -270,6 +364,15 @@ export const selectCanRedo = (s: StitchEditorState): boolean => s.future.length 
 export function selectedClipIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
   if (s.selection?.kind !== "clip" || !s.draft) return [];
   return clipIdsOf(s.selection, s.draft.timeline.map((c) => c.id));
+}
+
+/**
+ * The selected audio clips' ids in audio order (row, start, id; [] for a video selection or none). A new array per
+ * call: derive it in a useMemo, never through a selector.
+ */
+export function selectedAudioIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
+  if (s.selection?.kind !== "audio" || !s.draft) return [];
+  return clipIdsOf(s.selection, s.draft.audioClips.map((c) => c.id));
 }
 
 /** Several clips selected: group actions act on all of them, single-clip ones (trims, Start, In, Out) do nothing. */

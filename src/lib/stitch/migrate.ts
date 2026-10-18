@@ -1,5 +1,6 @@
 import { ASSET_ID_PATTERN } from "@/lib/assets/types";
 import type { StitchClipSource, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { sanitizeAudioClips } from "./audioClips";
 import { createClip, edgeIdsInOrder, MAX_START_SEC, newClipId } from "./timeline";
 
 /**
@@ -181,21 +182,46 @@ export function dropStitchEdges<T extends Pick<VideoStitchNodeData, "clipOrder" 
   };
 }
 
-/** dropStitchEdges on every Stitch node the removed edges led into. Returns the input array when nothing changes. */
+/**
+ * The music's connection went away (a disconnect, or a node pasted without it): when data.audioClips holds a music
+ * clip, the music clips are removed (the rest kept as sanitizeAudioClips reads them, rows compacted) and audioCurve and audioMuted reset to [] and false (on a node
+ * with audioClips they were only a copy for older builds); when nothing is left, the audioClips key is removed, so
+ * the node reads as legacy with fresh music. A new connection starts as one whole clip, never with the old trims.
+ * Returns the input when there is nothing to drop. Legacy nodes are never touched.
+ */
+export function dropStitchMusicClips<T extends Pick<VideoStitchNodeData, "audioClips" | "audioCurve" | "audioMuted">>(
+  data: T,
+): T {
+  const isMusic = (clip: unknown) => (clip as { source?: { kind?: unknown } } | null)?.source?.kind === "music";
+  if (!Array.isArray(data.audioClips) || !data.audioClips.some(isMusic)) return data;
+  const kept = sanitizeAudioClips(data.audioClips, { allowMusic: false });
+  if (kept.length > 0) return { ...data, audioClips: kept, audioCurve: [], audioMuted: false };
+  const next: Partial<Pick<VideoStitchNodeData, "audioClips">> = { ...data, audioCurve: [], audioMuted: false };
+  delete next.audioClips;
+  return next as T;
+}
+
+/**
+ * dropStitchEdges on every Stitch node the removed edges led into, and dropStitchMusicClips on those whose music
+ * connection (a non-loop edge into `audio`) was removed. Returns the input array when nothing changes.
+ */
 export function dropRemovedStitchEdges(nodes: WorkflowNode[], removedEdges: readonly WorkflowEdge[]): WorkflowNode[] {
   if (removedEdges.length === 0) return nodes;
   const byTarget = new Map<string, Set<string>>();
+  const musicGone = new Set<string>();
   for (const edge of removedEdges) {
     const ids = byTarget.get(edge.target) ?? new Set<string>();
     ids.add(edge.id);
     byTarget.set(edge.target, ids);
+    if (edge.targetHandle === "audio" && !edge.data?.isLoop) musicGone.add(edge.target);
   }
   let changed = false;
   const next = nodes.map((node) => {
     const removed = node.type === "videoStitch" ? byTarget.get(node.id) : undefined;
     if (!removed) return node;
     const data = node.data as VideoStitchNodeData;
-    const dropped = dropStitchEdges(data, removed);
+    const withoutEdges = dropStitchEdges(data, removed);
+    const dropped = musicGone.has(node.id) ? dropStitchMusicClips(withoutEdges) : withoutEdges;
     if (dropped === data) return node;
     changed = true;
     return { ...node, data: dropped } as WorkflowNode;

@@ -1,16 +1,19 @@
 import { describe, it, expect } from "vitest";
-import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
+import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import {
+  describeDraftChanges,
   draftDuration,
   draftPatch,
   draftSpans,
+  musicAudio,
   readSequenceLayout,
   readStitchDraft,
   sameDraft,
   sameLayout,
   type StitchDraft,
 } from "../draft";
+import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID } from "../audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import { createClip, type SourceKey } from "../timeline";
 
@@ -30,8 +33,8 @@ describe("readStitchDraft", () => {
     const draft = readStitchDraft(nodeData({ clipOrder: ["e2", "e1"] }), { liveEdgeIds: ["e1", "e2"], hasMusic: false });
     expect(draft).toEqual({
       timeline: [edgeClip("clip:e2", "e2"), edgeClip("clip:e1", "e1")],
-      audioCurve: [],
-      audioMuted: false,
+      audioClips: [],
+      legacyAudio: { curve: [], muted: false },
       loopCount: 1,
       sequenceLayout: TRACK_LAYOUT,
     });
@@ -55,10 +58,11 @@ describe("readStitchDraft", () => {
       }),
       { liveEdgeIds: ["e1"], hasMusic: true },
     );
+    const curve = [{ t: 0, gain: 1 }, { t: 2, gain: 0.5 }];
     expect(draft).toEqual({
       timeline,
-      audioCurve: [{ t: 0, gain: 1 }, { t: 2, gain: 0.5 }],
-      audioMuted: true,
+      audioClips: [legacyMusicClip(curve, true)],
+      legacyAudio: { curve, muted: true },
       loopCount: 2,
       sequenceLayout: TRACK_LAYOUT,
     });
@@ -216,20 +220,29 @@ describe("draftSpans and draftDuration", () => {
 describe("sameDraft", () => {
   const base: StitchDraft = {
     timeline: [edgeClip("a", "e1")],
-    audioCurve: [{ t: 0, gain: 1 }],
-    audioMuted: false,
+    audioClips: [legacyMusicClip([{ t: 0, gain: 1 }], false)],
+    legacyAudio: { curve: [{ t: 0, gain: 1 }], muted: false },
     loopCount: 1,
     sequenceLayout: TRACK_LAYOUT,
   };
 
   it("compares by value", () => {
-    expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1")], audioCurve: [{ t: 0, gain: 1 }] })).toBe(true);
+    expect(
+      sameDraft(base, {
+        ...base,
+        timeline: [edgeClip("a", "e1")],
+        audioClips: [legacyMusicClip([{ t: 0, gain: 1 }], false)],
+        legacyAudio: { curve: [{ t: 0, gain: 1 }], muted: false },
+      }),
+    ).toBe(true);
   });
 
   it("sees each kind of change", () => {
     expect(sameDraft(base, { ...base, loopCount: 2 })).toBe(false);
-    expect(sameDraft(base, { ...base, audioMuted: true })).toBe(false);
-    expect(sameDraft(base, { ...base, audioCurve: [] })).toBe(false);
+    // legacyAudio counts only without audio clips (a legacy node without music connected)
+    const silent = { ...base, audioClips: [] };
+    expect(sameDraft(silent, { ...silent, legacyAudio: { ...silent.legacyAudio, muted: true } })).toBe(false);
+    expect(sameDraft(silent, { ...silent, legacyAudio: { ...silent.legacyAudio, curve: [] } })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { outSec: 2 })] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { inSec: 1 })] })).toBe(false);
     expect(sameDraft(base, { ...base, timeline: [edgeClip("a", "e1", { muted: true })] })).toBe(false);
@@ -267,9 +280,16 @@ describe("draftPatch", () => {
       edgeClip("b2", "e2"),
     ];
     expect(
-      draftPatch({ timeline, audioCurve: [], audioMuted: true, loopCount: 2, sequenceLayout: TRACK_LAYOUT }),
+      draftPatch({
+        timeline,
+        audioClips: [],
+        legacyAudio: { curve: [], muted: true },
+        loopCount: 2,
+        sequenceLayout: TRACK_LAYOUT,
+      }),
     ).toEqual({
       timeline,
+      audioClips: undefined,
       audioCurve: [],
       audioMuted: true,
       loopCount: 2,
@@ -281,8 +301,8 @@ describe("draftPatch", () => {
   it("round-trips the layout through readStitchDraft, as a copy", () => {
     const d: StitchDraft = {
       timeline: [edgeClip("a", "e1")],
-      audioCurve: [],
-      audioMuted: false,
+      audioClips: [],
+      legacyAudio: { curve: [], muted: false },
       loopCount: 1,
       sequenceLayout: { mode: "stacked", overlapSec: 2.5, crossfade: false },
     };
@@ -290,5 +310,122 @@ describe("draftPatch", () => {
     expect(patch.sequenceLayout).not.toBe(d.sequenceLayout);
     const back = readStitchDraft({ ...nodeData(), ...patch }, { liveEdgeIds: ["e1"], hasMusic: false });
     expect(sameDraft(back, d)).toBe(true);
+  });
+});
+
+const music = (init: Partial<StitchAudioClip> = {}) => createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, ...init });
+const tone = (id: string, init: Partial<StitchAudioClip> = {}) =>
+  createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id, ...init });
+
+describe("audio in the draft", () => {
+  const ctx = (hasMusic: boolean) => ({ liveEdgeIds: ["e1"], hasMusic });
+
+  it("reads a legacy node as one music clip with its curve and mute, or none without music", () => {
+    const data = nodeData({ clipOrder: ["e1"], audioCurve: [{ t: 3, gain: 0.5 }], audioMuted: true });
+    expect(readStitchDraft(data, ctx(true)).audioClips).toEqual([
+      music({ curve: [{ t: 3, gain: 0.5 }], muted: true }),
+    ]);
+    const without = readStitchDraft(data, ctx(false));
+    expect(without.audioClips).toEqual([]);
+    expect(without.legacyAudio).toEqual({ curve: [{ t: 3, gain: 0.5 }], muted: true });
+  });
+
+  it("reads stored clips with the music reconciled, and legacyAudio fresh whatever the copy holds", () => {
+    const stored = [tone("t1", { row: 0, startSec: 2 })];
+    const data = nodeData({ clipOrder: ["e1"], audioClips: stored, audioCurve: [{ t: 1, gain: 0 }], audioMuted: true });
+    const withMusic = readStitchDraft(data, ctx(true));
+    expect(withMusic.audioClips).toEqual([music(), { ...stored[0], row: 1 }]);
+    expect(withMusic.legacyAudio).toEqual({ curve: [], muted: false });
+    expect(readStitchDraft(data, ctx(false)).audioClips).toEqual(stored);
+  });
+
+  it("never writes on read: reading the patch of a read gives the same draft", () => {
+    for (const data of [
+      nodeData({ clipOrder: ["e1"] }),
+      nodeData({ clipOrder: ["e1"], audioCurve: [{ t: 1, gain: 0.5 }], audioMuted: true }),
+      nodeData({ clipOrder: ["e1"], audioClips: [tone("t1", { startSec: 2 })] }),
+      nodeData({ clipOrder: ["e1"], audioClips: [] }),
+    ]) {
+      for (const hasMusic of [false, true]) {
+        const read = readStitchDraft(data, ctx(hasMusic));
+        expect(sameDraft(readStitchDraft({ ...data, ...draftPatch(read) }, ctx(hasMusic)), read)).toBe(true);
+      }
+    }
+  });
+
+  it("sees each audio change in sameDraft, and not an empty row a move left", () => {
+    const base = readStitchDraft(nodeData({ clipOrder: ["e1"], audioClips: [tone("t1"), tone("t2", { row: 1 })] }), ctx(true));
+    const clips = base.audioClips;
+    expect(sameDraft(base, { ...base, audioClips: clips.map((c) => ({ ...c, row: c.row * 2 })) })).toBe(true);
+    for (const patch of [{ startSec: 1 }, { inSec: 1 }, { outSec: 3 }, { muted: true }, { curve: [{ t: 0, gain: 0.5 }] }]) {
+      expect(sameDraft(base, { ...base, audioClips: clips.map((c) => (c.id === "t1" ? { ...c, ...patch } : c)) })).toBe(false);
+    }
+    expect(sameDraft(base, { ...base, audioClips: clips.slice(1) })).toBe(false);
+    // A clip that only changes rows, onto a row that stays (music 0, t1 1, t2 2: t1 joins t2)
+    expect(sameDraft(base, { ...base, audioClips: clips.map((c) => (c.id === "t1" ? { ...c, row: 2 } : c)) })).toBe(false);
+  });
+
+  it("compares legacyAudio only while neither draft has an audio clip, as draftPatch writes it only then", () => {
+    const legacy = nodeData({ clipOrder: ["e1"], audioCurve: [{ t: 1, gain: 0.5 }] });
+    const read = readStitchDraft(legacy, ctx(true));
+    // A Save re-reads the edited music into legacyAudio; the draft's stays as it opened
+    const edited = { ...read, audioClips: read.audioClips.map((c) => ({ ...c, curve: [{ t: 2, gain: 0.25 }] })) };
+    const saved = readStitchDraft({ ...legacy, ...draftPatch(edited) }, ctx(true));
+    expect(saved.legacyAudio.curve).toEqual([{ t: 2, gain: 0.25 }]);
+    expect(sameDraft(saved, edited)).toBe(true);
+    expect(describeDraftChanges(saved, edited)).toBe("Your changes will be lost. The node keeps what it had.");
+    // Without music connected legacyAudio is the music's curve and mute, and counts
+    const alone = readStitchDraft(legacy, ctx(false));
+    const muted = { ...alone, legacyAudio: { ...alone.legacyAudio, muted: true } };
+    expect(sameDraft(alone, muted)).toBe(false);
+    expect(describeDraftChanges(alone, muted)).toBe("The music mute will be lost. The node keeps what it had.");
+  });
+
+  it("collapses the legacy shape in draftPatch: no key, the curve and mute from the music clip", () => {
+    const d: StitchDraft = {
+      timeline: [edgeClip("a", "e1")],
+      audioClips: [music({ row: 2, curve: [{ t: 1, gain: 0.25 }], muted: true })],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: TRACK_LAYOUT,
+    };
+    const patch = draftPatch(d);
+    expect(patch.audioClips).toBeUndefined();
+    expect(patch.audioCurve).toEqual([{ t: 1, gain: 0.25 }]);
+    expect(patch.audioMuted).toBe(true);
+  });
+
+  it("otherwise writes the clips compacted, with the older-build copy", () => {
+    const moved = music({ startSec: 1, curve: [{ t: 1, gain: 0.25 }] });
+    const d: StitchDraft = {
+      timeline: [edgeClip("a", "e1")],
+      audioClips: [moved, tone("t1", { row: 3 })],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: TRACK_LAYOUT,
+    };
+    expect(draftPatch(d)).toMatchObject({
+      audioClips: [moved, { ...tone("t1"), row: 1 }],
+      audioCurve: [],
+      audioMuted: true,
+    });
+    const whole = music({ curve: [{ t: 2, gain: 0.5 }] });
+    expect(draftPatch({ ...d, audioClips: [whole, tone("t1", { row: 1 })] })).toMatchObject({
+      audioCurve: [{ t: 2, gain: 0.5 }],
+      audioMuted: false,
+    });
+  });
+
+  it("reads the music's curve and mute from the first music clip, else from legacyAudio", () => {
+    const d: StitchDraft = {
+      timeline: [],
+      audioClips: [],
+      legacyAudio: { curve: [{ t: 1, gain: 0 }], muted: true },
+      loopCount: 1,
+      sequenceLayout: TRACK_LAYOUT,
+    };
+    expect(musicAudio(d)).toBe(d.legacyAudio);
+    const withClip = { ...d, audioClips: [music(), tone("t1", { row: 1 })] };
+    expect(musicAudio(withClip)).toEqual({ curve: [], muted: false });
   });
 });

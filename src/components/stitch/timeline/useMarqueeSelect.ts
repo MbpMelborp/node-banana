@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { boxHits, clipIdsOf, type HitBox, type LaneRect } from "@/lib/stitch/selection";
+import { boxHits, clipIdsOf, type HitBox, type LaneRect, type SelectionIds } from "@/lib/stitch/selection";
 import {
   applyBoxSelection,
   clearClipSelection,
@@ -19,7 +19,8 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * Stacked every box it touches on both axes). ⇧ or ⌘ (Ctrl off a Mac) at the
  * press adds them to the selection. Release writes the selection once;
  * Escape drops the rectangle and puts the scroll back. A press that does not
- * travel clears the clip selection, unless a modifier was held. The lanes
+ * travel clears the selection, unless a modifier was held. The audio rows
+ * use the same gesture with their own kind, commit and clear. The lanes
  * scroll by themselves near their edges, as for a body drag, and the
  * rectangle takes in rows scrolled out of view under it.
  */
@@ -45,6 +46,12 @@ export interface MarqueeOptions {
   rowsView: () => { top: number; bottom: number } | null;
   /** The y range the rectangle is clamped to, lane content px. */
   bounds: () => { top: number; bottom: number };
+  /** The kind of clip the box selects; an additive box adds to a selection of that kind only. Default "clip". */
+  kind?: "clip" | "audio";
+  /** The release with the clips touched, in order. Default: applyBoxSelection over the selection at the press. */
+  commit?: (hitIds: string[], additive: boolean) => void;
+  /** A press that did not travel, without a modifier. Default: clearClipSelection. */
+  clear?: () => void;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
@@ -70,7 +77,8 @@ export function useMarqueeSelect(contentRef: RefObject<HTMLDivElement | null>, o
       pressing.current = true;
       const additive = event.shiftKey || isToggleClick(event);
       const selection = useStitchEditorStore.getState().selection;
-      const base = selection?.kind === "clip" ? selection : null;
+      const kind = latestOptions.current.kind ?? "clip";
+      const base: SelectionIds | null = selection?.kind === kind ? selection : null;
       const target = event.currentTarget;
       const pointerId = event.pointerId;
       const startX = event.clientX;
@@ -176,13 +184,15 @@ export function useMarqueeSelect(contentRef: RefObject<HTMLDivElement | null>, o
         const drawn = current;
         const wasLifted = lifted;
         end();
+        const { commit, clear } = latestOptions.current;
         if (!wasLifted) {
-          if (!additive) clearClipSelection();
+          if (!additive) (clear ?? clearClipSelection)();
           return;
         }
         if (!drawn) return;
-        const ids = latestOptions.current.order();
-        applyBoxSelection(base, ids.filter((id) => drawn.hitIds.has(id)), additive);
+        const hits = latestOptions.current.order().filter((id) => drawn.hitIds.has(id));
+        if (commit) commit(hits, additive);
+        else applyBoxSelection(selection?.kind === "clip" ? selection : null, hits, additive);
       };
 
       window.addEventListener("pointermove", onMove);

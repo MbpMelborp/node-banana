@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { selectIsDirty, STITCH_HISTORY_LIMIT, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { openStitchEditor } from "../openStitchEditor";
 import { commitStitchEdit, saveStitchEdit } from "../commitStitchEdit";
 import { createClip, removeClip, splitClipAt, trimClip, type SourceKey } from "@/lib/stitch/timeline";
-import type { StitchSequenceLayout, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID, removeAudioClips } from "@/lib/stitch/audioClips";
+import { musicAudio, type StitchDraft } from "@/lib/stitch/draft";
+import type { StitchSequenceLayout, VideoStitchNodeData, VolumePoint, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
@@ -42,6 +44,11 @@ function seed() {
 
 const data = () => wf().nodes.find((n) => n.id === "stitch")!.data as VideoStitchNodeData;
 const edgeIds = () => wf().edges.map((e) => e.id);
+/** The curve or the mute set on every music clip. */
+const withMusicAudio = (d: StitchDraft, patch: { curve?: VolumePoint[]; muted?: boolean }): StitchDraft => ({
+  ...d,
+  audioClips: d.audioClips.map((clip) => (clip.source.kind === "music" ? { ...clip, ...patch } : clip)),
+});
 const remove = (clipId: string) => editor().apply((d) => ({ ...d, timeline: removeClip(d.timeline, clipId).timeline }));
 
 beforeEach(async () => {
@@ -222,7 +229,7 @@ describe("saveStitchEdit", () => {
     expect(selectIsDirty(editor())).toBe(false);
     editor().redo();
     expect(commitStitchEdit()).toBe("written");
-    expect(data().timeline[0]).toMatchObject({ inSec: 2 });
+    expect(data().timeline![0]).toMatchObject({ inSec: 2 });
   });
 
   it("closes, writing nothing, when the node is gone", () => {
@@ -230,5 +237,242 @@ describe("saveStitchEdit", () => {
     wf().onNodesChange([{ type: "remove", id: "stitch" }]);
     expect(saveStitchEdit()).toBe("gone");
     expect(editor().isOpen).toBe(false);
+  });
+});
+
+describe("audio clips on Done", () => {
+  const connectMusic = () => {
+    editor().close();
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-m", "generateAudio", {})],
+      edges: [
+        ...wf().edges,
+        { id: "eM", source: "gen-m", target: "stitch", sourceHandle: "audio", targetHandle: "audio" },
+      ],
+    });
+    openStitchEditor("stitch");
+    editor().setDurations(DURATIONS);
+  };
+  const moveMusic = (startSec: number) =>
+    editor().apply((d) => ({
+      ...d,
+      audioClips: d.audioClips.map((clip) => (clip.source.kind === "music" ? { ...clip, startSec } : clip)),
+    }));
+
+  it("adds no key for an edit possible before audio clips: a trim, the curve, the mute, the loop", () => {
+    connectMusic();
+    expect(editor().draft!.audioClips.map((c) => c.id)).toEqual([MUSIC_CLIP_ID]);
+    editor().apply((d) => ({
+      ...withMusicAudio(d, { curve: [{ t: 1, gain: 0.5 }], muted: true }),
+      timeline: trimClip(d.timeline, "clip:eA", DURATIONS, { inSec: 1 }),
+      loopCount: 2,
+    }));
+    expect(commitStitchEdit()).toBe("written");
+    expect("audioClips" in data()).toBe(false);
+    expect(data()).toMatchObject({ audioCurve: [{ t: 1, gain: 0.5 }], audioMuted: true, loopCount: 2 });
+  });
+
+  it("writes the clips with the older-build copy once the music moves, and drops them when it moves back", () => {
+    connectMusic();
+    editor().apply((d) => withMusicAudio(d, { curve: [{ t: 1, gain: 0.5 }] }));
+    moveMusic(1);
+    commitStitchEdit();
+    expect(data().audioClips).toEqual([
+      createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, startSec: 1, curve: [{ t: 1, gain: 0.5 }] }),
+    ]);
+    expect(data()).toMatchObject({ audioCurve: [], audioMuted: true });
+
+    openStitchEditor("stitch");
+    editor().setDurations(DURATIONS);
+    expect(musicAudio(editor().draft!).curve).toEqual([{ t: 1, gain: 0.5 }]);
+    moveMusic(0);
+    commitStitchEdit();
+    expect(data().audioClips).toBeUndefined();
+    expect(data()).toMatchObject({ audioCurve: [{ t: 1, gain: 0.5 }], audioMuted: false });
+  });
+
+  const TONE = "atone00000001";
+  const addTone = () =>
+    editor().apply((d) => ({
+      ...d,
+      audioClips: [...d.audioClips, createAudioClip({ kind: "asset", assetId: TONE }, { id: "tone", row: 1, startSec: 2 })],
+    }));
+  const removeAudio = (...ids: string[]) =>
+    editor().apply((d) => ({ ...d, audioClips: removeAudioClips(d.audioClips, new Set(ids)).clips }));
+  const trimA = () => editor().apply((d) => ({ ...d, timeline: trimClip(d.timeline, "clip:eA", DURATIONS, { inSec: 1 }) }));
+  /** A node that stores audio clips: the music moved and a library clip under it. */
+  const storeClips = () => {
+    connectMusic();
+    moveMusic(1);
+    addTone();
+    commitStitchEdit();
+    expect(data().audioClips!.map((c) => c.id)).toEqual([MUSIC_CLIP_ID, "tone"]);
+    openStitchEditor("stitch");
+    editor().setDurations(DURATIONS);
+  };
+  const audioIds = () => data().audioClips?.map((c) => c.id);
+
+  it("disconnects the music with the data write when every music clip was removed, undone in one step", () => {
+    connectMusic();
+    const before = data();
+    removeAudio(MUSIC_CLIP_ID);
+    expect(commitStitchEdit()).toBe("written");
+    expect(edgeIds()).toEqual(["eA", "eB"]);
+    // Legacy-shaped again: no key, and the re-read added no music clip back
+    expect("audioClips" in data()).toBe(false);
+    openStitchEditor("stitch");
+    expect(editor().draft!.audioClips).toEqual([]);
+    editor().close();
+
+    wf().undo();
+    expect(edgeIds()).toEqual(["eA", "eB", "eM"]);
+    expect(data()).toEqual(before);
+  });
+
+  it("removing the music clip and keeping a library clip disconnects the music and writes no music clip", () => {
+    connectMusic();
+    addTone();
+    removeAudio(MUSIC_CLIP_ID);
+    commitStitchEdit();
+    expect(edgeIds()).not.toContain("eM");
+    expect(audioIds()).toEqual(["tone"]);
+    expect(data().audioClips![0]).toMatchObject({ row: 0, startSec: 2 });
+  });
+
+  it("drops the music clips when the music was disconnected on the canvas while the editor was open", () => {
+    storeClips();
+    wf().onEdgesChange([{ type: "remove", id: "eM" }]);
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect(audioIds()).toEqual(["tone"]);
+    expect(data().timeline![0]).toMatchObject({ inSec: 1 });
+  });
+
+  it("gives music connected after that disconnect one fresh clip, and leaves its edge", () => {
+    storeClips();
+    wf().onEdgesChange([{ type: "remove", id: "eM" }]);
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-m2", "generateAudio", {})],
+      edges: [...wf().edges, { id: "eM2", source: "gen-m2", target: "stitch", sourceHandle: "audio", targetHandle: "audio" }],
+    });
+    trimA();
+    commitStitchEdit();
+    expect(edgeIds()).toContain("eM2");
+    // The fresh music clip is whole and at 0:00; the tone moves under it
+    expect(data().audioClips).toEqual([
+      createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }),
+      expect.objectContaining({ id: "tone", row: 1 }),
+    ]);
+  });
+
+  it("writes nothing when the only change is the music going away on the canvas", () => {
+    storeClips();
+    wf().onEdgesChange([{ type: "remove", id: "eM" }]);
+    const before = wf().nodes;
+    expect(commitStitchEdit()).toBe("closed");
+    expect(wf().nodes).toBe(before);
+    expect(audioIds()).toEqual(["tone"]);
+  });
+
+  it("disconnects the music whose source is dimmed when its stored clip is removed", () => {
+    storeClips();
+    editor().close();
+    useWorkflowStore.setState({ dimmedNodeIds: new Set(["gen-m"]) });
+    openStitchEditor("stitch");
+    // A stored music clip is kept while its source is dimmed
+    expect(editor().draft!.audioClips.map((c) => c.id)).toEqual([MUSIC_CLIP_ID, "tone"]);
+    expect(editor().musicEdgeIdAtOpen).toBe("eM");
+    removeAudio(MUSIC_CLIP_ID);
+    commitStitchEdit();
+    expect(edgeIds()).not.toContain("eM");
+    expect(audioIds()).toEqual(["tone"]);
+  });
+
+  it("writes the older-build copy beside the clips: an untouched music clip's curve and mute, else muted", () => {
+    connectMusic();
+    editor().apply((d) => withMusicAudio(d, { curve: [{ t: 2, gain: 0.25 }], muted: true }));
+    addTone();
+    commitStitchEdit();
+    expect(data()).toMatchObject({ audioCurve: [{ t: 2, gain: 0.25 }], audioMuted: true });
+    expect(audioIds()).toEqual([MUSIC_CLIP_ID, "tone"]);
+  });
+
+  it("after a Save, Done checks the music edge the Save saw", () => {
+    connectMusic();
+    expect(editor().musicEdgeIdAtOpen).toBe("eM");
+    addTone();
+    // The music is swapped on the canvas, then Save: the old edge is gone, so the draft's music clip is dropped
+    wf().onEdgesChange([{ type: "remove", id: "eM" }]);
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-m2", "generateAudio", {})],
+      edges: [...wf().edges, { id: "eM2", source: "gen-m2", target: "stitch", sourceHandle: "audio", targetHandle: "audio" }],
+    });
+    moveMusic(3);
+    expect(saveStitchEdit()).toBe("saved");
+    // The draft still holds the old music clip, so the gone edge stays the one to compare against
+    expect(editor().musicEdgeIdAtOpen).toBe("eM");
+    expect(data().audioClips![0]).toMatchObject({ source: { kind: "music" }, startSec: 0 });
+    // At Done the old music clip is dropped again: eM2 keeps its fresh clip and is not disconnected
+    trimA();
+    commitStitchEdit();
+    expect(edgeIds()).toContain("eM2");
+    expect(data().audioClips![0]).toMatchObject({ source: { kind: "music" }, startSec: 0 });
+  });
+
+  it("after music is disconnected and saved, Done writes no music clip back, and new music starts whole", () => {
+    storeClips();
+    wf().onEdgesChange([{ type: "remove", id: "eM" }]);
+    trimA();
+    expect(saveStitchEdit()).toBe("saved");
+    expect(audioIds()).toEqual(["tone"]);
+    editor().apply((d) => ({ ...d, loopCount: 2 }));
+    expect(commitStitchEdit()).toBe("written");
+    expect(audioIds()).toEqual(["tone"]);
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-m2", "generateAudio", {})],
+      edges: [...wf().edges, { id: "eM2", source: "gen-m2", target: "stitch", sourceHandle: "audio", targetHandle: "audio" }],
+    });
+    openStitchEditor("stitch");
+    expect(editor().draft!.audioClips[0]).toEqual(createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID }));
+  });
+
+  it("is clean after a Save of a legacy node's edited music curve and mute", () => {
+    connectMusic();
+    editor().apply((d) => withMusicAudio(d, { curve: [{ t: 1, gain: 0.5 }] }));
+    editor().apply((d) => withMusicAudio(d, { muted: true }));
+    expect(saveStitchEdit()).toBe("saved");
+    expect("audioClips" in data()).toBe(false);
+    expect(data()).toMatchObject({ audioCurve: [{ t: 1, gain: 0.5 }], audioMuted: true });
+    expect(selectIsDirty(editor())).toBe(false);
+    const before = wf().nodes;
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(commitStitchEdit()).toBe("closed");
+    expect(wf().nodes).toBe(before);
+  });
+
+  it("disconnects the music for a music clip removed more edits ago than the history keeps", () => {
+    connectMusic();
+    addTone();
+    removeAudio(MUSIC_CLIP_ID);
+    for (let i = 1; i <= STITCH_HISTORY_LIMIT + 1; i++) editor().apply((d) => ({ ...d, loopCount: ((i % 3) + 1) as StitchDraft["loopCount"] }));
+    expect(editor().past.some((d) => d.audioClips.some((c) => c.source.kind === "music"))).toBe(false);
+    commitStitchEdit();
+    expect(edgeIds()).not.toContain("eM");
+    expect(audioIds()).toEqual(["tone"]);
+  });
+
+  it("keeps music a Save picked up that the draft never held", () => {
+    // Opened without music; music connected while the editor is open, then Save and Done
+    expect(editor().musicEdgeIdAtOpen).toBeNull();
+    useWorkflowStore.setState({
+      nodes: [...wf().nodes, node("gen-m", "generateAudio", {})],
+      edges: [...wf().edges, { id: "eM", source: "gen-m", target: "stitch", sourceHandle: "audio", targetHandle: "audio" }],
+    });
+    trimA();
+    saveStitchEdit();
+    expect(editor().initial!.audioClips).toEqual([legacyMusicClip([], false)]);
+    editor().apply((d) => ({ ...d, loopCount: 2 }));
+    commitStitchEdit();
+    expect(edgeIds()).toContain("eM");
   });
 });

@@ -61,6 +61,19 @@ describe("openStitchEditor", () => {
     expect(editor().isOpen).toBe(false);
   });
 
+  it("records the music edge at open, dimmed or not, and null without one", () => {
+    openStitchEditor("s1");
+    expect(editor().musicEdgeIdAtOpen).toBe("eM");
+    // The music clip is read only with the music live, but the edge is recorded either way
+    useWorkflowStore.setState({ dimmedNodeIds: new Set(["music"]) });
+    openStitchEditor("s1");
+    expect(editor().musicEdgeIdAtOpen).toBe("eM");
+    expect(editor().draft!.audioClips).toEqual([]);
+    useWorkflowStore.setState({ dimmedNodeIds: new Set(), edges: useWorkflowStore.getState().edges.filter((e) => e.id !== "eM") });
+    openStitchEditor("s1");
+    expect(editor().musicEdgeIdAtOpen).toBeNull();
+  });
+
   it("routes Expand on a Stitch node to the editor", () => {
     expect(openEditorForExpand("s1", "videoStitch")).toBe(true);
     expect(editor().isOpen).toBe(true);

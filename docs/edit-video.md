@@ -1,10 +1,11 @@
 # Edit video
 
 The Edit Video node (`videoStitch`, called Video Stitch before) joins the videos connected to its
-`video-*` sockets into one clip, with the music on its `audio` socket under
-them. The editor is where that sequence is finished: the clips' order, a
-trim for each clip, each clip's own sound, the music's volume over time,
-and the layout (Track, clips end to end, or Stacked, one row per clip,
+`video-*` sockets into one clip, with sound under them: the music on its
+`audio` socket and audio from the library, each a clip on an audio row.
+The editor is where that sequence is finished: the clips' order, a trim
+for each clip, each clip's own sound, the audio clips and their volume
+over time, and the layout (Track, clips end to end, or Stacked, one row per clip,
 placed anywhere). What the editor shows is what Render encodes.
 
 ## What the editor does
@@ -27,8 +28,8 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
 - **Rail**: the selected clip's name and source, in Stacked its Start (where
   it starts on the timeline), Trim (In, Out, Length),
   Audio (Clip audio, Volume), Split at playhead, Reset trim, Reveal source
-  node, Remove clip; with the audio track selected, Track sound and
-  the quick curve buttons (Fade in, Fade out, Flat). With several clips
+  node, Remove clip; with an audio clip selected, its Start, Trim, Clip
+  sound and the curve's quick buttons (Fade in, Fade out, Flat). With several clips
   selected the rail shows how many, and what applies to all of them: Clip
   audio (On or Off, with neither pressed while some are muted and some
   not), Split at playhead, Reset trim and Remove. At the foot of the
@@ -36,10 +37,12 @@ with its own darker chrome (the `editor-*` tokens in `globals.css`):
   canvas"); under it the footer holds Loop sequence (1×, 2×, 3×).
 - **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
   trim by their edges, a context menu, a `+` and a dashed slot that add
-  videos from the library) and the Audio lane (the music's waveform and its
-  volume line, taller while it is selected). In Stacked the Clips lane is
-  one row per clip; the rows scroll between a fixed ruler and a fixed audio
-  row. A clip's box drags in time and up or down to another row in one
+  videos from the library) and the audio rows (each audio clip's waveform
+  and volume line; a row's volume-line button makes it taller to edit the
+  line) and, under them, **+ Add audio**. In Stacked the Clips lane is one
+  row per clip; the rows scroll between a fixed ruler and the audio rows.
+  The timeline's height does not change with the layout or the selection
+  (see Audio clips). A clip's box drags in time and up or down to another row in one
   move; its row header drags it up or down only (see Stacked). Click,
   ⌘-click, ⇧-click or drag a box around clips to select several (see
   Several clips).
@@ -68,9 +71,10 @@ beside the fields the node always had:
 
 ```ts
 timeline?: StitchTimelineClip[];   // the sequence, in order
-audioCurve?: VolumePoint[];        // the music's volume over one loop; empty = flat at 0 dB
-audioMuted?: boolean;              // the music is off; the clips' own sound still plays
+audioCurve?: VolumePoint[];        // the music's volume over one loop; empty = flat at 0 dB; read only while audioClips is absent
+audioMuted?: boolean;              // the music is off; the clips' own sound still plays; read only while audioClips is absent
 sequenceLayout?: StitchSequenceLayout;   // Track or Stacked; absent = Track
+audioClips?: StitchAudioClip[];   // the audio clips; absent = the music alone, read from audioCurve and audioMuted
 
 interface StitchSequenceLayout {
   mode: "track" | "stacked";
@@ -86,7 +90,17 @@ interface StitchTimelineClip {
   volume: number;                               // 0..1, linear, on the clip's own sound
   startSec?: number;                            // Stacked: where the trimmed clip starts, 0..600 s; absent = laid out from Overlap
 }
-interface VolumePoint { t: number; gain: number }   // t in sequence seconds, gain 0..1 (1 = 0 dB)
+interface StitchAudioClip {
+  id: string;
+  source: { kind: "music" } | { kind: "asset"; assetId: string };   // the node's audio socket, or a library file
+  row: number;                    // audio row, from 0; stored with no empty rows
+  startSec: number;               // where its In plays on the timeline, 0..600 s
+  inSec: number;                  // trim start, in the file's seconds
+  outSec: number | null;          // trim end; null = the file's end
+  muted: boolean;
+  curve: VolumePoint[];           // t in the file's seconds, gain 0..1
+}
+interface VolumePoint { t: number; gain: number }   // t: sequence seconds for audioCurve, the clip's source seconds on an audio clip; gain 0..1 (1 = 0 dB)
 ```
 
 `clipOrder` (edge ids) is still written, equal to the timeline's edge ids in
@@ -94,6 +108,19 @@ order, for anything that reads it. `loopCount` is the node's existing field.
 No media is stored: frames, posters, durations, waveforms and library
 records live in module caches in the browser (`src/lib/stitch/mediaInfo.ts`,
 `waveformCache.ts`, `assetInfo.ts`), never in node data or saved workflows.
+
+**A node without `audioClips` keeps the old audio.** Its audio is the
+connected music alone, starting at 0:00, read from `audioCurve` and
+`audioMuted`. The editor shows it as one clip on the first audio row. Done
+writes `audioClips` only when the audio is something else: the music
+moved, trimmed or split, a library clip, a second row. When an edit brings
+it back to that one untouched music clip, Done removes `audioClips` and
+writes the curve and mute to `audioCurve` and `audioMuted` again. Whenever
+`audioClips` is written, `audioCurve` and `audioMuted` are written too, for
+builds from before audio clips, which ignore `audioClips`: they hold the
+curve and mute of an untouched music clip (whole, at 0:00), or say "muted"
+when the music was moved, trimmed, split or removed. On a node with
+`audioClips` they are never read. An older build plays no library audio.
 
 **A node without `timeline` is "legacy"**: the editor's Done has never run
 on it. That includes every workflow saved before the editor and every Edit Video
@@ -311,9 +338,10 @@ with dashed sides, labelled "Gap 1.0 s" when the band is wide enough for the lab
 for "Gap 1.0 s", 7 px more for each further character), and
 a 3 px black strip along the bottom of the ruler, which stays in view while
 the rows scroll. Up to three and a half rows show, so the timeline grows to
-279 px tall for four clips or more (351 px while the audio track is
-selected), taking the room from the stage. More rows scroll up and down
-under the fixed ruler, above the fixed audio row. While the preview plays,
+303 px tall for four clips or more, in Track as well, so that switching
+layouts moves nothing (see "The timeline's height" in Audio clips), taking
+the room from the stage. More rows scroll up and down under the fixed
+ruler, above the audio rows. While the preview plays,
 the row under the playhead is kept in view, and so is a clip selected by a
 key, a split or an undo. A wheel over the row headers scrolls the rows as
 one over the lanes does, and a right press on a header opens its clip's
@@ -509,6 +537,95 @@ long for the card they are cut at their end, with their full text on
 hover. The card has no layout control, and its own edits (a reorder, ✕)
 keep the layout and every clip's start.
 
+## Audio clips
+
+Under the video, the timeline has audio rows. Each row holds audio clips
+that do not overlap. A clip is the music on the node's `audio` socket, or an
+audio file from the library.
+
+**The music** is the first clip on the first row when it is connected. If
+you remove it, Done disconnects the music, as removing a video's last clip
+disconnects it. If you disconnect the music on the canvas, its clips go
+with the connection (also while the editor is open, and also when you copy
+the node without its music), and a new connection starts as one whole clip
+at 0:00. A music clip whose music is not connected is kept, drawn dashed
+("No audio connected"), and is silent.
+
+**Adding audio.** **+ Add audio**, under the audio rows, opens **Add audio
+from the library**: audio files only, with the same search, project menu,
+Favourites, This workflow and sort as for videos. Each picked file goes on a
+new row of its own, starting at the playhead. A library clip stores only the
+asset's id; a clip whose file is gone is drawn "Not in the library" and
+stops a render until it is removed.
+
+**Editing a clip.** Click a clip to select it (⌘-click and ⇧-click add to
+the selection; a selection holds either video clips or audio clips; ⌘A
+selects every clip of the kind selected; a drag on empty audio-row space
+draws a selection box). Drag it sideways to move it in time, and up or down
+to another row; one drag can do both. Drop it under the last row, on the
+**New row** strip, to make a row for it. A drop where it would overlap a
+clip on that row puts it on a new row just below instead (a line shows
+where while you drag). A row a move empties stays until you remove a clip
+or open the editor again, so nothing jumps after you let go. Drag either
+edge to trim it: the sound stays where it is in time, so an In trim moves
+the clip's start with it, and an edge stops at the clip next to it on its
+row. S splits the selected clips at the playhead; the pieces stay on their
+row and sound exactly as before. ⌥← and ⌥→ move the selected clips a frame,
+⌥↑ and ⌥↓ a row, [ and ] start or end the clip at the playhead, M mutes
+them, ⌫ removes them. ← → ↑ ↓, Home and End move the selection between
+audio clips. ⌘C, ⌘X, ⌘V and ⌘D work on audio clips: pasted clips go on new
+rows, the first at the playhead; a duplicate starts where the selection
+ends, on the same rows when there is room, else on new rows. A music clip
+pastes only into the node it came from. The clip menu (right-click) has
+Split at playhead, Start and End at playhead, Move up and down a row, Mute,
+Copy, Cut, Paste, Duplicate and Remove clip.
+
+**Audio keeps its own time.** Trimming, removing or reordering video clips,
+or switching Track and Stacked, leaves every audio clip where it is in time;
+only a fade out that ends at the end of the sequence follows the end.
+
+**Moves snap** within 8 px to the playhead, 0:00, the end of the sequence,
+every video clip's start and end, every other audio clip's start and end,
+and the clip's own start. ⇧ turns snapping off.
+
+**The volume curve.** Each clip has its own curve, drawn over its waveform.
+The volume-line button in a row's header makes the row taller (one row at a
+time; selecting a clip never changes a row's height). On a taller row, with
+one clip selected: click the line to add a point, drag a point, double-click
+a point to remove it (the point before it is then selected, so ⌫ removes
+points, not the clip), ⌥-drag to move the whole line. Fade in, Fade out and
+Flat are in the rail for any one selected clip. The curve belongs to the
+sound: moving the clip takes it along, and trimming shows or hides part of
+it, so a fade that is trimmed away needs Fade in or Fade out again. A split
+keeps the whole curve on both pieces. Fade out ends where the clip stops
+being heard: its Out, or the end of the sequence; on a clip that plays to
+the end of its file, Fade out waits until the file's length is read.
+
+**Length.** The sequence still ends at the last video frame. Audio after it
+is not heard: that part of a clip is hatched. A clip can start anywhere from
+0:00 to 10:00.
+
+**Loops.** While the audio is only the connected music, whole and starting
+at 0:00 (its curve and mute may be changed), the music plays on across
+loops as before, and its curve repeats each loop. Once the audio is anything
+else, every audio clip repeats with each loop, the music included: with
+Loop 2× on a 10 s sequence, a 20 s song plays its first 10 s twice instead
+of playing through once. Each restart is a cut. The rail says so under Loop
+sequence while it applies.
+
+**Clip sound** stays with each video clip (Clip audio and Volume in the
+rail), as before.
+
+**The timeline's height** depends on the number of video clips, the number
+of audio rows and which row is taller, never on the layout or the
+selection: switching Track and Stacked, undoing that, or clicking a clip
+moves nothing above or inside the timeline. Its video part is sized for
+whichever layout needs more room, so in Track with three or more clips an
+empty band sits above the audio rows. Two audio rows show at once; more
+scroll with the wheel over them (over Stacked's rows, only those scroll).
+In a short window Stacked's rows give way first, then the audio rows, down
+to one; the stage keeps at least 300 px.
+
 ## Several clips
 
 **Selecting.** A click on a clip selects it alone. ⌘-click (Ctrl-click on
@@ -577,7 +694,9 @@ lost."
 `stitchVideosAsync` (`src/hooks/useStitchVideos.ts`) takes one input per
 clip (`{ blob, inSec, outSec, muted, volume }`, and on a node the editor
 wrote the clip's `source` key, so pieces of one video are known), the music
-with its curve, and the options: `{ loopCount }`, plus `overlapSec` and
+with its curve, and the options: `{ loopCount }`, `audioClips` (each unmuted
+audio clip with its decoded file, start, In, Out and curve) when the node's
+audio is more than the untouched music, plus `overlapSec` and
 `crossfade` when the node is a lined-up stack with an overlap above 0, or
 `overlapSec`, `crossfade` and `placed: true` when some clip is placed (each
 placed clip's input then carries its `startSec`). A Track node passes
@@ -606,11 +725,26 @@ when the music plays alone, otherwise the highest rate that plays, at most
 stereo (5.1 and quad are downmixed; centre kept, LFE dropped). Resampling is
 linear. A clip whose sound fails to decode is silence in its own place.
 
-**Music.** The music plays once, continuously across loops. The curve covers
-one loop and shapes it again on each loop, sampled in 128-sample blocks and
-ramped inside each block. The music is cut at the encoded length and padded
-with silence when it is shorter. `audioMuted` drops it; the clips' sound
-still plays.
+**Audio.** On a node without `audioClips`, the music plays once,
+continuously across loops (as before; see Loops in Audio clips). The curve
+covers one loop and shapes it again on each loop, sampled in 128-sample
+blocks and ramped inside each block. The music is cut at the encoded length
+and padded with silence when it is shorter. `audioMuted` drops it; the
+clips' sound still plays. Otherwise each unmuted audio clip's heard part
+(from its In, up to its Out or the end of the loop) is decoded, shaped by
+its curve sample by sample (ramped in 128-sample blocks), and added at its
+start in every loop. Each clip is laid on its file's own sample grid at the
+master rate, and the blocks sit on that grid, so the pieces of a split give
+exactly the samples the whole clip gave. Each file is decoded once, with the
+same decoder the waveform uses. The master format is the audio file's rate
+when one file sounds alone, otherwise the highest rate among everything that
+sounds, at most stereo. Whether a node takes this path is decided by what
+its audio is, not by whether `audioClips` is stored: an empty `audioClips`
+with the music connected encodes as before. The progress line says "Mixing
+N audio clips...". A library audio file that is gone stops the run with
+"Audio clip “<file name>” is no longer in the library" (or, when its record
+was never read, "The audio clip on Audio 2 at 0:03.00 is no longer in the
+library").
 
 **Lined-up stacks.** A clip's frames outside its overlaps pass straight
 through, as in Track. With Crossfade off that is every frame from where the
@@ -674,9 +808,9 @@ sequence length times the loop count. In Stacked one loop runs to the end
 of the clip that ends last, and each restart is a cut. The audio is AAC at
 128 kbps (MP3 if the browser has no AAC encoder), tried in the master
 format, then 48 kHz and 44.1 kHz stereo. All the audio is written before
-any video. When clip sound and music play together, or clips' sound
-overlaps in Stacked, the sum is hard-clipped to full scale; one source on
-its own passes through as decoded.
+any video. When more than one source sounds at once (clip sound, music,
+audio clips that overlap in time), the sum is hard-clipped to full scale;
+one source on its own passes through as decoded.
 
 ### "Renders as before"
 
@@ -731,7 +865,7 @@ never wrote encode exactly as they did before clips could be placed.
 
 ## The volume curve
 
-The music's line is drawn on a square-root scale: a point's height is
+Each audio clip's line is drawn on a square-root scale: a point's height is
 `1 − √gain`, so 0 dB is the top, −∞ the bottom and −12 dB the middle guide.
 Between two points the level moves in a straight line on that scale
 (`gainAt` in `src/lib/stitch/curve.ts`), so what is drawn is what is heard.
@@ -740,17 +874,17 @@ first point's level, and after the last point the last one's.
 
 Click the line to add a point; drag a point (up and down, and along);
 double-click a point to remove it; ⌥-drag moves the whole line. Fade in and
-Fade out set a 1 s ramp at either end (at most half the sequence), and Flat
-clears the curve.
+Fade out set a 1 s ramp at either end of the part of the clip that is heard
+(at most half of it), and Flat clears the curve.
 
 Points keep their times when trims make the sequence shorter. Points past
-the new end are kept and not drawn, but they still shape the line up to the
-end, so a fade out made before a trim no longer reaches silence at the new
-end. Press Fade out again after shortening.
+the clip's Out are kept and not drawn, but they still shape the line up to
+the Out, so a fade out made before a trim no longer reaches silence at the
+new end. Press Fade out again after shortening.
 
 Switching between Track and Stacked, changing Overlap in a lined-up stack,
 or Line up changes the length without a trim, so a fade out that ends at the
-end follows it (`followEndFade`): when the curve's last point is silent and
+end, on any audio clip, follows it (`followEndFade`): when the curve's last point is silent and
 within one 1/60 s frame of the old end, it and the point before it move by
 the change in length, in the same undo step. Switching back moves them back,
 so the curve returns as it was. Other points keep their times, and a move
@@ -830,18 +964,18 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | Key | Action |
 |---|---|
 | Space | Play or pause |
-| I / O | Set the selected clip's In / Out at the playhead (the playhead must be inside it) |
-| S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play) |
-| ⌫ / Delete | Remove the selected clips, or the selected curve point |
-| M | Mute or unmute the music track |
-| ⌥M | Mute or unmute the selected clips' sound |
-| ⌥← / ⌥→ | Stacked: move the selected clips a frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
-| ⌥↑ / ⌥↓ | Stacked: move the selected clips up / down a row |
-| [ / ] | Stacked: start / end the selected clip at the playhead (also ⌥5 / ⌥6 and AltGr+8 / AltGr+9 where the keyboard types brackets that way) |
+| I / O | Set the selected clip's or audio clip's In / Out at the playhead (the playhead must be inside it) |
+| S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play); or the selected audio clips |
+| ⌫ / Delete | Remove the selected clips or audio clips, or the selected curve point |
+| M | Mute or unmute the selected audio clips; with none selected, the music |
+| ⌥M | Mute or unmute the selected video clips' own sound, or the selected audio clips |
+| ⌥← / ⌥→ | Stacked: the selected video clips; any layout: the selected audio clips. A frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
+| ⌥↑ / ⌥↓ | Stacked: move the selected clips up / down a row; or the selected audio clips a row |
+| [ / ] | Stacked: start / end the selected clip at the playhead, or the selected audio clip in any layout (also ⌥5 / ⌥6 and AltGr+8 / AltGr+9 where the keyboard types brackets that way) |
 | ⌘Z / Ctrl+Z | Undo, in the editor only |
 | ⇧⌘Z / Ctrl+Y | Redo |
 | J / K / L | Back 1 s / pause / play |
-| ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too) |
+| ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too), or along the audio clips with one focused (↑ / ↓ too) |
 | ↑ / ↓ in the Start well | 0.1 s later or earlier (⇧: 1 s), one undo step until the well is left |
 | Context menu key / ⇧F10 | Open the clip menu |
 | Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel |
@@ -849,13 +983,14 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | ⌥ while dragging the curve | Move the whole line |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
 | ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open |
-| ⌘C / ⌘X / ⌘V | Copy, cut, paste clips |
-| ⌘D | Duplicate the selected clips |
-| ⌘A | Select every clip |
+| ⌘C / ⌘X / ⌘V | Copy, cut, paste clips or audio clips |
+| ⌘D | Duplicate the selected clips or audio clips |
+| ⌘A | Select every clip, or every audio clip when audio is selected |
 | ⌘-click / ⇧-click | Add or remove a clip / select a range |
 | Drag on empty lane space | Select with a box (⇧ or ⌘ adds) |
 
-In Track, ⌥ with an arrow, [ and ] do nothing, and ⌥← never reaches the
+In Track, ⌥ with an arrow, [ and ] do nothing to video clips (they work on
+selected audio clips), and ⌥← never reaches the
 browser (on Windows it would go Back). Keys the canvas or the browser
 would act on (⌘Z, ⌘C, ⌘V, ⌘X, ⌘A, ⌘D, Shift+letters, ⌘↵ and so on) never
 reach them while the editor is open, except in a text field.
@@ -896,8 +1031,13 @@ snaps its start only.
 - In Stacked the preview has one `<video>` per clip, so every clip loads.
   Where clips overlap they all play at once, hidden ones too, and can drift
   apart by up to 0.15 s before they are seeked back together. In a gap the
-  playhead runs on the frame clock, and the music can drift from it by up
-  to 0.25 s before it is seeked back.
+  playhead runs on the frame clock.
+- The preview plays one `<audio>` per audio clip, set once a frame; it can
+  drift up to 0.25 s before it is seeked back.
+- Each audio file is decoded whole while a render runs: about 115 MB for 5
+  minutes of 48 kHz stereo.
+- A row taller for its volume line needs its header's button; editing
+  points needs it.
 - Pasting and duplicating add elements the same way: ⌘A then ⌘D doubles
   them each time. Past 24 clips in Stacked a notice says so; nothing is
   refused, but the preview slows down and a browser plays only so many
@@ -945,10 +1085,11 @@ snaps its start only.
   height (1080 to 1088) also take the canvas in a blend, scaled to cover it,
   about 0.7 % larger than the frames beside them; lined-up dissolves already
   did this.
-- In Stacked the timeline grows to 279 px for four or more clips, taking
-  room from the stage; on a window about 900 px tall the rail then scrolls,
-  more with a clip selected, since Stacked's rail adds Start above Trim and
-  six key hints.
+- The timeline grows to 303 px for four or more clips, in either layout,
+  and by 72 px while an audio row is taller, taking room from the stage
+  down to 300 px; on a window about 900 px tall the rail then scrolls, more
+  with a clip selected, since Stacked's rail adds Start above Trim and six
+  key hints.
 - A clip starts at most at 10:00 (600 s); a later start, typed or dragged,
   stops there.
 - An edit that places the clips while a clip's source is still loading
@@ -966,14 +1107,18 @@ snaps its start only.
   also disconnects a clip's connection: the store takes no undo snapshot of
   node edits during a run, as for every other edit made then.
 - The agent sees the node's `clipOrder` and loop count, not its timeline,
-  its layout or where its clips are placed; its edits keep all three.
+  its layout, where its clips are placed or its audio clips; its edits keep
+  them all.
 - Not built: ducking the music under clips with sound, roll edits,
   transitions other than the crossfade where stacked clips overlap, a
   crossfade at the loop's restart, an overlap set per join, fade lengths
   set per clip, selecting or deleting a gap, a slip edit,
   a start before 0:00, a lock to one axis while dragging a clip, speed
-  changes, titles, a second video or music track (Stacked's rows are still
-  one sequence and one output track), extending a selection with ⇧ and
+  changes, titles, a second video track (Stacked's rows are still one
+  sequence and one output track), a second audio socket, audio effects
+  other than the volume curve, selecting video and audio clips together, a
+  volume slider for audio clips, audio that follows a video clip when the
+  video moves, selecting a whole audio row from its header, extending a selection with ⇧ and
   the arrow keys, copying clips to the system clipboard (the copy lives in
   the app until it reloads), snapping every clip of a group drag (only the
   clip you hold snaps).

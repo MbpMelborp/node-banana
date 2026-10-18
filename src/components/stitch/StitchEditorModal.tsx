@@ -1,31 +1,35 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, type HTMLAttributes } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { requestSave } from "@/store/saveRequestStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { isPlaced, layoutSpans, spansEnd } from "@/lib/stitch/timeline";
-import type { StitchTimelineClip } from "@/types";
+import type { StitchAudioClip, StitchTimelineClip } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { DiscardSheet } from "./DiscardSheet";
 import { EditorHeader } from "./EditorHeader";
 import { EditorRail } from "./EditorRail";
 import { EditorStage, type PreviewLayerSource } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
-import { STITCH_EDITOR_PANEL } from "./editorStyles";
+import { GEOMETRY, STITCH_EDITOR_PANEL } from "./editorStyles";
 import { LibraryPicker } from "./library/LibraryPicker";
 import { Timeline } from "./timeline/Timeline";
 import { useTimelineZoom } from "./timeline/useTimelineZoom";
 import { useEditorLifecycle } from "./useEditorLifecycle";
 import { usePlayableUrls } from "./usePlayableUrls";
-import { useSequencePlayback } from "./useSequencePlayback";
+import { useSequencePlayback, type AudioPlaybackClip } from "./useSequencePlayback";
 import { useStitchEditorKeys } from "./useStitchEditorKeys";
 import { useStitchEditorMedia } from "./useStitchEditorMedia";
 
 const DEFAULT_ASPECT = 16 / 9;
 const EMPTY_TIMELINE: StitchTimelineClip[] = [];
+const NO_AUDIO: StitchAudioClip[] = [];
+/** The header's and the transport's heights (their h-12 and h-11). */
+const HEADER_PX = 48;
+const TRANSPORT_PX = 44;
 
 /** Cancel and Escape: straight out when nothing changed, otherwise the discard sheet asks. */
 function requestClose(): void {
@@ -54,14 +58,27 @@ function StitchEditor() {
   const rootRef = useRef<HTMLDivElement>(null);
   const timeline = useStitchEditorStore((s) => s.draft?.timeline ?? EMPTY_TIMELINE);
   const durations = useStitchEditorStore((s) => s.durations);
-  const curve = useStitchEditorStore((s) => s.draft?.audioCurve);
-  const audioMuted = useStitchEditorStore((s) => s.draft?.audioMuted ?? false);
+  const audioClips = useStitchEditorStore((s) => s.draft?.audioClips ?? NO_AUDIO);
   const layout = useStitchEditorStore((s) => s.draft?.sequenceLayout ?? DEFAULT_SEQUENCE_LAYOUT);
   const soundOn = useStitchEditorStore((s) => s.soundOn);
 
   useEditorLifecycle();
   useStitchEditorKeys(rootRef, requestClose);
-  const { byClip, music } = useStitchEditorMedia();
+  const { byClip, audioByClip } = useStitchEditorMedia();
+
+  // The timeline may take what leaves the stage GEOMETRY.stageFloor (Infinity until measured)
+  const [maxTimeline, setMaxTimeline] = useState(Infinity);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      if (root.clientHeight > 0) setMaxTimeline(root.clientHeight - HEADER_PX - TRANSPORT_PX - GEOMETRY.stageFloor);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
 
   const stacked = layout.mode === "stacked";
   const crossfade = layout.crossfade;
@@ -97,9 +114,9 @@ function StitchEditor() {
   const rawSources = useMemo(() => {
     const srcs: string[] = [];
     for (const view of byClip.values()) if (view.src && !srcs.includes(view.src)) srcs.push(view.src);
-    if (music?.src) srcs.push(music.src);
+    for (const view of audioByClip.values()) if (view.src && !srcs.includes(view.src)) srcs.push(view.src);
     return srcs;
-  }, [byClip, music]);
+  }, [byClip, audioByClip]);
   const playable = usePlayableUrls(rawSources);
   // Track: one element per source. Stacked: one per clip, in timeline order, since two pieces of one source can
   // show at once
@@ -119,7 +136,22 @@ function StitchEditor() {
     }
     return layers;
   }, [stacked, timeline, byClip, playable]);
-  const musicUrl = music?.src ? (playable.get(music.src) ?? null) : null;
+  // One element per audio clip: two pieces of one file play at their own times
+  const audioUrl = useCallback(
+    (clipId: string) => {
+      const src = audioByClip.get(clipId)?.src;
+      return src ? (playable.get(src) ?? null) : null;
+    },
+    [audioByClip, playable],
+  );
+  const audioLayers = useMemo(
+    () =>
+      audioClips.flatMap((clip): PreviewLayerSource[] => {
+        const url = audioUrl(clip.id);
+        return url ? [{ key: clip.id, src: url }] : [];
+      }),
+    [audioClips, audioUrl],
+  );
 
   const srcFor = useCallback(
     (clipId: string) => {
@@ -128,16 +160,28 @@ function StitchEditor() {
     },
     [byClip, playable],
   );
-  const musicPlayback = useMemo(
-    () => ({ src: musicUrl, curve: curve ?? [], muted: audioMuted }),
-    [musicUrl, curve, audioMuted],
+  const audioPlayback = useMemo(
+    () => ({
+      clips: audioClips.map(
+        (clip): AudioPlaybackClip => ({
+          id: clip.id,
+          src: audioUrl(clip.id),
+          startSec: clip.startSec,
+          inSec: clip.inSec,
+          outSec: clip.outSec,
+          muted: clip.muted,
+          curve: clip.curve,
+        }),
+      ),
+    }),
+    [audioClips, audioUrl],
   );
   const stack = useMemo(() => (stacked ? { crossfade, placed } : null), [stacked, crossfade, placed]);
   const { registerVideo, registerAudio, activeSrc } = useSequencePlayback({
     spans,
     total,
     srcFor,
-    music: musicPlayback,
+    audio: audioPlayback,
     soundOn,
     stack,
   });
@@ -186,14 +230,22 @@ function StitchEditor() {
               stacked={stacked}
               activeSrc={activeSrc}
               registerVideo={registerVideo}
-              musicSrc={musicUrl}
+              audioLayers={audioLayers}
               registerAudio={registerAudio}
             />
             <EditorTransport total={total} empty={empty} zoom={zoom} />
           </div>
-          <EditorRail media={byClip} music={music} total={total} spans={spans} frameSize={frameSize} />
+          <EditorRail media={byClip} audio={audioByClip} spans={spans} frameSize={frameSize} />
         </div>
-        <Timeline spans={spans} media={byClip} zoom={zoom} srcFor={srcFor} music={music} stacked={stacked} />
+        <Timeline
+          spans={spans}
+          media={byClip}
+          audio={audioByClip}
+          zoom={zoom}
+          srcFor={srcFor}
+          stacked={stacked}
+          maxHeight={maxTimeline}
+        />
       </div>
       <DiscardSheet />
       <LibraryPicker />

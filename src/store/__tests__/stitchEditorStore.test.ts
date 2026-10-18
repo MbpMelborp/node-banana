@@ -5,6 +5,8 @@ import {
   selectCanUndo,
   selectIsDirty,
   selectIsMulti,
+  audioSelectionOf,
+  selectedAudioIds,
   selectedClipIds,
   useStitchEditorStore,
 } from "@/store/stitchEditorStore";
@@ -19,6 +21,7 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
+import { createAudioClip, legacyMusicClip, setAudioClipCurve } from "@/lib/stitch/audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
   addAssetClips,
@@ -64,8 +67,8 @@ const clipB = createClip({ kind: "asset", assetId: "x" }, { id: "b", inSec: 1 })
 function makeDraft(overrides: Partial<StitchDraft> = {}): StitchDraft {
   return {
     timeline: [clipA, clipB],
-    audioCurve: [],
-    audioMuted: false,
+    audioClips: [],
+    legacyAudio: { curve: [], muted: false },
     loopCount: 1,
     sequenceLayout: TRACK_LAYOUT,
     ...overrides,
@@ -119,24 +122,113 @@ describe("stitchEditorStore", () => {
     expect(store().past).toHaveLength(1);
   });
 
-  it("forgets a selected point when another gesture changes the curve", () => {
-    openOn(makeDraft({ audioCurve: [{ t: 0, gain: 1 }, { t: 4, gain: 0.5 }] }));
-    store().select({ kind: "audio", point: 1 });
+  it("forgets a selected point when another gesture changes the lead's curve", () => {
+    const music = { ...legacyMusicClip([{ t: 0, gain: 1 }, { t: 4, gain: 0.5 }], false) };
+    const tone = createAudioClip({ kind: "asset", assetId: "tone" }, { id: "tone", row: 1, curve: [{ t: 0, gain: 1 }] });
+    openOn(makeDraft({ audioClips: [music, tone] }));
+    store().select(audioSelectionOf({ clipId: music.id }, 1, true));
     store().apply(setLoop(2));
-    expect(store().selection).toEqual({ kind: "audio", point: 1 });
-    store().apply((d) => ({ ...d, audioCurve: addPoint(d.audioCurve, 2, 0.2).curve }));
-    expect(store().selection).toEqual({ kind: "audio", point: null });
+    expect(store().selection).toMatchObject({ kind: "audio", point: 1 });
+    // Another clip's curve leaves the lead's point
+    store().apply((d) => ({ ...d, audioClips: setAudioClipCurve(d.audioClips, "tone", [{ t: 1, gain: 0.5 }]) }));
+    expect(store().selection).toMatchObject({ kind: "audio", point: 1 });
+    store().apply((d) => ({
+      ...d,
+      audioClips: setAudioClipCurve(d.audioClips, music.id, addPoint(d.audioClips[0].curve, 2, 0.2).curve),
+    }));
+    expect(store().selection).toEqual({ kind: "audio", clipId: music.id, point: null, onCurve: true });
   });
 
   it("forgets a selected point on undo and on redo", () => {
-    openOn(makeDraft({ audioCurve: [{ t: 0, gain: 1 }] }));
-    store().apply((d) => ({ ...d, audioCurve: flat() }));
-    store().select({ kind: "audio", point: 0 });
+    const music = legacyMusicClip([{ t: 0, gain: 1 }], false);
+    openOn(makeDraft({ audioClips: [music] }));
+    store().apply((d) => ({ ...d, audioClips: setAudioClipCurve(d.audioClips, music.id, flat()) }));
+    store().select(audioSelectionOf({ clipId: music.id }, 0));
     store().undo();
-    expect(store().selection).toEqual({ kind: "audio", point: null });
-    store().select({ kind: "audio", point: 0 });
+    expect(store().selection).toEqual({ kind: "audio", clipId: music.id, point: null, onCurve: false });
+    store().select(audioSelectionOf({ clipId: music.id }, 0));
     store().redo();
-    expect(store().selection).toEqual({ kind: "audio", point: null });
+    expect(store().selection).toEqual({ kind: "audio", clipId: music.id, point: null, onCurve: false });
+  });
+
+  it("drops audio clips an undo takes away from the selection, the first left leading", () => {
+    const a1 = createAudioClip({ kind: "asset", assetId: "t1" }, { id: "a1" });
+    const a2 = createAudioClip({ kind: "asset", assetId: "t2" }, { id: "a2", row: 1 });
+    const a3 = createAudioClip({ kind: "asset", assetId: "t3" }, { id: "a3", row: 2 });
+    openOn(makeDraft({ audioClips: [a1] }));
+    store().apply((d) => ({ ...d, audioClips: [a1, a2, a3] }));
+    store().select({ ...audioSelectionOf({ clipId: "a3", clipIds: ["a1", "a2", "a3"], anchorId: "a2" }) });
+    store().undo();
+    expect(store().selection).toEqual({ kind: "audio", clipId: "a1", point: null, onCurve: false });
+    store().select(audioSelectionOf({ clipId: "a1" }));
+    const before = store().selection;
+    store().redo();
+    // Nothing went: the same selection object
+    expect(store().selection).toBe(before);
+    store().select(audioSelectionOf({ clipId: "a2" }));
+    store().undo();
+    expect(store().selection).toBeNull();
+  });
+
+  it("takes a move that empties an audio row as an edit, though the draft still reads as unchanged", () => {
+    const a1 = createAudioClip({ kind: "asset", assetId: "t1" }, { id: "a1" });
+    const a2 = createAudioClip({ kind: "asset", assetId: "t2" }, { id: "a2", row: 1 });
+    openOn(makeDraft({ audioClips: [a1, a2] }));
+    store().apply((d) => ({ ...d, audioClips: [a1, { ...a2, row: 2 }] }));
+    expect(store().past).toHaveLength(1);
+    expect(store().draft!.audioClips[1].row).toBe(2);
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("collapses an expanded row that an undo or redo takes away, and keeps one that stays", () => {
+    const a1 = createAudioClip({ kind: "asset", assetId: "t1" }, { id: "a1" });
+    const a2 = createAudioClip({ kind: "asset", assetId: "t2" }, { id: "a2", row: 1 });
+    openOn(makeDraft({ audioClips: [a1] }));
+    store().apply((d) => ({ ...d, audioClips: [a1, a2] }));
+    store().setAudioExpandedRow(1);
+    store().undo();
+    expect(store().audioExpandedRow).toBeNull();
+    store().setAudioExpandedRow(0);
+    store().redo();
+    expect(store().audioExpandedRow).toBe(0);
+    // Not undoable: the row stays expanded across history moves that keep it
+    store().undo();
+    expect(store().audioExpandedRow).toBe(0);
+  });
+
+  it("keeps the music edge from open, updates it on markSaved when given, and resets the audio session on close", () => {
+    store().open({ nodeId: "s1", draft: makeDraft(), canvasGeneration: 3, musicEdgeIdAtOpen: "eM" });
+    expect(store().musicEdgeIdAtOpen).toBe("eM");
+    store().markSaved(makeDraft());
+    expect(store().musicEdgeIdAtOpen).toBe("eM");
+    store().markSaved(makeDraft(), "eM2");
+    expect(store().musicEdgeIdAtOpen).toBe("eM2");
+    store().markSaved(makeDraft(), null);
+    expect(store().musicEdgeIdAtOpen).toBeNull();
+
+    store().setAudioDurations(new Map([["music", 20]]));
+    store().setAudioExpandedRow(0);
+    store().setPickerOpen("audio");
+    expect(store().pickerOpen).toBe("audio");
+    store().close();
+    const s = store();
+    expect(s.audioDurations.size).toBe(0);
+    expect(s.audioExpandedRow).toBeNull();
+    expect(s.musicEdgeIdAtOpen).toBeNull();
+    expect(s.pickerOpen).toBe(false);
+    openOn();
+    expect(store().musicEdgeIdAtOpen).toBeNull();
+  });
+
+  it("selectedAudioIds gives the audio selection's ids in audio order, and nothing for a clip selection", () => {
+    const a1 = createAudioClip({ kind: "asset", assetId: "t1" }, { id: "a1" });
+    const a2 = createAudioClip({ kind: "asset", assetId: "t2" }, { id: "a2", row: 1 });
+    openOn(makeDraft({ audioClips: [a1, a2] }));
+    store().select(audioSelectionOf({ clipId: "a2", clipIds: ["a2", "a1", "gone"] }));
+    expect(selectedAudioIds(store())).toEqual(["a1", "a2"]);
+    expect(selectedClipIds(store())).toEqual([]);
+    store().select({ kind: "clip", clipId: "a" });
+    expect(selectedAudioIds(store())).toEqual([]);
   });
 
   it("coalesces a gesture into one step, and endGesture starts a new one", () => {
@@ -195,19 +287,19 @@ describe("stitchEditorStore", () => {
   it("keeps at most STITCH_HISTORY_LIMIT steps", () => {
     openOn();
     for (let i = 0; i < STITCH_HISTORY_LIMIT + 20; i++) {
-      store().apply((d) => ({ ...d, audioCurve: [{ t: i + 1, gain: 1 }] }));
+      store().apply((d) => ({ ...d, legacyAudio: { ...d.legacyAudio, curve: [{ t: i + 1, gain: 1 }] } }));
     }
     expect(store().past).toHaveLength(STITCH_HISTORY_LIMIT);
     // The oldest steps are the ones dropped
-    expect(store().past[0].audioCurve[0].t).toBe(20);
-    expect(store().past.at(-1)!.audioCurve[0].t).toBe(STITCH_HISTORY_LIMIT + 19);
+    expect(store().past[0].legacyAudio.curve[0].t).toBe(20);
+    expect(store().past.at(-1)!.legacyAudio.curve[0].t).toBe(STITCH_HISTORY_LIMIT + 19);
     store().undo();
-    expect(store().draft!.audioCurve[0].t).toBe(STITCH_HISTORY_LIMIT + 19);
+    expect(store().draft!.legacyAudio.curve[0].t).toBe(STITCH_HISTORY_LIMIT + 19);
     // Redo at the cap keeps the newest steps too
     store().redo();
-    expect(store().draft!.audioCurve[0].t).toBe(STITCH_HISTORY_LIMIT + 20);
+    expect(store().draft!.legacyAudio.curve[0].t).toBe(STITCH_HISTORY_LIMIT + 20);
     expect(store().past).toHaveLength(STITCH_HISTORY_LIMIT);
-    expect(store().past[0].audioCurve[0].t).toBe(20);
+    expect(store().past[0].legacyAudio.curve[0].t).toBe(20);
   });
 
   it("is not dirty once undone back to the draft it opened with", () => {
@@ -314,17 +406,17 @@ describe("stitchEditorStore: the sequence layout", () => {
   });
 
   it("moves a fade out with the end in the same step, and undo puts both back", () => {
-    store().apply((d) => ({ ...d, audioCurve: fadeOut(d.audioCurve, 10) }));
+    store().apply((d) => ({ ...d, legacyAudio: { ...d.legacyAudio, curve: fadeOut(d.legacyAudio.curve, 10) } }));
     const steps = store().past.length;
     setSequenceMode("stacked");
     expect(store().past).toHaveLength(steps + 1);
-    expect(store().draft!.audioCurve).toEqual([
+    expect(store().draft!.legacyAudio.curve).toEqual([
       { t: 8, gain: 1 },
       { t: 9, gain: 0 },
     ]);
     store().undo();
     expect(layout().mode).toBe("track");
-    expect(store().draft!.audioCurve).toEqual([
+    expect(store().draft!.legacyAudio.curve).toEqual([
       { t: 9, gain: 1 },
       { t: 10, gain: 0 },
     ]);
@@ -526,7 +618,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
     expect(canLineUp(store())).toBe(false);
     setClipStart("c", 9);
     expect(canLineUp(store())).toBe(true);
-    store().apply((d) => ({ ...d, audioCurve: fadeOut(d.audioCurve, 13) }));
+    store().apply((d) => ({ ...d, legacyAudio: { ...d.legacyAudio, curve: fadeOut(d.legacyAudio.curve, 13) } }));
     selectClip("c");
     store().setPlayhead(10);
     const before = steps();
@@ -535,7 +627,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
     expect(steps()).toBe(before + 1);
     expect(stored()).toEqual({ a: undefined, b: undefined, c: undefined });
     expect(starts()).toEqual([0, 4, 8]);
-    expect(store().draft!.audioCurve.at(-1)).toEqual({ t: 12, gain: 0 });
+    expect(store().draft!.legacyAudio.curve.at(-1)).toEqual({ t: 12, gain: 0 });
     expect(store().playhead).toBe(9);
 
     store().undo();
@@ -720,7 +812,7 @@ describe("stitchEditorStore: several clips", () => {
     store().select({ kind: "clip", clipId: "b" });
     expect(selectedClipIds(store())).toEqual(["b"]);
     expect(selectIsMulti(store())).toBe(false);
-    store().select({ kind: "audio", point: null });
+    store().select(audioSelectionOf({ clipId: "m" }));
     expect(selectedClipIds(store())).toEqual([]);
   });
 

@@ -174,6 +174,151 @@ export function chooseMasterFormat(
   return { sampleRate, channels: widest >= 2 ? 2 : 1 };
 }
 
+/**
+ * The layers' format: the one source's rate when it plays alone; with several sources or any clip sound, the highest
+ * rate of all. As many channels as the widest, at most 2. Nothing usable given → null.
+ */
+export function chooseLayerMasterFormat(
+  sources: ReadonlyArray<{ sampleRate: number; channels: number }>,
+  clips: ReadonlyArray<{ sampleRate: number; channels: number }>,
+): MasterFormat | null {
+  const usable = (s: { sampleRate: number; channels: number }) =>
+    Number.isFinite(s.sampleRate) && s.sampleRate > 0 && s.channels >= 1;
+  const layerSources = sources.filter(usable);
+  const clipSources = clips.filter(usable);
+  const all = [...layerSources, ...clipSources];
+  if (all.length === 0) return null;
+  const widest = Math.max(...all.map((s) => s.channels));
+  const sampleRate =
+    layerSources.length === 1 && clipSources.length === 0 ? layerSources[0].sampleRate : Math.max(...all.map((s) => s.sampleRate));
+  return { sampleRate, channels: widest >= 2 ? 2 : 1 };
+}
+
+/*
+ * Audio clips are laid on their source's own grid at the master rate: grid sample j of a source is what
+ * toMasterFormat would give at index j for the whole buffer, and a clip puts it at output sample K + j, with
+ * K = round((start − In) · rate). Every piece of one source reads the same grid and the same curve gains, so a split
+ * changes no sample.
+ */
+
+/** How many samples the source has on its grid at the master rate (resampleLinear's length rule). */
+export function masterLength(buffer: AudioBufferLike, format: MasterFormat): number {
+  return Math.round((buffer.length * format.sampleRate) / buffer.sampleRate);
+}
+
+/**
+ * Grid samples [a, b) of the source in the master format, in new arrays (safe to scale in place). Only the frames the
+ * range reads are remixed, and each sample is interpolated with resampleLinear's own expressions, so the range is
+ * sample for sample that slice of toMasterFormat of the whole buffer.
+ */
+export function masterRange(buffer: AudioBufferLike, format: MasterFormat, a: number, b: number): Pcm {
+  const count = Math.max(0, b - a);
+  const n = buffer.length;
+  const channels = Array.from({ length: format.channels }, () => new Float32Array(count));
+  if (count === 0 || n === 0) return { sampleRate: format.sampleRate, channels };
+  const same = buffer.sampleRate === format.sampleRate;
+  const step = buffer.sampleRate / format.sampleRate;
+  const first = Math.min(same ? a : Math.floor(a * step), n - 1);
+  const last = Math.min(same ? b - 1 : Math.floor((b - 1) * step) + 1, n - 1);
+  const frames: Pcm = { sampleRate: buffer.sampleRate, channels: [] };
+  for (let c = 0; c < buffer.numberOfChannels; c++) frames.channels.push(buffer.getChannelData(c).subarray(first, last + 1));
+  // remix works frame by frame, so remixing the frames read gives the whole buffer's remix of them
+  const mixed = remix(frames, format.channels).channels;
+  channels.forEach((out, c) => {
+    const source = mixed[c];
+    if (same) {
+      out.set(source.subarray(a - first, Math.min(b, n) - first));
+      return;
+    }
+    for (let i = 0; i < count; i++) {
+      const position = (a + i) * step;
+      const i0 = Math.min(Math.floor(position), n - 1);
+      const i1 = Math.min(i0 + 1, n - 1);
+      const frac = position - i0;
+      out[i] = source[i0 - first] + (source[i1 - first] - source[i0 - first]) * frac;
+    }
+  });
+  return { sampleRate: format.sampleRate, channels };
+}
+
+/**
+ * applyCurveGain on a source's grid: channels[c][i] is grid sample first + i, and the curve is read at grid sample /
+ * sampleRate (source seconds). Block edges sit at the multiples of blockSize and at cutAt (the loop's end), so every
+ * range of one grid reads the same gains. An empty curve changes nothing.
+ */
+export function applyCurveGainAt(
+  channels: Float32Array[],
+  sampleRate: number,
+  curve: readonly VolumePoint[],
+  first: number,
+  cutAt = Infinity,
+  blockSize = DEFAULT_BLOCK_SIZE,
+): void {
+  if (curve.length === 0 || channels.length === 0) return;
+  const end = first + channels[0].length;
+  const block = Math.max(1, Math.floor(blockSize));
+  for (let blockStart = Math.floor(first / block) * block; blockStart < end; ) {
+    let blockEnd = blockStart + block;
+    if (blockStart < cutAt && cutAt < blockEnd) blockEnd = cutAt;
+    const g0 = gainAt(curve, blockStart / sampleRate);
+    const g1 = gainAt(curve, blockEnd / sampleRate);
+    const span = blockEnd - blockStart;
+    for (let j = Math.max(blockStart, first); j < Math.min(blockEnd, end); j++) {
+      const gain = g0 + ((g1 - g0) * (j - blockStart)) / span;
+      for (const channel of channels) channel[j - first] *= gain;
+    }
+    blockStart = blockEnd;
+  }
+}
+
+/** One audio clip as audioClipLayers lays it: its decoded source, where its In plays, its trim and its curve. */
+export interface AudioClipLayerSource {
+  buffer: AudioBufferLike;
+  startSec: number;
+  inSec: number;
+  outSec: number | null;
+  /** Source seconds. */
+  curve: readonly VolumePoint[];
+}
+
+/**
+ * Each clip's heard part in the master format with its curve applied, and the output sample it starts at. A clip is
+ * cut at the loop's end and at its source's end; one that is not heard in the loop is left out.
+ */
+export function audioClipLayers(
+  clips: readonly AudioClipLayerSource[],
+  format: MasterFormat,
+  loopLength: number,
+): Array<{ pcm: Pcm; at: number }> {
+  const { sampleRate } = format;
+  const loopSamples = Math.max(0, Math.round(loopLength * sampleRate));
+  return clips.flatMap((clip) => {
+    const length = masterLength(clip.buffer, format);
+    const anchor = Math.round((clip.startSec - clip.inSec) * sampleRate);
+    const a = Math.round(clip.inSec * sampleRate);
+    const b = Math.min(clip.outSec === null ? length : Math.round(clip.outSec * sampleRate), length, loopSamples - anchor);
+    if (b <= a) return [];
+    const pcm = masterRange(clip.buffer, format, a, b);
+    applyCurveGainAt(pcm.channels, sampleRate, clip.curve, a, loopSamples - anchor);
+    return [{ pcm, at: anchor + a }];
+  });
+}
+
+/** Whether an audio layer overlaps another, or a clip's sound as mixLoop lays it, in output samples. */
+export function audioLayersOverlap(
+  layers: ReadonlyArray<{ pcm: Pcm; at: number }>,
+  clips: LoopMix["clips"],
+  sampleRate: number,
+): boolean {
+  const spans = layers.map(({ pcm, at }) => [at, at + frameCount(pcm)] as const);
+  const clipSpans = clips.map(({ pcm, seqStart }) => {
+    const at = Math.round(seqStart * sampleRate);
+    return [at, at + frameCount(pcm)] as const;
+  });
+  const overlap = (u: readonly [number, number], v: readonly [number, number]) => Math.max(u[0], v[0]) < Math.min(u[1], v[1]);
+  return spans.some((u, i) => spans.some((v, j) => j > i && overlap(u, v)) || clipSpans.some((v) => overlap(u, v)));
+}
+
 /** target[c][offset + i] += source[c][i] · gain; indices outside target are ignored. */
 export function mixInto(target: Float32Array[], source: Float32Array[], offset: number, gain: number): void {
   if (gain === 0) return;
@@ -311,6 +456,10 @@ export interface LoopMix {
   music: { pcm: Pcm; curve: readonly VolumePoint[] } | null;
   /** Clips overlap in the sequence (stacked), so their sound can sum. */
   clipsOverlap?: boolean;
+  /** Audio clips (audioClipLayers): the same samples every loop, each from output sample `at`. */
+  audio?: ReadonlyArray<{ pcm: Pcm; at: number }>;
+  /** An audio clip overlaps another or a clip's sound (audioLayersOverlap), so they can sum. */
+  audioSums?: boolean;
 }
 
 /**
@@ -319,8 +468,12 @@ export interface LoopMix {
  * loops (loop k reads its samples from k · loopSamples on, silence past its
  * end), and the curve, which covers one loop, shapes it again each time.
  *
+ * Audio clips (`audio`) are mixed in after the clips, the same samples every
+ * loop; with them there is no music.
+ *
  * The result is hard-clipped only when sources can sum: music under clip
- * sound, a gain above 1, or clips that overlap (stacked, said by the engine
+ * sound, a gain above 1, audio clips that overlap each other or clip sound
+ * (`audioSums`), or clips that overlap (stacked, said by the engine
  * rather than read from the sample ranges, so a rounding-level touch between
  * butted clips never turns it on). One source at a time (every unedited node)
  * passes its samples through as they were decoded, overs included.
@@ -331,6 +484,9 @@ export function mixLoop(mix: LoopMix, loopIndex: number): Float32Array[] {
   const out = Array.from({ length: channels }, () => new Float32Array(loopSamples));
   for (const clip of mix.clips) {
     mixInto(out, clip.pcm.channels, Math.round(clip.seqStart * sampleRate), clip.gain);
+  }
+  if (mix.audio) {
+    for (const layer of mix.audio) mixInto(out, layer.pcm.channels, layer.at, 1);
   }
   if (mix.music) {
     const from = loopIndex * loopSamples;
@@ -345,7 +501,8 @@ export function mixLoop(mix: LoopMix, loopIndex: number): Float32Array[] {
   const sums =
     mix.clipsOverlap === true ||
     (mix.music !== null && mix.clips.length > 0) ||
-    mix.clips.some((clip) => clip.gain > 1);
+    mix.clips.some((clip) => clip.gain > 1) ||
+    mix.audioSums === true;
   if (sums) clampSamples(out);
   else silenceNaN(out);
   return out;

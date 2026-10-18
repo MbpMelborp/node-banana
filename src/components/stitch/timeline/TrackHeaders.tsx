@@ -11,7 +11,7 @@ import { canLineUp, lineUpClips, openLibraryPicker } from "../editorActions";
 import { GEOMETRY, TEXT_GHOST } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
-import { AudioTrackHeader } from "./AudioTrackHeader";
+import { AudioHeaders, type AudioHeaderRows } from "./AudioTrackHeader";
 import { keepFocus } from "./ClipBox";
 import { openClipMenu } from "./ClipsLane";
 import { emptyCopy } from "./EmptyClipSlot";
@@ -26,8 +26,6 @@ export interface StackedHeaderRows {
   rowsRef: RefObject<HTMLDivElement | null>;
   /** The insertion line while a clip is dragged (by its header or its box), in rows px; null when it would not move. */
   insertionY: number | null;
-  /** The lanes' horizontal scrollbar, px (0 without one): the audio header stays level with its row. */
-  hBar: number;
   /**
    * A press on a header is a press on its clip: a click selects it (⌘ and ⇧ as on its box), a drag moves it up or down,
    * with the rest of the selection when it is one of several.
@@ -43,7 +41,7 @@ function AddButton({ libraryOn, className }: { libraryOn: boolean; className?: s
       aria-label="Add a clip from the library"
       title={libraryOn ? "Add from library" : "The asset library is off"}
       disabled={!libraryOn}
-      onClick={openLibraryPicker}
+      onClick={() => openLibraryPicker("video")}
       className={cn(
         "-mr-1 inline-flex h-5 w-5 items-center justify-center rounded-[5px] text-neutral-400 transition-colors hover:bg-white/6 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400",
         className,
@@ -83,26 +81,25 @@ function LineUpButton() {
 
 /**
  * The 132px column left of the lanes. In Track: an empty corner beside the
- * ruler, the Clips track (its dot, count and the + that adds from the
- * library), then the Audio track (its mute, and its dB labels while it is
- * selected). In Stacked the + moves to the corner and each clip has a 52px
+ * ruler, then the Clips track (its dot, count and the + that adds from the
+ * library). In Stacked the + moves to the corner and each clip has a 52px
  * header naming it and its source; the headers scroll with the rows and are
  * handles to drag a clip up or down (outside the listbox, as an option holds
  * no controls). A right press on one opens its clip's menu. Line up sits in
- * Stacked's corner, left of the +. Track | Stacked is in the transport
- * (LayoutToggle).
+ * Stacked's corner, left of the +. At the bottom in both, level with the
+ * lanes' audio section: one header per audio row and "+ Add audio". Track |
+ * Stacked is in the transport (LayoutToggle).
  */
 export function TrackHeaders({
   clipCount,
-  audioExpanded,
-  audioMuted,
-  canMuteAudio,
+  audio,
+  hBar,
   stackedRows = null,
 }: {
   clipCount: number;
-  audioExpanded: boolean;
-  audioMuted: boolean;
-  canMuteAudio: boolean;
+  audio: Omit<AudioHeaderRows, "libraryOn">;
+  /** The lanes' horizontal scrollbar, px (0 without one): the audio headers stay level with their rows. */
+  hBar: number;
   /** Stacked's rows; null in Track. */
   stackedRows?: StackedHeaderRows | null;
 }) {
@@ -123,17 +120,20 @@ export function TrackHeaders({
       {stackedRows ? (
         <StackedRows rows={stackedRows} />
       ) : (
-        <div className="flex shrink-0 items-center gap-2 border-b border-white/6 px-3" style={{ height: GEOMETRY.clipRow }}>
-          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-handle-video" />
-          <span className="text-xs text-neutral-300">Clips</span>
-          <span className="ml-auto font-mono text-[11px] text-neutral-500" data-testid="stitch-clip-count">
-            {clipCount}
-          </span>
-          <AddButton libraryOn={libraryOn} />
-        </div>
+        <>
+          <div className="flex shrink-0 items-center gap-2 border-b border-white/6 px-3" style={{ height: GEOMETRY.clipRow }}>
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-handle-video" />
+            <span className="text-xs text-neutral-300">Clips</span>
+            <span className="ml-auto font-mono text-[11px] text-neutral-500" data-testid="stitch-clip-count">
+              {clipCount}
+            </span>
+            <AddButton libraryOn={libraryOn} />
+          </div>
+          <div aria-hidden="true" className="min-h-0 flex-1" />
+        </>
       )}
-      <AudioTrackHeader expanded={audioExpanded} muted={audioMuted} canMute={canMuteAudio} />
-      {stackedRows && <div aria-hidden="true" className="shrink-0" style={{ height: stackedRows.hBar }} />}
+      <AudioHeaders audio={{ ...audio, libraryOn }} />
+      <div aria-hidden="true" className="shrink-0" style={{ height: hBar }} />
     </div>
   );
 }

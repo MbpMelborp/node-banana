@@ -29,7 +29,7 @@ const HANDLE_SHARE = 1 / 3;
 /** A handle narrower than this shows no grip. */
 const MIN_GRIP_HANDLE_PX = 4;
 /** The handles' width on a clip drawn this wide: the boards' 10px, narrower on a clip too short for two. */
-const handleWidthFor = (width: number) => Math.min(GEOMETRY.handle, width * HANDLE_SHARE);
+export const handleWidthFor = (width: number) => Math.min(GEOMETRY.handle, width * HANDLE_SHARE);
 /** A compact box narrower than this shows no length chip. */
 const MIN_CHIP_BOX_PX = 56;
 /**
@@ -40,7 +40,8 @@ const MIN_SOUND_BUTTON_BOX_PX = 96;
 /** A mouse press takes no focus: a focused clip or button would be unmounted by its own action and drop focus out of the editor. */
 export const keepFocus = (event: MouseEvent) => event.preventDefault();
 
-function Handle({
+/** A clip's In or Out handle, on a video box or an audio box. */
+export function EdgeHandle({
   side,
   width,
   selected,
@@ -278,14 +279,14 @@ export function ClipBox({
 
       {showHandles && (
         <>
-          <Handle
+          <EdgeHandle
             side="in"
             width={handleWidth}
             selected={handlesShown}
             active={trimEdge === "in"}
             onPointerDown={(event) => onHandlePointerDown(event, "in")}
           />
-          <Handle
+          <EdgeHandle
             side="out"
             width={handleWidth}
             selected={handlesShown}

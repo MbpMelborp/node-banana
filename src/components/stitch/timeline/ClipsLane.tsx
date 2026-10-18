@@ -34,7 +34,7 @@ function openMenuAt(clipId: string, x: number, y: number): void {
   // A drag applies what it measured at the press on release: no menu opens over it (a right press mid-trim)
   if (s.cancelGesture) return;
   if (!selectedClipIds(s).includes(clipId)) s.select({ kind: "clip", clipId });
-  s.openMenu({ clipId, x, y });
+  s.openMenu({ kind: "clip", clipId, x, y });
 }
 
 /** A clip's contextmenu event: at the pointer, or under the clip when the keyboard sent it. */
@@ -147,7 +147,7 @@ export function EmptyLaneButton({
       aria-label="Add a clip from the library"
       title={libraryOn ? "Add from library" : undefined}
       disabled={!libraryOn}
-      onClick={openLibraryPicker}
+      onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
       onBlur={onBlur}
       className="absolute flex items-center justify-center rounded-md border border-dashed border-white/12 text-neutral-500 transition-colors hover:border-white/18 hover:bg-white/2 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none"
@@ -181,7 +181,7 @@ export function AddSlotButton({
       aria-label="Add a clip from the library"
       title={libraryOn ? "Add from library" : "The asset library is off"}
       disabled={!libraryOn}
-      onClick={openLibraryPicker}
+      onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
       onBlur={onBlur}
       className="absolute flex items-center justify-center rounded-media border border-dashed border-white/18 bg-white/2 text-neutral-500 transition-colors hover:border-white/24 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:border-white/18 disabled:hover:text-neutral-500"

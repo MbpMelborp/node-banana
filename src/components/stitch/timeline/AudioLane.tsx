@@ -1,237 +1,448 @@
 "use client";
 
-import { useRef, type KeyboardEvent, type RefObject } from "react";
-import { Plus, VolumeX } from "lucide-react";
+import {
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  type UIEvent,
+} from "react";
+import { Plus } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
-import { useStitchWaveform } from "@/hooks/useStitchWaveform";
-import { formatDb, gainToLevel } from "@/lib/stitch/curve";
-import { COLLAPSED_CURVE, EXPANDED_CURVE, levelToY } from "@/lib/stitch/curveGeometry";
+import { audioSelectionOf, selectedAudioIds, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioClipLength, audioSourceKey, type AudioDurations } from "@/lib/stitch/audioClips";
+import { audioSnapText } from "@/lib/stitch/audioDrag";
+import type { AudioSectionLayout } from "@/lib/stitch/audioLayout";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
-import { formatTimecode } from "@/lib/stitch/timecode";
-import type { VolumePoint } from "@/types";
-import { EDITOR_CHIP, GEOMETRY, LABEL_BAR } from "../editorStyles";
-import type { MusicView } from "../useStitchEditorMedia";
-import { CurveLayer } from "./CurveLayer";
-import { useCurveDrag } from "./useCurveDrag";
-import { Waveform } from "./Waveform";
+import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
+import type { StitchAudioClip } from "@/types";
+import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
+import type { AudioClipView } from "../useStitchEditorMedia";
+import { AudioClipBox } from "./AudioClipBox";
+import { keepFocus } from "./ClipBox";
+import { useLaneFocus } from "./ClipsLane";
+import { releaseTypingFocus } from "./releaseTypingFocus";
+import { SnapGuide } from "./TrimOverlay";
+import { audioBlockHeight, type AudioDragLive } from "./useAudioClipDrag";
 
-/** Room a chip beside a point needs before it would pass the visible lanes' right side; it goes left of the point then. */
-const CHIP_ROOM = 130;
-/** The "Connect audio to the node" box is never narrower than its copy. */
-const CONNECT_MIN_WIDTH = 180;
+/** The "Connect audio" box is never narrower than its copy. */
+const CONNECT_MIN_WIDTH = 260;
+/** The move chip's gap from the moving box, and its height, px. */
+const CHIP_GAP = 12;
+const CHIP_HEIGHT = 22;
 
-function LabelBar({ music }: { music: MusicView }) {
-  return (
-    <div
-      className={cn("pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-[11px] leading-none", LABEL_BAR)}
-      style={{ height: GEOMETRY.labelBar }}
-    >
-      <span className="truncate font-medium text-neutral-100">{music.fileName}</span>
-      <span className="shrink-0 text-neutral-400">{music.sourceLabel}</span>
-    </div>
-  );
+/** One audio clip as the lane draws it at rest. */
+export interface AudioBox {
+  clip: StitchAudioClip;
+  /** Its length as drawn: decoded, else the library record's, else 0 (a fixed-width box). */
+  length: number;
+  /** The decoded length is known: it can be trimmed and split. */
+  known: boolean;
+  x: number;
+  width: number;
+}
+
+/** Each clip's box: at its start, as long as its length (decoded, else the record's), else EMPTY_SLOT wide. */
+export function audioBoxes(
+  axis: TimeAxis,
+  clips: readonly StitchAudioClip[],
+  views: ReadonlyMap<string, AudioClipView>,
+  durations: AudioDurations,
+): AudioBox[] {
+  return clips.map((clip) => {
+    const decoded = durations.get(audioSourceKey(clip.source));
+    const view = views.get(clip.id);
+    const known = decoded !== undefined && !view?.missing;
+    const length = audioClipLength(clip, known ? decoded : (view?.recordDuration ?? undefined));
+    const x = axis.timeToX(clip.startSec);
+    return { clip, length, known, x, width: length > 0 ? axis.timeToX(clip.startSec + length) - x : GEOMETRY.emptySlot };
+  });
+}
+
+/** "Audio 2". */
+export const audioRowName = (row: number) => `Audio ${row + 1}`;
+
+/**
+ * Opens the audio clip menu at a point, selecting the clip unless it is one of the selection; not over a drag.
+ */
+function openAudioMenuAt(clipId: string, x: number, y: number): void {
+  const s = useStitchEditorStore.getState();
+  if (s.cancelGesture) return;
+  if (!selectedAudioIds(s).includes(clipId)) s.select(audioSelectionOf({ clipId }));
+  s.openMenu({ kind: "audio", clipId, x, y });
+}
+
+/** An audio box's contextmenu event: at the pointer, or under the box when the keyboard sent it. */
+export function openAudioClipMenu(event: MouseEvent<HTMLElement>, clipId: string): void {
+  event.preventDefault();
+  if (useStitchEditorStore.getState().cancelGesture) return;
+  releaseTypingFocus(event.currentTarget);
+  if (event.clientX === 0 && event.clientY === 0) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    openAudioMenuAt(clipId, rect.left, rect.bottom + 4);
+    return;
+  }
+  openAudioMenuAt(clipId, event.clientX, event.clientY);
 }
 
 /**
- * The audio row under the clips: the music as a block over one loop of the
- * sequence, with its waveform, its volume curve and its file name. Clicking
- * the block selects the track, which grows the row (and the timeline) to
- * show dB guides and makes the curve editable (useCurveDrag); selecting a
- * clip collapses it again. A muted track keeps a faint waveform and no
- * curve. With nothing connected the row says so; with music but no timed
- * clips it holds a placeholder the length of the lane.
+ * The audio listbox's keys: ← and → the previous or next clip in audio order, Home and End the first and last, ↑ and
+ * ↓ the clip on the row above or below whose start is nearest; each selects one clip and takes focus. The
+ * context-menu key or ⇧F10 opens the clip's menu.
+ */
+function onAudioLaneKeyDown(event: KeyboardEvent<HTMLDivElement>, clips: readonly StitchAudioClip[], tabStop: string | null) {
+  const at = clips.findIndex((c) => c.id === tabStop);
+  const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'));
+  const optionOf = (id: string) => options.find((el) => el.dataset.audioClipId === id);
+  if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    const option = at === -1 ? undefined : optionOf(clips[at].id);
+    if (!option) return;
+    event.preventDefault();
+    const rect = option.getBoundingClientRect();
+    openAudioMenuAt(clips[at].id, rect.left, rect.bottom + 4);
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey || clips.length === 0) return;
+  let next: StitchAudioClip | undefined;
+  if (event.key === "ArrowRight") next = clips[Math.min(clips.length - 1, at + 1)];
+  else if (event.key === "ArrowLeft") next = clips[Math.max(0, at - 1)];
+  else if (event.key === "Home") next = clips[0];
+  else if (event.key === "End") next = clips[clips.length - 1];
+  else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && at !== -1) {
+    const current = clips[at];
+    const rows = [...new Set(clips.map((c) => c.row))].sort((a, b) => a - b);
+    const row = rows[rows.indexOf(current.row) + (event.key === "ArrowUp" ? -1 : 1)];
+    const onRow = row === undefined ? [] : clips.filter((c) => c.row === row);
+    next = onRow.reduce<StitchAudioClip | undefined>(
+      (best, c) => (!best || Math.abs(c.startSec - current.startSec) < Math.abs(best.startSec - current.startSec) ? c : best),
+      undefined,
+    );
+    if (!next) {
+      event.preventDefault();
+      return;
+    }
+  } else return;
+  if (!next) return;
+  event.preventDefault();
+  useStitchEditorStore.getState().select(audioSelectionOf({ clipId: next.id }));
+  optionOf(next.id)?.focus();
+}
+
+/**
+ * The audio section under the video, in both layouts: its rows (64px, the
+ * one expanded by its header's toggle 136px), each holding audio clips that
+ * do not overlap, then the 24px strip. It depends on the rows and the
+ * expanded row only, never on the selection, so a click moves nothing. Past
+ * two rows (fewer when the window is short) the rows scroll inside it by a
+ * translate the timeline owns, shared with their headers. With no audio at
+ * all one row says how to add some.
+ *
+ * During a body drag the moving boxes leave the rows' clip and follow the
+ * pointer over the section; the landing is drawn where release puts it: a
+ * band on the rows it lands on, a line where an overlap inserts a row under
+ * the target, or "New row" in the strip. The chip beside the lead names
+ * where it plays, how far it moved and what it snapped to.
  */
 export function AudioLane({
   axis,
-  music,
-  curve,
-  muted,
-  expanded,
+  boxes,
+  views,
+  layout,
+  scroll,
+  expandedRow,
+  selectedIds,
+  leadId,
+  selectedPoint,
+  drag,
   viewLeft,
   viewRight,
   visibleRight,
   contentWidth,
   contentRef,
-  top = GEOMETRY.ruler + GEOMETRY.clipRow,
+  viewRef,
+  guideTop,
+  scrollLeft,
+  laneWidth,
+  onBodyPointerDown,
+  onHandlePointerDown,
+  onLanePointerDown,
+  onViewScroll,
 }: {
   axis: TimeAxis;
-  music: MusicView | null;
-  curve: readonly VolumePoint[];
-  muted: boolean;
-  expanded: boolean;
+  boxes: readonly AudioBox[];
+  views: ReadonlyMap<string, AudioClipView>;
+  layout: AudioSectionLayout;
+  /** The rows' scroll, px. */
+  scroll: number;
+  expandedRow: number | null;
+  /** Every audio clip drawn selected (while a selection box runs, what it would select). */
+  selectedIds: ReadonlySet<string>;
+  /** The lead of the audio selection: the listbox's tab stop. */
+  leadId: string | null;
+  selectedPoint: number | null;
+  drag: AudioDragLive | null;
   viewLeft: number;
   viewRight: number;
-  /** The visible lanes' right side on the content (scroll plus width): chips flip before it. */
   visibleRight: number;
-  /** The lane content's width. */
   contentWidth: number;
   contentRef: RefObject<HTMLDivElement | null>;
-  /** The row's top in its container: under the clips row in Track; 0 inside Stacked's sticky audio row. */
-  top?: number;
+  /** The rows' view, for the drag's up-and-down auto-scroll. */
+  viewRef: RefObject<HTMLDivElement | null>;
+  /** The ruler's middle in the section's own box (negative: above it), where a snap guide starts. */
+  guideTop: number;
+  scrollLeft: number;
+  laneWidth: number;
+  onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string) => void;
+  onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, edge: "in" | "out") => void;
+  /** A press on empty row space: the selection box. */
+  onLanePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  /** The view was scrolled by the browser (focus moved into a hidden row): the scroll joins the shared translate. */
+  onViewScroll: (event: UIEvent<HTMLDivElement>) => void;
 }) {
-  const blockRef = useRef<HTMLDivElement>(null);
-  const selectedPoint = useStitchEditorStore((s) => (s.selection?.kind === "audio" ? s.selection.point : null));
-  const waveform = useStitchWaveform(music?.src ?? null);
-  const metrics = expanded ? EXPANDED_CURVE : COLLAPSED_CURVE;
-  const drag = useCurveDrag({ axis, metrics, contentRef, blockRef, editable: expanded && !muted });
+  const { rowRef, onFocus, onBlur } = useLaneFocus();
+  const clips = boxes.map((b) => b.clip);
+  const tabStop = clips.some((c) => c.id === leadId) ? leadId : (clips[0]?.id ?? null);
+  const multi = selectedIds.size > 1;
+  const endX = axis.timeToX(axis.total);
+  const move = drag?.kind === "move" ? drag : null;
+  const trim = drag?.kind === "trim" ? drag : null;
+  const moving = new Set(move?.clipIds ?? []);
+  const rowTop = (row: number) => layout.rowTops[row] ?? layout.rowsHeight;
+  const rowExpanded = (row: number) => row === expandedRow;
+  const blockTop = (row: number) => rowTop(row) + GEOMETRY.audioBlockTop;
 
-  const rowHeight = expanded ? GEOMETRY.audioRowExpanded : GEOMETRY.audioRow;
-  const blockHeight = expanded ? GEOMETRY.audioBlockExpanded : GEOMETRY.audioBlock;
-  const blockTop = GEOMETRY.audioBlockTop;
-  const blockX = axis.timeToX(0);
-  const blockWidth = Math.max(0, axis.timeToX(axis.total) - blockX);
-  const rowStyle = { top, height: rowHeight };
-
-  const toLaneEnd = Math.max(0, contentWidth - GEOMETRY.origin - GEOMETRY.endMargin);
-  if (!music) {
-    const width = axis.total > 0 ? Math.min(Math.max(blockWidth, CONNECT_MIN_WIDTH), toLaneEnd) : toLaneEnd;
+  const boxFor = (box: AudioBox, opts: { moving: boolean; top: number; xShift?: number; startShift?: number }) => {
+    const view = views.get(box.clip.id);
+    const live = trim && trim.clipId === box.clip.id ? trim.clip : box.clip;
+    const startShift = opts.startShift ?? 0;
+    // A trim draws the clip as release leaves it; a move carries it by its delta
+    let start = live.startSec + startShift;
+    let length = box.length;
+    if (live !== box.clip && box.known) {
+      length = audioClipLength(live, view?.duration ?? undefined);
+      start = live.startSec;
+    }
+    const x = axis.timeToX(start);
+    const width = length > 0 ? axis.timeToX(start + length) - x : GEOMETRY.emptySlot;
+    const selected = selectedIds.has(box.clip.id);
+    const single = selected && !multi;
     return (
-      <div data-testid="stitch-audio-row" className="absolute inset-x-0 border-b border-white/6" style={rowStyle}>
-        <div
-          className="absolute flex items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-media border border-dashed border-handle-audio/40 bg-handle-audio/3 text-[11px] text-neutral-500"
-          style={{ left: GEOMETRY.origin, top: blockTop, width, height: GEOMETRY.audioBlock }}
-        >
-          <Plus size={12} strokeWidth={2} className="shrink-0 text-handle-audio" />
-          Connect audio to the node
-        </div>
-      </div>
+      <AudioClipBox
+        key={box.clip.id}
+        clip={live}
+        start={start}
+        length={length}
+        view={view}
+        rowLabel={audioRowName(box.clip.row)}
+        x={x}
+        width={width}
+        top={opts.top}
+        expanded={rowExpanded(box.clip.row)}
+        selected={selected}
+        multi={multi}
+        focusable={!opts.moving && tabStop === box.clip.id}
+        editable={!opts.moving && single && rowExpanded(box.clip.row) && !box.clip.muted && box.length > 0}
+        selectedPoint={single ? selectedPoint : null}
+        moving={opts.moving}
+        trimEdge={trim?.clipId === box.clip.id ? trim.edge : null}
+        axis={axis}
+        endX={endX}
+        viewLeft={viewLeft}
+        viewRight={viewRight}
+        visibleRight={visibleRight}
+        contentWidth={contentWidth}
+        contentRef={contentRef}
+        onBodyPointerDown={(event) => onBodyPointerDown(event, box.clip.id)}
+        onHandlePointerDown={box.known && !opts.moving ? (event, edge) => onHandlePointerDown(event, box.clip.id, edge) : null}
+        onContextMenu={(event) => openAudioClipMenu(event, box.clip.id)}
+      />
     );
-  }
-
-  if (!(axis.total > 0)) {
-    // Nothing timed to lay the music under: a placeholder with its name, not selectable
-    return (
-      <div data-testid="stitch-audio-row" className="absolute inset-x-0 border-b border-white/6" style={rowStyle}>
-        <div
-          data-testid="stitch-audio-placeholder"
-          className="absolute overflow-hidden rounded-media border border-dashed border-handle-audio/30"
-          style={{
-            left: GEOMETRY.origin,
-            top: blockTop,
-            width: toLaneEnd,
-            height: GEOMETRY.audioBlock,
-          }}
-        >
-          <LabelBar music={music} />
-        </div>
-      </div>
-    );
-  }
-
-  const shown = drag.live?.curve ?? curve;
-  const select = () => useStitchEditorStore.getState().select({ kind: "audio", point: null });
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" || event.metaKey || event.ctrlKey || event.altKey) return;
-    event.preventDefault();
-    select();
   };
 
-  // The readout follows the dragged point; the hint follows the ghost
-  const dragged = drag.live && drag.live.index !== null ? drag.live.curve[drag.live.index] : null;
-  const readout = dragged
-    ? { x: axis.timeToX(dragged.t), y: blockTop + levelToY(gainToLevel(dragged.gain), metrics), point: dragged }
+  const landing = move?.landing ?? null;
+  const lead = move ? boxes.find((b) => b.clip.id === move.clipId) : undefined;
+  const movingTop = (row: number) => blockTop(row) - (move?.scrollAtPress ?? 0) + (move?.dy ?? 0);
+  const leadX = lead && move ? axis.timeToX(lead.clip.startSec + move.result.deltaSec) : 0;
+  const leadBottom = lead ? movingTop(lead.clip.row) + audioBlockHeight(rowExpanded(lead.clip.row)) : 0;
+  const snapText = move ? audioSnapText(move.result) : null;
+
+  // The chip goes right of the lead box when it fits in the visible lanes, else left of it
+  const chipRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = chipRef.current;
+    if (!el || !lead || !move) return;
+    const width = el.offsetWidth;
+    const right = leadX + (lead.length > 0 ? axis.timeToX(lead.clip.startSec + move.result.deltaSec + lead.length) - leadX : lead.width);
+    const viewEnd = scrollLeft + laneWidth;
+    let x = right + CHIP_GAP;
+    if (laneWidth > 0 && x + width > viewEnd) {
+      const before = leadX - CHIP_GAP - width;
+      x = before >= scrollLeft ? before : Math.max(scrollLeft, viewEnd - width);
+    }
+    el.style.left = `${x}px`;
+  });
+
+  const moveChip = (() => {
+    if (!move || !lead) return null;
+    const from = lead.clip.startSec + move.result.deltaSec;
+    const where = lead.length > 0 ? `${formatTimecode(from)}–${formatTimecode(from + lead.length)}` : formatTimecode(from);
+    const count = move.clipIds.length > 1 ? `${move.clipIds.length} clips · ` : "";
+    const newRow = landing?.kind === "insert" || landing?.kind === "append" ? " · New row" : "";
+    return `${count}${where} · ${formatSeconds(move.result.deltaSec, 2, { signed: true })}${newRow}`;
+  })();
+
+  const trimBox = trim ? boxes.find((b) => b.clip.id === trim.clipId) : undefined;
+  const trimChip = trim
+    ? trim.edge === "in"
+      ? `In ${formatTimecode(trim.clip.inSec)}`
+      : `Out ${formatTimecode(trim.clip.outSec ?? views.get(trim.clipId)?.duration ?? 0)}`
     : null;
-  const hint = drag.hover ? { x: drag.hover.x, y: blockTop + drag.hover.y } : null;
-  const beside = (x: number, gap: number) =>
-    x + gap + CHIP_ROOM > Math.min(contentWidth, visibleRight) ? { right: `calc(100% - ${x - gap}px)` } : { left: x + gap };
+  const trimEdgeX = (() => {
+    if (!trim || !trimBox) return 0;
+    if (trim.edge === "in") return axis.timeToX(trim.clip.startSec);
+    const length = audioClipLength(trim.clip, views.get(trim.clipId)?.duration ?? undefined);
+    return axis.timeToX(trim.clip.startSec + length);
+  })();
+  const trimTop = trimBox ? blockTop(trimBox.clip.row) - scroll : 0;
+
+  const empty = boxes.length === 0;
+  const toLaneEnd = Math.max(0, contentWidth - GEOMETRY.origin - GEOMETRY.endMargin);
+  const blockWidth = Math.max(0, endX - axis.timeToX(0));
 
   return (
-    <div data-testid="stitch-audio-row" className="absolute inset-x-0 border-b border-white/6" style={rowStyle}>
+    <div
+      data-audio-section=""
+      data-testid="stitch-audio-section"
+      className="relative bg-editor-lanes"
+      style={{ height: layout.sectionHeight }}
+    >
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-1 h-px bg-white/6" />
       <div
-        ref={blockRef}
-        role="button"
-        tabIndex={0}
-        aria-label="Audio track"
-        aria-expanded={expanded}
-        data-testid="stitch-audio-block"
-        onPointerDown={drag.onPointerDown}
-        onPointerMove={drag.onPointerMove}
-        onPointerLeave={drag.onPointerLeave}
-        onDoubleClick={drag.onDoubleClick}
-        onKeyDown={onKeyDown}
-        className={cn(
-          "absolute overflow-hidden rounded-media select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
-          // Selected (expanded), a muted block keeps a stronger ring than its unselected /15
-          muted
-            ? cn("bg-handle-audio/4 ring-1", expanded ? "ring-handle-audio/30" : "ring-handle-audio/15")
-            : cn("bg-handle-audio/8 ring-1", expanded ? "ring-handle-audio/55" : "ring-handle-audio/35"),
-          expanded &&
-            !muted &&
-            (drag.live
-              ? "cursor-grabbing"
-              : drag.overPoint
-                ? "cursor-grab"
-                : drag.hover
-                  ? "cursor-pointer"
-                  : "cursor-default"),
-        )}
-        style={{ left: blockX, top: blockTop, width: blockWidth, height: blockHeight }}
+        ref={viewRef}
+        data-testid="stitch-audio-view"
+        className="relative overflow-hidden"
+        style={{ height: layout.viewHeight }}
+        onScroll={onViewScroll}
       >
-        {waveform?.status === "ready" && waveform.peaks && waveform.duration !== null && (
-          <div className={cn("absolute inset-0", muted && "opacity-35")}>
-            <Waveform
-              peaks={waveform.peaks}
-              duration={waveform.duration}
-              axis={axis}
-              blockX={blockX}
-              blockWidth={blockWidth}
-              height={blockHeight}
-              expanded={expanded}
-              viewLeft={viewLeft}
-              viewRight={viewRight}
+        <div
+          ref={rowRef}
+          role="listbox"
+          aria-label="Audio clips"
+          aria-multiselectable="true"
+          onKeyDown={(event) => onAudioLaneKeyDown(event, clips, tabStop)}
+          onPointerDown={onLanePointerDown}
+          onMouseDown={keepFocus}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          data-testid="stitch-audio-rows"
+          className="absolute inset-x-0 top-0"
+          style={{ height: Math.max(layout.rowsHeight, layout.viewHeight), transform: `translateY(${-scroll}px)` }}
+        >
+          {layout.rowTops.map((top, row) => (
+            <div
+              key={row}
+              aria-hidden="true"
+              data-testid="stitch-audio-row"
+              data-row={row}
+              className={cn(
+                "pointer-events-none absolute inset-x-0 border-b border-white/6",
+                landing?.kind === "rows" && landing.rows.has(row) && "bg-selection/8",
+              )}
+              style={{ top, height: layout.rowHeights[row] }}
             />
+          ))}
+          {empty && (
+            <div
+              data-testid="stitch-audio-placeholder"
+              className="pointer-events-none absolute flex items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-media border border-dashed border-handle-audio/40 bg-handle-audio/3 px-3 text-[11px] text-neutral-500"
+              style={{
+                left: GEOMETRY.origin,
+                top: GEOMETRY.audioBlockTop,
+                width: Math.min(Math.max(blockWidth, CONNECT_MIN_WIDTH), Math.max(toLaneEnd, CONNECT_MIN_WIDTH)),
+                height: GEOMETRY.audioBlock,
+              }}
+            >
+              <Plus size={12} strokeWidth={2} className="shrink-0 text-handle-audio" />
+              Connect audio to the node, or add it from the library
+            </div>
+          )}
+          {boxes.map((box) => (moving.has(box.clip.id) ? null : boxFor(box, { moving: false, top: blockTop(box.clip.row) })))}
+          {landing?.kind === "insert" && (
+            <div
+              aria-hidden="true"
+              data-testid="stitch-audio-insertion"
+              className="pointer-events-none absolute inset-x-0 z-1 h-[3px] rounded-[2px] bg-selection"
+              style={{ top: rowTop(landing.after) + (layout.rowHeights[landing.after] ?? 0) - 1.5 }}
+            />
+          )}
+        </div>
+      </div>
+      <div
+        data-testid="stitch-audio-strip"
+        className="relative"
+        style={{ height: GEOMETRY.audioStrip }}
+      >
+        {landing?.kind === "append" && (
+          <div
+            data-testid="stitch-audio-new-row"
+            className="absolute inset-x-1 inset-y-0.5 flex items-center rounded-[5px] border border-dashed border-white/12 text-[11px] text-neutral-300"
+            style={{ paddingLeft: Math.max(8, scrollLeft + 8) }}
+          >
+            New row
           </div>
         )}
-        {muted ? (
-          <span
-            data-testid="stitch-audio-muted"
-            className="pointer-events-none absolute left-2 top-3.5 inline-flex items-center gap-1.5 rounded-[5px] bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-400"
-          >
-            <VolumeX size={11} strokeWidth={2} />
-            Muted
-          </span>
-        ) : (
-          <CurveLayer
-            curve={shown}
-            axis={axis}
-            metrics={metrics}
-            blockX={blockX}
-            blockWidth={blockWidth}
-            height={blockHeight}
-            expanded={expanded}
-            dragIndex={drag.live?.index ?? null}
-            selectedIndex={expanded ? selectedPoint : null}
-            hover={drag.hover}
-          />
-        )}
-        {/* Over the curve, as the boards draw it: the line's floor runs inside the label bar */}
-        <LabelBar music={music} />
       </div>
 
-      {readout && (
-        <div
-          aria-hidden="true"
-          data-testid="stitch-curve-readout"
-          className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex -translate-y-1/2 items-center gap-2 whitespace-nowrap font-mono tabular-nums")}
-          style={{ top: readout.y, ...beside(readout.x, 12) }}
-        >
-          <span className="text-neutral-200">{formatDb(readout.point.gain)}</span>
-          <span className="text-neutral-500">{formatTimecode(readout.point.t)}</span>
+      {/* Over the section, out of the rows' clip: the moving boxes follow the pointer anywhere, the strip included */}
+      {move && (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10">
+          {boxes.map((box) =>
+            moving.has(box.clip.id)
+              ? boxFor(box, { moving: true, top: movingTop(box.clip.row), startShift: move.result.deltaSec })
+              : null,
+          )}
+          {moveChip && lead && (
+            <div
+              ref={chipRef}
+              data-testid="stitch-audio-move-chip"
+              className={cn(EDITOR_CHIP, "absolute z-20 whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+              // Beside the box, never below the section: a box dragged onto the strip runs past it
+              style={{ left: leadX + lead.width + CHIP_GAP, top: Math.min(movingTop(lead.clip.row) + 10, layout.sectionHeight - CHIP_HEIGHT) }}
+            >
+              {moveChip}
+            </div>
+          )}
+          {move.result.snapped && snapText && (
+            <SnapGuide
+              x={axis.timeToX(move.result.snapped.t)}
+              top={guideTop}
+              bottom={leadBottom}
+              chipTop={leadBottom + 8}
+              text={snapText}
+            />
+          )}
         </div>
       )}
-      {hint && !drag.live && (
-        <div
-          aria-hidden="true"
-          data-testid="stitch-add-point"
-          className={cn(
-            EDITOR_CHIP,
-            "pointer-events-none absolute z-4 inline-flex -translate-y-full items-center gap-[5px] whitespace-nowrap px-[7px] py-[3px] text-neutral-300",
+      {trim && trimChip && (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10">
+          <div
+            data-testid="stitch-audio-trim-chip"
+            className={cn(EDITOR_CHIP, "absolute whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+            style={{ left: trimEdgeX + 8, top: trimTop + 4 }}
+          >
+            {trimChip}
+          </div>
+          {trim.snapped && (
+            <SnapGuide
+              x={axis.timeToX(trim.snapped.t)}
+              top={guideTop}
+              bottom={trimTop + audioBlockHeight(trimBox ? rowExpanded(trimBox.clip.row) : false)}
+              chipTop={trimTop + 30}
+              text={`Snapped to ${trim.snapped.label}`}
+            />
           )}
-          style={{ top: hint.y - 4, ...beside(hint.x, 6) }}
-        >
-          <Plus size={10} strokeWidth={2.25} />
-          Add point
         </div>
       )}
     </div>

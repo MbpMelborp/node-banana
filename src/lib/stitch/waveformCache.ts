@@ -21,7 +21,7 @@ export interface StitchWaveform {
 /** Decoded channels of a source; tests swap the decoder in with __setWaveformDecoderForTests. */
 export type WaveformDecoder = (src: string) => Promise<{ channels: Float32Array[]; duration: number }>;
 
-const WAVEFORM_LRU_LIMIT = 8;
+export const WAVEFORM_LRU_LIMIT = 16;
 
 interface Entry {
   waveform: StitchWaveform;

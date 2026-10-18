@@ -6,7 +6,9 @@ import {
   addPoint,
   dbToGain,
   fadeIn,
+  fadeInRange,
   fadeOut,
+  fadeOutRange,
   flat,
   followEndFade,
   formatDb,
@@ -189,6 +191,25 @@ describe("quick buttons", () => {
   it("leaves the curve alone for an empty sequence", () => {
     expect(fadeIn(dip, 0)).toEqual(dip);
     expect(fadeOut(dip, 0)).toEqual(dip);
+  });
+
+  it("fadeInRange and fadeOutRange from 0 are fadeIn and fadeOut", () => {
+    const curve = [{ t: 0.5, gain: 0.3 }, { t: 3, gain: 0.5 }];
+    for (const c of [curve, dip, []]) {
+      for (const seq of [10, 4, 1, 0, NaN, Infinity]) {
+        expect(fadeInRange(c, 0, seq)).toEqual(fadeIn(c, seq));
+        expect(fadeOutRange(c, 0, seq)).toEqual(fadeOut(c, seq));
+        expect(fadeInRange(c, 0, seq, 0.25)).toEqual(fadeIn(c, seq, 0.25));
+        expect(fadeOutRange(c, 0, seq, 0.25)).toEqual(fadeOut(c, seq, 0.25));
+      }
+    }
+  });
+
+  it("fades a range: from its start, to its end, at most half of it", () => {
+    expect(fadeInRange(dip, 1, 5)).toEqual([{ t: 1, gain: 0 }, { t: 2, gain: 0 }, { t: 4, gain: 1 }]);
+    expect(fadeOutRange([], 1, 5)).toEqual([{ t: 4, gain: 1 }, { t: 5, gain: 0 }]);
+    expect(fadeInRange([], 2, 3)).toEqual([{ t: 2, gain: 0 }, { t: 2.5, gain: 1 }]);
+    expect(fadeOutRange(dip, 3, 3)).toEqual(dip);
   });
 
   it("flat is the empty curve", () => {

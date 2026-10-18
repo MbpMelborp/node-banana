@@ -26,6 +26,7 @@ import {
   ensureEvenDimension,
 } from '@/lib/video-probing';
 import {
+  normalizeAudioClips,
   normalizeLoopCount,
   normalizeStack,
   normalizeStitchArgs,
@@ -45,6 +46,9 @@ import { probeClip, type ClipProbe } from '@/lib/stitch/clipProbe';
 import {
   applyCrossfades,
   applyGainPieces,
+  audioClipLayers,
+  audioLayersOverlap,
+  chooseLayerMasterFormat,
   chooseMasterFormat,
   mixLoop,
   pcmFromAudioBuffer,
@@ -193,7 +197,9 @@ export async function checkEncoderSupport(): Promise<boolean> {
  * black. The sequence repeats
  * `loopCount` times, with a cut at each restart. Each clip's own sound plays
  * at its volume unless muted, and the music is mixed over it with its volume
- * curve, which repeats each loop while the music itself runs on.
+ * curve, which repeats each loop while the music itself runs on. With
+ * `audioClips` the music argument is ignored: each audio clip plays from its
+ * start in every loop, with its curve, cut at the loop's end.
  *
  * Bare Blobs and a bare music buffer keep their old meaning: whole clips, and
  * the music replacing their sound (see normalizeStitchArgs).
@@ -206,6 +212,7 @@ export async function stitchVideosAsync(
   options?: StitchOptions
 ): Promise<Blob> {
   const { clips, music } = normalizeStitchArgs(videoClips, audio);
+  const audioClips = normalizeAudioClips(options);
   const loopCount = normalizeLoopCount(options);
   const stack = normalizeStack(options);
   let totalVideos = clips.length * loopCount;
@@ -333,11 +340,15 @@ export async function stitchVideosAsync(
           ? [{ ...unit, unitIndex, audioTrack: unit.probe.audioTrack }]
           : []
       );
-      const audibleMusic = music && !music.muted ? music : null;
+      const audibleMusic = audioClips ? null : music && !music.muted ? music : null;
+      // Each audio clip heard in a loop: from its start, for its trimmed length, until the loop ends
+      const soundingAudio = (audioClips ?? []).filter(
+        (clip) => Math.min(Math.min(clip.outSec ?? clip.audio.duration, clip.audio.duration) - clip.inSec, loopLength - clip.startSec) > 0
+      );
       let mix: LoopMix | null = null;
       let audioCodec: AudioCodec | null = null;
 
-      if (audible.length > 0 || audibleMusic) {
+      if (audible.length > 0 || audibleMusic || soundingAudio.length > 0) {
         // Decoded first, so the master format comes from the sound itself
         // (an HE-AAC track's container says half its rate and mono)
         const decoded: Array<{ pcm: Pcm; unitIndex: number; gain: number }> = [];
@@ -363,12 +374,20 @@ export async function stitchVideosAsync(
         }
 
         updateProgress('processing', 'Detecting supported audio codec...', 10);
-        const preferred = chooseMasterFormat(
-          audibleMusic
-            ? { sampleRate: audibleMusic.audio.buffer.sampleRate, channels: audibleMusic.audio.buffer.numberOfChannels }
-            : null,
-          decoded.map(({ pcm }) => ({ sampleRate: pcm.sampleRate, channels: pcm.channels.length }))
-        );
+        const preferred = audioClips
+          ? chooseLayerMasterFormat(
+              [...new Set(soundingAudio.map((clip) => clip.audio.buffer))].map((buffer) => ({
+                sampleRate: buffer.sampleRate,
+                channels: buffer.numberOfChannels,
+              })),
+              decoded.map(({ pcm }) => ({ sampleRate: pcm.sampleRate, channels: pcm.channels.length }))
+            )
+          : chooseMasterFormat(
+              audibleMusic
+                ? { sampleRate: audibleMusic.audio.buffer.sampleRate, channels: audibleMusic.audio.buffer.numberOfChannels }
+                : null,
+              decoded.map(({ pcm }) => ({ sampleRate: pcm.sampleRate, channels: pcm.channels.length }))
+            );
         const chosen = preferred ? await pickAudioCodec(preferred) : null;
 
         if (!preferred) {
@@ -431,6 +450,17 @@ export async function stitchVideosAsync(
             mix.clipsOverlap = decoded.some(
               ({ unitIndex }) => sounding.has(unitIndex + 1) && stacked.clips[unitIndex + 1].overlapIn > 0
             );
+          }
+          if (audioClips) {
+            const count = soundingAudio.length;
+            updateProgress('processing', `Mixing ${count} audio clip${count === 1 ? '' : 's'}...`, 10);
+            const layers = audioClipLayers(
+              soundingAudio.map((clip) => ({ ...clip, buffer: clip.audio.buffer })),
+              chosen.format,
+              loopLength
+            );
+            mix.audio = layers;
+            mix.audioSums = audioLayersOverlap(layers, mix.clips, chosen.format.sampleRate);
           }
         }
       }

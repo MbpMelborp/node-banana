@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createAudioClip, normalizeAudioClips } from "../audioClips";
 import { boxHits, clipIdsOf, makeSelection, rangeTo, selectAll, toggleClip, type ClipSelection } from "../selection";
 
 const order = ["a", "b", "c", "d", "e"];
@@ -131,5 +132,27 @@ describe("boxHits", () => {
 
   it("hits an empty clip's slot", () => {
     expect(boxHits(boxes, { left: 215, right: 216, top: 150, bottom: 151 }, "xy")).toEqual([2]);
+  });
+});
+
+describe("on an audio order", () => {
+  // Row, then start, then id: the same five ids as `order`
+  const audioOrder = normalizeAudioClips([
+    createAudioClip({ kind: "music" }, { id: "d", row: 1, startSec: 0 }),
+    createAudioClip({ kind: "music" }, { id: "a", row: 0, startSec: 0 }),
+    createAudioClip({ kind: "music" }, { id: "e", row: 1, startSec: 5 }),
+    createAudioClip({ kind: "music" }, { id: "c", row: 0, startSec: 4 }),
+    createAudioClip({ kind: "music" }, { id: "b", row: 0, startSec: 2 }),
+  ]).map((clip) => clip.id);
+  // An audio selection carries more than the ids; only the ids are read
+  const audio = { kind: "audio" as const, clipId: "b", clipIds: ["b", "d"], anchorId: "d", point: null, onCurve: false };
+  const video: ClipSelection = { kind: "clip", clipId: "b", clipIds: ["b", "d"], anchorId: "d" };
+
+  it("gives what the same ids give on a video order", () => {
+    expect(audioOrder).toEqual(order);
+    expect(clipIdsOf(audio, audioOrder)).toEqual(clipIdsOf(video, order));
+    expect(toggleClip(audioOrder, audio, "e")).toEqual(toggleClip(order, video, "e"));
+    expect(rangeTo(audioOrder, audio, "a")).toEqual(rangeTo(order, video, "a"));
+    expect(selectAll(audioOrder, audio)).toEqual(selectAll(order, video));
   });
 });

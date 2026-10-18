@@ -9,9 +9,14 @@ import {
   requestWaveform,
   subscribeWaveform,
   type WaveformDecoder,
+  WAVEFORM_LRU_LIMIT,
 } from "../waveformCache";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+it("keeps 16 sources, so a node's audio clips do not decode in a loop as rows scroll", () => {
+  expect(WAVEFORM_LRU_LIMIT).toBe(16);
+});
 
 afterEach(() => {
   __resetWaveformForTests();
@@ -74,7 +79,7 @@ describe("waveformCache", () => {
         }),
     );
     requestWaveform("slow", "slow");
-    for (let i = 0; i < 8; i++) requestWaveform(`k${i}`, `src${i}`);
+    for (let i = 0; i < WAVEFORM_LRU_LIMIT; i++) requestWaveform(`k${i}`, `src${i}`);
     expect(getWaveform("slow")).toBeUndefined();
     expect(getWaveform("k0")).toBeDefined();
     await flush();
@@ -88,7 +93,7 @@ describe("waveformCache", () => {
     unsubscribe();
     // Asking again counts as a use: k0 outlives k1
     requestWaveform("k0", "src0");
-    requestWaveform("k8", "src8");
+    requestWaveform(`k${WAVEFORM_LRU_LIMIT}`, `src${WAVEFORM_LRU_LIMIT}`);
     expect(getWaveform("k0")).toBeDefined();
     expect(getWaveform("k1")).toBeUndefined();
   });

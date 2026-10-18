@@ -150,7 +150,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
   updateNodeData(node.id, { status: "loading", progress: 0, error: null });
 
   try {
-    // The timeline, resolved to Blobs: trims, clip sound, library clips and the music's curve
+    // The timeline, resolved to Blobs: trims, clip sound, library clips, and the music's curve or the audio clips
     const gathered = await gatherStitchInputs(ctx, nodeData);
 
     const { stitchVideosAsync } = await import("@/hooks/useStitchVideos");
@@ -162,7 +162,8 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
         updateNodeData(node.id, { progress: progress.progress });
       },
       signal,
-      // A Track node passes the loop count alone, as it always did, and a lined-up stack its overlap as before
+      // A Track node passes the loop count alone, as it always did, and a lined-up stack its overlap as before;
+      // audio clips only when the audio is not legacy-shaped
       {
         loopCount: gathered.loopCount,
         ...(gathered.placed
@@ -170,6 +171,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
           : gathered.stack
             ? { overlapSec: gathered.stack.overlapSec, crossfade: gathered.stack.crossfade }
             : {}),
+        ...(gathered.audioClips ? { audioClips: gathered.audioClips } : {}),
       }
     );
 
@@ -209,7 +211,8 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
     await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
       clips: gathered.clipCount,
       loopCount: gathered.loopCount,
-      withAudio: gathered.music !== null,
+      withAudio: gathered.music !== null || (gathered.audioClips?.length ?? 0) > 0,
+      ...(gathered.audioClips ? { audioClips: gathered.audioClips.length } : {}),
       ...(gathered.placed
         ? {
             crossfade: gathered.placed.crossfade,

@@ -1,4 +1,4 @@
-import type { AssetPageRequest, AssetSort } from "@/lib/assets/types";
+import type { AssetKind, AssetPageRequest, AssetSort } from "@/lib/assets/types";
 
 /**
  * The Stitch editor's "Add from library" query, and the asset page request
@@ -25,7 +25,7 @@ export const DEFAULT_LIBRARY_QUERY: LibraryVideoQuery = {
 };
 
 /**
- * Videos only, a page at a time. Every other field is sent only when it
+ * One kind of asset (videos unless `kinds` says otherwise), a page at a time. Every other field is sent only when it
  * narrows the list: a search with something in it, Favourites, a project,
  * This workflow when the canvas has an id (nothing was ever recorded from one
  * without), and the sort when it is not the default newest first.
@@ -34,8 +34,9 @@ export function buildLibraryRequest(
   query: LibraryVideoQuery,
   workflowId: string | null,
   cursor?: string,
+  kinds: readonly AssetKind[] = ["video"],
 ): AssetPageRequest {
-  const request: AssetPageRequest = { kinds: ["video"], limit: LIBRARY_PAGE_SIZE };
+  const request: AssetPageRequest = { kinds: [...kinds], limit: LIBRARY_PAGE_SIZE };
   const q = query.q.trim();
   if (q) request.q = q;
   if (query.favourites) request.favorite = true;

@@ -1,4 +1,5 @@
 import type { VolumePoint } from "@/types";
+import { sortCurve } from "./curve";
 import { MAX_START_SEC } from "./placement";
 import { MAX_OVERLAP_SEC } from "./stack";
 
@@ -38,6 +39,19 @@ export interface StitchMusicInput {
   muted: boolean;
 }
 
+/** One audio clip as the engine mixes it. Pieces of one source share `audio` (decoded once). */
+export interface StitchAudioClipInput {
+  audio: StitchAudioData;
+  /** Where its In plays in each loop, seconds. */
+  startSec: number;
+  /** Trim start, source seconds. */
+  inSec: number;
+  /** Trim end, source seconds; null = the source's end. */
+  outSec: number | null;
+  /** Its volume curve, in source seconds. */
+  curve: VolumePoint[];
+}
+
 export interface StitchOptions {
   /** How many times the sequence plays; an integer >= 1, default 1. */
   loopCount?: number;
@@ -50,6 +64,12 @@ export interface StitchOptions {
    * Absent or false: Track or the lined-up stack, exactly as before.
    */
   placed?: boolean;
+  /**
+   * Present (even empty): every audio clip plays each loop from its start, cut at the loop's end, and the music
+   * argument is ignored. Absent: the music plays on across loops, as before. Muted clips are not passed. The executor
+   * passes it only when the node's audio is not legacy-shaped (stitchInputs).
+   */
+  audioClips?: StitchAudioClipInput[];
 }
 
 export function isMusicInput(audio: StitchAudioData | StitchMusicInput): audio is StitchMusicInput {
@@ -126,4 +146,26 @@ export function normalizePlacement(options: StitchOptions | undefined): { crossf
     crossfade: options.crossfade !== false,
     overlapSec: finite(overlapSec) && overlapSec > 0 ? Math.min(overlapSec, MAX_OVERLAP_SEC) : 0,
   };
+}
+
+/**
+ * null when options.audioClips is absent. Otherwise each clip with decoded audio: start clamped to [0, 600], In >= 0,
+ * Out kept only when finite and after In, the curve sorted.
+ */
+export function normalizeAudioClips(options: StitchOptions | undefined): StitchAudioClipInput[] | null {
+  const clips = options?.audioClips;
+  if (!Array.isArray(clips)) return null;
+  return clips.flatMap((clip) => {
+    if (!clip?.audio?.buffer) return [];
+    const inSec = finite(clip.inSec) && clip.inSec > 0 ? clip.inSec : 0;
+    return [
+      {
+        audio: clip.audio,
+        startSec: finite(clip.startSec) ? Math.min(Math.max(clip.startSec, 0), MAX_START_SEC) : 0,
+        inSec,
+        outSec: finite(clip.outSec) && clip.outSec > inSec ? clip.outSec : null,
+        curve: sortCurve(clip.curve),
+      },
+    ];
+  });
 }

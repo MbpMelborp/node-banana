@@ -110,3 +110,60 @@ describe("pasting a Stitch node with its sources", () => {
     expect((pastedStitch.data as VideoStitchNodeData).sequenceLayout).toEqual(sequenceLayout);
   });
 });
+
+describe("pasting a Stitch node's audio clips", () => {
+  const musicClip = { id: "audio:music", source: { kind: "music" }, row: 0, startSec: 1, inSec: 0, outSec: null, muted: false, curve: [] };
+  const tone = {
+    id: "t",
+    source: { kind: "asset", assetId: "atone00000001" },
+    row: 1,
+    startSec: 0,
+    inSec: 0,
+    outSec: null,
+    muted: false,
+    curve: [],
+  };
+  const audioEdge: WorkflowEdge = {
+    id: "edge-mus-1-stitch-1-audio-audio",
+    source: "mus-1",
+    target: "stitch-1",
+    sourceHandle: "audio",
+    targetHandle: "audio",
+  };
+
+  function seedWithMusic(audioClips: unknown[], copyMusicSource: boolean) {
+    seed(true, { audioClips } as unknown as Partial<VideoStitchNodeData>);
+    useWorkflowStore.setState({
+      nodes: [...store().nodes, node("mus-1", "audioInput", { audioFile: "blob:music" })].map((n) => ({
+        ...n,
+        selected: n.id !== "mus-1" || copyMusicSource,
+      })),
+      edges: [...store().edges, audioEdge],
+    });
+  }
+  const pasted = () =>
+    store().nodes.find((n) => n.type === "videoStitch" && n.id !== "stitch-1")!.data as VideoStitchNodeData;
+
+  it("drops the music clips of a node pasted without its music source", () => {
+    seedWithMusic([musicClip, tone], false);
+    store().copySelectedNodes();
+    store().pasteNodes();
+    expect(pasted().audioClips).toEqual([{ ...tone, row: 0 }]);
+    // The original keeps its own
+    expect((store().nodes.find((n) => n.id === "stitch-1")!.data as VideoStitchNodeData).audioClips).toHaveLength(2);
+  });
+
+  it("removes the key when only music was there", () => {
+    seedWithMusic([musicClip], false);
+    store().copySelectedNodes();
+    store().pasteNodes();
+    expect("audioClips" in pasted()).toBe(false);
+  });
+
+  it("keeps them when the music source is pasted with it", () => {
+    seedWithMusic([musicClip, tone], true);
+    store().copySelectedNodes();
+    store().pasteNodes();
+    expect(pasted().audioClips).toEqual([musicClip, tone]);
+  });
+});

@@ -14,7 +14,6 @@ import {
   MIN_POINT_GAP_SEC,
   movePoint,
   offsetCurve,
-  removePoint,
 } from "@/lib/stitch/curve";
 import {
   curvePolyline,
@@ -22,23 +21,24 @@ import {
   levelToY,
   pointerToPoint,
   type CurveMetrics,
+  type CurveWindow,
 } from "@/lib/stitch/curveGeometry";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import type { VolumePoint } from "@/types";
-import { setCurve } from "../editorActions";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 
 /**
- * Editing the music's volume curve in the expanded audio lane. A press on
- * a point drags it (its neighbours bound it); a press on the line adds a
- * point there and drags that; ⌥ held at the press moves the whole line up
- * or down. While the pointer moves the curve is this hook's state only; on
- * release it is applied to the draft once (the added point with its move),
- * so a gesture is one undo step and nothing reaches the workflow store.
- * Escape cancels. A double-click on a point removes it, and a press that
- * hits neither a point nor the line only selects the track. The pointer is
- * read against the lane's content, so a scroll during the drag (a wheel,
- * the playback follow) keeps the point under it.
+ * Editing an audio clip's volume curve, on the single selected clip of an
+ * expanded row. A press on a point drags it (its neighbours bound it); a
+ * press on the line adds a point there and drags that; ⌥ held at the press
+ * moves the whole line up or down. While the pointer moves the curve is this
+ * hook's state only; on release it is written once (the added point with
+ * its move), so a gesture is one undo step and nothing reaches the workflow
+ * store. Escape cancels. A double-click on a point removes it. A press that
+ * hits neither a point nor the line is not the curve's (onPointerDown says
+ * false), and the box takes it. Times are the clip's source seconds, drawn
+ * through its window; the pointer is read against the lane's content, so a
+ * scroll during the drag keeps the point under it.
  */
 
 /** A press this close to a point's centre takes the point. */
@@ -66,11 +66,21 @@ export interface CurveHover {
 interface CurveDragOptions {
   axis: TimeAxis;
   metrics: CurveMetrics;
+  /** The clip's part of its curve and where it is drawn. */
+  curveWindow: CurveWindow;
   /** The lane content (pointer x is measured from its left) and the audio block (y from its top). */
   contentRef: RefObject<HTMLDivElement | null>;
   blockRef: RefObject<HTMLDivElement | null>;
-  /** Off while collapsed or muted: a press only selects the track. */
+  /** Off unless the clip is the single selection on an expanded row, unmuted: every press is the box's. */
   editable: boolean;
+  /** The curve as the draft holds it now; undefined once the clip is gone. */
+  read: () => readonly VolumePoint[] | undefined;
+  /** One gesture's result, as one undo step. */
+  write: (curve: VolumePoint[]) => void;
+  /** The clip selected with this curve point (null: none), its last press on the curve. */
+  selectPoint: (point: number | null) => void;
+  /** A double-click on a point takes it off. */
+  removePoint: (index: number) => void;
 }
 
 type Hit = { kind: "point"; index: number } | { kind: "line" } | { kind: "none" };
@@ -80,38 +90,46 @@ interface Press {
   time: number;
   clientX: number;
   clientY: number;
-  /** The lane was editable at this press (a press on the collapsed lane only selects the track). */
+  /** The curve took this press. */
   editable: boolean;
   /** The point it took, and the curve it took it on. */
   point: number | null;
   curve: readonly VolumePoint[] | undefined;
 }
 
+const inWindow = (t: number, w: CurveWindow) => t >= w.from && t <= w.to;
+
 /**
- * The drawn points (inside the sequence) nearest the pointer, then the line. On the line, a point closer in time
+ * The drawn points (inside the window) nearest the pointer, then the line. On the line, a point closer in time
  * than MIN_POINT_GAP_SEC is the hit: adding one there would replace it (an instant step's two points, drawn as a
  * tall vertical segment, would both go).
  */
-function hitTest(curve: readonly VolumePoint[], axis: TimeAxis, m: CurveMetrics, x: number, y: number): Hit {
-  const total = axis.total;
+function hitTest(
+  curve: readonly VolumePoint[],
+  axis: TimeAxis,
+  m: CurveMetrics,
+  w: CurveWindow,
+  x: number,
+  y: number,
+): Hit {
   let index = -1;
   let best = POINT_HIT_PX;
   curve.forEach((p, i) => {
-    if (p.t > total) return;
-    const d = Math.hypot(axis.timeToX(p.t) - x, levelToY(gainToLevel(p.gain), m) - y);
+    if (!inWindow(p.t, w)) return;
+    const d = Math.hypot(axis.timeToX(p.t - w.offset) - x, levelToY(gainToLevel(p.gain), m) - y);
     if (d <= best) {
       best = d;
       index = i;
     }
   });
   if (index !== -1) return { kind: "point", index };
-  if (distanceToPolyline({ x, y }, curvePolyline(curve, total, axis, m)) > LINE_HIT_PX) return { kind: "none" };
-  const t = pointerToPoint(x, y, axis, m, total).t;
+  if (distanceToPolyline({ x, y }, curvePolyline(curve, axis.total, axis, m, w)) > LINE_HIT_PX) return { kind: "none" };
+  const t = pointerToPoint(x, y, axis, m, axis.total, w).t;
   let near = -1;
   let nearest = MIN_POINT_GAP_SEC;
   curve.forEach((p, i) => {
     const gap = Math.abs(p.t - t);
-    if (p.t <= total && gap < nearest) {
+    if (inWindow(p.t, w) && gap < nearest) {
       nearest = gap;
       near = i;
     }
@@ -119,7 +137,8 @@ function hitTest(curve: readonly VolumePoint[], axis: TimeAxis, m: CurveMetrics,
   return near === -1 ? { kind: "line" } : { kind: "point", index: near };
 }
 
-export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: CurveDragOptions) {
+export function useCurveDrag(options: CurveDragOptions) {
+  const { contentRef, blockRef, editable } = options;
   const [live, setLive] = useState<CurveDragLive | null>(null);
   const [hover, setHover] = useState<CurveHover | null>(null);
   const [overPoint, setOverPoint] = useState(false);
@@ -128,9 +147,9 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
   const lastPress = useRef<Press | null>(null);
   const pairedPress = useRef<Press | null>(null);
   // The press measures with the axis it saw last, which a zoom mid-drag cannot change (the ⌘ wheel waits)
-  const latest = useRef({ axis, metrics, editable });
+  const latest = useRef(options);
   useEffect(() => {
-    latest.current = { axis, metrics, editable };
+    latest.current = options;
   });
   useEffect(() => () => stop.current?.(), []);
 
@@ -142,15 +161,12 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
     [contentRef, blockRef],
   );
 
+  /** Whether the curve takes the press: a point, the line, or ⌥ anywhere on an editable box. */
   const onPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      if (event.button !== 0) return;
-      releaseTypingFocus(event.currentTarget);
-      event.preventDefault();
-      stop.current?.();
-      const editor = useStitchEditorStore.getState();
-      const { axis: pressAxis, metrics: m, editable: canEdit } = latest.current;
-      const curveAtStart = editor.draft?.audioCurve;
+    (event: ReactPointerEvent<HTMLElement>): boolean => {
+      if (event.button !== 0) return false;
+      const { axis: pressAxis, metrics: m, curveWindow: w, editable: canEdit, read, write, selectPoint } = latest.current;
+      const curveAtStart = read();
       const prev = lastPress.current;
       const repeat =
         prev !== null &&
@@ -166,19 +182,14 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
         curve: curveAtStart,
       };
       lastPress.current = press;
-      // The second press of a double-click that opened the lane lands where the lane grew to: it selects too
-      if (!curveAtStart || !canEdit || (repeat && prev?.editable === false)) {
-        editor.select({ kind: "audio", point: null });
-        return;
-      }
-      press.editable = true;
+      if (!curveAtStart || !canEdit) return false;
       const at = position(event.clientX, event.clientY);
-      const total = pressAxis.total;
-      const hit = event.altKey ? null : hitTest(curveAtStart, pressAxis, m, at.x, at.y);
-      if (hit?.kind === "none") {
-        editor.select({ kind: "audio", point: null });
-        return;
-      }
+      const hit = event.altKey ? null : hitTest(curveAtStart, pressAxis, m, w, at.x, at.y);
+      if (hit?.kind === "none") return false;
+      releaseTypingFocus(event.currentTarget);
+      event.preventDefault();
+      stop.current?.();
+      press.editable = true;
 
       // The curve the move starts from, and the point it moves: an added point is on the line where it was pressed
       let base: VolumePoint[] = curveAtStart.slice();
@@ -187,18 +198,20 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
       if (hit?.kind === "point") {
         index = hit.index;
         press.point = index;
-        editor.select({ kind: "audio", point: index });
+        selectPoint(index);
       } else if (hit?.kind === "line") {
-        const t = pointerToPoint(at.x, at.y, pressAxis, m, total).t;
+        const t = pointerToPoint(at.x, at.y, pressAxis, m, pressAxis.total, w).t;
         const result = addPoint(curveAtStart, t);
-        if (result.index === -1) return;
+        if (result.index === -1) return true;
         base = result.curve;
         index = result.index;
         added = true;
+      } else {
+        selectPoint(null);
       }
       // The pointer's offset from the point's centre, in lane content and block coordinates
       const startPoint = index === null ? null : base[index];
-      const offsetX = startPoint ? at.x - pressAxis.timeToX(startPoint.t) : 0;
+      const offsetX = startPoint ? at.x - pressAxis.timeToX(startPoint.t - w.offset) : 0;
       const offsetY = startPoint ? at.y - levelToY(gainToLevel(startPoint.gain), m) : 0;
 
       const target = event.currentTarget;
@@ -216,9 +229,9 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
         if (!moved && Math.hypot(p.x - at.x, p.y - at.y) < DRAG_START_PX) return;
         moved = true;
         if (index === null) {
-          current = { curve: offsetCurve(curveAtStart, (p.y - at.y) / m.span, total), index: null };
+          current = { curve: offsetCurve(curveAtStart, (p.y - at.y) / m.span, w.to), index: null };
         } else {
-          const point = pointerToPoint(p.x - offsetX, p.y - offsetY, pressAxis, m, total);
+          const point = pointerToPoint(p.x - offsetX, p.y - offsetY, pressAxis, m, pressAxis.total, w);
           current = { curve: movePoint(base, index, point.t, point.gain), index };
         }
         setLive(current);
@@ -244,12 +257,11 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
         onMove(e);
         end();
         if (!moved && !added) return;
-        const s = useStitchEditorStore.getState();
         // A draft that changed under the drag is not overwritten with what was measured against the old one
-        if (s.draft?.audioCurve !== curveAtStart) return;
-        setCurve(current.curve);
+        if (latest.current.read() !== curveAtStart) return;
+        write(current.curve);
         // The store forgets a point when the curve changes: the dragged one is selected again by its new index
-        useStitchEditorStore.getState().select({ kind: "audio", point: current.index });
+        latest.current.selectPoint(current.index);
       };
 
       setHover(null);
@@ -260,6 +272,7 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
       stop.current = end;
       useStitchEditorStore.getState().setCancelGesture(end);
       setLive(current);
+      return true;
     },
     [position, contentRef],
   );
@@ -271,33 +284,32 @@ export function useCurveDrag({ axis, metrics, contentRef, blockRef, editable }: 
   const onDoubleClick = useCallback(() => {
     const first = pairedPress.current;
     const second = lastPress.current;
-    const curve = useStitchEditorStore.getState().draft?.audioCurve;
+    const curve = latest.current.read();
     if (!latest.current.editable || !curve || !first || !second) return;
     if (!first.editable || !second.editable || first.point === null || first.point !== second.point) return;
     if (first.curve !== curve || second.curve !== curve) return;
-    setCurve(removePoint(curve, second.point));
-    useStitchEditorStore.getState().select({ kind: "audio", point: null });
+    latest.current.removePoint(second.point);
   }, []);
 
   /** The hover ghost and its "Add point" chip: only over the line, away from the points, with no drag running. */
   const onPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      const { axis: a, metrics: m, editable: canEdit } = latest.current;
-      const curve = useStitchEditorStore.getState().draft?.audioCurve;
+      const { axis: a, metrics: m, curveWindow: w, editable: canEdit, read } = latest.current;
+      const curve = read();
       if (!canEdit || !curve || stop.current || event.altKey) {
         setHover(null);
         setOverPoint(false);
         return;
       }
       const at = position(event.clientX, event.clientY);
-      const hit = hitTest(curve, a, m, at.x, at.y);
+      const hit = hitTest(curve, a, m, w, at.x, at.y);
       setOverPoint(hit.kind === "point");
       if (hit.kind !== "line") {
         setHover(null);
         return;
       }
-      const x = Math.min(Math.max(at.x, a.timeToX(0)), a.timeToX(a.total));
-      setHover({ x, y: levelToY(gainToLevel(gainAt(curve, a.xToTime(x))), m) });
+      const x = Math.min(Math.max(at.x, a.timeToX(w.from - w.offset)), a.timeToX(w.to - w.offset));
+      setHover({ x, y: levelToY(gainToLevel(gainAt(curve, a.xToTime(x) + w.offset)), m) });
     },
     [position],
   );

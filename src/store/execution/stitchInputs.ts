@@ -1,25 +1,33 @@
 /**
  * What a Stitch run encodes: the node's timeline resolved to video Blobs, and
- * the music. Read the way the card and the editor read it (readStitchDraft),
- * so the encode is the sequence they show.
+ * its audio: the music as before when the audio has the legacy shape, else
+ * every audio clip. Read the way the card and the editor read it
+ * (readStitchDraft), so the encode is the sequence they show.
  */
 
 import type { VideoStitchNodeData } from "@/types";
 import { AssetApiError, fetchAssetBlob } from "@/lib/assets/client/api";
-import type { StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes";
+import type { StitchAudioClipInput, StitchClipInput, StitchMusicInput } from "@/lib/stitch/engineTypes";
+import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { requestAssetInfo } from "@/lib/stitch/assetInfo";
-import { readStitchDraft } from "@/lib/stitch/draft";
+import { musicAudio, readStitchDraft } from "@/lib/stitch/draft";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { isPlaced, sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
 import { resolveEdgeVideo, resolveEdgeVideos } from "@/lib/stitch/sources";
+import { gatherAudioClipInputs } from "./audioClipInputs";
 import type { NodeExecutionContext } from "./types";
 
 export interface GatheredStitch {
   /** Playable clips in timeline order. On an unedited node a router edge gives one clip per video it carries. */
   clips: StitchClipInput[];
-  /** Null when no music has output, and when the music is muted (it is then never decoded). */
+  /**
+   * Null when no music has output, when the music is muted (it is then never decoded), and when the audio is not
+   * legacy-shaped (audioClips then carries the music too).
+   */
   music: StitchMusicInput | null;
+  /** Every unmuted audio clip, when the audio is not legacy-shaped (the new loop rule); else null (the old music path). */
+  audioClips: StitchAudioClipInput[] | null;
   loopCount: 1 | 2 | 3;
   /** Playable clips, for the asset recording. */
   clipCount: number;
@@ -134,15 +142,22 @@ export async function gatherStitchInputs(
   }));
 
   let music: StitchMusicInput | null = null;
-  if (musicUrl && !draft.audioMuted) {
-    const { prepareAudioAsync } = await import("@/hooks/useAudioMixing");
-    const audio = await prepareAudioAsync(await fetchMusicBlob(musicUrl), 0);
-    if (audio) {
-      music = { audio, curve: draft.audioCurve, muted: false };
-    } else if (legacy || fromInputs) {
-      // Music that would not decode never replaced the clips' sound
-      for (const clip of clips) clip.muted = false;
+  let audioClips: StitchAudioClipInput[] | null = null;
+  // Decided by what the audio is now, never by whether audioClips is stored: a stored [] plays as the key's absence
+  if (isLegacyAudioShape(draft.audioClips)) {
+    const { curve, muted } = musicAudio(draft);
+    if (musicUrl && !muted) {
+      const { prepareAudioAsync } = await import("@/hooks/useAudioMixing");
+      const audio = await prepareAudioAsync(await fetchMusicBlob(musicUrl), 0);
+      if (audio) {
+        music = { audio, curve, muted: false };
+      } else if (legacy || fromInputs) {
+        // Music that would not decode never replaced the clips' sound
+        for (const clip of clips) clip.muted = false;
+      }
     }
+  } else {
+    audioClips = await gatherAudioClipInputs(draft.audioClips, { musicUrl, signal });
   }
 
   // Without edges the clips play whole and carry no source keys: stacking them would dissolve where the editor shows cuts
@@ -151,5 +166,5 @@ export async function gatherStitchInputs(
       ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
       : null;
 
-  return { clips, music, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
+  return { clips, music, audioClips, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
 }

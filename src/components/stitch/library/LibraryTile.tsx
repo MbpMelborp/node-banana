@@ -29,7 +29,8 @@ function useOnScreen(ref: RefObject<HTMLElement | null>, root: HTMLElement | nul
  * One library video in the picker: its poster, its length, a star when it
  * is a favourite, and a check once picked. The tile is a toggle button. A
  * video without a poster on screen gets one made, through the Assets view's
- * own capture queue; a tile whose file is gone cannot be picked.
+ * own capture queue; a tile whose file is gone cannot be picked. An audio
+ * file shows the library's audio placeholder and asks for no poster.
  */
 export const LibraryTile = memo(function LibraryTile({
   asset,
@@ -51,9 +52,10 @@ export const LibraryTile = memo(function LibraryTile({
   const [thumbFailed, setThumbFailed] = useState<string | null>(null);
   const thumbUrl = tileThumbUrl({ sha256: asset.sha256, hasPoster }, TILE_WIDTH);
   const missing = !!asset.missing;
+  const audio = asset.kind === "audio";
 
   // Only while on screen: one scrolled past before its turn is withdrawn
-  const needsPoster = !hasPoster && !missing;
+  const needsPoster = !audio && !hasPoster && !missing;
   useEffect(() => {
     if (!needsPoster || !onScreen) return;
     return requestPoster(asset);
@@ -94,7 +96,9 @@ export const LibraryTile = memo(function LibraryTile({
             : "ring-1 ring-white/8 group-focus-visible:ring-2 group-focus-visible:ring-white/40 group-focus-visible:ring-offset-1 group-focus-visible:ring-offset-card",
         )}
       >
-        {!missing && thumbFailed !== thumbUrl ? (
+        {audio ? (
+          <AssetPlaceholder kind="audio" size={24} />
+        ) : !missing && thumbFailed !== thumbUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
           <img
             src={thumbUrl}

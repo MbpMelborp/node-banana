@@ -3,35 +3,78 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { isSaveShortcut } from "@/utils/saveShortcut";
 import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
 import { copySelection, cutSelection, duplicateSelection, pasteClipboard } from "./clipboardActions";
-import { hasTextSelection, selectAllClips } from "./selectionActions";
+import { hasTextSelection, selectAllAudioClips, selectAllClips } from "./selectionActions";
 import {
   endSelectedAtPlayhead,
+  endSelectedAudioAtPlayhead,
+  moveSelectedAudioRow,
   moveSelectedRow,
+  nudgeSelectedAudio,
   nudgeSelectedClip,
   pause,
   play,
+  removeAudioSelection,
   removeSelection,
+  setAudioEdgeAtPlayhead,
   setEdgeAtPlayheadForSelection,
   splitAtPlayhead,
+  splitSelectedAudioAtPlayhead,
   startSelectedAtPlayhead,
+  startSelectedAudioAtPlayhead,
   stepBack,
   toggleMusicMute,
   togglePlay,
+  toggleSelectedAudioMute,
   toggleSelectedClipMute,
 } from "./editorActions";
 
 /** A dialog stacked over the editor (the discard sheet, the picker, anything else): it owns the keys. */
 function stackedDialogOpen(root: HTMLElement | null): boolean {
   const s = useStitchEditorStore.getState();
-  if (s.discardOpen || s.pickerOpen) return true;
+  if (s.discardOpen || s.pickerOpen !== false) return true;
   const overlays = document.querySelectorAll("[data-dialog-overlay]");
   const top = overlays[overlays.length - 1];
   return Boolean(top && root && !top.contains(root));
 }
 
-/** Each action is handled in either layout; the ones that place a clip in time or change its row do nothing in Track. */
+/**
+ * Each action is handled in either layout; the ones that place a video clip in time or change its row do nothing in
+ * Track. With audio clips selected, the clip keys act on them (audio always has a start and a row); M mutes them.
+ */
 function run(action: EditorKeyAction, e: Pick<KeyboardEvent, "shiftKey" | "repeat">, requestClose: () => void): void {
   const s = useStitchEditorStore.getState();
+  if (s.selection?.kind === "audio") {
+    switch (action) {
+      case "setIn":
+        return setAudioEdgeAtPlayhead("in");
+      case "setOut":
+        return setAudioEdgeAtPlayhead("out");
+      case "split":
+        return splitSelectedAudioAtPlayhead();
+      case "remove":
+        return removeAudioSelection();
+      case "toggleMusicMute":
+      case "toggleClipMute":
+        return toggleSelectedAudioMute();
+      case "nudgeEarlier":
+        return nudgeSelectedAudio(-1, e.shiftKey, e.repeat);
+      case "nudgeLater":
+        return nudgeSelectedAudio(1, e.shiftKey, e.repeat);
+      case "rowUp":
+        return moveSelectedAudioRow(-1);
+      case "rowDown":
+        return moveSelectedAudioRow(1);
+      case "startAtPlayhead":
+        return startSelectedAudioAtPlayhead();
+      case "endAtPlayhead":
+        return endSelectedAudioAtPlayhead();
+      case "selectAll":
+        return selectAllAudioClips();
+      default:
+        // Playback, history, Escape and the clipboard (which reads the selection's kind itself)
+        break;
+    }
+  }
   switch (action) {
     case "togglePlay":
       return togglePlay();

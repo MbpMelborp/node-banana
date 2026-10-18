@@ -17,13 +17,13 @@ import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEdit
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fetchFacets } from "@/lib/assets/client/api";
 import { onPosterReady } from "@/lib/assets/client/poster";
-import type { AssetFacets, AssetView } from "@/lib/assets/types";
+import type { AssetFacets, AssetKind, AssetView } from "@/lib/assets/types";
 import { DEFAULT_LIBRARY_QUERY, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { isPlaced } from "@/lib/stitch/timeline";
 import { formatTimecode } from "@/lib/stitch/timecode";
-import { addAssetClips } from "../editorActions";
+import { addAssetClips, addAudioFromLibrary, drawnPlayhead } from "../editorActions";
 import { STITCH_EDITOR_PANEL } from "../editorStyles";
 import { LibraryTile } from "./LibraryTile";
 import { ProjectMenu } from "./ProjectMenu";
@@ -38,6 +38,8 @@ const FILTER_OFF = "border-card-border text-neutral-400 hover:text-neutral-200 h
 const FILTER_ON = "border-transparent bg-white/10 text-neutral-100";
 
 const NO_PROJECTS: AssetFacets["projects"] = [];
+const VIDEO_KINDS: readonly AssetKind[] = ["video"];
+const AUDIO_KINDS: readonly AssetKind[] = ["audio"];
 
 const closePicker = () => useStitchEditorStore.getState().setPickerOpen(false);
 
@@ -58,27 +60,32 @@ function goesAfterIndex(s: StitchEditorState): number {
 }
 
 /**
- * "Add from library", over the Stitch editor: the library's videos, searched
- * and narrowed by project, favourites and this workflow, newest or oldest
- * first. Videos are picked in order, and Add appends one clip each, in that
- * order, after the last clip. The picker owns its query and its pages; it
- * never touches the Assets view's own list. Escape closes only the picker.
+ * "Add from library", over the Stitch editor: the library's videos (or, from
+ * "+ Add audio", its audio files), searched and narrowed by project,
+ * favourites and this workflow, newest or oldest first. Files are picked in
+ * order. Add appends one video clip each, in that order, after the last
+ * clip; for audio it puts each file on a new audio row of its own, starting
+ * at the playhead. The picker owns its query and its pages; it never touches
+ * the Assets view's own list. Escape closes only the picker.
  */
 export function LibraryPicker() {
   const open = useStitchEditorStore((s) => s.pickerOpen);
   if (!open) return null;
-  return <OpenPicker />;
+  return <OpenPicker key={open} kind={open} />;
 }
 
-function OpenPicker() {
+function OpenPicker({ kind }: { kind: "video" | "audio" }) {
   const workflowId = useWorkflowStore((s) => s.workflowId);
   const afterIndex = useStitchEditorStore(goesAfterIndex);
+  const playhead = useStitchEditorStore(drawnPlayhead);
   const libraryOn = useLibraryAvailable();
+  const audio = kind === "audio";
   const [query, setQuery] = useState<LibraryVideoQuery>(DEFAULT_LIBRARY_QUERY);
   const { assets, loading, loadingMore, error, moreError, hasMore, loadMore, retry, listingKey } = useLibraryVideos(
     query,
     workflowId,
     libraryOn,
+    audio ? AUDIO_KINDS : VIDEO_KINDS,
   );
   const update = (patch: Partial<LibraryVideoQuery>) => setQuery((q) => ({ ...q, ...patch }));
 
@@ -96,9 +103,12 @@ function OpenPicker() {
         const panel = document.querySelector<HTMLElement>(`[${STITCH_EDITOR_PANEL}]`);
         if (wasAdd) {
           const selection = useStitchEditorStore.getState().selection;
-          const clipId = selection?.kind === "clip" ? selection.clipId : null;
-          const box = clipId
-            ? panel?.querySelector<HTMLElement>(`[role="option"][data-clip-id="${CSS.escape(clipId)}"]`)
+          const box = selection
+            ? panel?.querySelector<HTMLElement>(
+                selection.kind === "audio"
+                  ? `[role="option"][data-audio-clip-id="${CSS.escape(selection.clipId)}"]`
+                  : `[role="option"][data-clip-id="${CSS.escape(selection.clipId)}"]`,
+              )
             : null;
           if (box) {
             box.focus();
@@ -114,7 +124,8 @@ function OpenPicker() {
   );
   const add = () => {
     added.current = true;
-    addAssetClips(picked);
+    if (audio) addAudioFromLibrary(picked);
+    else addAssetClips(picked);
   };
 
   // The scrim closes the picker only for a press that starts and ends on it: a drag out of the search field
@@ -172,8 +183,13 @@ function OpenPicker() {
 
   const pickedIds = new Set(picked.map((a) => a.id));
   const pickedSec = picked.reduce((sum, a) => sum + (a.durationSec ?? 0), 0);
-  const where = afterIndex >= 0 ? `goes after ${clipName(afterIndex)}` : "goes first";
   const n = picked.length;
+  const where = audio
+    ? `${n === 1 ? "starts" : "each starts"} at ${formatTimecode(playhead)} on a new row`
+    : afterIndex >= 0
+      ? `goes after ${clipName(afterIndex)}`
+      : "goes first";
+  const filtered = query.q.trim() !== "" || query.project !== null || query.favourites || query.thisWorkflow;
 
   let body: ReactNode;
   if (!libraryOn) body = <Notice>The asset library is off.</Notice>;
@@ -193,7 +209,9 @@ function OpenPicker() {
       </div>
     );
   }
-  else if (assets.length === 0) body = <Notice>No videos match</Notice>;
+  else if (assets.length === 0) {
+    body = <Notice>{!audio ? "No videos match" : filtered ? "No audio matches" : "No audio in the library yet"}</Notice>;
+  }
   else {
     body = (
       <>
@@ -251,10 +269,11 @@ function OpenPicker() {
       className="max-w-[880px] h-[min(580px,85vh)]"
     >
       <DialogHeader divider>
-        <DialogTitle>Add from library</DialogTitle>
+        <DialogTitle>{audio ? "Add audio from the library" : "Add from library"}</DialogTitle>
         <DialogDescription>
-          Videos saved in your Node Banana folder. A picked clip goes on the timeline after the last one and keeps its
-          link to the library.
+          {audio
+            ? "Audio saved in your Node Banana folder. Each picked file goes on a new audio row, starting at the playhead."
+            : "Videos saved in your Node Banana folder. A picked clip goes on the timeline after the last one and keeps its link to the library."}
         </DialogDescription>
       </DialogHeader>
 
@@ -262,14 +281,14 @@ function OpenPicker() {
         <DialogSearchField
           ref={searchRef}
           className="w-[260px] shrink-0"
-          placeholder="Search videos"
-          aria-label="Search videos"
+          placeholder={audio ? "Search audio" : "Search videos"}
+          aria-label={audio ? "Search audio" : "Search videos"}
           value={query.q}
           onChange={(event) => update({ q: event.target.value })}
           disabled={!libraryOn}
         />
         <ProjectMenu value={query.project} projects={projects} onChange={(project) => update({ project })} />
-        <span className={cn(FILTER_BUTTON, FILTER_ON)}>Videos</span>
+        <span className={cn(FILTER_BUTTON, FILTER_ON)}>{audio ? "Audio" : "Videos"}</span>
         <button
           type="button"
           aria-pressed={query.favourites}
@@ -310,14 +329,18 @@ function OpenPicker() {
               <span className="ml-1 text-neutral-500">{where}</span>
             </>
           ) : (
-            <span className="text-neutral-400">Pick videos to add</span>
+            <span className="text-neutral-400">{audio ? "Pick audio files to add" : "Pick videos to add"}</span>
           )}
         </div>
         <DialogButton variant="ghost" onClick={closePicker}>
           Cancel
         </DialogButton>
         <DialogButton variant="primary" disabled={n === 0} onClick={add}>
-          {n === 0 ? "Add clips" : `Add ${n} clip${n === 1 ? "" : "s"}`}
+          {n === 0
+            ? "Add clips"
+            : audio
+              ? `Add ${n} audio clip${n === 1 ? "" : "s"}`
+              : `Add ${n} clip${n === 1 ? "" : "s"}`}
         </DialogButton>
       </DialogFooter>
     </Dialog>

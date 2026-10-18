@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import {
   __resetMediaInfoForTests,
   __setMediaExtractorForTests,
@@ -165,7 +166,7 @@ describe("FrameToCanvasButton", () => {
     const ids = editor().draft!.timeline.map((c) => c.id);
     const selections = [
       { kind: "clip" as const, clipId: ids[1] },
-      { kind: "audio" as const, point: null },
+      audioSelectionOf({ clipId: MUSIC_CLIP_ID }),
       null,
       { kind: "clip" as const, clipId: ids[0], clipIds: ids, anchorId: ids[0] },
     ];
@@ -178,8 +179,8 @@ describe("FrameToCanvasButton", () => {
     const rail = screen.getByRole("complementary", { name: "Clip" });
     expect(within(rail).getByText("2 clips")).toBeInTheDocument();
     expect(rail).toContainElement(button);
-    act(() => editor().select({ kind: "audio", point: null }));
-    expect(screen.getByRole("complementary", { name: "Audio track" })).toContainElement(button);
+    act(() => editor().select(audioSelectionOf({ clipId: MUSIC_CLIP_ID })));
+    expect(screen.getByRole("complementary", { name: "Audio clip" })).toContainElement(button);
   });
 
   it("is ready while the preview plays, and the press pauses it", async () => {

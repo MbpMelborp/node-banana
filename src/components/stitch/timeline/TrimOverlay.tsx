@@ -195,15 +195,28 @@ export function TrimMarks({
 
 /**
  * A snap, inside the lanes: the dashed guide from the ruler down to `bottom` at the snapped time, and the chip
- * naming what it snapped to, 9px right of the guide. A trim and a body drag both draw it.
+ * naming what it snapped to, 9px right of the guide. A trim and a body drag both draw it; the audio section passes
+ * the ruler's place in its own box as `top`.
  */
-export function SnapGuide({ x, bottom, chipTop, text }: { x: number; bottom: number; chipTop: number; text: string }) {
+export function SnapGuide({
+  x,
+  bottom,
+  chipTop,
+  text,
+  top = 13,
+}: {
+  x: number;
+  bottom: number;
+  chipTop: number;
+  text: string;
+  top?: number;
+}) {
   return (
     <>
       <div
         aria-hidden="true"
         className="pointer-events-none absolute z-4 border-l border-dashed border-neutral-200/70"
-        style={{ left: x, top: 13, height: bottom - 13 + 1 }}
+        style={{ left: x, top, height: bottom - top + 1 }}
       />
       <div
         data-testid="stitch-snap-chip"

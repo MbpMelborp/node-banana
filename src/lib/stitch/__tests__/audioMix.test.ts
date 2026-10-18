@@ -2,9 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   applyCrossfades,
   applyCurveGain,
+  applyCurveGainAt,
   applyGainPieces,
+  audioClipLayers,
+  audioLayersOverlap,
+  chooseLayerMasterFormat,
   chooseMasterFormat,
   clampSamples,
+  masterLength,
+  masterRange,
   mixInto,
   mixLoop,
   pcmFromAudioBuffer,
@@ -13,7 +19,9 @@ import {
   resampleLinear,
   sliceChunksToRange,
   toMasterFormat,
+  type AudioBufferLike,
   type LoopMix,
+  type MasterFormat,
   type Pcm,
   type PcmChunk,
 } from "../audioMix";
@@ -489,5 +497,226 @@ describe("applyGainPieces", () => {
     // It stopped at the next check, before the piece's end
     expect(long[0][199999]).toBe(1);
     expect(long[0][65535]).not.toBe(1);
+  });
+});
+
+/** A decoded buffer of `length` frames per channel, sample i of channel c = fill(i, c). */
+function buffer(sampleRate: number, length: number, channels: number, fill: (i: number, c: number) => number): AudioBufferLike {
+  const data = Array.from({ length: channels }, (_, c) => filled(length, (i) => fill(i, c)));
+  return { sampleRate, numberOfChannels: channels, length, getChannelData: (c: number) => data[c] };
+}
+/** A sound that changes every sample, so an off-by-one shows. */
+const wobble = (i: number, c: number) => Math.sin(i * 0.37 + c) * 0.5;
+const asPcm = (b: AudioBufferLike): Pcm => ({
+  sampleRate: b.sampleRate,
+  channels: Array.from({ length: b.numberOfChannels }, (_, c) => b.getChannelData(c)),
+});
+const fmt = (sampleRate: number, channels: 1 | 2): MasterFormat => ({ sampleRate, channels });
+
+describe("masterLength", () => {
+  it("is resampleLinear's length rule", () => {
+    expect(masterLength(buffer(48000, 1000, 1, () => 0), fmt(48000, 1))).toBe(1000);
+    expect(masterLength(buffer(44100, 441, 1, () => 0), fmt(48000, 2))).toBe(480);
+    expect(masterLength(buffer(44100, 1000, 1, () => 0), fmt(48000, 1))).toBe(resampleLinear({ sampleRate: 44100, channels: [filled(1000, 0)] }, 48000).channels[0].length);
+  });
+});
+
+describe("masterRange", () => {
+  const cases: Array<[string, AudioBufferLike, MasterFormat]> = [
+    ["48 → 48", buffer(48000, 3000, 2, wobble), fmt(48000, 2)],
+    ["44.1 → 48", buffer(44100, 3000, 2, wobble), fmt(48000, 2)],
+    ["mono → stereo, resampled", buffer(44100, 3000, 1, wobble), fmt(48000, 2)],
+    ["stereo → mono", buffer(48000, 3000, 2, wobble), fmt(48000, 1)],
+    ["stereo → mono, resampled", buffer(32000, 3000, 2, wobble), fmt(48000, 1)],
+  ];
+  for (const [name, source, format] of cases) {
+    it(`is sample for sample the same slice of toMasterFormat of the whole buffer (${name})`, () => {
+      const whole = toMasterFormat(asPcm(source), format);
+      const length = masterLength(source, format);
+      for (const [a, b] of [[0, length], [37, 300], [301, 302], [length - 129, length]]) {
+        const range = masterRange(source, format, a, b);
+        expect(range.sampleRate).toBe(format.sampleRate);
+        expect(range.channels).toHaveLength(format.channels);
+        range.channels.forEach((channel, c) => expect([...channel]).toEqual([...whole.channels[c].subarray(a, b)]));
+      }
+    });
+  }
+
+  it("copies: scaling the range leaves the buffer alone", () => {
+    const source = buffer(48000, 100, 2, () => 0.5);
+    const range = masterRange(source, fmt(48000, 2), 10, 20);
+    range.channels[0].fill(0);
+    expect(source.getChannelData(0)[15]).toBe(0.5);
+  });
+
+  it("is empty for an empty range", () => {
+    expect(masterRange(buffer(48000, 100, 2, () => 0.5), fmt(48000, 2), 50, 50).channels.map((c) => c.length)).toEqual([0, 0]);
+  });
+});
+
+describe("applyCurveGainAt", () => {
+  const curve = [{ t: 0.1, gain: 1 }, { t: 0.2, gain: 0.2 }, { t: 0.35, gain: 0.9 }, { t: 0.6, gain: 0 }];
+
+  it("with first 0 and cutAt the length, equals applyCurveGain", () => {
+    const n = 700;
+    const a = [filled(n, (i) => wobble(i, 0)), filled(n, (i) => wobble(i, 1))];
+    const b = a.map((channel) => channel.slice());
+    applyCurveGain(a, SR, curve);
+    applyCurveGainAt(b, SR, curve, 0, n);
+    expect(b.map((c) => [...c])).toEqual(a.map((c) => [...c]));
+  });
+
+  it("gives two ranges of one grid the samples the whole range gets, the cut off the block grid", () => {
+    const n = 700;
+    const cut = 301;
+    const whole = [filled(n, (i) => wobble(i, 0))];
+    applyCurveGainAt(whole, SR, curve, 0, 650);
+    const left = [filled(cut, (i) => wobble(i, 0))];
+    const right = [filled(n - cut, (i) => wobble(i + cut, 0))];
+    applyCurveGainAt(left, SR, curve, 0, 650);
+    applyCurveGainAt(right, SR, curve, cut, 650);
+    expect([...left[0], ...right[0]]).toEqual([...whole[0]]);
+  });
+
+  it("reads the gain at the source's own grid: a range from sample 500 reads the curve from 0.5 s", () => {
+    const channel = [filled(100, 1)];
+    applyCurveGainAt(channel, SR, [{ t: 0.5, gain: 0.25 }, { t: 1, gain: 0.25 }], 500);
+    expect(channel[0].every((v) => Math.abs(v - 0.25) < 1e-7)).toBe(true);
+  });
+
+  it("changes nothing for an empty curve", () => {
+    const channel = [filled(10, 0.5)];
+    applyCurveGainAt(channel, SR, [], 3);
+    expect([...channel[0]]).toEqual([...filled(10, 0.5)]);
+  });
+});
+
+describe("chooseLayerMasterFormat", () => {
+  it("takes the one source's rate when there is no clip sound", () => {
+    expect(chooseLayerMasterFormat([{ sampleRate: 44100, channels: 1 }], [])).toEqual({ sampleRate: 44100, channels: 1 });
+  });
+
+  it("takes the highest rate of several sources, or of sources and clip sound", () => {
+    expect(chooseLayerMasterFormat([{ sampleRate: 44100, channels: 1 }, { sampleRate: 48000, channels: 2 }], [])).toEqual({ sampleRate: 48000, channels: 2 });
+    expect(chooseLayerMasterFormat([{ sampleRate: 44100, channels: 1 }], [{ sampleRate: 48000, channels: 1 }])).toEqual({ sampleRate: 48000, channels: 1 });
+    expect(chooseLayerMasterFormat([], [{ sampleRate: 32000, channels: 6 }])).toEqual({ sampleRate: 32000, channels: 2 });
+  });
+
+  it("is null with nothing usable", () => {
+    expect(chooseLayerMasterFormat([], [])).toBeNull();
+    expect(chooseLayerMasterFormat([{ sampleRate: 0, channels: 2 }], [])).toBeNull();
+  });
+});
+
+describe("audioClipLayers", () => {
+  const format = fmt(SR, 1);
+  const source = buffer(SR, 3 * SR, 1, () => 0.5);
+  const layer = (init: Partial<{ startSec: number; inSec: number; outSec: number | null; curve: { t: number; gain: number }[] }>) => ({
+    buffer: source,
+    startSec: 0,
+    inSec: 0,
+    outSec: null,
+    curve: [],
+    ...init,
+  });
+
+  it("puts each clip's In at its start, on the source's grid", () => {
+    const [placed] = audioClipLayers([layer({ startSec: 2, inSec: 1, outSec: 1.5 })], format, 10);
+    expect(placed.at).toBe(2 * SR);
+    expect(placed.pcm.channels[0].length).toBe(SR / 2);
+  });
+
+  it("cuts a clip at the loop's end and drops one that starts after it", () => {
+    const layers = audioClipLayers([layer({ startSec: 0.5 }), layer({ startSec: 1 }), layer({ startSec: 1.2 })], format, 1);
+    expect(layers).toHaveLength(1);
+    expect(layers[0].pcm.channels[0].length).toBe(SR / 2);
+  });
+
+  it("stops at the source's end however far Out is", () => {
+    const [placed] = audioClipLayers([layer({ outSec: 9 })], format, 10);
+    expect(placed.pcm.channels[0].length).toBe(3 * SR);
+  });
+
+  it("applies the curve in the clip's source seconds", () => {
+    const [placed] = audioClipLayers([layer({ startSec: 4, inSec: 1, curve: [{ t: 1, gain: 0 }, { t: 2, gain: 0 }, { t: 2.2, gain: 1 }] })], format, 10);
+    expect(placed.pcm.channels[0][500]).toBe(0);
+    expect(placed.pcm.channels[0][1600]).toBeCloseTo(0.5, 6);
+  });
+
+  it("never scales the shared buffer", () => {
+    audioClipLayers([layer({ curve: [{ t: 0, gain: 0 }] })], format, 10);
+    expect(source.getChannelData(0).every((v) => v === 0.5)).toBe(true);
+  });
+});
+
+describe("audioLayersOverlap", () => {
+  const pcm = (n: number): Pcm => ({ sampleRate: SR, channels: [filled(n, 0.1)] });
+  it("is false for the touching pieces of a split, true for clips that overlap each other or clip sound", () => {
+    expect(audioLayersOverlap([{ pcm: pcm(300), at: 0 }, { pcm: pcm(200), at: 300 }], [], SR)).toBe(false);
+    expect(audioLayersOverlap([{ pcm: pcm(300), at: 0 }, { pcm: pcm(200), at: 299 }], [], SR)).toBe(true);
+    expect(audioLayersOverlap([{ pcm: pcm(300), at: 500 }], [{ pcm: pcm(500), seqStart: 0, gain: 1 }], SR)).toBe(false);
+    expect(audioLayersOverlap([{ pcm: pcm(300), at: 499 }], [{ pcm: pcm(500), seqStart: 0, gain: 1 }], SR)).toBe(true);
+  });
+});
+
+describe("mixLoop with audio clips", () => {
+  const format = fmt(SR, 1);
+
+  it("plays the same audio every loop and nothing past the loop's end", () => {
+    const audio = [{ pcm: { sampleRate: SR, channels: [filled(300, 0.4)] }, at: 800 }];
+    for (const loop of [0, 1, 2]) {
+      const [out] = mixLoop({ format, loopLength: 1, clips: [], music: null, audio }, loop);
+      expect(out.length).toBe(SR);
+      expect(out[799]).toBe(0);
+      expect(out[800]).toBeCloseTo(0.4, 6);
+      expect(out[999]).toBeCloseTo(0.4, 6);
+    }
+  });
+
+  it("clamps only when the engine says audio sums", () => {
+    const audio = [{ pcm: { sampleRate: SR, channels: [filled(SR, 1.2)] }, at: 0 }];
+    expect(mixLoop({ format, loopLength: 1, clips: [], music: null, audio }, 0)[0][5]).toBeCloseTo(1.2, 6);
+    expect(mixLoop({ format, loopLength: 1, clips: [], music: null, audio, audioSums: true }, 0)[0][5]).toBe(1);
+  });
+
+  // P3: an untouched music clip under the new rule plays at Loop 1x as the old music path plays the music
+  describe("an untouched music clip plays as the music did (P3)", () => {
+    const curve = [{ t: 0, gain: 0.2 }, { t: 0.31, gain: 1 }, { t: 0.5, gain: 0.4 }, { t: 0.9, gain: 1 }];
+    const loopLength = 1.0123;
+    for (const [name, musicRate, clipRate] of [
+      ["48 kHz music alone", 48000, null],
+      ["44.1 kHz music under 48 kHz clip sound", 44100, 48000],
+    ] as const) {
+      it(name, () => {
+        const music = buffer(musicRate, 2 * musicRate, 2, wobble);
+        const clipSound = clipRate ? [{ sampleRate: clipRate, channels: 2 }] : [];
+        const format = chooseMasterFormat({ sampleRate: musicRate, channels: 2 }, clipSound)!;
+        expect(chooseLayerMasterFormat([{ sampleRate: musicRate, channels: 2 }], clipSound)).toEqual(format);
+        const clips = clipRate
+          ? [{ pcm: { sampleRate: clipRate, channels: [filled(clipRate / 2, 0.1), filled(clipRate / 2, 0.1)] }, seqStart: 0.2, gain: 1 }]
+          : [];
+        // The engine's old music path: the head the loops play, in the master format
+        const played = Math.round(loopLength * format.sampleRate);
+        const old: LoopMix = {
+          format,
+          loopLength,
+          clips,
+          music: { pcm: toMasterFormat(pcmHead(music, (played * music.sampleRate) / format.sampleRate + 1), format), curve },
+        };
+        const audio = audioClipLayers([{ buffer: music, startSec: 0, inSec: 0, outSec: null, curve }], format, loopLength);
+        const fresh: LoopMix = {
+          format,
+          loopLength,
+          clips,
+          music: null,
+          audio,
+          audioSums: audioLayersOverlap(audio, clips, format.sampleRate),
+        };
+        const a = mixLoop(old, 0);
+        const b = mixLoop(fresh, 0);
+        expect(played % 128).not.toBe(0);
+        b.forEach((channel, c) => expect([...channel]).toEqual([...a[c]]));
+      });
+    }
   });
 });

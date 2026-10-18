@@ -1,5 +1,10 @@
 import { useToast } from "@/components/Toast";
-import { selectedClipIds, useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
+import {
+  selectedAudioIds,
+  selectedClipIds,
+  useStitchEditorStore,
+  type StitchEditorState,
+} from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import {
@@ -9,14 +14,26 @@ import {
   pastableItems,
   pasteIntoTimeline,
   skippedMessage,
+  type ClipboardAudioItem,
   type ClipboardItem,
+  type ClipboardOrigin,
   type ClipboardVideoItem,
   type PasteTarget,
 } from "@/lib/stitch/clipboard";
+import { copyAudioItems, duplicateAudioClips, pasteAudioClips, type AudioRowMap } from "@/lib/stitch/audioClips";
 import { draftSpans, type ClipOrigin } from "@/lib/stitch/draft";
 import { makeSelection } from "@/lib/stitch/selection";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
-import { drawnPlayhead, keepZoom, removeClipsById } from "./editorActions";
+import {
+  drawnPlayhead,
+  editorAudioLengthOf,
+  keepZoom,
+  remapExpandedRow,
+  removeAudioClipsById,
+  removeClipsById,
+  selectAudioClips,
+} from "./editorActions";
+import type { StitchAudioClip } from "@/types";
 
 /**
  * ⌘C, ⌘X, ⌘V and ⌘D in the editor, and the clip menu's Copy, Cut, Paste and
@@ -47,36 +64,63 @@ export function canPaste(hasClipboard: boolean, s: Pick<StitchEditorState, "draf
   return hasClipboard && s.draft !== null;
 }
 
+/** Where the clips are copied: this node in this tab and workflow (an unsaved workflow is given its id first). */
+function copyOrigin(nodeId: string): ClipboardOrigin {
+  const wf = useWorkflowStore.getState();
+  return { kind: "node", nodeId, tabId: wf.activeTabId, workflowId: wf.ensureWorkflowId() };
+}
+
 /**
- * ⌘C: the selected clips to the clipboard. An unsaved workflow is given its id first, so a clip from a connected
- * video still knows its own node after a tab switch. False when nothing is selected (the clipboard is kept).
+ * ⌘C: the selected clips to the clipboard, video or audio as the selection holds. An unsaved workflow is given its id
+ * first, so a clip from a connected video (or the music) still knows its own node after a tab switch. False when
+ * nothing is selected (the clipboard is kept).
  */
 export function copySelection(): boolean {
   const s = editor();
+  if (!s.draft || !s.nodeId) return false;
+  if (s.selection?.kind === "audio") {
+    const items = copyAudioItems(s.draft.audioClips, selectedAudioIds(s));
+    if (items.length === 0) return false;
+    useStitchClipboard.getState().setClipboard({ origin: copyOrigin(s.nodeId), items });
+    return true;
+  }
   const ids = selectedClipIds(s);
-  if (!s.draft || !s.nodeId || ids.length === 0) return false;
-  const wf = useWorkflowStore.getState();
-  const clipboard = copyClips(s.draft, s.durations, ids, {
-    kind: "node",
-    nodeId: s.nodeId,
-    tabId: wf.activeTabId,
-    workflowId: wf.ensureWorkflowId(),
-  });
+  if (ids.length === 0) return false;
+  const clipboard = copyClips(s.draft, s.durations, ids, copyOrigin(s.nodeId));
   if (!clipboard) return false;
   useStitchClipboard.getState().setClipboard(clipboard);
   return true;
 }
 
-/** ⌘X: copy, then remove the selected clips in one step; the clip now at the first removed index is selected. */
+/** ⌘X: copy, then remove the selected clips in one step; the clip now at the first removed place is selected. */
 export function cutSelection(): void {
-  const ids = selectedClipIds(editor());
+  const s = editor();
+  const audio = s.selection?.kind === "audio";
+  const ids = audio ? selectedAudioIds(s) : selectedClipIds(s);
   if (!copySelection()) return;
-  const removed = removeClipsById(ids);
+  const removed = audio ? removeAudioClipsById(ids) : removeClipsById(ids);
   editor().tagClips(removed, "cut");
 }
 
 function videoItems(items: readonly ClipboardItem[]): ClipboardVideoItem[] {
   return items.filter((item): item is ClipboardVideoItem => item.track === "video");
+}
+
+function audioItems(items: readonly ClipboardItem[]): ClipboardAudioItem[] {
+  return items.filter((item): item is ClipboardAudioItem => item.track === "audio");
+}
+
+/** Audio copies made by a paste or a duplicate: tagged, selected (the first leading), the expanded row following. */
+function insertAudioCopies(
+  result: { clips: StitchAudioClip[]; ids: string[]; rowMap?: AudioRowMap },
+  origin: Extract<ClipOrigin, "pasted" | "duplicated">,
+): void {
+  const s = editor();
+  if (result.ids.length === 0) return;
+  s.apply((d) => ({ ...d, audioClips: result.clips }));
+  if (result.rowMap) remapExpandedRow(result.rowMap);
+  editor().tagClips(result.ids, origin);
+  selectAudioClips(result.ids);
 }
 
 /** The notice that Stacked now has many clips, when this edit took it past MANY_STACKED_CLIPS. */
@@ -125,9 +169,10 @@ function lastSelectedIndex(s: StitchEditorState): number {
 }
 
 /**
- * ⌘V: in Track after the last selected clip (or at the end); in Stacked on new rows below it (or at the bottom), the
- * first at the playhead and the others at their copied offsets. Clips that may not be pasted here are left out and
- * a notice says why; with none left, nothing is written.
+ * ⌘V, by what the clipboard holds. Video: in Track after the last selected clip (or at the end); in Stacked on new
+ * rows below it (or at the bottom), the first at the playhead and the others at their copied offsets. Audio: on new
+ * rows under the last, the first at the playhead, the time and row spacing kept. Clips that may not be pasted here
+ * are left out and a notice says why; with none left, nothing is written.
  */
 export function pasteClipboard(): void {
   const s = editor();
@@ -135,13 +180,39 @@ export function pasteClipboard(): void {
   const target = pasteTarget(s);
   if (!clipboard || !s.draft || !target) return;
   const { items, skipped } = pastableItems(clipboard, target);
-  const at = { afterIndex: lastSelectedIndex(s), startSec: drawnPlayhead(s) };
-  insertCopies(videoItems(items), at, "pasted", skippedMessage(skipped));
+  const track = clipboard.items[0]?.track;
+  switch (track) {
+    case undefined:
+    case "video": {
+      const at = { afterIndex: lastSelectedIndex(s), startSec: drawnPlayhead(s) };
+      return insertCopies(videoItems(items), at, "pasted", skippedMessage(skipped));
+    }
+    case "audio": {
+      // A copy holds one kind: audio pastes on new rows under the last, the first at the playhead, whatever is selected
+      insertAudioCopies(pasteAudioClips(s.draft.audioClips, audioItems(items), drawnPlayhead(s)), "pasted");
+      const notice = skippedMessage(skipped);
+      if (notice) useToast.getState().show(notice, "info");
+      return;
+    }
+    default: {
+      const unknown: never = track;
+      return unknown;
+    }
+  }
 }
 
-/** ⌘D: copies of the selected clips right after them (Stacked: starting where the selection ends). The clipboard is kept. */
+/**
+ * ⌘D: copies of the selected clips right after them (Stacked: starting where the selection ends). Audio copies start
+ * where the selection ends, on their own rows when they fit there, else on new rows under it. The clipboard is kept.
+ */
 export function duplicateSelection(): void {
   const s = editor();
+  if (s.selection?.kind === "audio") {
+    if (!s.draft) return;
+    const ids = selectedAudioIds(s);
+    if (ids.length === 0) return;
+    return insertAudioCopies(duplicateAudioClips(s.draft.audioClips, editorAudioLengthOf(s), ids), "duplicated");
+  }
   const ids = selectedClipIds(s);
   if (!s.draft || ids.length === 0) return;
   const items = copyItems(s.draft, s.durations, ids);

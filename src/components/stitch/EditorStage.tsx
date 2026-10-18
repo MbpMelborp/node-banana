@@ -14,6 +14,20 @@ export interface PreviewLayerSource {
   src: string;
 }
 
+/** A hidden <audio> per audio clip, registered by the clip's id. */
+function PreviewAudio({
+  clipId,
+  src,
+  registerAudio,
+}: {
+  clipId: string;
+  src: string;
+  registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
+}) {
+  const ref = useCallback((el: HTMLAudioElement | null) => registerAudio(clipId, el), [registerAudio, clipId]);
+  return <audio ref={ref} src={src} preload="auto" className="hidden" />;
+}
+
 /**
  * One <video>, with a ref callback that keeps its identity while its key does. Track shows the active one by class;
  * Stacked leaves it hidden by class and the playback writes its inline opacity.
@@ -52,7 +66,7 @@ function PreviewVideo({
  * under the playhead is shown; in Stacked one per clip, in row order, and
  * the playback works their opacities out in that order (each clip's share
  * of the picture does not depend on which one paints last).
- * useSequencePlayback drives them. The music plays from a hidden <audio>.
+ * useSequencePlayback drives them, and each audio clip's hidden <audio>.
  * An editor with no clips shows the empty state instead.
  */
 export function EditorStage({
@@ -62,7 +76,7 @@ export function EditorStage({
   stacked,
   activeSrc,
   registerVideo,
-  musicSrc,
+  audioLayers,
   registerAudio,
 }: {
   empty: boolean;
@@ -73,8 +87,9 @@ export function EditorStage({
   stacked: boolean;
   activeSrc: string | null;
   registerVideo: (key: string, el: HTMLVideoElement | null) => void;
-  musicSrc: string | null;
-  registerAudio: (el: HTMLAudioElement | null) => void;
+  /** One per audio clip with a playable URL, keyed by the clip's id. */
+  audioLayers: ReadonlyArray<PreviewLayerSource>;
+  registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ width: number; height: number } | null>(null);
@@ -125,8 +140,10 @@ export function EditorStage({
           ))}
         </div>
       )}
-      {/* Keyed by its URL: a new source is a new element, which the playback starts afresh */}
-      {musicSrc && <audio key={musicSrc} ref={registerAudio} src={musicSrc} preload="auto" className="hidden" />}
+      {/* Keyed by its clip and URL: a new source is a new element, which the playback starts afresh */}
+      {audioLayers.map((layer) => (
+        <PreviewAudio key={`${layer.key}\n${layer.src}`} clipId={layer.key} src={layer.src} registerAudio={registerAudio} />
+      ))}
     </div>
   );
 }

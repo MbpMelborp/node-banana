@@ -1,5 +1,6 @@
 import { inputClass } from "@/components/ui/Controls";
 import { cn } from "@/components/nodes/ui/cn";
+import { AUDIO_ROW_EXPANDED_PX, AUDIO_ROW_PX, AUDIO_ROWS_CAP, AUDIO_STRIP_PX } from "@/lib/stitch/audioLayout";
 
 /**
  * The Stitch editor's class constants and geometry, in one place so the
@@ -36,15 +37,17 @@ export const SECONDS_WELL = cn(TIMECODE_WELL, "w-16");
 
 /** Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 48, transport 44, rail 280) are its Tailwind classes. */
 export const GEOMETRY = {
-  timeline: 200,
-  timelineExpanded: 272,
+  /** One video row (Track's clips, or up to two of Stacked's), one audio row and the audio strip. */
+  timeline: 224,
+  /** The same with that audio row expanded. */
+  timelineExpanded: 296,
   trackHeader: 132,
   ruler: 24,
   clipRow: 92,
   clipTop: 10,
   clipHeight: 72,
-  audioRow: 64,
-  audioRowExpanded: 136,
+  audioRow: AUDIO_ROW_PX,
+  audioRowExpanded: AUDIO_ROW_EXPANDED_PX,
   audioBlockTop: 8,
   audioBlock: 48,
   audioBlockExpanded: 120,
@@ -65,6 +68,18 @@ export const GEOMETRY = {
   stackRowsCap: 182,
   /** The timeline's 1px border and an 8px horizontal scrollbar. */
   stackSlack: 9,
+  /** Track's room under its clips row: the border, the scrollbar and some air. */
+  trackSlack: 20,
+  /** Under the audio rows: "+ Add audio" in the header, the "New row" drop target in the lanes. */
+  audioStrip: AUDIO_STRIP_PX,
+  /** Audio rows shown before the rest scroll. */
+  audioRowsCap: AUDIO_ROWS_CAP,
+  /** The stage keeps at least this much height: the timeline gives up room below it first. */
+  stageFloor: 300,
+  /** Stacked's rows view is never capped below one and a half rows, so it still reads as scrollable. */
+  stackRowsFloor: 78,
+  /** An audio row header's controls sit this far above the row's bottom, in either height. */
+  audioControlsBottom: 22,
 } as const;
 
 /** The room the lane keeps after the last clip: the add slot with its gap, and the end margin. Fit leaves it too. */

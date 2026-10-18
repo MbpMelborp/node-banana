@@ -1,5 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
+import type { StitchDraft } from "@/lib/stitch/draft";
+import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
+import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type KeyLike } from "../editorKeys";
+import { useStitchEditorKeys } from "../useStitchEditorKeys";
+
+vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
 const key = (k: string, mods: Partial<KeyLike> = {}): KeyLike => ({
   key: k,
@@ -203,5 +212,143 @@ describe("isTypingTarget", () => {
     expect(isTypingTarget(document.createElement("button"))).toBe(false);
     expect(isTypingTarget(null)).toBe(false);
     expect(isTypingTarget(window)).toBe(false);
+  });
+});
+
+describe("the editor's keys with an audio selection", () => {
+  const TONE = "atone00000001";
+  const store = () => useStitchEditorStore.getState();
+  const audio = () => store().draft!.audioClips;
+  const audioClip = (id: string) => audio().find((c) => c.id === id)!;
+  const video = () => store().draft!.timeline;
+  const press = (k: string, mods: Partial<KeyLike> = {}) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: mods.code ?? "", bubbles: true, cancelable: true, ...mods }));
+
+  beforeEach(() => {
+    store().close();
+    const draft: StitchDraft = {
+      timeline: [createClip({ kind: "edge", edgeId: "e1" }, { id: "a" }), createClip({ kind: "edge", edgeId: "e2" }, { id: "b" })],
+      audioClips: [
+        createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, curve: [{ t: 1, gain: 0.5 }, { t: 2, gain: 0.25 }] }),
+        createAudioClip({ kind: "asset", assetId: TONE }, { id: "t", row: 1, startSec: 2 }),
+      ],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
+    };
+    store().open({ nodeId: "n1", draft, canvasGeneration: 1 });
+    store().setDurations(
+      new Map<SourceKey, number>([
+        ["edge:e1", 5],
+        ["edge:e2", 5],
+      ]),
+    );
+    store().setAudioDurations(
+      new Map([
+        ["music", 20],
+        [`asset:${TONE}`, 3],
+      ]),
+    );
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}));
+  });
+  afterEach(() => {
+    store().close();
+    document.body.innerHTML = "";
+  });
+
+  it("S splits the selected audio clip, not the video under the playhead", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    store().setPlayhead(3);
+    press("s");
+    expect(video()).toHaveLength(2);
+    expect(audio().filter((c) => c.source.kind === "asset")).toHaveLength(2);
+    expect(store().selection).toMatchObject({ kind: "audio" });
+    expect(store().selection?.clipId).not.toBe("t");
+    // The cut is at the playhead: the left piece keeps the id and ends there, the right one starts there
+    expect(audioClip("t")).toMatchObject({ startSec: 2, inSec: 0, outSec: 1, row: 1 });
+    expect(audioClip(store().selection!.clipId)).toMatchObject({ startSec: 3, inSec: 1, row: 1 });
+  });
+
+  it("S with a video selection still splits video", () => {
+    store().select({ kind: "clip", clipId: "a" });
+    store().setPlayhead(3);
+    press("s");
+    expect(video()).toHaveLength(3);
+    expect(audio()).toHaveLength(2);
+  });
+
+  it("⌫ removes the selected point, then nothing while onCurve, else the clips", () => {
+    store().setAudioExpandedRow(0);
+    store().select(audioSelectionOf({ clipId: MUSIC_CLIP_ID }, 1, true));
+    press("Backspace");
+    expect(audioClip(MUSIC_CLIP_ID).curve).toHaveLength(1);
+    expect(store().selection).toMatchObject({ point: 0, onCurve: true });
+    store().select(audioSelectionOf({ clipId: MUSIC_CLIP_ID }, null, true));
+    press("Delete");
+    expect(audio()).toHaveLength(2);
+    store().select(audioSelectionOf({ clipId: "t" }));
+    press("Backspace");
+    expect(audio().map((c) => c.id)).toEqual([MUSIC_CLIP_ID]);
+    expect(video()).toHaveLength(2);
+  });
+
+  it("M and ⌥M mute the selected audio clips; M without them mutes the music", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    press("m");
+    expect(audio().map((c) => c.muted)).toEqual([false, true]);
+    press("µ", { altKey: true, code: "KeyM" });
+    expect(audio().map((c) => c.muted)).toEqual([false, false]);
+    store().select({ kind: "clip", clipId: "a" });
+    press("m");
+    expect(audio().map((c) => c.muted)).toEqual([true, false]);
+    expect(video().every((c) => !c.muted)).toBe(true);
+  });
+
+  it("⌥ arrows nudge and change the row of the selected audio clips, in Track", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    press("ArrowRight", { altKey: true });
+    expect(audioClip("t").startSec).toBeCloseTo(2 + 1 / 60, 9);
+    press("ArrowDown", { altKey: true });
+    expect(audioClip("t").row).toBe(2);
+    press("ArrowUp", { altKey: true });
+    expect(audioClip("t").row).toBe(1);
+    expect(video().map((c) => c.startSec)).toEqual([undefined, undefined]);
+  });
+
+  it("[ and ] place the selected audio clip at the playhead; I and O trim it there", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    store().setPlayhead(6);
+    press("[");
+    expect(audioClip("t").startSec).toBe(6);
+    press("]");
+    expect(audioClip("t").startSec).toBe(3);
+    store().setPlayhead(4);
+    press("i");
+    expect(audioClip("t")).toMatchObject({ inSec: 1, startSec: 4 });
+    store().setPlayhead(5);
+    press("o");
+    expect(audioClip("t")).toMatchObject({ inSec: 1, outSec: 2 });
+    expect(video().map((c) => [c.inSec, c.outSec])).toEqual([
+      [0, null],
+      [0, null],
+    ]);
+  });
+
+  it("⌘A selects every audio clip with audio selected, else every video clip", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    press("a", { metaKey: true });
+    expect(store().selection).toEqual({ kind: "audio", clipId: "t", clipIds: [MUSIC_CLIP_ID, "t"], point: null, onCurve: false });
+    store().select({ kind: "clip", clipId: "b" });
+    press("a", { metaKey: true });
+    expect(store().selection).toEqual({ kind: "clip", clipId: "b", clipIds: ["a", "b"] });
+  });
+
+  it("leaves the keys to the picker while it is open for audio", () => {
+    store().select(audioSelectionOf({ clipId: "t" }));
+    store().setPickerOpen("audio");
+    press("Backspace");
+    expect(audio()).toHaveLength(2);
   });
 });

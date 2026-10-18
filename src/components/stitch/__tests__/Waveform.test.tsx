@@ -96,4 +96,35 @@ describe("Waveform", () => {
       expect(h).toBeCloseTo(0.7 * height);
     }
   });
+
+  it("reads the source at sequence time plus the offset: a clip's In less its start", () => {
+    // 20 s of source: silent for the first 10 s, then full scale
+    const peaks = new Float32Array(256);
+    peaks.fill(1, 128);
+    const draw = (sourceOffset?: number) => {
+      rects.length = 0;
+      const blockX = axis.timeToX(0);
+      const { unmount } = render(
+        <Waveform
+          peaks={peaks}
+          duration={20}
+          axis={axis}
+          blockX={blockX}
+          blockWidth={axis.timeToX(4) - blockX}
+          height={48}
+          expanded={false}
+          viewLeft={0}
+          viewRight={2000}
+          sourceOffset={sourceOffset}
+        />,
+      );
+      const drawn = rects.length;
+      unmount();
+      return drawn;
+    };
+    // Without an offset the first 4 s of the source are silent: no bars
+    expect(draw()).toBe(0);
+    // A clip whose In is 12 s, starting at 0:00, plays source 12–16 s: bars all along
+    expect(draw(12)).toBeGreaterThan(0);
+  });
 });

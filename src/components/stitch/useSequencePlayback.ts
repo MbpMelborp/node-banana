@@ -14,10 +14,12 @@ import type { VolumePoint } from "@/types";
 
 /**
  * The editor's preview: one <video> per source, the one under the playhead
- * shown, switched at each join, with the clip's mute and volume and the
- * music's curve applied to the elements (element volume rather than Web
- * Audio, so a source served without CORS still sounds). A short freeze at a
- * join is accepted; the encode is the truth. The preview plays one loop.
+ * shown, switched at each join, with the clip's mute and volume applied to
+ * the elements (element volume rather than Web Audio, so a source served
+ * without CORS still sounds). Each audio clip has its own hidden <audio>,
+ * playing inside its span from its In at its curve's gain, re-synced when it
+ * drifts and paused outside. A short freeze at a join is accepted; the
+ * encode is the truth. The preview plays one loop.
  *
  * Paused, the active element is seeked to the frame under the playhead.
  * Playing, a frame loop reads the active element's time back into the
@@ -38,15 +40,29 @@ import type { VolumePoint } from "@/types";
  * higher row keeps playing at opacity 0, in step. The clock is the live clip
  * that started first, and at its Out the next one by start time, not by row.
  * Where no clip plays (a gap) the frame clock drives the playhead, the stage
- * is black and the music plays on.
+ * is black and the audio clips play on.
  */
+
+/** One audio clip as the preview plays it. */
+export interface AudioPlaybackClip {
+  id: string;
+  /** What its element plays; null with nothing to play (no music connected, a file not in the library). */
+  src: string | null;
+  startSec: number;
+  inSec: number;
+  /** Source seconds its sound stops at; null = the file's end. */
+  outSec: number | null;
+  muted: boolean;
+  /** Source seconds. */
+  curve: VolumePoint[];
+}
 
 export interface SequencePlaybackOptions {
   spans: ClipSpan[];
   total: number;
   /** The playable URL of a clip's source, or null when it has none. */
   srcFor: (clipId: string) => string | null;
-  music: { src: string | null; curve: VolumePoint[]; muted: boolean };
+  audio: { clips: readonly AudioPlaybackClip[] };
   soundOn: boolean;
   /** Stacked: elements per clip, blended at overlaps; placed once some clip has a stored start. Absent or null: Track. */
   stack?: { crossfade: boolean; placed?: boolean } | null;
@@ -56,8 +72,8 @@ export interface SequencePlaybackOptions {
 const END_SLACK = 0.03;
 /** A paused element this far from its target is seeked. */
 const SEEK_TOLERANCE = 0.02;
-/** The music is re-synced when it drifts this far from the playhead. */
-const MUSIC_DRIFT = 0.25;
+/** An audio clip is re-synced when it drifts this far from the playhead. */
+const AUDIO_DRIFT = 0.25;
 /** The next clip's element is seeked to its In this long before the join. */
 const PRESEEK = 0.5;
 /** Stacked: a paused element this close to its target (its pre-seek landed) is played without another seek. */
@@ -98,36 +114,44 @@ const LINED_UP = { crossfade: true } as const;
 const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
 /**
- * The music under a playing preview: its mute and the curve's gain, started from the playhead when it is not
- * playing, re-synced when it drifts, stopped past its end. reset() asks it to play again (a jump).
+ * The audio clips under a playing preview: each element's mute and its curve's gain at its own source time; inside
+ * its span it is started from the playhead when it is not playing and re-synced when it drifts, outside it (or past
+ * its Out or its file's end) it is paused. reset() asks each to play again (a jump).
  */
-function createMusicDriver(audio: RefObject<HTMLAudioElement | null>, latest: RefObject<SequencePlaybackOptions>) {
-  // The music element play() was last asked of; asked again after it stops at its end, a jump or a new element
-  let musicAsked: HTMLAudioElement | null = null;
+function createAudioDriver(
+  audios: RefObject<Map<string, HTMLAudioElement>>,
+  latest: RefObject<SequencePlaybackOptions>,
+) {
+  // The elements play() was last asked of; asked again after one stops at its end, a jump or a new element
+  let asked = new Set<HTMLAudioElement>();
   return {
     reset() {
-      musicAsked = null;
+      asked = new Set();
     },
     apply(at: number) {
-      const { music, soundOn } = latest.current;
-      const track = audio.current;
-      if (!track) return;
-      track.muted = music.muted || !soundOn;
-      track.volume = clamp01(gainAt(music.curve, at));
-      const length = track.duration;
-      if (Number.isFinite(length) && at >= length) {
-        if (!track.paused) track.pause();
-        musicAsked = null;
-        return;
-      }
-      if (!music.src) return;
-      if (track.paused && musicAsked !== track) {
-        // Starting, back inside the music after it ended, or a remounted element
-        musicAsked = track;
-        track.currentTime = at;
-        track.play().catch(() => undefined);
-      } else if (Math.abs(track.currentTime - at) > MUSIC_DRIFT) {
-        track.currentTime = at;
+      const { audio, soundOn } = latest.current;
+      for (const clip of audio.clips) {
+        const track = audios.current.get(clip.id);
+        if (!track) continue;
+        const target = clip.inSec + (at - clip.startSec);
+        const length = track.duration;
+        const end = Math.min(clip.outSec ?? Infinity, Number.isFinite(length) ? length : Infinity);
+        track.muted = clip.muted || !soundOn;
+        track.volume = clamp01(gainAt(clip.curve, target));
+        if (at < clip.startSec || target >= end) {
+          if (!track.paused) track.pause();
+          asked.delete(track);
+          continue;
+        }
+        if (!clip.src) continue;
+        if (track.paused && !asked.has(track)) {
+          // Starting, back inside the clip after it ended, or a remounted element
+          asked.add(track);
+          track.currentTime = target;
+          track.play().catch(() => undefined);
+        } else if (Math.abs(track.currentTime - target) > AUDIO_DRIFT) {
+          track.currentTime = target;
+        }
       }
     },
   };
@@ -136,7 +160,7 @@ function createMusicDriver(audio: RefObject<HTMLAudioElement | null>, latest: Re
 /** What both frame loops share: the registered elements, the options as last rendered, and the seek queue. */
 interface PlaybackRefs {
   videos: RefObject<Map<string, HTMLVideoElement>>;
-  audio: RefObject<HTMLAudioElement | null>;
+  audios: RefObject<Map<string, HTMLAudioElement>>;
   pendingSeeks: RefObject<WeakMap<HTMLVideoElement, number>>;
   latest: RefObject<SequencePlaybackOptions>;
 }
@@ -149,16 +173,16 @@ interface PlaybackRefs {
  * its start (a cut). Placed, the next clip is the one live at the Out that started first, and where none is live the
  * frame clock carries the playhead through the gap. Returns the loop's cleanup.
  */
-function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): () => void {
+function runStackedLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => void {
   let alive = true;
   const store = useStitchEditorStore.getState();
-  const music = createMusicDriver(audio, latest);
+  const sound = createAudioDriver(audios, latest);
   const elementOf = (span: ClipSpan) => videos.current.get(span.clip.id) ?? null;
   const stackNow = () => latest.current.stack ?? LINED_UP;
   const placed = () => Boolean(latest.current.stack?.placed);
   const pauseAll = () => {
     for (const el of videos.current.values()) el.pause();
-    audio.current?.pause();
+    for (const el of audios.current.values()) el.pause();
   };
   const stop = (at?: number) => {
     pauseAll();
@@ -244,7 +268,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     gapSince = null;
     written = at;
     applyLayers(at);
-    music.apply(at);
+    sound.apply(at);
   };
 
   /**
@@ -270,7 +294,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     const target = sourceTimeAt(first, at);
     if (!el.paused || Math.abs(el.currentTime - target) > LANDED) el.currentTime = target;
     applyLayers(at);
-    music.apply(at);
+    sound.apply(at);
     play(el);
     return true;
   };
@@ -295,7 +319,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
       if (!startAt(at)) return stop();
     } else {
       applyLayers(at);
-      music.apply(at);
+      sound.apply(at);
       preseek(at, null);
     }
     frame = requestAnimationFrame(tick);
@@ -349,7 +373,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
       written = Math.min(following.end, Math.max(floor, next));
       s.setPlayhead(written);
       applyLayers(written);
-      music.apply(written);
+      sound.apply(written);
       return true;
     }
     // Placed, the clip is already live at the Out: it starts there, not at its own start
@@ -364,7 +388,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
     // The playhead was moved from outside (Go to start, the ruler): carry on from there
     if (Math.abs(s.playhead - written) > 1e-6) {
       written = s.playhead;
-      music.reset();
+      sound.reset();
       if (!startAt(s.playhead)) return stop();
       frame = requestAnimationFrame(tick);
       return;
@@ -398,7 +422,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
       written = at;
       s.setPlayhead(at);
       applyLayers(at);
-      music.apply(at);
+      sound.apply(at);
       preseek(at, live);
     }
     frame = requestAnimationFrame(tick);
@@ -414,7 +438,7 @@ function runStackedLoop({ videos, audio, pendingSeeks, latest }: PlaybackRefs): 
 
 export function useSequencePlayback(opts: SequencePlaybackOptions): {
   registerVideo: (key: string, el: HTMLVideoElement | null) => void;
-  registerAudio: (el: HTMLAudioElement | null) => void;
+  registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
   activeSrc: string | null;
 } {
   const playing = useStitchEditorStore((s) => s.playing);
@@ -425,7 +449,8 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   });
   // Keyed by source URL in Track, by clip id in Stacked
   const videos = useRef(new Map<string, HTMLVideoElement>());
-  const audio = useRef<HTMLAudioElement | null>(null);
+  // Keyed by audio clip id
+  const audios = useRef(new Map<string, HTMLAudioElement>());
   // A seek asked for while the element is still seeking: only the latest target is kept
   const pendingSeeks = useRef(new WeakMap<HTMLVideoElement, number>());
   const latest = useRef(opts);
@@ -501,8 +526,12 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
     [onSeeked, onLoadedMetadata],
   );
 
-  const registerAudio = useCallback((el: HTMLAudioElement | null) => {
-    audio.current = el;
+  const registerAudio = useCallback((clipId: string, el: HTMLAudioElement | null) => {
+    const previous = audios.current.get(clipId);
+    if (previous === el) return;
+    previous?.pause();
+    if (el) audios.current.set(clipId, el);
+    else audios.current.delete(clipId);
   }, []);
 
   // On a playhead move or a pause, read from the store rather than a render
@@ -526,14 +555,14 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   // Playing: the frame loop
   useEffect(() => {
     if (!playing) return;
-    if (latest.current.stack) return runStackedLoop({ videos, audio, pendingSeeks, latest });
+    if (latest.current.stack) return runStackedLoop({ videos, audios, pendingSeeks, latest });
     // A play() refusal that lands after this session ended must not stop the next one
     let alive = true;
     const store = useStitchEditorStore.getState();
-    const music = createMusicDriver(audio, latest);
+    const sound = createAudioDriver(audios, latest);
     const pauseAll = () => {
       for (const el of videos.current.values()) el.pause();
-      audio.current?.pause();
+      for (const el of audios.current.values()) el.pause();
     };
     const stop = (at?: number) => {
       pauseAll();
@@ -559,7 +588,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
         el.muted = span.clip.muted || !soundOn;
         el.volume = clamp01(span.clip.volume);
       }
-      music.apply(at);
+      sound.apply(at);
     };
 
     /** Starts the clip under `at` from its own source time. false when there is nothing to play there. */
@@ -588,7 +617,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
       return true;
     };
 
-    // startAt also starts the music (applyVolumes)
+    // startAt also starts the audio clips (applyVolumes)
     if (!startAt(t)) {
       stop();
       return;
@@ -602,8 +631,8 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
       // The playhead was moved from outside (Go to start, the ruler): carry on from there
       if (Math.abs(s.playhead - written) > 1e-6) {
         written = s.playhead;
-        // The music is asked to play again from there, if it had stopped
-        music.reset();
+        // The audio clips are asked to play again from there, if they had stopped
+        sound.reset();
         if (!startAt(s.playhead)) return stop();
         frame = requestAnimationFrame(tick);
         return;
@@ -659,10 +688,10 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   // Pause everything when the editor goes away
   useEffect(() => {
     const elements = videos.current;
-    const track = audio;
+    const tracks = audios.current;
     return () => {
       for (const el of elements.values()) el.pause();
-      track.current?.pause();
+      for (const el of tracks.values()) el.pause();
     };
   }, []);
 

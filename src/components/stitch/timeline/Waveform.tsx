@@ -19,9 +19,9 @@ function handleAudioColor(): string {
 }
 
 /**
- * The music's waveform under the volume curve: one bar per 8px, mirrored
- * about the block's centre, as tall as the loudest sample in the music
- * time it covers. Drawn to a canvas across the visible part of the block
+ * An audio clip's waveform under its volume curve: one bar per 8px, mirrored
+ * about the block's centre, as tall as the loudest sample in the source
+ * time it covers (sequence time + sourceOffset: a clip's In less its start). Drawn to a canvas across the visible part of the block
  * only, so a long sequence at a high zoom never makes a canvas too large to
  * draw. No bars inside a slot: it takes no time.
  */
@@ -35,6 +35,7 @@ export function Waveform({
   expanded,
   viewLeft,
   viewRight,
+  sourceOffset = 0,
 }: {
   peaks: Float32Array;
   duration: number;
@@ -47,6 +48,8 @@ export function Waveform({
   /** The lane range to draw (the visible lanes with an overscan). */
   viewLeft: number;
   viewRight: number;
+  /** Source seconds less sequence seconds. */
+  sourceOffset?: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const left = Math.max(0, Math.floor(viewLeft - blockX));
@@ -73,13 +76,13 @@ export function Waveform({
       const x0 = blockX + k * BAR_PITCH;
       const x1 = x0 + BAR_PITCH;
       if (axis.slots.some((slot) => x1 > slot.x && x0 < slot.x + slot.width)) continue;
-      const peak = peakInRange(peaks, duration, axis.xToTime(x0), axis.xToTime(x1));
+      const peak = peakInRange(peaks, duration, axis.xToTime(x0) + sourceOffset, axis.xToTime(x1) + sourceOffset);
       if (peak <= 0) continue;
       const barHeight = Math.max(1, peak * reach);
       // On whole pixels (2px in), so a 3px bar stays sharp at a device pixel ratio of 1
       ctx.fillRect(k * BAR_PITCH - left + Math.floor((BAR_PITCH - barWidth) / 2), centre - barHeight / 2, barWidth, barHeight);
     }
-  }, [peaks, duration, axis, blockX, left, right, width, height, expanded]);
+  }, [peaks, duration, axis, blockX, left, right, width, height, expanded, sourceOffset]);
 
   if (width === 0) return null;
   return (

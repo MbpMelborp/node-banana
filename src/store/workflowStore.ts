@@ -119,7 +119,7 @@ import {
   needsMaterialization,
 } from "./utils/splitGridTemplate";
 import type { ArrayNodeData, SplitGridTemplate, VideoStitchNodeData } from "@/types";
-import { dropRemovedStitchEdges, remapStitchEdgeIds } from "@/lib/stitch/migrate";
+import { dropRemovedStitchEdges, dropStitchMusicClips, remapStitchEdgeIds } from "@/lib/stitch/migrate";
 import { appendConnectedStitchClips } from "@/lib/stitch/sources";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
@@ -1931,13 +1931,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }),
     }));
 
-    // A pasted stitch's clips name its input edges, which were just given new ids
+    // A pasted stitch's clips name its input edges, which were just given new ids; pasted without its music, it
+    // loses its music clips as a disconnect would
     const edgeIdMapping = new Map(clipboard.edges.map((edge, i) => [edge.id, newEdges[i].id]));
-    const pastedNodes = remappedNodes.map((n) =>
-      n.type === "videoStitch"
-        ? { ...n, data: remapStitchEdgeIds(n.data as VideoStitchNodeData, edgeIdMapping) }
-        : n
-    );
+    const pastedNodes = remappedNodes.map((n) => {
+      if (n.type !== "videoStitch") return n;
+      const data = remapStitchEdgeIds(n.data as VideoStitchNodeData, edgeIdMapping);
+      const withMusic = newEdges.some((e) => e.target === n.id && e.targetHandle === "audio" && !e.data?.isLoop);
+      return { ...n, data: withMusic ? data : dropStitchMusicClips(data) };
+    });
 
     // Deselect existing nodes and add new ones
     const updatedNodes = nodes.map((node) => ({

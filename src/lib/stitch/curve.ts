@@ -113,16 +113,40 @@ export function offsetCurve(curve: readonly VolumePoint[], deltaLevel: number, s
 
 /** L = min(length, seq/2); seq <= 0 or not finite → unchanged; a non-finite length counts FADE_SEC. Drops points with t <= L; adds {0,0} and {L, gainAt(old, L)}. */
 export function fadeIn(curve: readonly VolumePoint[], sequenceSec: number, length: number = FADE_SEC): VolumePoint[] {
-  if (!(sequenceSec > 0) || !Number.isFinite(sequenceSec)) return curve.slice();
-  const fade = Math.min(Number.isFinite(length) ? length : FADE_SEC, sequenceSec / 2);
-  return [{ t: 0, gain: 0 }, { t: fade, gain: gainAt(curve, fade) }, ...curve.filter((p) => p.t > fade)];
+  return fadeInRange(curve, 0, sequenceSec, length);
 }
 
 /** s = seq − L. Drops points with t >= s; adds {s, gainAt(old, s)} and {seq, 0}. */
 export function fadeOut(curve: readonly VolumePoint[], sequenceSec: number, length: number = FADE_SEC): VolumePoint[] {
-  if (!(sequenceSec > 0) || !Number.isFinite(sequenceSec)) return curve.slice();
-  const start = sequenceSec - Math.min(Number.isFinite(length) ? length : FADE_SEC, sequenceSec / 2);
-  return [...curve.filter((p) => p.t < start), { t: start, gain: gainAt(curve, start) }, { t: sequenceSec, gain: 0 }];
+  return fadeOutRange(curve, 0, sequenceSec, length);
+}
+
+/**
+ * fadeIn over [from, to] (an audio clip's heard part, in its source seconds): L = min(length, (to − from)/2); an empty
+ * or non-finite range → unchanged. Drops every point with t <= from + L; adds {from, 0} and {from + L, gainAt(old,
+ * from + L)}.
+ */
+export function fadeInRange(
+  curve: readonly VolumePoint[],
+  from: number,
+  to: number,
+  length: number = FADE_SEC,
+): VolumePoint[] {
+  if (!(to > from) || !Number.isFinite(from) || !Number.isFinite(to)) return curve.slice();
+  const end = from + Math.min(Number.isFinite(length) ? length : FADE_SEC, (to - from) / 2);
+  return [{ t: from, gain: 0 }, { t: end, gain: gainAt(curve, end) }, ...curve.filter((p) => p.t > end)];
+}
+
+/** fadeOut over [from, to]: s = to − L. Drops points with t >= s; adds {s, gainAt(old, s)} and {to, 0}. */
+export function fadeOutRange(
+  curve: readonly VolumePoint[],
+  from: number,
+  to: number,
+  length: number = FADE_SEC,
+): VolumePoint[] {
+  if (!(to > from) || !Number.isFinite(from) || !Number.isFinite(to)) return curve.slice();
+  const start = to - Math.min(Number.isFinite(length) ? length : FADE_SEC, (to - from) / 2);
+  return [...curve.filter((p) => p.t < start), { t: start, gain: gainAt(curve, start) }, { t: to, gain: 0 }];
 }
 
 /**

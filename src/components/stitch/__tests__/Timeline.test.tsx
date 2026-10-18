@@ -2,7 +2,7 @@ import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import {
   __resetMediaInfoForTests,
   __setMediaExtractorForTests,
@@ -10,10 +10,13 @@ import {
   mediaKeyOf,
   nearestFrame,
 } from "@/lib/stitch/mediaInfo";
+import { createAudioClip } from "@/lib/stitch/audioClips";
+import { primeAssetInfo } from "@/lib/stitch/assetInfo";
+import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { moveClipTo, removeSelection, setClipStart, setCrossfade, setOverlapSec } from "../editorActions";
-import type { StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -856,7 +859,7 @@ describe("Timeline, the clip menu", () => {
     fireEvent.wheel(menu, { deltaY: 40 });
     expect(lanes.scrollLeft).toBe(0);
     expect(lanes.scrollTop).toBe(0);
-    expect(editor().menu).toEqual({ clipId: "clip:eB", x: 400, y: 60 });
+    expect(editor().menu).toEqual({ kind: "clip", clipId: "clip:eB", x: 400, y: 60 });
     // Over the lanes, the wheel still scrolls them
     fireEvent.wheel(lanes, { deltaY: 40 });
     expect(lanes.scrollLeft).toBe(40);
@@ -1024,8 +1027,8 @@ describe("Timeline, Stacked", () => {
     const slot = screen.getByTestId("stitch-add-slot");
     expect(slot.style.left).toBe(`${ORIGIN + 14 * PPS + 8}px`);
     expect(slot.style.top).toBe(`${2 * ROW + BOX_TOP}px`);
-    // 3 rows: 24 + 156 + 64 + 9
-    expect(timelineEl().style.height).toBe("253px");
+    // 3 rows: 24 + 156 + 9, then one audio row and the strip (64 + 24)
+    expect(timelineEl().style.height).toBe("277px");
     expect(screen.getByTestId("stitch-lanes")).toHaveClass("overflow-y-hidden");
   });
 
@@ -1146,8 +1149,8 @@ describe("Timeline, Stacked", () => {
     seedClips([5, 5, 6, 5, 5, 6]);
     const onRender = vi.fn();
     openStacked(onRender);
-    // 24 + 182 + 64 + 9
-    expect(timelineEl().style.height).toBe("279px");
+    // 24 + 182 + 9 + 64 + 24
+    expect(timelineEl().style.height).toBe("303px");
     const lanes = screen.getByTestId("stitch-lanes");
     expect(lanes).toHaveClass("overflow-y-auto");
     const optionsBefore = within(lane()).getAllByRole("option");
@@ -1201,7 +1204,7 @@ describe("Timeline, Stacked", () => {
     openStacked();
     const notCancelled = fireEvent.contextMenu(header("clip:e1"), { clientX: 40, clientY: 78 });
     expect(notCancelled).toBe(false);
-    expect(editor().menu).toEqual({ clipId: "clip:e1", x: 40, y: 78 });
+    expect(editor().menu).toEqual({ kind: "clip", clipId: "clip:e1", x: 40, y: 78 });
     expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:e1" });
   });
 
@@ -1759,7 +1762,7 @@ describe("Timeline, Stacked", () => {
       // A Mac's ctrl-click: a left press with ctrl, then the context menu, then the release
       fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, ctrlKey: true, pointerId: 1, ...at(100, 26) });
       fireEvent.contextMenu(clipBox("Clip 1"), { clientX: 100, clientY: 26, ctrlKey: true });
-      expect(editor().menu).toEqual({ clipId: "clip:eA", x: 100, y: 26 });
+      expect(editor().menu).toEqual({ kind: "clip", clipId: "clip:eA", x: 100, y: 26 });
       release(100, 26);
     });
 
@@ -2635,5 +2638,214 @@ describe("Timeline, several clips", () => {
       expect(order()).toEqual([id(1), id(0), id(2)]);
       expect(editor().past).toHaveLength(1);
     });
+  });
+});
+
+describe("Timeline, heights and the audio section", () => {
+  const TONE = "atone00000001";
+  const timelineEl = () => screen.getByTestId("stitch-timeline");
+  const toggleGroup = () => screen.getByRole("group", { name: "Timeline layout" });
+  const audioLane = () => screen.getByRole("listbox", { name: "Audio clips" });
+  const audioBox = (id: string) => audioLane().querySelector<HTMLElement>(`[data-audio-clip-id="${id}"]`)!;
+  const toneClip = (id: string, init: Partial<StitchAudioClip> = {}) =>
+    createAudioClip({ kind: "asset", assetId: TONE }, { id, ...init });
+
+  /** Clips of these lengths, and the node's audio clips as stored (each a 3 s library file). */
+  function seedWith(lengths: number[], audioClips?: StitchAudioClip[]) {
+    useWorkflowStore.setState({
+      nodes: [
+        ...lengths.map((_, i) => node(`gen-${i}`, "generateVideo", { outputVideo: `blob:s${i}` })),
+        node("stitch", "videoStitch", {
+          clips: [],
+          clipOrder: [],
+          outputVideo: null,
+          loopCount: 1,
+          status: "idle",
+          ...(audioClips ? { audioClips } : {}),
+        }),
+      ],
+      edges: lengths.map((_, i) => edge(`e${i}`, `gen-${i}`, `video-${i}`)),
+      openModalCount: 0,
+      isModalOpen: false,
+    });
+    lengths.forEach((duration, i) =>
+      __setMediaInfoForTests(mediaKeyOf(`blob:s${i}`), { duration, width: 1920, height: 1080, fps: 24 }),
+    );
+    primeAssetInfo([{ id: TONE, kind: "audio", filename: "tone1320.m4a", durationSec: 3 } as unknown as AssetView]);
+  }
+
+  it.each([2, 3, 6])("keeps one height through Track, Stacked, ⌘Z and ⇧⌘Z with %i clips", (count) => {
+    seedWith(Array.from({ length: count }, () => 5));
+    openEditor();
+    const height = timelineEl().style.height;
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+    expect(timelineEl().style.height).toBe(height);
+    press("z", { metaKey: true });
+    expect(editor().draft!.sequenceLayout.mode).toBe("track");
+    expect(timelineEl().style.height).toBe(height);
+    press("z", { metaKey: true, shiftKey: true });
+    expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+    expect(timelineEl().style.height).toBe(height);
+  });
+
+  it("keeps one height whatever is selected: a clip, several, an audio clip, nothing", () => {
+    seedWith([5, 4, 6], [toneClip("t", { startSec: 1 }), toneClip("u", { row: 1 })]);
+    openEditor();
+    const ids = editor().draft!.timeline.map((c) => c.id);
+    // Collapsed, and with a row expanded (its own height, still none from the selection)
+    for (const expanded of [null, 0, 1]) {
+      act(() => editor().setAudioExpandedRow(expanded));
+      const height = timelineEl().style.height;
+      for (const selection of [
+        { kind: "clip" as const, clipId: ids[1] },
+        { kind: "clip" as const, clipId: ids[0], clipIds: ids, anchorId: ids[0] },
+        audioSelectionOf({ clipId: "t" }),
+        audioSelectionOf({ clipId: "u", clipIds: ["t", "u"] }),
+        audioSelectionOf({ clipId: "t" }, 0, true),
+        null,
+      ]) {
+        act(() => editor().select(selection));
+        expect(timelineEl().style.height).toBe(height);
+      }
+    }
+  });
+
+  it("takes the room the editor leaves it: Stacked's rows give way first, then the audio rows", () => {
+    // The dialog is 752px tall (a 1280 × 800 window): the stage keeps 300, the timeline gets at most 360
+    const globals = globalThis as { ResizeObserver?: unknown };
+    const original = globals.ResizeObserver;
+    globals.ResizeObserver = class {
+      constructor(private callback: () => void) {}
+      observe() {
+        this.callback();
+      }
+      disconnect() {}
+    };
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("flex-col") && this.classList.contains("h-full") && this.parentElement?.getAttribute("role") !== "listbox"
+        ? 752
+        : 0;
+    });
+    try {
+      seedWith([5, 5, 5, 5], [toneClip("t", { startSec: 1 }), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+      openEditor();
+      act(() => editor().setAudioExpandedRow(0));
+      expect(timelineEl().style.height).toBe("360px");
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("200px");
+    } finally {
+      globals.ResizeObserver = original;
+    }
+  });
+
+  it("scrolls the audio rows with a wheel over them, and Stacked's rows only with one over theirs", () => {
+    seedWith([5, 5, 5, 5, 5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+    openEditor();
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    const lanes = screen.getByTestId("stitch-lanes");
+    const rowsBlock = () => screen.getByTestId("stitch-audio-rows");
+    const headers = () => screen.getByTestId("stitch-audio-headers");
+    expect(rowsBlock().style.transform).toBe("translateY(0px)");
+    lanes.scrollTop = 0;
+    act(() => {
+      screen.getByTestId("stitch-audio-view").dispatchEvent(new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true }));
+    });
+    expect(rowsBlock().style.transform).toBe("translateY(-40px)");
+    expect(headers().style.transform).toBe("translateY(-40px)");
+    expect(lanes.scrollTop).toBe(0);
+    // Past the end it stops at the last row: three rows in a two-row view scroll 64px
+    act(() => {
+      headers().dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
+    });
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    // Over Stacked's rows, only they scroll
+    act(() => {
+      screen.getByTestId("stitch-rows").dispatchEvent(new WheelEvent("wheel", { deltaY: 30, bubbles: true, cancelable: true }));
+    });
+    expect(lanes.scrollTop).toBe(30);
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+  });
+
+  it("scrolls the selected audio clip's row into view when it is selected other than by a press", () => {
+    seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+    openEditor();
+    const rowsBlock = () => screen.getByTestId("stitch-audio-rows");
+    expect(rowsBlock().style.transform).toBe("translateY(0px)");
+    // Three rows in a two-row view: the last row shows once the rows scroll 64px, and no further
+    act(() => editor().select(audioSelectionOf({ clipId: "v" })));
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    act(() => editor().select(audioSelectionOf({ clipId: "u" })));
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+    expect(rowsBlock().style.transform).toBe("translateY(0px)");
+  });
+
+  it("counts the audio rows out of view in the strip", () => {
+    seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+    openEditor();
+    expect(screen.getByTestId("stitch-audio-hidden-rows")).toHaveTextContent(/^1 audio row below1$/);
+    act(() => {
+      screen.getByTestId("stitch-audio-view").dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
+    });
+    expect(screen.getByTestId("stitch-audio-hidden-rows")).toHaveTextContent(/^1 audio row above1$/);
+  });
+
+  it("turns a view's own scroll (focus in a hidden row) into the translate both sides share", () => {
+    seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+    openEditor();
+    const headerView = screen.getByTestId("stitch-audio-headers").parentElement as HTMLElement;
+    for (const view of [headerView, screen.getByTestId("stitch-audio-view")]) {
+      act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+      expect(screen.getByTestId("stitch-audio-rows").style.transform).toBe("translateY(0px)");
+      view.scrollTop = 64;
+      fireEvent.scroll(view);
+      expect(view.scrollTop).toBe(0);
+      expect(screen.getByTestId("stitch-audio-rows").style.transform).toBe("translateY(-64px)");
+      expect(screen.getByTestId("stitch-audio-headers").style.transform).toBe("translateY(-64px)");
+      act(() => editor().select(null));
+    }
+  });
+
+  it("leaves the audio rows where they are on an edit that keeps the lead and its row (a row's mute)", () => {
+    seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
+    openEditor();
+    const rowsBlock = () => screen.getByTestId("stitch-audio-rows");
+    act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+    act(() => {
+      screen.getByTestId("stitch-audio-view").dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
+    });
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    // The lead's row is out of view; the last row's mute must not bring it back under the pointer
+    fireEvent.click(screen.getByRole("button", { name: "Mute Audio 3" }));
+    expect(editor().draft!.audioClips.find((c) => c.id === "v")!.muted).toBe(true);
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    // A key that moves the lead to another row still reveals it
+    act(() => editor().select(audioSelectionOf({ clipId: "u" })));
+    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    act(() => editor().select(audioSelectionOf({ clipId: "t" })));
+    expect(rowsBlock().style.transform).toBe("translateY(0px)");
+  });
+
+  it("widens the lanes to an audio clip placed past the last frame", () => {
+    seedWith([5, 4], [toneClip("t", { startSec: 30 })]);
+    openEditor();
+    const content = screen.getByTestId("stitch-lanes").firstElementChild as HTMLElement;
+    expect(parseFloat(content.style.width)).toBeGreaterThanOrEqual(ORIGIN + 33 * PPS);
+    expect(audioBox("t").style.left).toBe(`${ORIGIN + 30 * PPS}px`);
+  });
+
+  it("opens an audio clip's menu, whose items act on it", () => {
+    seedWith([5, 4], [toneClip("t", { startSec: 1 }), toneClip("u", { startSec: 5 })]);
+    openEditor();
+    fireEvent.contextMenu(audioBox("u"), { clientX: 200, clientY: 300 });
+    const menu = screen.getByRole("menu", { name: "tone1320.m4a · Audio 1" });
+    expect(editor().selection).toMatchObject({ kind: "audio", clipId: "u" });
+    for (const name of ["Split at playhead", "Start at playhead", "End at playhead", "Move up a row", "Move down a row", "Mute clip", "Copy", "Cut", "Paste", "Duplicate", "Remove clip"]) {
+      expect(within(menu).getByRole("menuitem", { name: new RegExp(name) })).toBeInTheDocument();
+    }
+    expect(within(menu).getByRole("menuitem", { name: /Move up a row/ })).toBeDisabled();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Move down a row/ }));
+    expect(editor().draft!.audioClips.find((c) => c.id === "u")!.row).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

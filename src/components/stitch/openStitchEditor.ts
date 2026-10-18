@@ -1,7 +1,7 @@
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { readStitchDraft } from "@/lib/stitch/draft";
-import { stitchReadContext } from "@/lib/stitch/sources";
+import { stitchMusicEdge, stitchReadContext } from "@/lib/stitch/sources";
 import type { VideoStitchNodeData } from "@/types";
 
 /** Opens the editor on a Stitch node with its migrated, reconciled draft. false if the node is gone. */
@@ -14,6 +14,8 @@ export function openStitchEditor(nodeId: string): boolean {
     nodeId,
     draft: readStitchDraft(node.data as VideoStitchNodeData, ctx),
     canvasGeneration: wf.canvasGeneration,
+    // Dimmed or not: Done drops the music clips if this edge is gone by then
+    musicEdgeIdAtOpen: stitchMusicEdge(nodeId, wf.edges)?.id ?? null,
   });
   return true;
 }

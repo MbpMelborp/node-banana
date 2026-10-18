@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
+import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import type { NodeExecutionContext } from "../types";
 import { gatherStitchInputs } from "../stitchInputs";
@@ -14,8 +14,9 @@ const mocks = vi.hoisted(() => {
       this.name = "AssetApiError";
     }
   }
-  return { AssetApiError, fetchAssetBlob: vi.fn(), prepareAudioAsync: vi.fn(), requestAssetInfo: vi.fn() };
+  return { AssetApiError, fetchAssetBlob: vi.fn(), prepareAudioAsync: vi.fn(), requestAssetInfo: vi.fn(), gatherAudioClipInputs: vi.fn() };
 });
+vi.mock("../audioClipInputs", () => ({ gatherAudioClipInputs: mocks.gatherAudioClipInputs }));
 vi.mock("@/lib/assets/client/api", () => ({ AssetApiError: mocks.AssetApiError, fetchAssetBlob: mocks.fetchAssetBlob }));
 vi.mock("@/hooks/useAudioMixing", () => ({ prepareAudioAsync: mocks.prepareAudioAsync }));
 vi.mock("@/lib/stitch/assetInfo", () => ({ requestAssetInfo: mocks.requestAssetInfo }));
@@ -86,6 +87,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.fetchAssetBlob.mockImplementation(async (id: string) => sourced(`asset:${id}`, "video/mp4"));
   mocks.prepareAudioAsync.mockResolvedValue({ buffer: { sampleRate: 48000 }, duration: 3 });
+  mocks.gatherAudioClipInputs.mockResolvedValue([]);
 });
 
 describe("gatherStitchInputs", () => {
@@ -220,6 +222,87 @@ describe("gatherStitchInputs", () => {
     const g = await gatherStitchInputs(makeCtx(stitch, [...nodes, music], [...edges, edge("em", "m", "s", "audio", "audio")]), stitch.data as never);
     expect(g.music?.curve).toEqual(curve);
     expect(g.loopCount).toBe(3);
+  });
+
+  it("plays the music of a stored empty audioClips as a node without the key plays it: flat, unmuted", async () => {
+    const { nodes, edges } = twoVideos();
+    const music = node("m", "generateAudio", { outputAudio: "audio:song" });
+    const stitch = stitchNode({
+      timeline: [edgeClip("a", "e1"), edgeClip("b", "e2")],
+      audioClips: [],
+      // On a node with audioClips these are a copy for older builds, never read
+      audioCurve: [{ t: 1, gain: 0 }],
+      audioMuted: true,
+    });
+    const g = await gatherStitchInputs(makeCtx(stitch, [...nodes, music], [...edges, edge("em", "m", "s", "audio", "audio")]), stitch.data as never);
+    expect(g.music).not.toBeNull();
+    expect(g.music?.curve).toEqual([]);
+    expect(g.music?.muted).toBe(false);
+    expect(g.audioClips).toBeNull();
+    expect(mocks.gatherAudioClipInputs).not.toHaveBeenCalled();
+  });
+
+  describe("audio clips", () => {
+    const musicClip = (extra: Partial<StitchAudioClip> = {}): StitchAudioClip => ({
+      id: "audio:music",
+      source: { kind: "music" },
+      row: 0,
+      startSec: 0,
+      inSec: 0,
+      outSec: null,
+      muted: false,
+      curve: [],
+      ...extra,
+    });
+    const withMusic = (data: Record<string, unknown>) => {
+      const { nodes, edges } = twoVideos();
+      const music = node("m", "generateAudio", { outputAudio: "audio:song" });
+      const stitch = stitchNode({ timeline: [edgeClip("a", "e1"), edgeClip("b", "e2")], ...data });
+      return { stitch, ctx: makeCtx(stitch, [...nodes, music], [...edges, edge("em", "m", "s", "audio", "audio")]) };
+    };
+
+    it("takes the old music path for a stored untouched music clip alone, with its curve and mute", async () => {
+      const curve = [{ t: 2, gain: 0.5 }];
+      const { stitch, ctx } = withMusic({ audioClips: [musicClip({ row: 1, curve })], audioCurve: [], audioMuted: true });
+      const g = await gatherStitchInputs(ctx, stitch.data as never);
+      expect(g.music?.curve).toEqual(curve);
+      expect(g.audioClips).toBeNull();
+      expect(mocks.gatherAudioClipInputs).not.toHaveBeenCalled();
+      const muted = withMusic({ audioClips: [musicClip({ muted: true })] });
+      const m = await gatherStitchInputs(muted.ctx, muted.stitch.data as never);
+      expect(m.music).toBeNull();
+      expect(m.audioClips).toBeNull();
+    });
+
+    it("gathers every audio clip when the music moved, and passes no music", async () => {
+      const inputs = [{ audio: { buffer: {}, duration: 3 }, startSec: 2, inSec: 0, outSec: null, curve: [] }];
+      mocks.gatherAudioClipInputs.mockResolvedValue(inputs);
+      const signal = new AbortController().signal;
+      const { stitch, ctx } = withMusic({ audioClips: [musicClip({ startSec: 2 })] });
+      const g = await gatherStitchInputs({ ...ctx, signal } as never, stitch.data as never);
+      expect(g.music).toBeNull();
+      expect(g.audioClips).toBe(inputs);
+      expect(mocks.prepareAudioAsync).not.toHaveBeenCalled();
+      expect(mocks.gatherAudioClipInputs).toHaveBeenCalledWith([musicClip({ startSec: 2 })], { musicUrl: "audio:song", signal });
+    });
+
+    it("gathers a library clip beside the music, the music reconciled onto row 0 when the node stores none", async () => {
+      const tone: StitchAudioClip = { ...musicClip(), id: "aclip_1", source: { kind: "asset", assetId: "atone00000001" }, startSec: 3 };
+      const { stitch, ctx } = withMusic({ audioClips: [tone] });
+      await gatherStitchInputs(ctx, stitch.data as never);
+      const [clips] = mocks.gatherAudioClipInputs.mock.calls[0];
+      expect(clips.map((c: StitchAudioClip) => [c.id, c.row])).toEqual([
+        ["audio:music", 0],
+        ["aclip_1", 1],
+      ]);
+    });
+
+    it("refuses too few video clips before fetching any audio", async () => {
+      const { nodes, edges } = twoVideos();
+      const stitch = stitchNode({ timeline: [edgeClip("a", "e1")], audioClips: [musicClip({ startSec: 2 })] });
+      await expect(gatherStitchInputs(makeCtx(stitch, nodes.slice(0, 1), edges.slice(0, 1)), stitch.data as never)).rejects.toThrow("Need at least 2 video clips");
+      expect(mocks.gatherAudioClipInputs).not.toHaveBeenCalled();
+    });
   });
 
   it("says which clip's library video is gone", async () => {

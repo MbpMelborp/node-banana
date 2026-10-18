@@ -10,6 +10,15 @@ export function clipName(index: number): string {
   return `Clip ${index + 1}`;
 }
 
+const COUNT_WORDS = ["", "", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+
+/** "a trim" / "two trims" / "12 trims" for the discard sheet: `one` is the singular with its article. */
+export function counted(n: number, one: string, many: string): string | null {
+  if (n <= 0) return null;
+  if (n === 1) return one;
+  return `${n < COUNT_WORDS.length ? COUNT_WORDS[n] : n} ${many}`;
+}
+
 /** Title-cased words become lower case after the first; acronyms and "3D" keep theirs ("LLM generate", "Generate 3D"). */
 function sentenceCase(title: string): string {
   return title
