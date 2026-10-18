@@ -260,21 +260,26 @@ afterEach(() => {
 });
 
 describe("the home screen", () => {
-  it("lists the edits as cards, with New edit and Show in Finder", async () => {
+  it("lists the edits as rows, with New edit and Show in Finder", async () => {
     const other = doc({ id: OTHER, name: "Launch cut", updatedAt: 5000 });
     await renderHome(listOf([other, doc()]));
     const list = screen.getByRole("list", { name: "Edits" });
-    const cards = within(list).getAllByRole("button", { name: /^Open / });
-    expect(cards.map((c) => c.getAttribute("aria-label")?.split(",")[0])).toEqual(["Open Launch cut", "Open Trip"]);
-    expect(cards[1]).toHaveAccessibleName(/^Open Trip, 2 clips, 0:10, edited /);
+    const rows = within(list).getAllByRole("button", { name: /^Open / });
+    expect(rows.map((c) => c.getAttribute("aria-label")?.split(",")[0])).toEqual(["Open Launch cut", "Open Trip"]);
+    expect(rows[1]).toHaveAccessibleName(/^Open Trip, 2 clips, 0:10, edited /);
     expect(screen.getByRole("button", { name: "New edit" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "New edit" })).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Show in Finder" }));
     await waitFor(() => expect(edits.revealEditsFolder).toHaveBeenCalledTimes(1));
+    fireEvent.click(rows[1]);
+    await waitFor(() => expect(edits.fetchEdit).toHaveBeenCalledWith(ID));
   });
 
   it("says when there are no edits, while the list loads, and when it fails", async () => {
     const view = await renderHome();
-    expect(screen.getByText("No edits yet")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Edits" })).toBeNull();
+    expect(screen.getByText("An edit puts videos and audio from any project on one timeline.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "New edit" })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "New edit" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "Show in Finder" })).toBeInTheDocument();
     view.unmount();
@@ -831,7 +836,7 @@ describe("the edit menu", () => {
     expect(sheet).toHaveTextContent("Delete “Trip”?");
     fireEvent.click(within(sheet).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(edits.deleteEdit).toHaveBeenCalledWith(ID));
-    await screen.findByText("No edits yet");
+    await screen.findByText("An edit puts videos and audio from any project on one timeline.");
     expect(editor().isOpen).toBe(false);
   });
 

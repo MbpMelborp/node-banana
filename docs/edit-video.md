@@ -947,10 +947,27 @@ and the renders made from it. Media are referenced by asset id only. A
 library move carries the Edits folder with it; switching to another
 library folder leaves it behind, as it leaves Generations.
 
-**Home.** With no edit open, the view lists the edits, newest first, with
-New edit. A new edit is called "Untitled edit" (then "Untitled edit 2", …).
-Each card's ⋯ menu renames, duplicates, shows the file or deletes the edit.
-The arrow keys move between the cards.
+**Home.** With no edit open, the view is an index of the edits, newest
+first: one name to a row, in large type with its length, beside a preview
+of the active edit (its poster, then "4 clips · 1:07 · edited 12m ago").
+The preview fits a short window, and a view too narrow for it shows that
+line under the list instead. The active edit is the row under the pointer
+or with focus; it stays on the last one hovered when the pointer leaves,
+and starts on the newest. Focus in the list goes along with the row the
+pointer takes, so the focused row is always the lit one; a row the list
+scrolls under a pointer that has not moved does not take over from the
+keys. Only the active row is lit and carries ⋯, which renames it in place,
+duplicates it, shows its file or deletes it (the preview stays on it while
+the menu or the name field is open). ↑ and ↓ move between the rows, Home
+and End jump to the ends, Enter opens; ↑ or ↓ from New edit, which has
+focus when the home shows, goes to the active row. That first focus is
+unmarked; after a key, keyboard focus shows (a faint fill across the row).
+A long list scrolls in its column. Above it, New edit and the Edits
+folder's button (the heading "Edits" shows the folder's path on hover);
+under it, the files the view cannot open, also under the message when the
+list cannot be read again, with Make it a separate edit on a Finder copy.
+With no edits the list holds one entry, New edit, beside an empty frame. A
+new edit is called "Untitled edit" (then "Untitled edit 2", …).
 
 **Editing.** The open edit shows the library on the left and the same
 editor as the dialog: stage, transport, rail and timeline, with the same
@@ -1002,9 +1019,9 @@ the library ("Not in the library · sunset.mp4" in the rail).
 **Frame to canvas** from the view adds the image node to the middle of the
 open workflow's canvas, and its toast offers Go to canvas.
 
-**Show in Finder.** The home screen's Show in Finder opens the Edits
-folder (it is created if it is not there yet); the edit menu's shows the
-edit's own file.
+**Show in Finder.** The home screen's folder button (its tooltip says
+Show in Finder) opens the Edits folder (it is created if it is not there
+yet); the edit menu's and a row's ⋯ show the edit's own file.
 
 ## Frame to canvas
 
