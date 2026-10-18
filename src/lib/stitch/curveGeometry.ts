@@ -20,9 +20,9 @@ export interface CurveMetrics {
   span: number;
 }
 
-/** The 48px block of the collapsed lane. */
-export const COLLAPSED_CURVE: CurveMetrics = { top: 10, span: 31 };
-/** The 120px block of the lane while the audio is selected. */
+/** The 44px block of a collapsed row: 0 dB 6px under its top, silence 4px over its foot. */
+export const COLLAPSED_CURVE: CurveMetrics = { top: 6, span: 34 };
+/** The 120px block of the row whose volume curve is open. */
 export const EXPANDED_CURVE: CurveMetrics = { top: 16, span: 90 };
 
 export interface CurveVertex {

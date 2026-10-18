@@ -41,7 +41,7 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * one row delta, their spacing kept, the group stopped as a whole at 0:00,
  * 10:00 and the first and last rows; only the pressed clip snaps.
  *
- * The row header's drag (rows only) is useClipReorder's.
+ * The row grip's drag (rows only) is useClipReorder's.
  */
 
 export interface MoveLive {

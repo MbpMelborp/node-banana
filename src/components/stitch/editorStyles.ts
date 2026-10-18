@@ -17,13 +17,13 @@ export const EDITOR_CHIP =
 export const RAIL_ACTION =
   "group/action -mx-2 h-9 w-[calc(100%+16px)] shrink-0 flex items-center gap-2.5 px-2 rounded-md text-left text-[13px] text-neutral-300 transition-colors hover:bg-white/4 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-neutral-300";
 
-/** 28px icon buttons in the track headers, the library pane and the home. */
+/** 28px icon buttons in the library pane and the home. */
 export const ICON_BUTTON =
   "h-7 w-7 inline-flex items-center justify-center rounded-md text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
 
-/** Text ghosts: the track headers' small text buttons. */
+/** The timeline's quiet text buttons under its rows: "+ Audio", and Line up in Stacked. */
 export const TEXT_GHOST =
-  "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-md text-xs text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-neutral-700/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
+  "h-6 px-1.5 inline-flex items-center gap-1 rounded-md text-xs text-ink-3 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:text-neutral-600 disabled:hover:bg-transparent";
 
 /** The headers' height (the view's and the dialog's h-14): what sits over the stage in the editor's column. */
 export const HEADER_PX = 56;
@@ -60,45 +60,49 @@ export const CONTROL_BUTTON = cn(
 export const TIMECODE_WELL =
   "h-8 w-full min-w-0 rounded-md border-0 bg-edit-field px-2.5 text-[13px] tabular-nums text-neutral-200 outline-none transition-colors placeholder:text-neutral-500 focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-50";
 
+/** The timeline's hairline top edge, px. */
+export const TIMELINE_EDGE_PX = 1;
+/** The ruler over the lanes, px. */
+const RULER_PX = 28;
+/** Track's clips row: the 64px clips with 8px over and under them, px. */
+const CLIP_ROW_PX = 80;
+
 /**
- * Pixel sizes from the boards (Main, Trim, Volume) the timeline lane computes with. The shell's own (header 56, rail
- * 280) are its Tailwind classes; the stage's room and its control row are EditorStage's.
+ * Pixel sizes from the boards (Index-Editor-Clip, -Audio, -Focus; Trim, Volume) the timeline lane computes with. The
+ * shell's own (header 56, rail 280) are its Tailwind classes; the stage's room and its control row are EditorStage's.
  */
 export const GEOMETRY = {
-  /** One video row (Track's clips, or up to two of Stacked's), one audio row and the audio strip. */
-  timeline: 224,
-  /** The same with that audio row expanded. */
-  timelineExpanded: 296,
-  trackHeader: 132,
-  ruler: 24,
-  clipRow: 92,
-  clipTop: 10,
-  clipHeight: 72,
+  /** The least the timeline takes: its 1px top edge, the ruler, Track's clips row, one audio row and the strip. */
+  timeline: TIMELINE_EDGE_PX + RULER_PX + CLIP_ROW_PX + AUDIO_ROW_PX + AUDIO_STRIP_PX,
+  ruler: RULER_PX,
+  /** The playhead's head on the ruler, from its top: a snap guide carries its line on from there. */
+  playheadHead: 12,
+  /** Track's clips row: the 64px clips with 8px over and under them (a press there starts the selection box). */
+  clipRow: CLIP_ROW_PX,
+  clipTop: 8,
+  clipHeight: 64,
   audioRow: AUDIO_ROW_PX,
   audioRowExpanded: AUDIO_ROW_EXPANDED_PX,
-  audioBlockTop: 8,
-  audioBlock: 48,
+  /** An audio clip's block sits at its row's top, 8px over the next row. */
+  audioBlockTop: 0,
+  audioBlock: 44,
   audioBlockExpanded: 120,
-  origin: 16,
+  /** 0:00 sits this far into the lanes: the timeline's 20px side padding, which the row controls float in. */
+  origin: 20,
   frameCell: 56,
-  labelBar: 20,
   handle: 10,
-  addSlot: 52,
-  addSlotGap: 8,
+  addSlot: 44,
+  addSlotGap: 6,
   emptySlot: 160,
   /** The lane's margin after the add slot, and the empty lane's placeholder's right margin. */
-  endMargin: 16,
+  endMargin: 20,
   /** One clip per row in Stacked. */
   stackRow: 52,
   stackClipTop: 6,
   stackClipHeight: 40,
   /** 3.5 rows: the rows scroll vertically past this. */
   stackRowsCap: 182,
-  /** The timeline's 1px border and an 8px horizontal scrollbar. */
-  stackSlack: 9,
-  /** Track's room under its clips row: the border, the scrollbar and some air. */
-  trackSlack: 20,
-  /** Under the audio rows: "+ Add audio" in the header, the "New row" drop target in the lanes. */
+  /** Under the audio rows: "+ Audio" and Line up, the "New row" drop target in the lanes. */
   audioStrip: AUDIO_STRIP_PX,
   /** Audio rows shown before the rest scroll. */
   audioRowsCap: AUDIO_ROWS_CAP,
@@ -109,26 +113,35 @@ export const GEOMETRY = {
   stageFloor: 344,
   /** Stacked's rows view is never capped below one and a half rows, so it still reads as scrollable. */
   stackRowsFloor: 78,
-  /** An audio row header's controls sit this far above the row's bottom, in either height. */
-  audioControlsBottom: 22,
 } as const;
 
 /** The room the lane keeps after the last clip: the add slot with its gap, and the end margin. Fit leaves it too. */
 export const LANE_TRAILING_PX = GEOMETRY.addSlotGap + GEOMETRY.addSlot + GEOMETRY.endMargin;
 
 /**
- * A label bar over a frame or waveform: a soft gradient, darker through the middle where the text sits, and a dense
- * black halo round the text, so the name, the grey source and the length stay readable over a white bottom edge
- * (sky, snow, a studio wall). Over a dark frame the halo does not show and the gradient stays a soft fade, not a band.
+ * A selected clip's ring (video or audio, one or several): 2px of neutral-100 inside the box's edge, drawn over its
+ * frames or waveform, under its handles and badges.
  */
-export const LABEL_BAR =
-  "bg-linear-to-t from-black/80 via-black/55 via-55% to-transparent [text-shadow:0_0_1px_rgb(0_0_0),0_0_2px_rgb(0_0_0),0_0_3px_rgb(0_0_0/0.9),0_0_6px_rgb(0_0_0/0.8)]";
+export const SELECTED_RING = "pointer-events-none absolute inset-0 z-1 rounded-[inherit] border-2 border-neutral-100";
 
 /** A clip (or slot) lifted to be dragged to a new place (design-spec §9.1). */
 export const LIFTED_CLIP = "z-10 -translate-y-1.5 -rotate-[1.5deg] shadow-[0_12px_28px_rgba(0,0,0,0.6)]";
 
 /** A clip (or slot) Stacked's body drag carries in time and across rows: on top, ringed and raised. */
-export const MOVING_CLIP = "z-10 ring-2 ring-selection shadow-[0_8px_20px_rgba(0,0,0,0.5)] cursor-grabbing";
+export const MOVING_CLIP = "z-10 ring-2 ring-neutral-100 shadow-[0_8px_20px_rgba(0,0,0,0.5)] cursor-grabbing";
+
+/** The edit menus' surface (the headers' ⋯, the clip menu): 220px, a hairline on neutral-900, 10px corners. */
+export const EDIT_MENU_SURFACE = "w-[220px] overflow-visible rounded-[10px] border-neutral-800 bg-neutral-900 p-1 shadow-edit-menu";
+
+/** Their row: 32px in 13px type, lit on hover, on keyboard focus and while its submenu is open. */
+export const EDIT_MENU_ROW =
+  "h-8 rounded-md py-0 text-[13px] text-neutral-200 hover:bg-white/6 focus-visible:bg-white/6 disabled:cursor-default disabled:text-neutral-600 disabled:opacity-100";
+
+/** A muted line in them: a group's label and note, a footer, the clip menu's heading. */
+export const EDIT_MENU_MUTED = "px-2.5 text-xs leading-4 tabular-nums text-ink-3";
+
+/** The hairline between their groups of rows. */
+export const EDIT_MENU_DIVIDER = "my-1 border-neutral-800";
 
 /** The editor's panel, marked for code outside it that hands focus back (the library picker): not its label. */
 export const STITCH_EDITOR_PANEL = "data-stitch-editor";

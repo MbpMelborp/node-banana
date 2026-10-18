@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { rulerTicks } from "@/lib/stitch/rulerTicks";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
@@ -8,14 +9,17 @@ import { pause } from "../editorActions";
 import { GEOMETRY } from "../editorStyles";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 
-/** A label sits 4px right of its tick and is at most this wide ("10:00.00" at 10px mono). */
+/** A label sits 5px right of its tick and is at most this wide ("10:00.00" at 11px tabular figures). */
 const LABEL_ROOM = 52;
 
 /**
- * The 24px ruler over the lanes: majors and minors from the zoom, labels on
- * every major or every second one, drawn only across the visible range.
- * Pressing or dragging on it pauses and moves the playhead. An empty
- * sequence shows the ticks without labels.
+ * The 28px ruler over the lanes, with no other chrome, as the boards draw
+ * it: a tick from 8px down to the foot beside each label (11px ink-3,
+ * tabular figures, at the zoom's spacing) and one short mark half-way
+ * between each two, drawn only across the visible range. A tick whose label
+ * has no room before the lanes' end is a short mark. Pressing or dragging on
+ * it pauses and moves the playhead. An empty sequence shows only the short
+ * marks where its labels would be.
  */
 export function Ruler({
   axis,
@@ -38,6 +42,9 @@ export function Ruler({
 }) {
   const dragging = useRef(false);
   const ticks = rulerTicks(axis.pxPerSec, Math.max(0, axis.xToTime(viewLeft)), Math.max(0, axis.xToTime(viewRight - 1)));
+  // The labels drawn: each beside its tick, never past the content
+  const labels = showLabels ? ticks.labels.filter(({ t }) => axis.timeToX(t) + 5 + LABEL_ROOM <= maxX) : [];
+  const labelled = new Set(labels.map(({ t }) => t));
 
   const seekTo = (clientX: number) => {
     const left = contentRef.current?.getBoundingClientRect().left ?? 0;
@@ -65,31 +72,41 @@ export function Ruler({
   return (
     <div
       data-testid="stitch-ruler"
-      className="absolute inset-x-0 top-0 cursor-pointer border-b border-white/6"
+      className="absolute inset-x-0 top-0 cursor-pointer"
       style={{ height: GEOMETRY.ruler }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      {ticks.minors.map((t) => (
-        <span key={`m${t}`} aria-hidden="true" className="absolute bottom-0 h-1 w-px bg-white/7" style={{ left: axis.timeToX(t) }} />
-      ))}
-      {ticks.majors.map((t) => (
-        <span key={`M${t}`} aria-hidden="true" className="absolute bottom-0 h-2 w-px bg-white/16" style={{ left: axis.timeToX(t) }} />
-      ))}
       {showLabels &&
-        ticks.labels
-          .filter(({ t }) => axis.timeToX(t) + 4 + LABEL_ROOM <= maxX)
-          .map(({ t, text }) => (
-            <span
-              key={`L${t}`}
-              className="pointer-events-none absolute top-[5px] font-mono text-[10px] leading-3 tabular-nums text-neutral-500"
-              style={{ left: axis.timeToX(t) + 4 }}
-            >
-              {text}
-            </span>
-          ))}
+        ticks.minors.map((t) => (
+          <span
+            key={`m${t}`}
+            aria-hidden="true"
+            data-ruler-mark="minor"
+            className="absolute bottom-0 h-1.5 w-px bg-neutral-800"
+            style={{ left: axis.timeToX(t) }}
+          />
+        ))}
+      {ticks.majors.map((t) => (
+        <span
+          key={`M${t}`}
+          aria-hidden="true"
+          data-ruler-mark={labelled.has(t) ? "labelled" : "major"}
+          className={cn("absolute bottom-0 w-px bg-edit-tick", labelled.has(t) ? "top-2" : "h-2")}
+          style={{ left: axis.timeToX(t) }}
+        />
+      ))}
+      {labels.map(({ t, text }) => (
+        <span
+          key={`L${t}`}
+          className="pointer-events-none absolute top-[9px] text-[11px] leading-[11px] tabular-nums text-ink-3"
+          style={{ left: axis.timeToX(t) + 5 }}
+        >
+          {text}
+        </span>
+      ))}
     </div>
   );
 }

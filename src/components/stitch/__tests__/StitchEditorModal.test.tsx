@@ -894,7 +894,7 @@ describe("StitchEditorModal", () => {
       expect(column.firstElementChild).toBe(screen.getByTestId("stitch-preview"));
       // Not in the header, nor in the timeline
       expect(document.querySelector("[data-editor-header]")!.contains(toggle)).toBe(false);
-      expect(screen.getByRole("listbox", { name: "Clips" }).closest(".bg-editor-lanes")!.contains(toggle)).toBe(false);
+      expect(screen.getByTestId("stitch-timeline").contains(toggle)).toBe(false);
       // It switches from there, and back
       stack();
       expect(editor().draft!.sequenceLayout.mode).toBe("stacked");

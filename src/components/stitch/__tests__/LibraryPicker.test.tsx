@@ -594,18 +594,19 @@ describe("LibraryPicker over the editor", () => {
     __resetMediaInfoForTests();
   });
 
-  it("opens from the Clips track's + and the slot after the last clip, and Escape closes only the picker", async () => {
+  it("opens from the slot after the last clip, and Escape closes only the picker", async () => {
     render(<StitchEditorModal />);
     act(() => {
       openStitchEditor("stitch");
     });
     const editorDialog = screen.getByRole("dialog", { name: "Edit video" });
-    // The Clips track's + (the slot after the last clip has the same name)
-    const [headerAdd, slotAdd] = within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" });
+    // The + slot after the last clip (the timeline has no track headers, so no other +)
+    const [slotAdd] = within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" });
+    expect(within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" })).toHaveLength(1);
     expect(slotAdd).toBe(screen.getByTestId("stitch-add-slot"));
     // A browser focuses a button it clicks; jsdom does not
-    act(() => headerAdd.focus());
-    fireEvent.click(headerAdd);
+    act(() => slotAdd.focus());
+    fireEvent.click(slotAdd);
     expect(await within(dialog()).findByRole("button", { name: named("a1.mp4") })).toBeInTheDocument();
     await waitFor(() => expect(document.activeElement).toBe(within(dialog()).getByRole("textbox", { name: "Search videos" })));
     // Canvas and editor keys stay off while the picker is up: ⌫ removes no clip
@@ -621,7 +622,7 @@ describe("LibraryPicker over the editor", () => {
     expect(editor().discardOpen).toBe(false);
     expect(screen.getByRole("dialog", { name: "Edit video" })).toBeInTheDocument();
     // Focus goes back to the + that opened it
-    await waitFor(() => expect(document.activeElement).toBe(headerAdd));
+    await waitFor(() => expect(document.activeElement).toBe(slotAdd));
 
     fireEvent.click(screen.getByTestId("stitch-add-slot"));
     expect(editor().pickerOpen).toBe("video");
@@ -643,13 +644,13 @@ describe("LibraryPicker over the editor", () => {
       openStitchEditor("stitch");
     });
     // Not asked yet (null): offered, and the list request says what it finds
-    const headerAdd = () => screen.getAllByRole("button", { name: "Add a clip from the library" })[0];
-    expect(headerAdd()).toBeEnabled();
+    const addAudio = () => screen.getByRole("button", { name: "Add audio" });
+    expect(addAudio()).toBeEnabled();
     expect(screen.getByTestId("stitch-add-slot")).toBeEnabled();
     try {
       act(() => applyLibraryStatus(status(false)));
-      expect(headerAdd()).toBeDisabled();
-      expect(headerAdd()).toHaveAttribute("title", "The asset library is off");
+      expect(addAudio()).toBeDisabled();
+      expect(addAudio()).toHaveAttribute("title", "The asset library is off");
       expect(screen.getByTestId("stitch-add-slot")).toBeDisabled();
       expect(screen.getByTestId("stitch-add-slot")).toHaveAttribute("title", "The asset library is off");
       // The picker, if it is up all the same, asks nothing
@@ -740,7 +741,7 @@ describe("LibraryPicker over the editor", () => {
       expect(await within(audioDialog()).findByText("No audio matches")).toBeInTheDocument();
     });
 
-    it("opens from + Add audio under the audio rows", async () => {
+    it("opens from + Audio under the audio rows", async () => {
       render(<StitchEditorModal />);
       act(() => {
         openStitchEditor("stitch");

@@ -57,17 +57,30 @@ ground (the `editor-*` and `edit-*` tokens in `globals.css`):
   Unmute, M), Split at playhead and Remove. The keys are in hover labels: a
   field's (I, O, and [ or ]) and an action's (shown at its right on hover or
   focus); ? lists them all, with the mouse modifiers.
-- **Timeline**: a ruler, the Clips lane (filmstrips you drag to reorder and
-  trim by their edges, a context menu, a `+` and a dashed slot that add
-  videos from the library) and the audio rows (each audio clip's waveform
-  and volume curve; a row's volume-curve button makes it taller to edit the
-  curve) and, under them, **+ Add audio**. In Stacked the Clips lane is one
-  row per clip; the rows scroll between a fixed ruler and the audio rows.
-  The timeline's height does not change with the layout or the selection
-  (see Audio clips). A clip's box drags in time and up or down to another row in one
-  move; its row header drags it up or down only (see Stacked). Click,
-  ⌘-click, ⇧-click or drag a box around clips to select several (see
-  Several clips).
+- **Timeline**: on the pane colour under a hairline, with no track headers:
+  the lanes run its full width, 0:00 sitting 20 px in. A ruler (a label in
+  11 px ink-3, tabular, at each tall tick, and one short mark half-way
+  between), the Clips lane (filmstrips 2 px apart that you drag to reorder
+  and trim by their edges, a context menu, and a quiet `+` slot after the
+  last clip that adds videos from the library) and the audio rows (each
+  audio clip's waveform in grey) and, under them, a quiet **+ Audio**. A
+  clip shows only its frames (or its waveform) at rest; its length shows on
+  hover, with its trim handles and, on a video clip, its sound button; an
+  audio clip's file name is its tooltip. A muted clip keeps its muted badge
+  (an icon). Selected clips, video or audio, are ringed in white; a selected
+  audio clip's waveform lightens and its volume curve is drawn in white. The
+  playhead's line ends above "+ Audio". What the track headers held floats
+  in the timeline's 20 px left padding while the pointer is over a row, or
+  keyboard focus is on it: an audio row's mute and its volume-curve button
+  (which makes the row taller to edit the curve), and in Stacked each row's
+  grip. Scrolled sideways, the lanes pass under that padding, which covers
+  them there, so a press on the controls never reaches a clip out of view.
+  In Stacked the Clips lane is one row per clip; the rows scroll between a
+  fixed ruler and the audio rows. The timeline takes the height its rows
+  need, never more for the selection (see Audio clips). A clip's box drags in time and up or down to
+  another row in one move; its row's grip drags it up or down only (see
+  Stacked). Click, ⌘-click, ⇧-click or drag a box around clips to select
+  several (see Several clips).
 
 Edits stay inside the editor, with their own undo history (100 steps), until
 **Done**. Done writes the node in one `updateNodeData` call and does not
@@ -281,10 +294,13 @@ Track itself never overlaps. The switch is inert while the editor has no
 clips, and any switch (Undo and Redo included) pauses the preview. Cancel's
 discard sheet names what would be lost ("The switch to Stacked and the
 overlap will be lost.", "A trim and a moved clip will be lost.", or "lining
-up the clips" after Line up). The switch changes the timeline's height, and
-the timeline grows up from the bottom of the editor, so with three or more
-clips the stage, and the video and its control row (the toggle in it), can
-change size when the layout switches.
+up the clips" after Line up). Each layout's timeline takes the height its
+rows need, so a switch changes it, and the stage gives or takes the
+difference. While the pointer is over the control row the timeline keeps
+the height it had as the pointer came in, so a switch never moves the
+toggle from under it (the other layout's button is right beside it); the
+timeline settles to the new layout's height once the pointer leaves the
+row. A switch by ⌘Z or ⇧⌘Z changes it at once.
 
 **Lined up and placed.** A Stacked node starts **lined up**: no clip has a
 start of its own, and each starts a set time (Overlap) before the clip
@@ -298,15 +314,16 @@ then on an edit moves only the clip it edits.
   row, or both), a nudge, a typed Start, [ and ], every trim (a drag,
   I, O, a typed In or Out, Reset trim), a paste, a duplicate, and a drag
   or nudge of several clips.
-- Placing only in a stack that is already placed: a row move by the row
-  header, ⌥↑ / ⌥↓ or the clip menu, a split, a removal and a cut. In a
+- Placing only in a stack that is already placed: a row move by a row's
+  grip, ⌥↑ / ⌥↓ or the clip menu, a split, a removal and a cut. In a
   lined-up stack these work as before: a row move or a removal
   re-sequences the clips, and a split is refused inside an overlap.
 - Never placing: adding from the library, Crossfade, the layout switch,
   loops, clip sound and the curve. Edits in Track, and the card's reorder
   and ✕, keep every stored start.
 
-**Line up**, in the corner left of `+`, puts every clip back where Overlap
+**Line up**, in Stacked a quiet text button after **+ Audio** under the
+audio rows, puts every clip back where Overlap
 lays it out, as one undo step: it drops every stored start, moves a fade
 out that ends at the end along with the end, and keeps the playhead on the
 same frame of the same clip. It is on once some clip has been placed, with
@@ -343,10 +360,11 @@ the clips still end in the order they start.
   as one clip, so a split never changes an overlap or moves a clip.
 
 **The lane.** Each row is 52 px, with the clip's box at its own start on the
-ruler. The boxes are compact: the row header names the clip and its source
-(with a muted speaker when the clip is muted), and the box shows its length
-at the right. A box's accessible name says where it starts ("Clip 3, starts
-0:07.20"), and so does an empty clip's slot. A box narrower than 96 px has
+ruler. The boxes are compact: frames only, the length on hover, and the
+muted badge on a muted clip. While the pointer is over a row, its grip
+shows in the timeline's left padding. A box's accessible name says where it
+starts ("Clip 3, starts 0:07.20"), and so does an empty clip's slot. A box
+narrower than 96 px has
 no hover mute button, and its muted badge is only a mark, so a press on it
 still drags the box (⌥M and the clip menu unmute). In a lined-up stack, with
 Crossfade on, a wedge marks the head a clip fades in on and the tail it
@@ -359,18 +377,16 @@ where several fades meet, and a dark band wherever a higher row hides it
 sound plays."). A gap of a frame or more is a black band across the rows
 with dashed sides, labelled "Gap 1.0 s" when the band is wide enough for the label (64 px
 for "Gap 1.0 s", 7 px more for each further character), and
-a 3 px black strip along the bottom of the ruler, which stays in view while
+a 3 px grey strip along the bottom of the ruler, which stays in view while
 the rows scroll. Up to three and a half rows show, so the timeline grows to
-303 px tall for four clips or more, in Track as well, so that switching
-layouts moves nothing (see "The timeline's height" in Audio clips), taking
-the room from the stage. More rows scroll up and down under the fixed
-ruler, above the audio rows. While the preview plays,
-the row under the playhead is kept in view, and so is a clip selected by a
-key, a split or an undo. A wheel over the row headers scrolls the rows as
-one over the lanes does, and a right press on a header opens its clip's
-menu. The `+` that adds from the library moves to the corner beside the
-ruler, with Line up left of it, and the dashed slot that adds sits in the
-last row, after the latest end.
+291 px tall for four clips or more with one audio row (Track keeps 189 px;
+see "The timeline's height" in Audio clips), taking the room from the
+stage. More rows scroll up and down under the fixed ruler, above the audio
+rows. While the preview plays, the row under the playhead is kept in view,
+and so is a clip selected by a key, a split or an undo. A wheel over the
+grips scrolls the rows as one over the lanes does, and a right press on a
+grip opens its clip's menu. The `+` slot that adds from the library sits in
+the last row, after the latest end, and Line up is under the audio rows.
 
 **Moving a clip.** Drag a clip's box, or an empty clip's slot, anywhere:
 sideways moves it in time, up or down moves it to another row, and one
@@ -379,8 +395,8 @@ clip, and playback goes on. Past that the clip lifts, the preview pauses,
 and the box follows the pointer on both axes. It lands in the row under its
 centre, which changes only once the centre is more than half a row and 4 px
 from the middle of the row it lands in now: at 52 px a row, a sideways drag
-keeps its row until it strays more than 30 px up or down. A line across the
-rows and the headers marks the row it will land in; the box floats with the
+keeps its row until it strays more than 30 px up or down. A white line
+across the rows marks the row it will land in; the box floats with the
 pointer, and the rows between move by one when you let go. A chip beside
 the box says where the clip will play and how far it moved
 ("0:14.20–0:17.40 · +3.20 s"). Near their sides the lanes scroll by
@@ -392,11 +408,12 @@ and the scroll back. A box drag always places: in a lined-up stack too,
 the box lands where it was drawn and every other clip keeps its start.
 While it runs, every box is marked as release will leave it (which clip
 covers which, the fades and the gaps), and a hidden band names the
-covering clip as the row headers do until release. The stage keeps showing
+covering clip by its row at the press until release. The stage keeps showing
 the clips where they were until you let go, and a ⌘ wheel does not zoom
 while a clip is pressed or dragged. The start snaps (see Snapping).
 
-**Moving a row.** The row header drags its clip up or down only. In a
+**Moving a row.** A row's grip (in the left padding, shown while the
+pointer is over the row) drags its clip up or down only. In a
 lined-up stack the clips re-sequence as before: the lifted box is drawn at
 the start it will have in its new place. In a placed stack
 every clip keeps its start, the lifted box keeps its place in time, and
@@ -416,7 +433,7 @@ time and press Enter or leave the well, or step it with ↑ and ↓ (0.1 s, ⇧
 and 10:00 (600 s); nothing starts before 0:00. A start typed or keyed that
 takes the selected clip wholly out of view scrolls the lanes so that its
 box sits 64 px inside their left side. A move made in the timeline never
-does: not a drag's release (a box's body, a row header or a trim handle:
+does: not a drag's release (a box's body, a row's grip or a trim handle:
 the box lands where it was drawn), and not a
 typed Start that a press in the timeline commits (the lanes stay under the
 pointer). Start's hover label names [ and ] (either key, a slash between),
@@ -573,9 +590,10 @@ the node without its music), and a new connection starts as one whole clip
 at 0:00. A music clip whose music is not connected is kept, drawn dashed
 ("No audio connected"), and is silent.
 
-**Adding audio.** **+ Add audio**, under the audio rows, opens **Add audio
-from the library**: audio files only, with the same search, project menu,
-Favourites, This workflow and sort as for videos. Each picked file goes on a
+**Adding audio.** With no audio the first row is an empty outline (in a
+node's dialog it says "Connect audio to the node"). **+ Audio**, under the
+audio rows, opens **Add audio from the library**: audio files only, with
+the same search, project menu, Favourites, This workflow and sort as for videos. Each picked file goes on a
 new row of its own, starting at the playhead. A library clip stores only the
 asset's id; a clip whose file is gone is drawn "Not in the library" and
 stops a render until it is removed.
@@ -611,10 +629,20 @@ every video clip's start and end, every other audio clip's start and end,
 and the clip's own start. ⇧ turns snapping off.
 
 **The volume curve.** Each clip has its own curve, drawn over its waveform.
-The volume-curve button in a row's header makes the row taller (one row at a
-time; selecting a clip never changes a row's height). On a taller row, with
-one clip selected: click the line to add a point, drag a point, double-click
-a point to remove it (the point before it is then selected, so ⌫ removes
+The volume-curve button among a row's controls makes the row taller (one row
+at a time; selecting a clip never changes a row's height). The controls, the
+row's mute over that button, float in the timeline's left padding while the
+pointer is over the row or keyboard focus is in them or on one of the row's
+clips, and stay while the row is taller, the button pressed; they keep
+their names ("Mute Audio 2", "Show volume curve") and their tab stops. The
+taller row grows upward, so the button stays under the pointer; its 0 dB
+and −12 dB guides are unlabelled (a dragged point's readout says its
+level). A press on a control keeps the controls in place until its
+release, so a click whose pointer drifts still lands. At rest a clip shows
+its waveform alone; selected, its curve is drawn in white with its points,
+and on the taller row the other clips' curves show faintly. On a taller
+row, with one clip selected: click the line to add a point, drag a point,
+double-click a point to remove it (the point before it is then selected, so ⌫ removes
 points, not the clip), ⌥-drag to move the whole line. Fade in, Fade out and
 Flat are the rail's Volume for any one selected clip: pressed by what the
 curve does over the part that is heard (Flat with no points, Fade in when it
@@ -642,16 +670,21 @@ so while it applies.
 **Clip sound** stays with each video clip (Sound and Volume in the
 rail), as before.
 
-**The timeline's height** depends on the number of video clips, the number
-of audio rows and which row is taller, never on the layout or the
-selection: switching Track and Stacked, undoing that, or clicking a clip
-moves nothing above or inside the timeline. Its video part is sized for
-whichever layout needs more room, so in Track with three or more clips an
-empty band sits above the audio rows. Two audio rows show at once; more
-scroll with the wheel over them (over Stacked's rows, only those scroll).
-In a short window Stacked's rows give way first, then the audio rows, down
-to one; the stage keeps at least 344 px, its control row included (a 240 px
-video).
+**The timeline's height** is what its rows need: the 28 px ruler, Track's
+80 px clips row or Stacked's 52 px rows (up to three and a half), the
+audio rows (52 px, the taller one 128 px) and the 28 px line with
+"+ Audio", plus the room of a horizontal scrollbar where the system draws
+one beside the content (none where it is drawn over it), kept whether the
+scrollbar shows or not: the scrollbar never covers a row, and zooming in
+past Fit moves nothing. Clicking a clip never changes it. In Track with one
+audio row it is 189 px. A switch of Track | Stacked changes it; while the
+pointer is over the control row it keeps the height it had, so
+the toggle stays under the pointer, and it settles once the pointer leaves
+(see Stacked). Two audio rows show at once; more scroll with the wheel
+over them (over Stacked's rows, only those scroll). In a short window
+Stacked's rows give way first, down to one and a half, then the audio
+rows, down to one; the stage keeps at least 344 px, its control row
+included (a 240 px video).
 
 ## Several clips
 
@@ -660,8 +693,8 @@ Windows) adds a clip to the selection or takes it out. ⇧-click selects
 every clip from the last clip you clicked to this one: in Track in their
 order, in Stacked by row (the same thing, since rows are the order). A
 ⌘-click or ⇧-click that lands on a clip's trim handle selects too; drag
-from a handle to trim. A drag on empty space in the lane draws a box and
-selects the clips it touches (in Track every clip it crosses sideways, in
+from a handle to trim. A drag on empty space in the lane draws a faint
+white box and selects the clips it touches (in Track every clip it crosses sideways, in
 Stacked every box it touches); with ⇧ or ⌘ held when you press, they are
 added to the selection. In Track the clips fill most of their row, so
 press just above or below them (or past the last one when zoomed in) to
@@ -923,8 +956,8 @@ move the curve: press Fade out again after a move that changes the end.
 
 ## Library clips
 
-`+` in the Clips header (in Stacked, in the corner beside the ruler), the
-dashed slot after the last clip, or the empty lane opens **Add from
+The `+` slot after the last clip (in Stacked, in the last row), or the
+empty lane opens **Add from
 library**: videos only, with search, a project menu, Favourites, This
 workflow and a sort. The picked videos are added after the last clip, in
 the order they were picked, as one undo step. The playhead goes to the
@@ -1188,8 +1221,8 @@ snaps its start only.
 - Each audio file is decoded whole while a render runs: about 115 MB for 5
   minutes of 48 kHz stereo. For the waveforms the editor decodes at most two
   files at a time and keeps only their peaks.
-- A row taller for its volume curve needs its header's button; editing
-  points needs it.
+- A row taller for its volume curve needs its row's volume-curve button
+  (among the row's controls in the left padding); editing points needs it.
 - Pasting and duplicating add elements the same way: ⌘A then ⌘D doubles
   them each time. Past 24 clips in Stacked a notice says so; nothing is
   refused, but the preview slows down and a browser plays only so many
@@ -1237,8 +1270,9 @@ snaps its start only.
   height (1080 to 1088) also take the canvas in a blend, scaled to cover it,
   about 0.7 % larger than the frames beside them; lined-up dissolves already
   did this.
-- The timeline grows to 303 px for four or more clips, in either layout,
-  and by 72 px while an audio row is taller, taking room from the stage
+- The timeline grows to 291 px for four or more clips in Stacked (189 px in
+  Track) with one audio row, by 52 px for a second audio row and by 76 px
+  while an audio row is taller, taking room from the stage
   down to 344 px (its padding and the control row under the video included:
   a 240 px video). The rail
   scrolls in a short window; its actions sit at its foot while there is
@@ -1273,7 +1307,7 @@ snaps its start only.
   sequence and one output track), a second audio socket, audio effects
   other than the volume curve, selecting video and audio clips together, a
   volume slider for audio clips, audio that follows a video clip when the
-  video moves, selecting a whole audio row from its header, extending a selection with ⇧ and
+  video moves, selecting a whole audio row at once, extending a selection with ⇧ and
   the arrow keys, copying clips to the system clipboard (the copy lives in
   the app until it reloads), snapping every clip of a group drag (only the
   clip you hold snaps).

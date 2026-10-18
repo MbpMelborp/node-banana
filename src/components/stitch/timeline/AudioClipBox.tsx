@@ -11,9 +11,9 @@ import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { StitchAudioClip } from "@/types";
 import { removeAudioCurvePoint, setAudioCurve } from "../editorActions";
-import { EDITOR_CHIP, GEOMETRY, LABEL_BAR, MOVING_CLIP } from "../editorStyles";
+import { EDITOR_CHIP, GEOMETRY, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
 import type { AudioClipView } from "../useStitchEditorMedia";
-import { EdgeHandle, handleWidthFor, keepFocus } from "./ClipBox";
+import { EdgeHandle, handleWidthFor, keepFocus, LENGTH_CHIP, MUTED_BADGE } from "./ClipBox";
 import { CurveLayer } from "./CurveLayer";
 import { useCurveDrag } from "./useCurveDrag";
 import { Waveform } from "./Waveform";
@@ -31,14 +31,17 @@ function stateLabel(view: AudioClipView | undefined): string | null {
 }
 
 /**
- * One audio clip on its row: the waveform of the part it plays, its volume
- * curve over it (editable when it is the single selection on an expanded
- * row, drawn only otherwise), the label bar with the file name, the source
- * and the length, and the In and Out handles once the file's length is
- * known. A muted clip keeps a faint waveform and a "Muted" chip instead of
- * the curve. Past the sequence's last frame the box is hatched: that part
- * is not heard. Music that is not connected, a library file that is gone and
- * a file that cannot be read are drawn dashed and say so.
+ * One audio clip on its row, in grey on the edit-clip body: at rest only the
+ * waveform of the part it plays. Selected, it is ringed in white, the
+ * waveform lightens and its volume curve is drawn in white with its points
+ * (editable when it is the single selection on an expanded row, whose other
+ * clips show theirs faintly). On hover: its length, and the In and Out
+ * handles once the file's length is known; its file name is its tooltip (and
+ * in its accessible name and the rail). A muted clip keeps a faint waveform
+ * and the muted badge instead of the curve. Past the sequence's last frame
+ * the box is hatched: that part is not heard. Music that is not connected, a
+ * library file that is gone and a file that cannot be read are drawn dashed
+ * and say so.
  *
  * It is an option of the "Audio clips" listbox. A press on the curve is the
  * curve's (useCurveDrag); any other press is the box's (a click selects, a
@@ -134,7 +137,11 @@ export function AudioClipBox({
   const broken = view?.missing || view?.status === "error";
   const dashed = label !== null;
   const muted = clip.muted;
-  const handlesShown = (selected && !multi) || trimEdge !== null;
+  // White on the one selected clip; a trim acts on one clip, so several selected keep the quiet ones
+  const handlesWhite = selected && !multi;
+  const handles = onHandlePointerDown !== null && !moving;
+  // The badge makes room for the In handle while it shows
+  const badgeLeft = !handles ? "left-1.5" : trimEdge ? "left-4" : "left-1.5 group-hover:left-4";
   const handleWidth = handleWidthFor(width);
   const hatchFrom = Math.max(0, endX - x);
   const shown = drag.live?.curve ?? clip.curve;
@@ -160,6 +167,7 @@ export function AudioClipBox({
         role="option"
         aria-selected={selected}
         aria-label={`${label ?? fileName}, ${rowLabel}, starts ${formatTimecode(clip.startSec)}${muted ? ", muted" : ""}`}
+        title={label ? undefined : fileName}
         tabIndex={focusable ? 0 : -1}
         data-audio-clip-id={clip.id}
         onPointerDown={onPointerDown}
@@ -169,19 +177,9 @@ export function AudioClipBox({
         onMouseDown={keepFocus}
         onContextMenu={onContextMenu}
         className={cn(
-          "group absolute overflow-hidden rounded-media select-none outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70",
-          dashed
-            ? cn("border border-dashed", broken ? "border-red-400/40" : "border-handle-audio/30")
-            : muted
-              ? "bg-handle-audio/4"
-              : "bg-handle-audio/8",
-          moving
-            ? MOVING_CLIP
-            : selected || trimEdge
-              ? "ring-2 ring-selection"
-              : dashed
-                ? undefined
-                : cn("ring-1", muted ? "ring-handle-audio/15" : "ring-handle-audio/35"),
+          "group absolute overflow-hidden rounded-md select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
+          dashed ? cn("border border-dashed", broken ? "border-white/25" : "border-white/15") : "bg-edit-clip",
+          moving && MOVING_CLIP,
           editable &&
             (drag.live ? "cursor-grabbing" : drag.overPoint ? "cursor-grab" : drag.hover ? "cursor-pointer" : undefined),
         )}
@@ -196,7 +194,7 @@ export function AudioClipBox({
               blockX={x}
               blockWidth={width}
               height={height}
-              expanded={expanded}
+              selected={selected}
               viewLeft={viewLeft}
               viewRight={viewRight}
               sourceOffset={offset}
@@ -205,11 +203,11 @@ export function AudioClipBox({
         )}
         {muted ? (
           <span
+            aria-hidden="true"
             data-testid="stitch-audio-muted"
-            className="pointer-events-none absolute left-2 top-3.5 inline-flex items-center gap-1.5 rounded-[5px] bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-400"
+            className={cn(MUTED_BADGE, "top-1.5", badgeLeft)}
           >
             <VolumeX size={11} strokeWidth={2} />
-            Muted
           </span>
         ) : (
           length > 0 &&
@@ -223,6 +221,7 @@ export function AudioClipBox({
               blockWidth={width}
               height={height}
               expanded={expanded}
+              selected={selected}
               dragIndex={drag.live?.index ?? null}
               selectedIndex={editable ? selectedPoint : null}
               hover={drag.hover}
@@ -237,39 +236,32 @@ export function AudioClipBox({
             style={{ left: hatchFrom }}
           />
         )}
-        {/* Over the curve, as the boards draw it: the line's floor runs inside the label bar */}
-        <div
-          className={cn(
-            "pointer-events-none absolute bottom-0 flex items-center gap-1.5 px-2 text-[11px] leading-none",
-            LABEL_BAR,
-            handlesShown ? "left-2.5 right-2.5" : "left-0 right-0",
-          )}
-          style={{ height: GEOMETRY.labelBar }}
-        >
-          <span className={cn("truncate font-medium", label ? "text-neutral-400" : "text-neutral-100")}>
-            {label ?? fileName}
+        {(selected || trimEdge) && !moving && <span aria-hidden="true" data-selected-ring="" className={SELECTED_RING} />}
+        {/* A dashed box says what is wrong at rest; any other shows its length on hover (and live while trimming) */}
+        {label ? (
+          <span className="pointer-events-none absolute inset-x-2 bottom-1 z-2 truncate px-1 text-[10px] leading-4 text-neutral-400">
+            {label}
           </span>
-          {/* On a short box the source label gives way before the file name */}
-          {!label && <span className="min-w-0 shrink-[1000] truncate text-neutral-400">{view?.sourceLabel ?? ""}</span>}
-          {length > 0 && (
-            <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-neutral-300">
+        ) : (
+          length > 0 && (
+            <span className={cn(LENGTH_CHIP, trimEdge ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
               {formatSeconds(length, trimEdge ? 2 : 1)}
             </span>
-          )}
-        </div>
-        {onHandlePointerDown && !moving && (
+          )
+        )}
+        {handles && onHandlePointerDown && (
           <>
             <EdgeHandle
               side="in"
               width={handleWidth}
-              selected={handlesShown}
+              selected={handlesWhite}
               active={trimEdge === "in"}
               onPointerDown={(event) => onHandlePointerDown(event, "in")}
             />
             <EdgeHandle
               side="out"
               width={handleWidth}
-              selected={handlesShown}
+              selected={handlesWhite}
               active={trimEdge === "out"}
               onPointerDown={(event) => onHandlePointerDown(event, "out")}
             />
@@ -281,7 +273,7 @@ export function AudioClipBox({
         <div
           aria-hidden="true"
           data-testid="stitch-curve-readout"
-          className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex -translate-y-1/2 items-center gap-2 whitespace-nowrap font-mono tabular-nums")}
+          className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex -translate-y-1/2 items-center gap-2 whitespace-nowrap tabular-nums")}
           style={{ top: readout.y, ...beside(readout.x, 12) }}
         >
           <span className="text-neutral-200">{formatDb(readout.point.gain)}</span>

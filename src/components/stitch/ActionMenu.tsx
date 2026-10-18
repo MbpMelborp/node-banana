@@ -12,7 +12,7 @@ import {
 import { Check, ChevronRight, MoreHorizontal } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuDivider, MenuItem, MenuSurface } from "@/components/ui/Menu";
-import { HEADER_ICON_BUTTON } from "./editorStyles";
+import { EDIT_MENU_DIVIDER, EDIT_MENU_MUTED, EDIT_MENU_ROW, EDIT_MENU_SURFACE, HEADER_ICON_BUTTON } from "./editorStyles";
 
 /** One of a set; picking it closes the menu like an item. */
 export type ActionMenuRadio = { kind: "radio"; label: string; checked: boolean; onSelect: () => void; disabled?: boolean };
@@ -43,16 +43,6 @@ const ROWS = [
 
 /** How long a submenu stays once the pointer leaves its row: long enough to cross a row on the way into it. */
 const SUBMENU_CLOSE_MS = 300;
-
-/** The shared menu surface in the boards' skin for the edit menu: 220px, a hairline on neutral-900, 10px corners. Submenus hang outside it. */
-const SURFACE = "w-[220px] overflow-visible rounded-[10px] border-neutral-800 bg-neutral-900 p-1 shadow-edit-menu";
-
-/** The shared menu row at the boards' size: 32px in 13px type, lit on hover, on keyboard focus and while its submenu is open. */
-const ROW =
-  "h-8 rounded-md py-0 text-[13px] text-neutral-200 hover:bg-white/6 focus-visible:bg-white/6 disabled:cursor-default disabled:text-neutral-600 disabled:opacity-100";
-
-/** A muted line in the menu: a group's label and note, the footer. */
-const MUTED = "px-2.5 text-xs leading-4 tabular-nums text-ink-3";
 
 /** Focus a menu's first row; with none to take it (each one off), the menu itself, so its Escape and Tab still work. */
 function focusFirstRow(menu: HTMLElement | null, options?: FocusOptions) {
@@ -222,7 +212,7 @@ function MenuList({
       role="menuitemradio"
       aria-checked={entry.checked}
       disabled={entry.disabled}
-      className={ROW}
+      className={EDIT_MENU_ROW}
       onClick={() => pick(entry.onSelect)}
     >
       <span className="truncate">{entry.label}</span>
@@ -231,7 +221,7 @@ function MenuList({
   );
 
   return (
-    <MenuSurface ref={surfaceRef} floating={false} className={cn(SURFACE, className)}>
+    <MenuSurface ref={surfaceRef} floating={false} className={cn(EDIT_MENU_SURFACE, className)}>
       <div
         ref={menuRef}
         role="menu"
@@ -243,18 +233,18 @@ function MenuList({
         onKeyDown={onKeyDown}
       >
         {entries.map((entry, i) => {
-          if (entry.kind === "divider") return <MenuDivider key={i} role="separator" className="my-1 border-neutral-800" />;
+          if (entry.kind === "divider") return <MenuDivider key={i} role="separator" className={EDIT_MENU_DIVIDER} />;
           if (entry.kind === "radio") return radio(entry, i);
           if (entry.kind === "group") {
             const note = entry.footer ? `${id}-${i}-note` : undefined;
             return (
               <div key={i} role="group" aria-label={entry.label} aria-describedby={note}>
-                <div aria-hidden="true" className={cn(MUTED, "pb-1 pt-1.5")}>
+                <div aria-hidden="true" className={cn(EDIT_MENU_MUTED, "pb-1 pt-1.5")}>
                   {entry.label}
                 </div>
                 {entry.entries.map((r, j) => radio(r, j))}
                 {entry.footer && (
-                  <div id={note} className={cn(MUTED, "pb-1.5 pt-1")}>
+                  <div id={note} className={cn(EDIT_MENU_MUTED, "pb-1.5 pt-1")}>
                     {entry.footer}
                   </div>
                 )}
@@ -298,7 +288,7 @@ function MenuList({
                   // "Loop: 2×", not the run-together "Loop2×" its two spans would make
                   aria-label={entry.value !== undefined ? `${entry.label}: ${entry.value}` : undefined}
                   disabled={entry.disabled}
-                  className={cn(ROW, open && "bg-white/6 text-neutral-100")}
+                  className={cn(EDIT_MENU_ROW, open && "bg-white/6 text-neutral-100")}
                   // Opens it and leaves it open: a hover has usually opened it already, and a click must not shut it
                   onClick={() => {
                     cancelClose();
@@ -340,14 +330,14 @@ function MenuList({
             );
           }
           return (
-            <MenuItem key={i} role="menuitem" disabled={entry.disabled} className={ROW} onClick={() => pick(entry.onSelect)}>
+            <MenuItem key={i} role="menuitem" disabled={entry.disabled} className={EDIT_MENU_ROW} onClick={() => pick(entry.onSelect)}>
               <span className="truncate">{entry.label}</span>
             </MenuItem>
           );
         })}
       </div>
       {footer && (
-        <div id={`${id}-footer`} className={cn(MUTED, "pb-1.5 pt-2")}>
+        <div id={`${id}-footer`} className={cn(EDIT_MENU_MUTED, "pb-1.5 pt-2")}>
           {footer}
         </div>
       )}

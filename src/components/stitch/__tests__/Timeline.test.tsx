@@ -18,6 +18,7 @@ import { openStitchEditor } from "../openStitchEditor";
 import { moveClipTo, removeSelection, setClipStart, setCrossfade, setOverlapSec } from "../editorActions";
 import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
+import { libraryDrop } from "../timeline/libraryDrop";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 vi.mock("@/utils/logger", () => ({
@@ -46,7 +47,7 @@ vi.stubGlobal("localStorage", {
 // nothing out (every rect is at 0), so lane x is the pointer's clientX.
 
 const PPS = 64;
-const ORIGIN = 16;
+const ORIGIN = 20;
 const wf = () => useWorkflowStore.getState();
 const editor = () => useStitchEditorStore.getState();
 const node = (id: string, type: string, data: Record<string, unknown>): WorkflowNode =>
@@ -106,6 +107,8 @@ const pressOnFocus = (key: string) =>
   act(() => {
     (document.activeElement ?? window).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   });
+/** A selected box's white ring, drawn over its frames (null when it is not selected). */
+const ring = (box: HTMLElement) => box.querySelector<HTMLElement>("[data-selected-ring]");
 /** A clip's hover mute button or muted badge (pointer shortcuts, out of the accessibility tree). */
 const soundButton = (name: string, label: string) => clipBox(name).querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const handleOf = (name: string, edge: "in" | "out") =>
@@ -151,21 +154,124 @@ afterEach(() => {
 });
 
 describe("Timeline", () => {
-  it("lays the clips out with their names, sources and lengths", () => {
+  it("lays the clips out as their frames alone, each named by its accessible name, its length on hover", () => {
     seed();
     openEditor();
     const first = clipBox("Clip 1");
-    expect(within(first).getByText("Clip 1")).toBeInTheDocument();
-    expect(within(first).getByText("Veo 3.1")).toBeInTheDocument();
-    expect(within(first).getByText("5.0 s")).toBeInTheDocument();
+    // No name or source drawn at rest: the box is its frames on the field ground, the length a hover chip
+    expect(within(first).queryByText("Clip 1")).toBeNull();
+    expect(within(first).queryByText("Veo 3.1")).toBeNull();
+    expect(first).toHaveClass("bg-edit-field", "rounded-md");
+    expect(within(first).getByText("5.0 s")).toHaveClass("opacity-0", "group-hover:opacity-100");
     expect(within(clipBox("Clip 2")).getByText("4.0 s")).toBeInTheDocument();
-    // 5 s at 64 px/s from the origin, the next one after the 4px gap
+    // 5 s at 64 px/s from the origin (20px into the lanes), the next one after the boards' 2px gap; 64px tall, 8px
+    // under the ruler
     expect(first.style.left).toBe(`${ORIGIN}px`);
-    expect(first.style.width).toBe(`${5 * PPS - 2}px`);
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 5 * PPS + 2}px`);
-    expect(screen.getByTestId("stitch-clip-count")).toHaveTextContent("2");
+    expect(first.style.width).toBe(`${5 * PPS - 1}px`);
+    expect(first.style.top).toBe("8px");
+    expect(first.style.height).toBe("64px");
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 5 * PPS + 1}px`);
+    // No track headers: the lanes are the timeline's only column
+    expect(screen.queryByTestId("stitch-clip-count")).toBeNull();
+    expect(screen.getByTestId("stitch-lanes").parentElement).toBe(screen.getByTestId("stitch-timeline"));
     // The ruler's labels (jsdom has no width, so only the overscan past the origin is drawn)
     expect(within(screen.getByTestId("stitch-ruler")).getByText("0:00")).toBeInTheDocument();
+  });
+
+  it("draws the ruler as the boards do: a tick by each label, one short mark between, a short tick where a label has no room", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(950);
+    seed();
+    openEditor();
+    const ruler = screen.getByTestId("stitch-ruler");
+    const marks = (kind: string) =>
+      [...ruler.querySelectorAll<HTMLElement>(`[data-ruler-mark="${kind}"]`)].map((el) => parseFloat(el.style.left));
+    const x = (t: number) => ORIGIN + t * PPS;
+    // 950px of lanes at 64 px/s: a label every 2 s up to 0:12; 0:14's would pass the lanes' end, so its tick is short
+    expect(marks("labelled")).toEqual([0, 2, 4, 6, 8, 10, 12].map(x));
+    expect(within(ruler).getAllByText(/^0:\d\d$/).map((el) => el.textContent)).toEqual([
+      "0:00",
+      "0:02",
+      "0:04",
+      "0:06",
+      "0:08",
+      "0:10",
+      "0:12",
+    ]);
+    expect(marks("major")).toEqual([x(14)]);
+    // One mark half-way between each two, and nothing else
+    expect(marks("minor")).toEqual([1, 3, 5, 7, 9, 11, 13].map(x));
+    expect(ruler.children).toHaveLength(7 + 1 + 7 + 7);
+    const tall = ruler.querySelector('[data-ruler-mark="labelled"]')!;
+    const short = ruler.querySelector('[data-ruler-mark="major"]')!;
+    const minor = ruler.querySelector('[data-ruler-mark="minor"]')!;
+    expect(tall).toHaveClass("top-2", "bg-edit-tick");
+    expect(short).toHaveClass("h-2", "bg-edit-tick");
+    expect(minor).toHaveClass("h-1.5", "bg-neutral-800");
+  });
+
+  it("ends the playhead's line at the strip under the audio rows, clear of \"+ Audio\"", () => {
+    seed();
+    openEditor();
+    act(() => editor().setPlayhead(1));
+    const line = screen.getByTestId("stitch-playhead-line");
+    expect(line.style.left).toBe(`${ORIGIN + PPS}px`);
+    expect(line.style.top).toBe("0px");
+    expect(line.style.bottom).toBe("28px");
+    // Stacked: in a box pinned to the bottom of the rows' view (189 − 1 − 52 − 28 + 104 = 212 tall), from its top
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    expect(screen.getAllByTestId("stitch-playhead-line")).toHaveLength(1);
+    const stacked = screen.getByTestId("stitch-playhead-line");
+    expect(stacked.parentElement).toHaveClass("sticky", "bottom-0", "h-0");
+    expect(stacked.style.top).toBe("-212px");
+    expect(stacked.style.bottom).toBe("28px");
+  });
+
+  it("covers the lanes under the side padding once they scroll sideways, and takes the presses there", () => {
+    seed();
+    openEditor();
+    const lanes = screen.getByTestId("stitch-lanes");
+    expect(screen.queryByTestId("stitch-gutter")).toBeNull();
+    click(clipBox("Clip 2"));
+    const selected = editor().selection;
+    lanes.scrollLeft = 100;
+    fireEvent.scroll(lanes);
+    const gutter = screen.getByTestId("stitch-gutter");
+    expect(gutter).toHaveClass("bg-pane", "z-5");
+    expect(gutter).not.toHaveClass("pointer-events-none");
+    expect(gutter.style.width).toBe(`${ORIGIN}px`);
+    // Drawn under the row controls and "+ Audio", which stay on top of it
+    for (const over of [screen.getByTestId("stitch-audio-controls").parentElement!, screen.getByTestId("stitch-timeline-foot")]) {
+      expect(gutter.compareDocumentPosition(over) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // A press on it reaches nothing under it: no selection box, the selection kept
+    fireEvent.pointerDown(gutter, { button: 0, clientX: 10, clientY: 40, pointerId: 1 });
+    pointer("pointermove", 300, { clientY: 60 });
+    expect(screen.queryByTestId("stitch-marquee")).toBeNull();
+    pointer("pointerup", 300, { clientY: 60 });
+    expect(editor().selection).toEqual(selected);
+    lanes.scrollLeft = 0;
+    fireEvent.scroll(lanes);
+    expect(screen.queryByTestId("stitch-gutter")).toBeNull();
+  });
+
+  it("draws a library drop's landing box as a dashed outline, never as a selected clip's ring", () => {
+    seed();
+    openEditor();
+    try {
+      act(() =>
+        libraryDrop.set(
+          { lane: "audio", startSec: 1, row: 0, newRow: false },
+          { assetId: "atone00000001", kind: "audio", durationSec: 2 },
+        ),
+      );
+      const ghost = screen.getByTestId("library-drop-marker");
+      expect(ghost).toHaveClass("border", "border-dashed", "border-white/40", "bg-white/6");
+      expect(ghost).not.toHaveClass("ring-2", "border-2", "border-neutral-100");
+      expect(ghost.style.left).toBe(`${ORIGIN + PPS}px`);
+      expect(ghost.style.width).toBe(`${2 * PPS}px`);
+    } finally {
+      act(() => libraryDrop.set(null));
+    }
   });
 
   it("selects a clip on a click, and the rail shows it", () => {
@@ -249,13 +355,13 @@ describe("Timeline", () => {
     // Nothing is applied until release, and the next clip holds its place behind the ghost
     expect(editor().past).toHaveLength(0);
     expect(editor().draft?.timeline[0].outSec).toBeNull();
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 5 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 5 * PPS + 1}px`);
 
     pointer("pointerup", edgeX - 51);
     expect(editor().past).toHaveLength(1);
     expect(editor().draft?.timeline[0].outSec).toBeCloseTo(5 - 51 / PPS, 3);
     // It closes up on release
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + (5 - 51 / PPS) * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + (5 - 51 / PPS) * PPS + 1}px`);
     expect(screen.queryByTestId("stitch-trim-popover")).toBeNull();
     const out = within(rail()).getByRole("textbox", { name: "Out" }) as HTMLInputElement;
     expect(out.value).toBe("0:04.20");
@@ -323,7 +429,7 @@ describe("Timeline", () => {
     expect(editor().draft?.timeline[0].inSec).toBeCloseTo(0.5, 6);
     expect(editor().past).toHaveLength(1);
     expect((within(rail()).getByRole("textbox", { name: "In" }) as HTMLInputElement).value).toBe("0:00.50");
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 4.5 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 4.5 * PPS + 1}px`);
   });
 
   it("pushes the clips after a lengthening edge live, with no ghost and no jump on release", () => {
@@ -335,21 +441,21 @@ describe("Timeline", () => {
     fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, clientX: outX, pointerId: 1 });
     pointer("pointermove", outX + PPS);
     expect(screen.queryByTestId("stitch-trim-ghost")).toBeNull();
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3 * PPS + 1}px`);
     pointer("pointerup", outX + PPS);
     expect(editor().draft?.timeline[0].outSec).toBeCloseTo(4, 6);
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3 * PPS + 1}px`);
 
     // A lengthening In keeps the clip's left (its start does not move) and pushes the rest
     fireEvent.pointerDown(handleOf("Clip 1", "in"), { button: 0, clientX: ORIGIN, pointerId: 1 });
     pointer("pointermove", ORIGIN - 32);
     expect(clipBox("Clip 1").style.left).toBe(`${ORIGIN}px`);
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3.5 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3.5 * PPS + 1}px`);
     expect(screen.queryByTestId("stitch-trim-ghost")).toBeNull();
     pointer("pointerup", ORIGIN - 32);
     expect(editor().draft?.timeline[0].inSec).toBeCloseTo(0.5, 6);
     expect(clipBox("Clip 1").style.left).toBe(`${ORIGIN}px`);
-    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3.5 * PPS + 2}px`);
+    expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 3.5 * PPS + 1}px`);
   });
 
   it("moves the add slot with a lengthening Out on the last clip, and leaves it after the ghost of a shortening one", () => {
@@ -359,18 +465,18 @@ describe("Timeline", () => {
     const slot = () => screen.getByTestId("stitch-add-slot");
     // Clip 2 runs 5–9 s of the sequence and ends its 4 s source
     const restEnd = ORIGIN + 9 * PPS;
-    expect(slot().style.left).toBe(`${restEnd + 8}px`);
+    expect(slot().style.left).toBe(`${restEnd + 6}px`);
     fireEvent.pointerDown(handleOf("Clip 2", "out"), { button: 0, clientX: restEnd, pointerId: 1 });
     pointer("pointermove", restEnd - PPS);
     expect(screen.getByTestId("stitch-trim-ghost")).toBeInTheDocument();
-    expect(slot().style.left).toBe(`${restEnd + 8}px`);
+    expect(slot().style.left).toBe(`${restEnd + 6}px`);
     pointer("pointerup", restEnd - PPS);
     expect(editor().draft?.timeline[1].outSec).toBeCloseTo(3, 6);
-    expect(slot().style.left).toBe(`${restEnd - PPS + 8}px`);
+    expect(slot().style.left).toBe(`${restEnd - PPS + 6}px`);
     // Lengthening it back pushes the slot along
     fireEvent.pointerDown(handleOf("Clip 2", "out"), { button: 0, clientX: restEnd - PPS, pointerId: 1 });
     pointer("pointermove", restEnd - PPS / 2);
-    expect(slot().style.left).toBe(`${restEnd - PPS / 2 + 8}px`);
+    expect(slot().style.left).toBe(`${restEnd - PPS / 2 + 6}px`);
     pointer("pointerup", restEnd - PPS / 2);
   });
 
@@ -626,7 +732,7 @@ describe("Timeline", () => {
     openEditor();
     const slot = clipBox("Clip 2");
     expect(slot).toHaveTextContent("Clip 2 · not generated yet");
-    expect(slot.style.width).toBe("158px");
+    expect(slot.style.width).toBe("159px");
   });
 
   it("says when a trim starts past the end of its source, and the slot can be selected and reset", () => {
@@ -660,7 +766,11 @@ describe("Timeline", () => {
     });
     openEditor();
     expect(screen.getByTestId("stitch-empty-lane")).toBeInTheDocument();
-    expect(within(screen.getByTestId("stitch-ruler")).queryByText("0:00")).toBeNull();
+    const ruler = screen.getByTestId("stitch-ruler");
+    expect(within(ruler).queryByText("0:00")).toBeNull();
+    // Only short marks where the labels would be: no tall tick without its label, no marks between
+    expect(ruler.querySelectorAll('[data-ruler-mark="major"]').length).toBeGreaterThan(0);
+    expect(ruler.querySelectorAll('[data-ruler-mark="labelled"], [data-ruler-mark="minor"]')).toHaveLength(0);
     expect(screen.queryByTestId("stitch-playhead-line")).toBeNull();
   });
 
@@ -750,9 +860,9 @@ describe("Timeline", () => {
     seed();
     render(<StitchEditorModal />);
     act(() => openStitchEditor("stitch"));
-    // Fit: (1258 − 16 − 76) / 9 s
-    const fitBefore = (1258 - 16 - 76) / 9;
-    const fitAfter = (1258 - 16 - 76) / 7;
+    // Fit: (1258 − 20 − 70) / 9 s (the origin; the add slot, its gap and the end margin)
+    const fitBefore = (1258 - 20 - 70) / 9;
+    const fitAfter = (1258 - 20 - 70) / 7;
     const out = within(rail()).getByRole("textbox", { name: "Out" }) as HTMLInputElement;
     act(() => out.focus());
     fireEvent.change(out, { target: { value: "0:03.00" } });
@@ -773,7 +883,7 @@ describe("Timeline", () => {
     const content = lanes.firstElementChild as HTMLElement;
     fireEvent.pointerDown(clipBox("Clip 2"), { button: 0, clientX: 450, pointerId: 1 });
     pointer("pointermove", 300);
-    const restX = ORIGIN + 5 * PPS + 2;
+    const restX = ORIGIN + 5 * PPS + 1;
     expect(clipBox("Clip 2").style.left).toBe(`${restX - 150}px`);
     // A wheel scrolls the lanes 100px under the still pointer
     vi.spyOn(content, "getBoundingClientRect").mockReturnValue({ left: -100, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: -100, y: 0, toJSON: () => ({}) });
@@ -790,10 +900,10 @@ describe("Timeline", () => {
     seed({ stitch: { timeline: [clipItem("eA"), clipItem("eB", { inSec: 1, outSec: 1.25 })], clipOrder: ["eA", "eB"] } });
     openEditor();
     expect(handleOf("Clip 1", "out").style.width).toBe("10px");
-    // 0.25 s at 64 px/s, less the 2px join inset: 14px wide
-    expect(clipBox("Clip 2").style.width).toBe("14px");
-    expect(parseFloat(handleOf("Clip 2", "in").style.width)).toBeCloseTo(14 / 3, 6);
-    expect(parseFloat(handleOf("Clip 2", "out").style.width)).toBeCloseTo(14 / 3, 6);
+    // 0.25 s at 64 px/s, less the 1px join inset: 15px wide
+    expect(clipBox("Clip 2").style.width).toBe("15px");
+    expect(parseFloat(handleOf("Clip 2", "in").style.width)).toBeCloseTo(15 / 3, 6);
+    expect(parseFloat(handleOf("Clip 2", "out").style.width)).toBeCloseTo(15 / 3, 6);
   });
 
   it("keeps focus in the lane when the focused clip is removed, and on the panel when none is left", () => {
@@ -808,13 +918,13 @@ describe("Timeline", () => {
     press("z", { metaKey: true });
     press("z", { metaKey: true, shiftKey: true });
     expect(document.activeElement).toBe(clipBox("Clip 1"));
-    // The add slot after the clip is the panel's last tab stop (the clips' mute buttons are out of the tab
+    // "+ Audio" under the audio rows is the panel's last tab stop (the clips' mute buttons are out of the tab
     // order): Tab from it wraps inside the dialog
-    const addSlot = screen.getByTestId("stitch-add-slot");
-    act(() => addSlot.focus());
-    fireEvent.keyDown(addSlot, { key: "Tab" });
+    const addAudio = screen.getByRole("button", { name: "Add audio" });
+    act(() => addAudio.focus());
+    fireEvent.keyDown(addAudio, { key: "Tab" });
     expect(dialog.contains(document.activeElement)).toBe(true);
-    expect(document.activeElement).not.toBe(addSlot);
+    expect(document.activeElement).not.toBe(addAudio);
     act(() => clipBox("Clip 1").focus());
     press("Backspace");
     expect(editor().draft?.timeline).toHaveLength(0);
@@ -928,14 +1038,16 @@ describe("Timeline, Stacked", () => {
   const clipBox = (name: string) => within(lane()).getByRole("option", { name: new RegExp(`^${name}(,|$)`) });
   const handleOf = (name: string, edge: "in" | "out") =>
     clipBox(name).querySelector<HTMLElement>(`[data-trim-handle="${edge}"]`)!;
-  const header = (id: string) => document.querySelector<HTMLElement>(`[data-row-header="${id}"]`)!;
+  /** A row's grip in the left padding: what the row header was (a drag up or down, a right press for the menu). */
+  const grip = (id: string) => document.querySelector<HTMLElement>(`[data-row-grip="${id}"]`)!;
   const at = (x: number, y: number) => ({ clientX: x, clientY: y });
   const move = (x: number, y: number, init: MouseEventInit = {}) => pointer("pointermove", x, { clientY: y, ...init });
   const release = (x: number, y: number) => pointer("pointerup", x, { clientY: y });
   const order = () => editor().draft!.timeline.map((c) => c.id);
   const starts = () => editor().draft!.timeline.map((c) => c.startSec);
   const timelineEl = () => screen.getByTestId("stitch-lanes").parentElement!;
-  const corner = () => screen.getByTestId("stitch-row-headers").parentElement!.previousElementSibling as HTMLElement;
+  /** The quiet line under the audio rows: "+ Audio", and Line up in Stacked. */
+  const foot = () => screen.getByTestId("stitch-timeline-foot");
   const shift = (type: "keydown" | "keyup") =>
     act(() => {
       window.dispatchEvent(new KeyboardEvent(type, { key: "Shift", shiftKey: type === "keydown", bubbles: true }));
@@ -982,28 +1094,31 @@ describe("Timeline, Stacked", () => {
       "aria-hidden",
       "true",
     );
-    // Not in the timeline: it is at the transport's right end
+    // Not in the timeline: it is in the control row under the video
     expect(timelineEl().contains(toggle())).toBe(false);
-    // Track keeps its Clips header, under an empty corner
-    const clipsHeader = screen.getByTestId("stitch-clip-count").parentElement!;
-    expect(clipsHeader.previousElementSibling!.childElementCount).toBe(0);
-    expect(screen.getByTestId("stitch-clip-count")).toHaveTextContent("2");
+    // Track: no headers; under the audio rows only "+ Audio", and the slot after the last clip adds videos
+    expect(within(foot()).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "Add audio",
+    ]);
+    expect(screen.getAllByRole("button", { name: "Add a clip from the library" })).toEqual([
+      screen.getByTestId("stitch-add-slot"),
+    ]);
     fireEvent.click(stacked);
     expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
     expect(within(toggle()).getByRole("button", { name: "Stacked" })).toHaveAttribute("aria-pressed", "true");
     expect(timelineEl().contains(toggle())).toBe(false);
-    expect(screen.queryByTestId("stitch-clip-count")).toBeNull();
-    // Stacked's corner holds Line up (off: nothing has been placed yet), then the + that adds from the library
-    const lineUp = within(corner()).getByRole("button", { name: "Line up" });
-    const add = within(corner()).getByRole("button", { name: "Add a clip from the library" });
-    expect(corner().childElementCount).toBe(2);
-    expect(corner().firstElementChild).toBe(lineUp);
-    expect(corner().lastElementChild).toBe(add);
+    // Stacked adds Line up after "+ Audio" (off: nothing has been placed yet); the slot in the last row still adds
+    const lineUp = within(foot()).getByRole("button", { name: "Line up" });
+    expect(within(foot()).getAllByRole("button")).toEqual([within(foot()).getByRole("button", { name: "Add audio" }), lineUp]);
     expect(lineUp).toBeDisabled();
+    expect(lineUp).toHaveAttribute("title", "The clips are lined up");
+    expect(screen.getAllByRole("button", { name: "Add a clip from the library" })).toEqual([
+      screen.getByTestId("stitch-add-slot"),
+    ]);
     expect(editor().past).toHaveLength(1);
   });
 
-  it("lays out one row per clip, each box at its own start, compact, with its row header", () => {
+  it("lays out one row per clip, each box at its own start, compact, with a grip per row", () => {
     seedClips([5, 5, 6]);
     openStacked();
     expect(lane()).toHaveAttribute("aria-orientation", "vertical");
@@ -1018,19 +1133,26 @@ describe("Timeline, Stacked", () => {
       expect(box.style.top).toBe(`${i * ROW + BOX_TOP}px`);
       expect(box.style.height).toBe("40px");
     });
-    // No label bar: the row header names the clip; the box keeps a length chip
+    // Frames only: no name or source, the length on hover
     expect(within(clipBox("Clip 1")).queryByText("Clip 1")).toBeNull();
     expect(within(clipBox("Clip 1")).queryByText("Model 1")).toBeNull();
-    expect(within(clipBox("Clip 1")).getByText("5.0 s")).toBeInTheDocument();
-    const headers = screen.getByTestId("stitch-row-headers");
-    expect(within(headers).getByText("Clip 2")).toBeInTheDocument();
-    expect(within(headers).getByText("Model 2")).toBeInTheDocument();
+    expect(within(clipBox("Clip 1")).getByText("5.0 s")).toHaveClass("opacity-0", "group-hover:opacity-100");
+    // A grip per row, level with its box, hidden until the row is hovered and out of the accessibility tree
+    const grips = screen.getByTestId("stitch-row-grips");
+    expect(Array.from(grips.children).map((el) => (el as HTMLElement).dataset.rowGrip)).toEqual([
+      "clip:e0",
+      "clip:e1",
+      "clip:e2",
+    ]);
+    expect(grip("clip:e1").style.top).toBe(`${ROW + BOX_TOP}px`);
+    expect(grip("clip:e1")).toHaveAttribute("aria-hidden", "true");
+    expect(grip("clip:e1")).toHaveClass("opacity-0");
     // The add slot after the last row's box, in that row
     const slot = screen.getByTestId("stitch-add-slot");
-    expect(slot.style.left).toBe(`${ORIGIN + 14 * PPS + 8}px`);
+    expect(slot.style.left).toBe(`${ORIGIN + 14 * PPS + 6}px`);
     expect(slot.style.top).toBe(`${2 * ROW + BOX_TOP}px`);
-    // 3 rows: 24 + 156 + 9, then one audio row and the strip (64 + 24)
-    expect(timelineEl().style.height).toBe("277px");
+    // 3 rows as they need: the edge, the ruler, 156, then one audio row and the strip (52 + 28)
+    expect(timelineEl().style.height).toBe(`${1 + 28 + 156 + 80}px`);
     expect(screen.getByTestId("stitch-lanes")).toHaveClass("overflow-y-hidden");
   });
 
@@ -1077,48 +1199,49 @@ describe("Timeline, Stacked", () => {
     expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:e1" });
   });
 
-  it("drags a clip by its row header down two rows in one undo step, drawn at the start it will have, with the line in both columns", () => {
+  it("drags a clip by its row's grip down two rows in one undo step, drawn at the start it will have, with the line", () => {
     seedClips([5, 5, 6]);
     openStacked();
     const before = editor().past.length;
-    fireEvent.pointerDown(header("clip:e0"), { button: 0, pointerId: 1, ...at(40, 26) });
-    move(40, 26 + 2 * ROW);
+    fireEvent.pointerDown(grip("clip:e0"), { button: 0, pointerId: 1, ...at(10, 26) });
+    move(10, 26 + 2 * ROW);
     // Lifted down two rows, at x of its start in the order B, C, A: 5 + 6 − 2 overlaps = 9 s
     const lifted = clipBox("Clip 1");
     expect(lifted.style.top).toBe(`${BOX_TOP + 2 * ROW}px`);
     expect(lifted.style.left).toBe(`${ORIGIN + 9 * PPS}px`);
-    // Below the last row, across the lanes and the headers
+    // A lifted box says which clip it is
+    expect(within(lifted).getByText("Clip 1")).toBeInTheDocument();
+    // Below the last row, across the lanes
     expect(screen.getByTestId("stitch-insertion-bar").style.top).toBe(`${3 * ROW - 1.5}px`);
-    expect(screen.getByTestId("stitch-header-insertion").style.top).toBe(`${3 * ROW - 1.5}px`);
-    release(40, 26 + 2 * ROW);
+    expect(screen.getByTestId("stitch-insertion-bar")).toHaveClass("bg-neutral-100");
+    release(10, 26 + 2 * ROW);
     expect(order()).toEqual(["clip:e1", "clip:e2", "clip:e0"]);
     // Lined up, it stays lined up: nothing is placed
     expect(starts()).toEqual([undefined, undefined, undefined]);
     expect(editor().past).toHaveLength(before + 1);
     expect(screen.queryByTestId("stitch-insertion-bar")).toBeNull();
-    expect(screen.queryByTestId("stitch-header-insertion")).toBeNull();
   });
 
-  it("drags a clip by its row header, and a click on the header selects it; in a placed stack the start stays", () => {
+  it("drags a clip by its row's grip, and a click on the grip selects it; in a placed stack the start stays", () => {
     seedClips([5, 5, 6]);
     openStacked();
-    fireEvent.pointerDown(header("clip:e1"), { button: 0, pointerId: 1, ...at(40, 78) });
-    release(40, 78);
+    fireEvent.pointerDown(grip("clip:e1"), { button: 0, pointerId: 1, ...at(10, 78) });
+    release(10, 78);
     expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:e1" });
     expect(order()).toEqual(["clip:e0", "clip:e1", "clip:e2"]);
-    fireEvent.pointerDown(header("clip:e2"), { button: 0, pointerId: 1, ...at(40, 130) });
-    move(40, 130 - 2 * ROW);
-    expect(screen.getByTestId("stitch-header-insertion").style.top).toBe("-1.5px");
-    release(40, 130 - 2 * ROW);
+    fireEvent.pointerDown(grip("clip:e2"), { button: 0, pointerId: 1, ...at(10, 130) });
+    move(10, 130 - 2 * ROW);
+    expect(screen.getByTestId("stitch-insertion-bar").style.top).toBe("-1.5px");
+    release(10, 130 - 2 * ROW);
     expect(order()).toEqual(["clip:e2", "clip:e0", "clip:e1"]);
 
     act(() => editor().undo());
     act(() => setClipStart("clip:e2", 9));
-    fireEvent.pointerDown(header("clip:e2"), { button: 0, pointerId: 1, ...at(40, 130) });
-    move(40, 130 - 2 * ROW);
+    fireEvent.pointerDown(grip("clip:e2"), { button: 0, pointerId: 1, ...at(10, 130) });
+    move(10, 130 - 2 * ROW);
     // Lifted at its own x: a placed stack keeps every start
     expect(clipBox("Clip 3").style.left).toBe(`${ORIGIN + 9 * PPS}px`);
-    release(40, 130 - 2 * ROW);
+    release(10, 130 - 2 * ROW);
     expect(order()).toEqual(["clip:e2", "clip:e0", "clip:e1"]);
     expect(starts()).toEqual([9, 0, 4]);
   });
@@ -1142,17 +1265,17 @@ describe("Timeline, Stacked", () => {
     expect(slot.style.width).toBe("160px");
     expect(slot.style.top).toBe(`${ROW + BOX_TOP}px`);
     expect(slot.style.left).toBe(`${ORIGIN + 5 * PPS}px`);
-    expect(within(screen.getByTestId("stitch-row-headers")).getByText("not generated yet")).toBeInTheDocument();
+    expect(within(slot).getByText("Clip 2 · not generated yet")).toBeInTheDocument();
     // The add slot comes after the empty slot, in its row
-    expect(screen.getByTestId("stitch-add-slot").style.left).toBe(`${ORIGIN + 5 * PPS + 160 + 8}px`);
+    expect(screen.getByTestId("stitch-add-slot").style.left).toBe(`${ORIGIN + 5 * PPS + 160 + 6}px`);
   });
 
-  it("caps the rows at three and a half and scrolls them under the ruler, the headers following", () => {
+  it("caps the rows at three and a half and scrolls them under the ruler, the grips following", () => {
     seedClips([5, 5, 6, 5, 5, 6]);
     const onRender = vi.fn();
     openStacked(onRender);
-    // 24 + 182 + 9 + 64 + 24
-    expect(timelineEl().style.height).toBe("303px");
+    // 1 + 28 + 182 + 52 + 28
+    expect(timelineEl().style.height).toBe("291px");
     const lanes = screen.getByTestId("stitch-lanes");
     expect(lanes).toHaveClass("overflow-y-auto");
     const optionsBefore = within(lane()).getAllByRole("option");
@@ -1161,9 +1284,9 @@ describe("Timeline, Stacked", () => {
     expect(onRender).toHaveBeenCalled();
     onRender.mockClear();
     fireEvent.scroll(lanes);
-    // Written straight to the header rows: nothing renders
+    // Written straight to the grips: nothing renders
     expect(onRender).not.toHaveBeenCalled();
-    expect(screen.getByTestId("stitch-row-headers").style.transform).toBe("translateY(-40px)");
+    expect(screen.getByTestId("stitch-row-grips").style.transform).toBe("translateY(-40px)");
     // The boxes stay where they were: the scroll is the scroller's own
     const optionsAfter = within(lane()).getAllByRole("option");
     expect(optionsAfter.every((el, i) => el === optionsBefore[i] && el.style.top === `${i * ROW + BOX_TOP}px`)).toBe(true);
@@ -1190,23 +1313,75 @@ describe("Timeline, Stacked", () => {
     expect(lanes.scrollTop).toBe(0);
   });
 
-  it("scrolls the rows with a wheel over their headers too", () => {
+  it("scrolls the rows with a wheel over their grips too", () => {
     seedClips([5, 5, 6, 5, 5, 6]);
     openStacked();
     const lanes = screen.getByTestId("stitch-lanes");
-    fireEvent.wheel(screen.getByTestId("stitch-row-headers"), { deltaY: 50 });
+    fireEvent.wheel(grip("clip:e1"), { deltaY: 50 });
     expect(lanes.scrollTop).toBe(50);
-    // The browser's scroll event (jsdom sends none) moves the headers with them
+    // The browser's scroll event (jsdom sends none) moves the grips with them
     fireEvent.scroll(lanes);
-    expect(screen.getByTestId("stitch-row-headers").style.transform).toBe("translateY(-50px)");
+    expect(screen.getByTestId("stitch-row-grips").style.transform).toBe("translateY(-50px)");
   });
 
-  it("opens the clip menu from a right press on a row header", () => {
+  it("shows a row's grip while the pointer is over the row, anywhere across the lanes", () => {
     seedClips([5, 5, 6]);
     openStacked();
-    const notCancelled = fireEvent.contextMenu(header("clip:e1"), { clientX: 40, clientY: 78 });
+    // The grips' layer starts under the ruler; jsdom lays nothing out, so it is given its place
+    const layer = screen.getByTestId("stitch-row-grips").parentElement!;
+    vi.spyOn(layer, "getBoundingClientRect").mockReturnValue(rect(0, 28, 20, 156));
+    const timeline = screen.getByTestId("stitch-timeline");
+    fireEvent.pointerMove(timeline, { clientX: 600, clientY: 28 + ROW + 10 });
+    expect(grip("clip:e1")).toHaveClass("opacity-100", "pointer-events-auto");
+    expect(grip("clip:e0")).toHaveClass("opacity-0");
+    fireEvent.pointerMove(timeline, { clientX: 600, clientY: 10 });
+    expect(grip("clip:e1")).toHaveClass("opacity-0");
+    fireEvent.pointerMove(timeline, { clientX: 600, clientY: 28 + 10 });
+    expect(grip("clip:e0")).toHaveClass("opacity-100");
+    // A held button (a drag) shows none
+    fireEvent.pointerMove(timeline, { clientX: 600, clientY: 28 + 10, buttons: 1 });
+    expect(grip("clip:e0")).toHaveClass("opacity-0");
+    fireEvent.pointerLeave(timeline);
+    expect(grip("clip:e0")).toHaveClass("opacity-0");
+  });
+
+  it("keeps a row's grip through a press on it, so a right press that drifts still opens its menu; a drag hides the grips", () => {
+    seedClips([5, 5, 6]);
+    openStacked();
+    const layer = screen.getByTestId("stitch-row-grips").parentElement!;
+    vi.spyOn(layer, "getBoundingClientRect").mockReturnValue(rect(0, 28, 20, 156));
+    const timeline = screen.getByTestId("stitch-timeline");
+    vi.spyOn(timeline, "getBoundingClientRect").mockReturnValue(rect(0, 0, 1000, 291));
+    const y = 28 + ROW + 20;
+    fireEvent.pointerMove(timeline, { clientX: 10, clientY: y });
+    expect(grip("clip:e1")).toHaveClass("opacity-100", "pointer-events-auto");
+    // A right press, the pointer drifting a pixel with the button held: the grip stays under it through the release
+    fireEvent.pointerDown(grip("clip:e1"), { button: 2, buttons: 2, clientX: 10, clientY: y, pointerId: 1 });
+    fireEvent.pointerMove(timeline, { clientX: 11, clientY: y + 1, buttons: 2 });
+    expect(grip("clip:e1")).toHaveClass("opacity-100", "pointer-events-auto");
+    pointer("pointerup", 11, { clientY: y + 1 });
+    expect(grip("clip:e1")).toHaveClass("opacity-100", "pointer-events-auto");
+    fireEvent.contextMenu(grip("clip:e1"), { clientX: 11, clientY: y + 1 });
+    expect(editor().menu).toMatchObject({ kind: "clip", clipId: "clip:e1" });
+    press("Escape");
+    expect(editor().menu).toBeNull();
+    // A left press that becomes a drag: the grip stays until the drag starts, then the grips give way to the clip
+    fireEvent.pointerDown(grip("clip:e1"), { button: 0, buttons: 1, clientX: 10, clientY: y, pointerId: 1 });
+    move(10, y + 1, { buttons: 1 });
+    expect(grip("clip:e1")).toHaveClass("opacity-100");
+    move(10, y + ROW, { buttons: 1 });
+    expect(grip("clip:e1")).toHaveClass("opacity-0");
+    press("Escape");
+    release(10, y + ROW);
+    expect(order()).toEqual(["clip:e0", "clip:e1", "clip:e2"]);
+  });
+
+  it("opens the clip menu from a right press on a row's grip", () => {
+    seedClips([5, 5, 6]);
+    openStacked();
+    const notCancelled = fireEvent.contextMenu(grip("clip:e1"), { clientX: 10, clientY: 78 });
     expect(notCancelled).toBe(false);
-    expect(editor().menu).toEqual({ kind: "clip", clipId: "clip:e1", x: 40, y: 78 });
+    expect(editor().menu).toEqual({ kind: "clip", clipId: "clip:e1", x: 10, y: 78 });
     expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:e1" });
   });
 
@@ -1222,7 +1397,7 @@ describe("Timeline, Stacked", () => {
     const ghost = screen.getByTestId("stitch-trim-ghost");
     expect(ghost.style.left).toBe(`${ORIGIN + 4 * PPS}px`);
     expect(ghost.style.width).toBe(`${PPS}px`);
-    expect(ghost).toHaveClass("rounded-l-media");
+    expect(ghost).toHaveClass("rounded-l-md");
     release(edgeX + PPS, 78);
     expect(editor().draft!.timeline[1].inSec).toBeCloseTo(1, 6);
     expect(starts()).toEqual([0, 5, 8]);
@@ -1268,11 +1443,11 @@ describe("Timeline, Stacked", () => {
     seedClips([5, 5, 6, 5, 5, 6]);
     openStacked();
     const lanes = screen.getByTestId("stitch-lanes");
-    // Starts 0, 4, 8, 13, 17, 21: at 25 s only clip 6 plays. Its row (260–312) under a 190px viewport
+    // Starts 0, 4, 8, 13, 17, 21: at 25 s only clip 6 plays. Its row (260–312) under a 182px viewport
     act(() => editor().setPlayhead(25));
     expect(lanes.scrollTop).toBe(0);
     act(() => editor().setPlaying(true));
-    expect(lanes.scrollTop).toBe(5 * ROW + ROW - 190);
+    expect(lanes.scrollTop).toBe(5 * ROW + ROW - 182);
     act(() => editor().setPlaying(false));
   });
 
@@ -1286,8 +1461,8 @@ describe("Timeline, Stacked", () => {
     act(() => editor().undo());
     expect(order()[5]).toBe("clip:e5");
     expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:e5" });
-    // Row 6 (260–312) under the 190px viewport
-    expect(lanes.scrollTop).toBe(6 * ROW - 190);
+    // Row 6 (260–312) under the 182px viewport
+    expect(lanes.scrollTop).toBe(6 * ROW - 182);
   });
 
   it("fits an empty clip's slot that reaches past the sequence's end", () => {
@@ -1313,7 +1488,7 @@ describe("Timeline, Stacked", () => {
     const lanes = screen.getByTestId("stitch-lanes");
     click(clipBox("Clip 1"));
     fireEvent.keyDown(clipBox("Clip 1"), { key: "End" });
-    expect(lanes.scrollTop).toBe(6 * ROW - 190);
+    expect(lanes.scrollTop).toBe(6 * ROW - 182);
     fireEvent.keyDown(clipBox("Clip 6"), { key: "Home" });
     expect(lanes.scrollTop).toBe(0);
   });
@@ -1336,12 +1511,12 @@ describe("Timeline, Stacked", () => {
       const drawn = clipBox("Clip 2");
       expect(drawn.style.left).toBe(`${ORIGIN + 5.5 * PPS}px`);
       expect(drawn.style.top).toBe(`${ROW + BOX_TOP}px`);
-      expect(drawn).toHaveClass("ring-selection", "cursor-grabbing");
+      expect(drawn).toHaveClass("ring-neutral-100", "cursor-grabbing");
       // The others are snap targets: not dimmed
       expect(clipBox("Clip 1")).not.toHaveClass("opacity-40");
       expect(screen.getByTestId("stitch-move-chip")).toHaveTextContent("0:05.50–0:09.50 · +1.50 s");
       // The move chip sits 10px into the moving box, right of it
-      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${24 + ROW + BOX_TOP + 10}px`);
+      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${28 + ROW + BOX_TOP + 10}px`);
       expect(screen.getByTestId("stitch-move-chip").style.left).toBe(`${ORIGIN + 5.5 * PPS + 4 * PPS + 12}px`);
       expect(screen.queryByTestId("stitch-snap-chip")).toBeNull();
       expect(screen.queryByTestId("stitch-insertion-bar")).toBeNull();
@@ -1433,9 +1608,11 @@ describe("Timeline, Stacked", () => {
       // The guide at the snapped time, down to the lower of the two boxes; the chip 9px right, 12px under the box
       const guide = chip.previousElementSibling as HTMLElement;
       expect(guide.style.left).toBe(`${ORIGIN + 5 * PPS}px`);
-      expect(guide.style.height).toBe(`${24 + 2 * ROW + BOX_TOP + 40 - 13 + 1}px`);
+      // From the foot of the playhead's 12px head, as its line would run
+      expect(guide.style.top).toBe("12px");
+      expect(guide.style.height).toBe(`${28 + 2 * ROW + BOX_TOP + 40 - 12 + 1}px`);
       expect(chip.style.left).toBe(`${ORIGIN + 5 * PPS + 9}px`);
-      expect(chip.style.top).toBe(`${24 + 2 * ROW + BOX_TOP + 40 + 12}px`);
+      expect(chip.style.top).toBe(`${28 + 2 * ROW + BOX_TOP + 40 + 12}px`);
       shift("keydown");
       expect(clipBox("Clip 3").style.left).toBe(`${ORIGIN + 5.05 * PPS}px`);
       expect(screen.queryByTestId("stitch-snap-chip")).toBeNull();
@@ -1497,7 +1674,7 @@ describe("Timeline, Stacked", () => {
       expect(starts()).toEqual([undefined, undefined, undefined]);
     });
 
-    it("moves a clip down two rows and 1 s later in one undo step, the line in both columns", () => {
+    it("moves a clip down two rows and 1 s later in one undo step, the line across the rows", () => {
       seedClips([5, 5, 6]);
       openStacked();
       const before = editor().past.length;
@@ -1507,8 +1684,7 @@ describe("Timeline, Stacked", () => {
       expect(clipBox("Clip 1").style.top).toBe(`${BOX_TOP + 2 * ROW}px`);
       expect(clipBox("Clip 1").style.left).toBe(`${ORIGIN + PPS}px`);
       expect(screen.getByTestId("stitch-insertion-bar").style.top).toBe(`${3 * ROW - 1.5}px`);
-      expect(screen.getByTestId("stitch-header-insertion").style.top).toBe(`${3 * ROW - 1.5}px`);
-      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${24 + BOX_TOP + 2 * ROW + 10}px`);
+      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${28 + BOX_TOP + 2 * ROW + 10}px`);
       release(100 + PPS, 26 + 2 * ROW);
       expect(order()).toEqual(["clip:e1", "clip:e2", "clip:e0"]);
       expect(starts()).toEqual([4, 8, 1]);
@@ -1525,7 +1701,7 @@ describe("Timeline, Stacked", () => {
       fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 26) });
       move(100, 26 + 400);
       expect(clipBox("Clip 1").style.top).toBe(`${2 * ROW + BOX_TOP}px`);
-      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${24 + 2 * ROW + BOX_TOP + 10}px`);
+      expect(screen.getByTestId("stitch-move-chip").style.top).toBe(`${28 + 2 * ROW + BOX_TOP + 10}px`);
       move(100, 26 - 400);
       expect(clipBox("Clip 1").style.top).toBe(`${BOX_TOP}px`);
       move(100, 26 + 400);
@@ -1557,10 +1733,9 @@ describe("Timeline, Stacked", () => {
       move(603, 130 - 40);
       expect(screen.getByTestId("stitch-snap-chip")).toHaveTextContent("Snapped to where it was");
       expect(screen.getByTestId("stitch-insertion-bar").style.top).toBe(`${ROW - 1.5}px`);
-      expect(screen.getByTestId("stitch-header-insertion").style.top).toBe(`${ROW - 1.5}px`);
       release(603, 130 - 40);
       expect(order()).toEqual(["clip:e0", "clip:e2", "clip:e1"]);
-      // Pinned where each was: the header would have re-sequenced them
+      // Pinned where each was: the grip would have re-sequenced them
       expect(starts()).toEqual([0, 8, 4]);
     });
 
@@ -1586,7 +1761,7 @@ describe("Timeline, Stacked", () => {
       openStacked();
       const lanes = screen.getByTestId("stitch-lanes");
       fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 26) });
-      // The visible rows end at 24 + 190: 10px from there
+      // The visible rows end at 28 + 182 = 210: 6px from there
       move(100, 204);
       next();
       expect(lanes.scrollTop).toBe(6);
@@ -1624,7 +1799,7 @@ describe("Timeline, Stacked", () => {
       seedClips([5, 5, 6, 5, 5, 6]);
       openStacked();
       const lanes = screen.getByTestId("stitch-lanes");
-      // Clip 4 (row 3, 13 s) shows down to the rows' bottom at 214: pressed 10px above it, then dragged sideways only
+      // Clip 4 (row 3, 13 s) shows down to the rows' bottom at 210: pressed 6px above it, then dragged sideways only
       fireEvent.pointerDown(clipBox("Clip 4"), { button: 0, pointerId: 1, ...at(900, 204) });
       move(940, 204);
       next();
@@ -1635,12 +1810,12 @@ describe("Timeline, Stacked", () => {
       expect(order()).toEqual(["clip:e0", "clip:e1", "clip:e2", "clip:e3", "clip:e4", "clip:e5"]);
       expect(starts()[3]).toBeCloseTo(13 + 40 / PPS, 9);
       // Selected, its row is shown whole, as a click shows it
-      expect(lanes.scrollTop).toBe(4 * ROW - 190);
+      expect(lanes.scrollTop).toBe(4 * ROW - 182);
       // Heading down toward the edge, the rows scroll
       fireEvent.pointerDown(clipBox("Clip 4"), { button: 0, pointerId: 1, ...at(940, 204) });
       move(940, 210);
       next();
-      expect(lanes.scrollTop).toBe(4 * ROW - 190 + 6);
+      expect(lanes.scrollTop).toBe(4 * ROW - 182 + 6);
       press("Escape");
       release(940, 210);
     });
@@ -1718,14 +1893,14 @@ describe("Timeline, Stacked", () => {
       const lanes = screen.getByTestId("stitch-lanes");
       const content = lanes.firstElementChild as HTMLElement;
       vi.spyOn(lanes, "getBoundingClientRect").mockReturnValue(rect(0, 0, 600, 200));
-      // At rest: B ends at 8 s (x 528), then the add slot's 76px
-      expect(content.style.width).toBe("604px");
+      // At rest: B ends at 8 s (x 532), then the add slot's 70px (its gap, itself and the end margin)
+      expect(content.style.width).toBe("602px");
       fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 26) });
       move(590, 30);
       next();
       expect(lanes.scrollLeft).toBe(6);
-      // The box at 16 + 490 = 506 and 5 s long ends at 826: the lanes reach past it by the add slot's room
-      expect(content.style.width).toBe(`${ORIGIN + 490 + 5 * PPS + 76}px`);
+      // The box at 20 + 490 = 510 and 5 s long ends at 830: the lanes reach past it by the add slot's room
+      expect(content.style.width).toBe(`${ORIGIN + 490 + 5 * PPS + 70}px`);
       press("Escape");
       release(590, 30);
     });
@@ -1777,12 +1952,12 @@ describe("Timeline, Stacked", () => {
       release(100, 26 + ROW);
       expect(order()[1]).toBe("clip:e0");
       expect(lanes.scrollTop).toBe(0);
-      // Row 4 (156–208) shows 34px of 52 in the 190px viewport
+      // Row 4 (156–208) shows 26px of 52 in the 182px viewport
       fireEvent.pointerDown(clipBox("Clip 1"), { button: 0, pointerId: 1, ...at(100, 26) });
       move(100, 26 + 3 * ROW);
       release(100, 26 + 3 * ROW);
       expect(order()[3]).toBe("clip:e1");
-      expect(lanes.scrollTop).toBe(4 * ROW - 190);
+      expect(lanes.scrollTop).toBe(4 * ROW - 182);
     });
 
     it("keeps the Fit zoom when an empty clip's slot moves, so it lands where it was drawn", () => {
@@ -1816,7 +1991,7 @@ describe("Timeline, Stacked", () => {
       const before = editor().past.length;
       fireEvent.pointerDown(clipBox("Clip 2"), { button: 0, pointerId: 1, ...at(400, 78) });
       move(400 + PPS, 78);
-      expect(clipBox("Clip 2")).toHaveClass("ring-selection", "cursor-grabbing");
+      expect(clipBox("Clip 2")).toHaveClass("ring-neutral-100", "cursor-grabbing");
       expect(clipBox("Clip 2").style.left).toBe(`${ORIGIN + 6 * PPS}px`);
       expect(screen.getByTestId("stitch-move-chip")).toHaveTextContent("0:06.00 · +1.00 s");
       release(400 + PPS, 78);
@@ -1853,7 +2028,7 @@ describe("Timeline, Stacked", () => {
       expect(close(marksOf("Clip 3"))).toEqual(want(expected3));
     });
 
-    it("draws a row change's layering before release, the covering clip named as the headers name it", () => {
+    it("draws a row change's layering before release, the covering clip named by its row at the press", () => {
       // Clip 4 wholly under Clip 3, which is the higher row
       seedPlaced([5, 4.2, 6, 3.2], [0, 6, 9.2, 11]);
       openEditor();
@@ -1900,7 +2075,7 @@ describe("Timeline, Stacked", () => {
       expect(strip.style.left).toBe(band.style.left);
       expect(strip.style.width).toBe(band.style.width);
       // Line up is on once a clip has been placed
-      expect(within(corner()).getByRole("button", { name: "Line up" })).toBeEnabled();
+      expect(within(foot()).getByRole("button", { name: "Line up" })).toBeEnabled();
     });
 
     it("leaves a gap its label would spill out of unlabelled", () => {
@@ -1962,11 +2137,11 @@ describe("Timeline, Stacked", () => {
       expect(marksOf("Clip 1")).toEqual([]);
     });
 
-    it("draws a header drag's hidden bands before release, the lifted box at its own x", () => {
+    it("draws a grip drag's hidden bands before release, the lifted box at its own x", () => {
       seedPlaced([5, 4.2, 6, 3.2], [0, 6, 9.2, 11], { crossfade: false });
       openEditor();
-      fireEvent.pointerDown(header("clip:e3"), { button: 0, pointerId: 1, ...at(40, 182) });
-      move(40, 182 - ROW);
+      fireEvent.pointerDown(grip("clip:e3"), { button: 0, pointerId: 1, ...at(10, 182) });
+      move(10, 182 - ROW);
       expect(clipBox("Clip 4").style.left).toBe(`${ORIGIN + 11 * PPS}px`);
       // Clip 3 is under Clip 2 over [9.2, 10.2) and would be under Clip 4 over [11.0, 14.2)
       const round = (marks: ReturnType<typeof marksOf>) =>
@@ -1976,7 +2151,7 @@ describe("Timeline, Stacked", () => {
         { kind: "stitch-hidden", left: 115.2, width: 204.8, title: "Hidden under Clip 4. Its sound plays." },
       ]);
       expect(marksOf("Clip 4")).toEqual([]);
-      release(40, 182 - ROW);
+      release(10, 182 - ROW);
       expect(starts()).toEqual([0, 6, 11, 9.2]);
       expect(round(marksOf("Clip 4"))[1]).toEqual({
         kind: "stitch-hidden",
@@ -1988,8 +2163,8 @@ describe("Timeline, Stacked", () => {
       // With the crossfade on, the same drag back shows the hidden band of an inside clip in front
       act(() => editor().undo());
       act(() => setCrossfade(true));
-      fireEvent.pointerDown(header("clip:e3"), { button: 0, pointerId: 1, ...at(40, 182) });
-      move(40, 182 - ROW);
+      fireEvent.pointerDown(grip("clip:e3"), { button: 0, pointerId: 1, ...at(10, 182) });
+      move(10, 182 - ROW);
       expect(round(marksOf("Clip 3"))).toContainEqual({
         kind: "stitch-hidden",
         left: 230.4,
@@ -1997,21 +2172,21 @@ describe("Timeline, Stacked", () => {
         title: "Hidden under Clip 4.",
       });
       press("Escape");
-      release(40, 182 - ROW);
+      release(10, 182 - ROW);
     });
 
     it("puts the add slot after the latest end, in the last row", () => {
       seedPlaced([5, 4], [6, 0]);
       openEditor();
       const slot = screen.getByTestId("stitch-add-slot");
-      expect(slot.style.left).toBe(`${ORIGIN + 11 * PPS + 8}px`);
+      expect(slot.style.left).toBe(`${ORIGIN + 11 * PPS + 6}px`);
       expect(slot.style.top).toBe(`${ROW + BOX_TOP}px`);
     });
 
-    it("lines the clips up from the corner in one step, and says when they are", () => {
+    it("lines the clips up from the line under the rows in one step, and says when they are", () => {
       seedPlaced([5, 4], [0, 6]);
       openEditor();
-      const lineUp = within(corner()).getByRole("button", { name: "Line up" });
+      const lineUp = within(foot()).getByRole("button", { name: "Line up" });
       expect(lineUp).toHaveAttribute("title", "Line up: each clip starts 1.0 s before the one above ends");
       fireEvent.click(lineUp);
       expect(starts()).toEqual([undefined, undefined]);
@@ -2022,13 +2197,13 @@ describe("Timeline, Stacked", () => {
       act(() => editor().undo());
       expect(starts()).toEqual([0, 6]);
       act(() => setOverlapSec(0));
-      expect(within(corner()).getByRole("button", { name: "Line up" })).toHaveAttribute(
+      expect(within(foot()).getByRole("button", { name: "Line up" })).toHaveAttribute(
         "title",
         "Line up: each clip starts where the one above ends",
       );
     });
 
-    it("offers the placing items in the clip menu in Stacked only, with their icons and when they cannot act", () => {
+    it("offers the placing items in the clip menu in Stacked only, on the edit menus' skin, and when they cannot act", () => {
       seed();
       openEditor();
       fireEvent.contextMenu(clipBox("Clip 1"), { clientX: 100, clientY: 60 });
@@ -2039,15 +2214,18 @@ describe("Timeline, Stacked", () => {
       fireEvent.contextMenu(clipBox("Clip 1"), { clientX: 100, clientY: 60 });
       const item = (name: RegExp) => screen.getByRole("menuitem", { name });
       expect(item(/Start at playhead/)).toBeEnabled();
-      expect(item(/Start at playhead/).querySelector(".lucide-align-start-vertical")).not.toBeNull();
       expect(item(/End at playhead/)).toBeDisabled();
       expect(item(/End at playhead/)).toHaveAttribute("title", "The clip is longer than the time before the playhead");
-      expect(item(/End at playhead/).querySelector(".lucide-align-end-vertical")).not.toBeNull();
       expect(item(/Move up a row/)).toBeDisabled();
-      expect(item(/Move up a row/).querySelector(".lucide-arrow-up")).not.toBeNull();
       expect(item(/Move down a row/)).toBeEnabled();
       expect(item(/Move down a row/)).not.toHaveAttribute("title");
-      expect(item(/Move down a row/).querySelector(".lucide-arrow-down")).not.toBeNull();
+      // The headers' ⋯ skin: 32px rows in 13px type, no icons, no red, 220px on neutral-900 with 10px corners
+      for (const row of screen.getAllByRole("menuitem")) {
+        expect(row).toHaveClass("h-8", "text-[13px]");
+        expect(row.querySelector("svg")).toBeNull();
+        expect(row.className).not.toMatch(/text-red/);
+      }
+      expect(screen.getByRole("menu")).toHaveClass("w-[220px]", "rounded-[10px]", "bg-neutral-900");
       // In the menu's order, under Split
       const labels = screen.getAllByRole("menuitem").map((el) => el.textContent);
       expect(labels.slice(1, 6)).toEqual([
@@ -2109,17 +2287,17 @@ describe("Timeline, Stacked", () => {
       expect(clipBox("Clip 2").style.left).toBe(drawn);
     });
 
-    it("leaves the lanes where they are when a row-header drag of the selected clip re-sequences it out of view", () => {
+    it("leaves the lanes where they are when a grip drag of the selected clip re-sequences it out of view", () => {
       vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(300);
       seedClips([5, 5, 6]);
       openStacked();
       const lanes = screen.getByTestId("stitch-lanes");
       act(() => editor().select({ kind: "clip", clipId: "clip:e0" }));
-      fireEvent.pointerDown(header("clip:e0"), { button: 0, pointerId: 1, ...at(40, 26) });
-      move(40, 26 + 2 * ROW);
+      fireEvent.pointerDown(grip("clip:e0"), { button: 0, pointerId: 1, ...at(10, 26) });
+      move(10, 26 + 2 * ROW);
       const drawn = clipBox("Clip 1").style.left;
       expect(parseFloat(drawn)).toBeGreaterThan(300);
-      release(40, 26 + 2 * ROW);
+      release(10, 26 + 2 * ROW);
       expect(order()).toEqual(["clip:e1", "clip:e2", "clip:e0"]);
       expect(lanes.scrollLeft).toBe(0);
       // Its row is the third now, and so is its name
@@ -2254,7 +2432,10 @@ describe("Timeline, several clips", () => {
   const starts = () => editor().draft!.timeline.map((c) => c.startSec);
   const platform = (value: string) => vi.spyOn(navigator, "platform", "get").mockReturnValue(value);
   const stackedBox = (name: string) => within(lane()).getByRole("option", { name: new RegExp(`^${name},`) });
-  const header = (clipId: string) => document.querySelector<HTMLElement>(`[data-row-header="${clipId}"]`)!;
+  /** A Stacked row's grip in the left padding. */
+  const grip = (clipId: string) => document.querySelector<HTMLElement>(`[data-row-grip="${clipId}"]`)!;
+  /** A Stacked row's band in the lanes, tinted while its clip is selected. */
+  const rowBand = (clipId: string) => document.querySelector<HTMLElement>(`[data-stacked-row="${clipId}"]`)!;
   const at = (x: number, y: number) => ({ clientX: x, clientY: y });
   const move = (x: number, y: number, init: MouseEventInit = {}) => pointer("pointermove", x, { clientY: y, ...init });
   const release = (x: number, y: number, init: MouseEventInit = {}) => pointer("pointerup", x, { clientY: y, ...init });
@@ -2270,7 +2451,7 @@ describe("Timeline, several clips", () => {
     pointer("pointerup", clientX, { ctrlKey: true, ...init });
   };
 
-  // Track at 64 px/s, lengths 5, 4 and 6: Clip 1 16–336, Clip 2 336–592, Clip 3 592–976 (2px inset at each join)
+  // Track at 64 px/s, lengths 5, 4 and 6: Clip 1 20–340, Clip 2 340–596, Clip 3 596–980 (2px inset at each join)
 
   describe("selecting", () => {
     it("adds and takes out a clip with ⌘-click on a Mac, and with Ctrl-click elsewhere", () => {
@@ -2299,18 +2480,18 @@ describe("Timeline, several clips", () => {
       expect(editor().selection).toEqual({ kind: "clip", clipId: id(2), clipIds: [id(0), id(1), id(2)], anchorId: id(0) });
       expect(within(rail()).getByText("3 clips")).toBeInTheDocument();
       expect(within(rail()).getByText("Clip 1, Clip 2 and Clip 3")).toBeInTheDocument();
-      // Every selected box is ringed; the lane says it takes several
+      // Every selected box is ringed in white; the lane says it takes several
       expect(lane()).toHaveAttribute("aria-multiselectable", "true");
       for (const name of ["Clip 1", "Clip 2", "Clip 3"]) {
-        expect(clipBox(name)).toHaveClass("ring-selection");
+        expect(ring(clipBox(name))).toHaveClass("border-2", "border-neutral-100");
         expect(clipBox(name)).toHaveAttribute("aria-selected", "true");
       }
       click(clipBox("Clip 2"), 400);
       expect(editor().selection).toEqual({ kind: "clip", clipId: id(1) });
-      expect(clipBox("Clip 1")).not.toHaveClass("ring-selection");
+      expect(ring(clipBox("Clip 1"))).toBeNull();
     });
 
-    it("selects a range by row in Stacked, tinting every selected row and header", () => {
+    it("selects a range by row in Stacked, tinting every selected row", () => {
       seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
       openEditor();
       fireEvent.pointerDown(stackedBox("Clip 4"), { button: 0, pointerId: 1, ...at(750, 190) });
@@ -2318,10 +2499,10 @@ describe("Timeline, several clips", () => {
       fireEvent.pointerDown(stackedBox("Clip 2"), { button: 0, pointerId: 1, shiftKey: true, ...at(420, 90) });
       release(420, 90, { shiftKey: true });
       expect(editor().selection).toEqual({ kind: "clip", clipId: id(1), clipIds: [id(1), id(2), id(3)], anchorId: id(3) });
-      expect(header(id(0))).not.toHaveClass("bg-white/4");
+      expect(rowBand(id(0))).not.toHaveClass("bg-white/4");
       for (const i of [1, 2, 3]) {
-        expect(header(id(i))).toHaveClass("bg-white/4");
-        expect(stackedBox(`Clip ${i + 1}`)).toHaveClass("ring-selection");
+        expect(rowBand(id(i))).toHaveClass("bg-white/4");
+        expect(ring(stackedBox(`Clip ${i + 1}`))).not.toBeNull();
       }
     });
 
@@ -2402,7 +2583,8 @@ describe("Timeline, several clips", () => {
       pointer("pointermove", 628);
       pointer("pointerup", 628);
       expect(editor().past).toHaveLength(1);
-      expect(handleOf("Clip 3", "in")).toHaveClass("bg-selection");
+      // Selected alone now: its handles show white on hover
+      expect(handleOf("Clip 3", "in")).toHaveClass("bg-neutral-100", "opacity-0", "group-hover:opacity-100");
     });
 
     it("lets a ⌘-press on a box's hover mute button select, and leaves the clip's sound alone", () => {
@@ -2458,12 +2640,14 @@ describe("Timeline, several clips", () => {
       const box = screen.getByTestId("stitch-marquee");
       expect(box.style.left).toBe("400px");
       expect(box.style.width).toBe("300px");
-      // A level drag still draws over the whole clips row (ruler 24, row 92): Track selects by x alone
-      expect(box.style.top).toBe("24px");
-      expect(box.style.height).toBe("92px");
+      // A level drag still draws over the whole clips row (ruler 28, row 80): Track selects by x alone
+      expect(box.style.top).toBe("28px");
+      expect(box.style.height).toBe("80px");
+      // Neutral: a faint white fill in a white/40 edge
+      expect(box).toHaveClass("border-white/40", "bg-white/8");
       // Drawn selected while it runs, with the group look release gives (handles on hover only); the store is untouched
-      expect(clipBox("Clip 2")).toHaveClass("ring-selection");
-      expect(clipBox("Clip 1")).not.toHaveClass("ring-selection");
+      expect(ring(clipBox("Clip 2"))).not.toBeNull();
+      expect(ring(clipBox("Clip 1"))).toBeNull();
       expect(handleOf("Clip 2", "in")).toHaveClass("opacity-0");
       expect(handleOf("Clip 3", "out")).toHaveClass("opacity-0");
       expect(select).not.toHaveBeenCalled();
@@ -2504,13 +2688,13 @@ describe("Timeline, several clips", () => {
       openEditor();
       const lanes = screen.getByTestId("stitch-lanes");
       selectClips(2);
-      // Clip 1 is drawn to 334, Clip 2 from 338
-      fireEvent.pointerDown(lane(), { button: 0, clientX: 335, clientY: 26, pointerId: 1 });
-      fireEvent.wheel(lanes, { ctrlKey: true, deltaY: -100, clientX: 335 });
+      // Clip 1 is drawn to 339, Clip 2 from 341
+      fireEvent.pointerDown(lane(), { button: 0, clientX: 340, clientY: 26, pointerId: 1 });
+      fireEvent.wheel(lanes, { ctrlKey: true, deltaY: -100, clientX: 340 });
       expect(editor().pxPerSec).toBe(PPS);
-      pointer("pointermove", 337, { clientY: 110 });
+      pointer("pointermove", 340, { clientY: 110 });
       expect(screen.getByTestId("stitch-marquee")).toBeInTheDocument();
-      pointer("pointerup", 337, { clientY: 110 });
+      pointer("pointerup", 340, { clientY: 110 });
       expect(editor().selection).toBeNull();
     });
 
@@ -2519,9 +2703,9 @@ describe("Timeline, several clips", () => {
       seedLengths([5, 4, 6, 3, 5, 4], [0, 6, 9, 11, 2, 14]);
       openEditor();
       // From 12 s on the first row to 8 s on the third: Clip 2 (6–10 s) and Clip 3 (9–15 s); Clip 1 ends at 5 s
-      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(16 + 12 * PPS, 24 + 26) });
-      pointer("pointermove", 16 + 8 * PPS, { clientY: 24 + 2 * ROW + 26 });
-      pointer("pointerup", 16 + 8 * PPS, { clientY: 24 + 2 * ROW + 26 });
+      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(ORIGIN + 12 * PPS, 28 + 26) });
+      pointer("pointermove", ORIGIN + 8 * PPS, { clientY: 28 + 2 * ROW + 26 });
+      pointer("pointerup", ORIGIN + 8 * PPS, { clientY: 28 + 2 * ROW + 26 });
       expect(ids()).toEqual([id(1), id(2)]);
 
       // The rows scrolled 100px down: the rectangle takes in the second row, out of view above, but is drawn from the
@@ -2529,12 +2713,12 @@ describe("Timeline, several clips", () => {
       selectClips(5);
       const content = screen.getByTestId("stitch-rows").parentElement!;
       vi.spyOn(content, "getBoundingClientRect").mockReturnValue(rect(0, -100, 2000, 600));
-      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(16 + 9.5 * PPS, 150) });
-      pointer("pointermove", 16 + 8 * PPS, { clientY: 10 });
+      fireEvent.pointerDown(lane(), { button: 0, pointerId: 1, ...at(ORIGIN + 9.5 * PPS, 150) });
+      pointer("pointermove", ORIGIN + 8 * PPS, { clientY: 10 });
       const box = screen.getByTestId("stitch-marquee");
-      expect(parseFloat(box.style.top)).toBe(100 + 24);
-      pointer("pointerup", 16 + 8 * PPS, { clientY: 10 });
-      // Content y 110–250 over 8–9.5 s: Clip 2's box (82–122, wholly scrolled away) and Clip 3's (134–174)
+      expect(parseFloat(box.style.top)).toBe(100 + 28);
+      pointer("pointerup", ORIGIN + 8 * PPS, { clientY: 10 });
+      // Content y 110–250 over 8–9.5 s: Clip 2's box (86–126, mostly scrolled away) and Clip 3's (138–178)
       expect(ids()).toEqual([id(1), id(2)]);
     });
   });
@@ -2587,15 +2771,15 @@ describe("Timeline, several clips", () => {
       expect(apply).toHaveBeenCalledTimes(1);
     });
 
-    it("moves a group's rows only by a row header", () => {
+    it("moves a group's rows only by a row's grip", () => {
       seedLengths([5, 4, 6, 3], [0, 6, 9, 11]);
       openEditor();
       selectClips(1, 2);
-      fireEvent.pointerDown(header(id(1)), { button: 0, pointerId: 1, ...at(40, 90) });
-      move(40, 90 + ROW);
+      fireEvent.pointerDown(grip(id(1)), { button: 0, pointerId: 1, ...at(10, 90) });
+      move(10, 90 + ROW);
       expect(stackedBox("Clip 2").style.top).toBe(`${2 * ROW + BOX_TOP}px`);
       expect(stackedBox("Clip 3").style.top).toBe(`${3 * ROW + BOX_TOP}px`);
-      release(40, 90 + ROW);
+      release(10, 90 + ROW);
       expect(order()).toEqual([id(0), id(3), id(1), id(2)]);
       expect(starts()).toEqual([0, 11, 6, 9]);
       expect(editor().past).toHaveLength(1);
@@ -2676,19 +2860,112 @@ describe("Timeline, heights and the audio section", () => {
     primeAssetInfo([{ id: TONE, kind: "audio", filename: "tone1320.m4a", durationSec: 3 } as unknown as AssetView]);
   }
 
-  it.each([2, 3, 6])("keeps one height through Track, Stacked, ⌘Z and ⇧⌘Z with %i clips", (count) => {
+  it.each([2, 3, 6])("takes what each layout's rows need through Track, Stacked, ⌘Z and ⇧⌘Z with %i clips", (count) => {
     seedWith(Array.from({ length: count }, () => 5));
     openEditor();
-    const height = timelineEl().style.height;
+    // Track: the edge, the ruler, the clips row, one audio row and the strip; no room kept for Stacked's rows
+    const track = `${1 + 28 + 80 + 52 + 28}px`;
+    const stacked = `${1 + 28 + Math.min(count * 52, 182) + 52 + 28}px`;
+    expect(timelineEl().style.height).toBe(track);
     fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
     expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
-    expect(timelineEl().style.height).toBe(height);
+    expect(timelineEl().style.height).toBe(stacked);
     press("z", { metaKey: true });
     expect(editor().draft!.sequenceLayout.mode).toBe("track");
-    expect(timelineEl().style.height).toBe(height);
+    expect(timelineEl().style.height).toBe(track);
     press("z", { metaKey: true, shiftKey: true });
     expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
-    expect(timelineEl().style.height).toBe(height);
+    expect(timelineEl().style.height).toBe(stacked);
+  });
+
+  it("holds its height while the pointer is on the control row, so a switch never moves the toggle, and settles after", () => {
+    seedWith([5, 5, 5]);
+    openEditor();
+    const controls = screen.getByTestId("stitch-controls").parentElement!;
+    const lanes = screen.getByTestId("stitch-lanes");
+    expect(timelineEl().style.height).toBe("189px");
+    fireEvent.pointerEnter(controls);
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    expect(editor().draft!.sequenceLayout.mode).toBe("stacked");
+    // Held at Track's height: Stacked's three rows scroll in the clips row's room meanwhile
+    expect(timelineEl().style.height).toBe("189px");
+    expect(lanes).toHaveClass("overflow-y-auto");
+    // And back again, still held
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Track" }));
+    expect(timelineEl().style.height).toBe("189px");
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    fireEvent.pointerLeave(controls);
+    expect(timelineEl().style.height).toBe(`${1 + 28 + 156 + 52 + 28}px`);
+    expect(lanes).toHaveClass("overflow-y-hidden");
+    // Coming in again holds the height it has now: back to Track keeps Stacked's until the pointer leaves
+    fireEvent.pointerEnter(controls);
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Track" }));
+    expect(timelineEl().style.height).toBe("265px");
+    fireEvent.pointerLeave(controls);
+    expect(timelineEl().style.height).toBe("189px");
+  });
+
+  it("keeps the room of a scrollbar drawn beside the lanes under the rows, shown or not: zooming in past Fit moves nothing", () => {
+    const globals = globalThis as { ResizeObserver?: unknown };
+    const original = globals.ResizeObserver;
+    const callbacks: Array<() => void> = [];
+    globals.ResizeObserver = class {
+      constructor(private callback: () => void) {
+        callbacks.push(callback);
+      }
+      observe() {
+        this.callback();
+      }
+      disconnect() {}
+    };
+    // An 8px scrollbar beside the content: the probe always has one, the lanes once they overflow
+    let lanesBar = 0;
+    const lanesBox = (el: HTMLElement) =>
+      parseFloat(el.parentElement!.style.height) - 1 - parseFloat(el.style.marginBottom || "0");
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "stitch-scrollbar-probe") return 40;
+      return this.dataset.testid === "stitch-lanes" ? lanesBox(this) : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "stitch-scrollbar-probe") return 32;
+      return this.dataset.testid === "stitch-lanes" ? lanesBox(this) - lanesBar : 0;
+    });
+    try {
+      seedWith([5, 5]);
+      openEditor();
+      const lanes = screen.getByTestId("stitch-lanes");
+      // 8px taller than the rows need, the room under the lanes while the scrollbar is hidden; the rows as they were
+      expect(timelineEl().style.height).toBe(`${189 + 8}px`);
+      expect(lanes.style.marginBottom).toBe("8px");
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("52px");
+      expect(screen.getByTestId("stitch-timeline-foot").style.bottom).toBe("8px");
+      expect(screen.getByTestId("stitch-audio-controls").parentElement!.style.bottom).toBe(`${8 + 28}px`);
+      // Zoomed in, the lanes overflow and the scrollbar shows in that room: no height changes
+      lanesBar = 8;
+      act(() => editor().setZoom(PPS * 4));
+      act(() => callbacks.forEach((callback) => callback()));
+      expect(timelineEl().style.height).toBe(`${189 + 8}px`);
+      expect(lanes.style.marginBottom).toBe("0px");
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("52px");
+      expect(screen.getByTestId("stitch-timeline-foot").style.bottom).toBe("8px");
+      // Held from the control row, a scrollbar coming or going changes nothing either
+      const controls = screen.getByTestId("stitch-controls").parentElement!;
+      fireEvent.pointerEnter(controls);
+      lanesBar = 0;
+      act(() => callbacks.forEach((callback) => callback()));
+      expect(timelineEl().style.height).toBe(`${189 + 8}px`);
+      fireEvent.pointerLeave(controls);
+      expect(timelineEl().style.height).toBe(`${189 + 8}px`);
+    } finally {
+      globals.ResizeObserver = original;
+    }
+  });
+
+  it("keeps the board's height where scrollbars are drawn over the content", () => {
+    seedWith([5, 5]);
+    openEditor();
+    expect(timelineEl().style.height).toBe("189px");
+    expect(screen.getByTestId("stitch-lanes").style.marginBottom).toBe("0px");
   });
 
   it("keeps one height whatever is selected: a clip, several, an audio clip, nothing", () => {
@@ -2714,7 +2991,7 @@ describe("Timeline, heights and the audio section", () => {
   });
 
   it("takes the room the editor leaves it: Stacked's rows give way first, then the audio rows", () => {
-    // The dialog is 752px tall (a 1280 × 800 window): under its 56px header and the transport the stage keeps 300,
+    // The dialog is 752px tall (a 1280 × 800 window): under its 56px header the stage keeps 344 with its control row,
     // the timeline gets at most 352
     const globals = globalThis as { ResizeObserver?: unknown };
     const original = globals.ResizeObserver;
@@ -2734,8 +3011,14 @@ describe("Timeline, heights and the audio section", () => {
       seedWith([5, 5, 5, 5], [toneClip("t", { startSec: 1 }), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
       openEditor();
       act(() => editor().setAudioExpandedRow(0));
+      // Track fits: the clips row and two audio rows, one of them open
+      expect(timelineEl().style.height).toBe(`${1 + 28 + 80 + 180 + 28}px`);
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("180px");
+      // Stacked's four rows would want 182px: they give way to 115, the audio rows keep their view
+      fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
       expect(timelineEl().style.height).toBe("352px");
-      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("192px");
+      expect(screen.getByTestId("stitch-audio-view").style.height).toBe("180px");
+      expect(screen.getByTestId("stitch-lanes")).toHaveClass("overflow-y-auto");
     } finally {
       globals.ResizeObserver = original;
     }
@@ -2747,26 +3030,27 @@ describe("Timeline, heights and the audio section", () => {
     fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
     const lanes = screen.getByTestId("stitch-lanes");
     const rowsBlock = () => screen.getByTestId("stitch-audio-rows");
-    const headers = () => screen.getByTestId("stitch-audio-headers");
+    const controls = () => screen.getByTestId("stitch-audio-controls");
     expect(rowsBlock().style.transform).toBe("translateY(0px)");
     lanes.scrollTop = 0;
     act(() => {
       screen.getByTestId("stitch-audio-view").dispatchEvent(new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true }));
     });
     expect(rowsBlock().style.transform).toBe("translateY(-40px)");
-    expect(headers().style.transform).toBe("translateY(-40px)");
+    expect(controls().style.transform).toBe("translateY(-40px)");
     expect(lanes.scrollTop).toBe(0);
-    // Past the end it stops at the last row: three rows in a two-row view scroll 64px
+    // Past the end it stops at the last row: three rows in a two-row view scroll 52px; a wheel over the rows'
+    // controls in the left padding scrolls them too
     act(() => {
-      headers().dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
+      controls().dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
     });
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     // Over Stacked's rows, only they scroll
     act(() => {
       screen.getByTestId("stitch-rows").dispatchEvent(new WheelEvent("wheel", { deltaY: 30, bubbles: true, cancelable: true }));
     });
     expect(lanes.scrollTop).toBe(30);
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
   });
 
   it("scrolls the selected audio clip's row into view when it is selected other than by a press", () => {
@@ -2774,16 +3058,16 @@ describe("Timeline, heights and the audio section", () => {
     openEditor();
     const rowsBlock = () => screen.getByTestId("stitch-audio-rows");
     expect(rowsBlock().style.transform).toBe("translateY(0px)");
-    // Three rows in a two-row view: the last row shows once the rows scroll 64px, and no further
+    // Three rows in a two-row view: the last row shows once the rows scroll 52px, and no further
     act(() => editor().select(audioSelectionOf({ clipId: "v" })));
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     act(() => editor().select(audioSelectionOf({ clipId: "u" })));
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     act(() => editor().select(audioSelectionOf({ clipId: "t" })));
     expect(rowsBlock().style.transform).toBe("translateY(0px)");
   });
 
-  it("counts the audio rows out of view in the strip", () => {
+  it("counts the audio rows out of view in the line under them", () => {
     seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
     openEditor();
     expect(screen.getByTestId("stitch-audio-hidden-rows")).toHaveTextContent(/^1 audio row below1$/);
@@ -2796,15 +3080,15 @@ describe("Timeline, heights and the audio section", () => {
   it("turns a view's own scroll (focus in a hidden row) into the translate both sides share", () => {
     seedWith([5, 5], [toneClip("t"), toneClip("u", { row: 1 }), toneClip("v", { row: 2 })]);
     openEditor();
-    const headerView = screen.getByTestId("stitch-audio-headers").parentElement as HTMLElement;
-    for (const view of [headerView, screen.getByTestId("stitch-audio-view")]) {
+    const controlsView = screen.getByTestId("stitch-audio-controls").parentElement as HTMLElement;
+    for (const view of [controlsView, screen.getByTestId("stitch-audio-view")]) {
       act(() => editor().select(audioSelectionOf({ clipId: "t" })));
       expect(screen.getByTestId("stitch-audio-rows").style.transform).toBe("translateY(0px)");
-      view.scrollTop = 64;
+      view.scrollTop = 52;
       fireEvent.scroll(view);
       expect(view.scrollTop).toBe(0);
-      expect(screen.getByTestId("stitch-audio-rows").style.transform).toBe("translateY(-64px)");
-      expect(screen.getByTestId("stitch-audio-headers").style.transform).toBe("translateY(-64px)");
+      expect(screen.getByTestId("stitch-audio-rows").style.transform).toBe("translateY(-52px)");
+      expect(screen.getByTestId("stitch-audio-controls").style.transform).toBe("translateY(-52px)");
       act(() => editor().select(null));
     }
   });
@@ -2817,14 +3101,14 @@ describe("Timeline, heights and the audio section", () => {
     act(() => {
       screen.getByTestId("stitch-audio-view").dispatchEvent(new WheelEvent("wheel", { deltaY: 400, bubbles: true, cancelable: true }));
     });
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     // The lead's row is out of view; the last row's mute must not bring it back under the pointer
     fireEvent.click(screen.getByRole("button", { name: "Mute Audio 3" }));
     expect(editor().draft!.audioClips.find((c) => c.id === "v")!.muted).toBe(true);
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     // A key that moves the lead to another row still reveals it
     act(() => editor().select(audioSelectionOf({ clipId: "u" })));
-    expect(rowsBlock().style.transform).toBe("translateY(-64px)");
+    expect(rowsBlock().style.transform).toBe("translateY(-52px)");
     act(() => editor().select(audioSelectionOf({ clipId: "t" })));
     expect(rowsBlock().style.transform).toBe("translateY(0px)");
   });
@@ -2847,6 +3131,17 @@ describe("Timeline, heights and the audio section", () => {
       expect(within(menu).getByRole("menuitem", { name: new RegExp(name) })).toBeInTheDocument();
     }
     expect(within(menu).getByRole("menuitem", { name: /Move up a row/ })).toBeDisabled();
+    // The edit menus' skin, as the clip menu: 220px on neutral-900, 32px rows in 13px type, no icons, no red, hairlines
+    expect(menu).toHaveClass("w-[220px]", "rounded-[10px]", "bg-neutral-900");
+    for (const row of within(menu).getAllByRole("menuitem")) {
+      expect(row).toHaveClass("h-8", "text-[13px]");
+      expect(row.querySelector("svg")).toBeNull();
+      expect(row.className).not.toMatch(/text-red/);
+    }
+    expect(within(menu).getAllByRole("separator")).toHaveLength(2);
+    for (const line of within(menu).getAllByRole("separator")) expect(line).toHaveClass("my-1", "border-neutral-800");
+    // Its rows sit straight in the menu, under its heading
+    expect(within(menu).getAllByRole("menuitem").every((row) => row.parentElement === menu)).toBe(true);
     fireEvent.click(within(menu).getByRole("menuitem", { name: /Move down a row/ }));
     expect(editor().draft!.audioClips.find((c) => c.id === "u")!.row).toBe(1);
     expect(screen.queryByRole("menu")).toBeNull();

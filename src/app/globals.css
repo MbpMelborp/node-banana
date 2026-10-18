@@ -60,13 +60,11 @@
   --tracking-display: -0.03em;
 
   /* Stitch editor (src/components/stitch): a darker chrome than a normal
-     dialog, by request. Chrome = the dialog's panel and the track headers
-     (the stage, its control row and the rail sit on the pane colour, as the
-     headers do); lanes = the timeline ground; well = an empty frame (the
-     editor's stage with no clips, the home's preview). Stacked dialogs keep
-     bg-card. */
+     dialog, by request. Chrome = the dialog's panel (the stage, its control
+     row, the rail and the timeline sit on the pane colour); well = an empty
+     frame (the editor's stage with no clips, the home's preview). Stacked
+     dialogs keep bg-card. */
   --color-editor-chrome: #1a1a1a;
-  --color-editor-lanes: #141414;
   --color-editor-well: #0f0f0f;
 
   /* Edit video's quiet look (the view and the node's dialog): the hairline
@@ -79,6 +77,16 @@
   --color-edit-pressed: #1f1f1f;
   --color-edit-switch-off: #333333;
   --shadow-edit-menu: 0 16px 40px rgb(0 0 0 / 0.5);
+
+  /* Its timeline: an audio clip's body, its waveform (lighter while the
+     clip is selected), the ruler's major ticks, and the slots that add
+     clips (the empty lane, the + after the last clip). A video clip's
+     ground is edit-field; selection is a neutral-100 ring. */
+  --color-edit-clip: #161616;
+  --color-edit-wave: #5c5c5c;
+  --color-edit-wave-active: #a3a3a3;
+  --color-edit-tick: #333333;
+  --color-edit-slot: #121212;
 }
 
 /* The Stitch editor's trim ghost: the part of a clip a trim cuts away. */

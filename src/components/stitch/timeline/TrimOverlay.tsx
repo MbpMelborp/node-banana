@@ -131,7 +131,7 @@ export function TrimOverlay({
         <EdgeFrame src={src} time={time} fallback={fallback} />
         <div className="flex h-[18px] items-center justify-between px-1 text-[10px]">
           <span className="text-neutral-400">{trim.edge === "out" ? "Out" : "In"}</span>
-          <span className="font-mono tabular-nums text-neutral-100">{formatTimecode(time)}</span>
+          <span className="tabular-nums text-neutral-100">{formatTimecode(time)}</span>
         </div>
       </div>
       <div
@@ -178,7 +178,7 @@ export function TrimMarks({
       <div
         aria-hidden="true"
         data-testid="stitch-trim-delta"
-        className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+        className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 whitespace-nowrap tabular-nums text-neutral-200")}
         style={{
           top: deltaTop,
           ...(chipOnRight ? { left: edgeX + 12 } : { right: `calc(100% - ${edgeX - 12}px)` }),
@@ -194,7 +194,7 @@ export function TrimMarks({
 }
 
 /**
- * A snap, inside the lanes: the dashed guide from the ruler down to `bottom` at the snapped time, and the chip
+ * A snap, inside the lanes: the dashed guide from the playhead's head (as its line would) down to `bottom` at the snapped time, and the chip
  * naming what it snapped to, 9px right of the guide. A trim and a body drag both draw it; the audio section passes
  * the ruler's place in its own box as `top`.
  */
@@ -203,7 +203,7 @@ export function SnapGuide({
   bottom,
   chipTop,
   text,
-  top = 13,
+  top = GEOMETRY.playheadHead,
 }: {
   x: number;
   bottom: number;

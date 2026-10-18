@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SourceKey } from "@/lib/stitch/timeline";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { EditorRail } from "./EditorRail";
@@ -15,9 +15,17 @@ import type { EditorComposition } from "./useEditorComposition";
  * across the bottom. The node's dialog and the Edit video view each lay it
  * out in their own column, with the composition they read once for it and
  * their header.
+ *
+ * The timeline's height follows the layout (Track | Stacked), and the stage
+ * gives or takes the difference, which would move the control row. While
+ * the pointer is over that row the timeline keeps the height it had as the
+ * pointer came in, so a switch never moves the toggle from under it; it
+ * settles once the pointer leaves.
  */
 export function EditorWorkspace({ composition }: { composition: EditorComposition }) {
   const { byClip, audioByClip, spans, total, empty, stacked, zoom } = composition;
+  const timelineHeight = useRef(0);
+  const [heldHeight, setHeldHeight] = useState<number | null>(null);
 
   // An edit that pins a lined-up stack waits for these (clipsLoading)
   useEffect(() => {
@@ -39,14 +47,19 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
           audioLayers={composition.audioLayers}
           registerAudio={composition.registerAudio}
         >
-          <EditorTransport
-            total={total}
-            empty={empty}
-            zoom={zoom}
-            media={byClip}
-            spans={spans}
-            frameSize={composition.frameSize}
-          />
+          <div
+            onPointerEnter={() => setHeldHeight(timelineHeight.current > 0 ? timelineHeight.current : null)}
+            onPointerLeave={() => setHeldHeight(null)}
+          >
+            <EditorTransport
+              total={total}
+              empty={empty}
+              zoom={zoom}
+              media={byClip}
+              spans={spans}
+              frameSize={composition.frameSize}
+            />
+          </div>
         </EditorStage>
         <EditorRail media={byClip} audio={audioByClip} />
       </div>
@@ -58,6 +71,8 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
         srcFor={composition.srcFor}
         stacked={stacked}
         maxHeight={composition.maxTimeline}
+        heldHeight={heldHeight}
+        heightRef={timelineHeight}
       />
     </>
   );

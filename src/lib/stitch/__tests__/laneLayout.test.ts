@@ -68,16 +68,19 @@ describe("laneBoxes", () => {
 });
 
 describe("insetBox", () => {
-  it("insets 2px on each side shared with another clip", () => {
-    expect(insetBox({ x: 16, width: 320 }, 0, 3)).toEqual({ x: 16, width: 318 });
-    expect(insetBox({ x: 336, width: 256 }, 1, 3)).toEqual({ x: 338, width: 252 });
-    expect(insetBox({ x: 592, width: 192 }, 2, 3)).toEqual({ x: 594, width: 190 });
+  it("insets 1px on each side shared with another clip: the boards' 2px between neighbours", () => {
+    expect(insetBox({ x: 16, width: 320 }, 0, 3)).toEqual({ x: 16, width: 319 });
+    expect(insetBox({ x: 336, width: 256 }, 1, 3)).toEqual({ x: 337, width: 254 });
+    expect(insetBox({ x: 592, width: 192 }, 2, 3)).toEqual({ x: 593, width: 191 });
+    // The gap between the first two as drawn
+    expect(337 - (16 + 319)).toBe(2);
   });
 
   it("keeps a very short clip pressable: at least 4px, centred on its place", () => {
-    // 0.1 s at 30 px/s is 3px: the insets alone would leave nothing
+    // 0.1 s at 30 px/s is 3px: the insets alone would leave 1px
     expect(insetBox({ x: 100, width: 3 }, 1, 3)).toEqual({ x: 99.5, width: MIN_DRAWN_PX });
-    expect(insetBox({ x: 100, width: 8 }, 1, 3)).toEqual({ x: 102, width: 4 });
+    expect(insetBox({ x: 100, width: 5 }, 1, 3)).toEqual({ x: 100.5, width: MIN_DRAWN_PX });
+    expect(insetBox({ x: 100, width: 6 }, 1, 3)).toEqual({ x: 101, width: 4 });
   });
 });
 

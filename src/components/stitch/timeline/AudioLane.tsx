@@ -9,7 +9,6 @@ import {
   type RefObject,
   type UIEvent,
 } from "react";
-import { Plus } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { audioSelectionOf, selectedAudioIds, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { audioClipLength, audioSourceKey, type AudioDurations } from "@/lib/stitch/audioClips";
@@ -29,6 +28,8 @@ import { audioBlockHeight, type AudioDragLive } from "./useAudioClipDrag";
 
 /** The "Connect audio" box is never narrower than its copy. */
 const CONNECT_MIN_WIDTH = 260;
+/** The room under each row's block, px. */
+const ROW_GAP = GEOMETRY.audioRow - GEOMETRY.audioBlock;
 /** The move chip's gap from the moving box, and its height, px. */
 const CHIP_GAP = 12;
 const CHIP_HEIGHT = 22;
@@ -131,13 +132,15 @@ function onAudioLaneKeyDown(event: KeyboardEvent<HTMLDivElement>, clips: readonl
 }
 
 /**
- * The audio section under the video, in both layouts: its rows (64px, the
- * one expanded by its header's toggle 136px), each holding audio clips that
- * do not overlap, then the 24px strip. It depends on the rows and the
- * expanded row only, never on the selection, so a click moves nothing. Past
- * two rows (fewer when the window is short) the rows scroll inside it by a
- * translate the timeline owns, shared with their headers. With no audio at
- * all one row says how to add some.
+ * The audio section under the video, in both layouts: its rows (52px, the
+ * one expanded by its volume-curve toggle 128px), each holding audio clips
+ * that do not overlap, then the 28px strip (where "+ Audio" sits, drawn by
+ * the timeline). It depends on the rows and the expanded row only, never on
+ * the selection, so a click moves nothing. Past two rows (fewer when the
+ * window is short) the rows scroll inside it by a translate the timeline
+ * owns, shared with their controls. With no audio at all one empty row is
+ * drawn as a dashed outline ("+ Audio" under it adds some; in a node's
+ * dialog it says audio can be connected to the node).
  *
  * During a body drag the moving boxes leave the rows' clip and follow the
  * pointer over the section; the landing is drawn where release puts it: a
@@ -190,7 +193,7 @@ export function AudioLane({
   contentRef: RefObject<HTMLDivElement | null>;
   /** The rows' view, for the drag's up-and-down auto-scroll. */
   viewRef: RefObject<HTMLDivElement | null>;
-  /** The ruler's middle in the section's own box (negative: above it), where a snap guide starts. */
+  /** The foot of the playhead's head in the section's own box (negative: above it), where a snap guide starts. */
   guideTop: number;
   scrollLeft: number;
   laneWidth: number;
@@ -317,10 +320,9 @@ export function AudioLane({
     <div
       data-audio-section=""
       data-testid="stitch-audio-section"
-      className="relative bg-editor-lanes"
+      className="relative bg-pane"
       style={{ height: layout.sectionHeight }}
     >
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-1 h-px bg-white/6" />
       <div
         ref={viewRef}
         data-testid="stitch-audio-view"
@@ -349,16 +351,18 @@ export function AudioLane({
               data-testid="stitch-audio-row"
               data-row={row}
               className={cn(
-                "pointer-events-none absolute inset-x-0 border-b border-white/6",
-                landing?.kind === "rows" && landing.rows.has(row) && "bg-selection/8",
+                "pointer-events-none absolute inset-x-0",
+                landing?.kind === "rows" && landing.rows.has(row) && "bg-white/6",
               )}
               style={{ top, height: layout.rowHeights[row] }}
             />
           ))}
+          {/* An empty row, not a button: "+ Audio" under it adds audio. A node's dialog says audio can come from the node */}
           {empty && (
             <div
               data-testid="stitch-audio-placeholder"
-              className="pointer-events-none absolute flex items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-media border border-dashed border-handle-audio/40 bg-handle-audio/3 px-3 text-[11px] text-neutral-500"
+              aria-hidden={inEdit ? true : undefined}
+              className="pointer-events-none absolute flex items-center justify-center overflow-hidden whitespace-nowrap rounded-md border border-dashed border-edit-line px-3 text-xs text-ink-3"
               style={{
                 left: GEOMETRY.origin,
                 top: GEOMETRY.audioBlockTop,
@@ -366,8 +370,7 @@ export function AudioLane({
                 height: GEOMETRY.audioBlock,
               }}
             >
-              <Plus size={12} strokeWidth={2} className="shrink-0 text-handle-audio" />
-              {inEdit ? "Add audio from the library" : "Connect audio to the node, or add it from the library"}
+              {inEdit ? null : "Connect audio to the node"}
             </div>
           )}
           {boxes.map((box) => (moving.has(box.clip.id) ? null : boxFor(box, { moving: false, top: blockTop(box.clip.row) })))}
@@ -375,8 +378,9 @@ export function AudioLane({
             <div
               aria-hidden="true"
               data-testid="stitch-audio-insertion"
-              className="pointer-events-none absolute inset-x-0 z-1 h-[3px] rounded-[2px] bg-selection"
-              style={{ top: rowTop(landing.after) + (layout.rowHeights[landing.after] ?? 0) - 1.5 }}
+              className="pointer-events-none absolute inset-x-0 z-1 h-[3px] rounded-[2px] bg-neutral-100"
+              // In the gap under the row it inserts after
+              style={{ top: rowTop(landing.after) + (layout.rowHeights[landing.after] ?? 0) - ROW_GAP / 2 - 1.5 }}
             />
           )}
         </div>
@@ -389,7 +393,7 @@ export function AudioLane({
         {landing?.kind === "append" && (
           <div
             data-testid="stitch-audio-new-row"
-            className="absolute inset-x-1 inset-y-0.5 flex items-center rounded-[5px] border border-dashed border-white/12 text-[11px] text-neutral-300"
+            className="absolute inset-x-1 inset-y-1 flex items-center rounded-md border border-dashed border-white/15 text-xs text-neutral-300"
             style={{ paddingLeft: Math.max(8, scrollLeft + 8) }}
           >
             New row
@@ -409,7 +413,7 @@ export function AudioLane({
             <div
               ref={chipRef}
               data-testid="stitch-audio-move-chip"
-              className={cn(EDITOR_CHIP, "absolute z-20 whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+              className={cn(EDITOR_CHIP, "absolute z-20 whitespace-nowrap tabular-nums text-neutral-200")}
               // Beside the box, never below the section: a box dragged onto the strip runs past it
               style={{ left: leadX + lead.width + CHIP_GAP, top: Math.min(movingTop(lead.clip.row) + 10, layout.sectionHeight - CHIP_HEIGHT) }}
             >
@@ -431,7 +435,7 @@ export function AudioLane({
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10">
           <div
             data-testid="stitch-audio-trim-chip"
-            className={cn(EDITOR_CHIP, "absolute whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+            className={cn(EDITOR_CHIP, "absolute whitespace-nowrap tabular-nums text-neutral-200")}
             style={{ left: trimEdgeX + 8, top: trimTop + 4 }}
           >
             {trimChip}

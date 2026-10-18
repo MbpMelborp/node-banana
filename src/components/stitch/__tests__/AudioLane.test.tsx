@@ -44,12 +44,12 @@ import type { StitchAudioClip, VideoStitchNodeData, VolumePoint, WorkflowEdge, W
 
 // The audio section inside the real editor, against the real stores. jsdom
 // lays nothing out (every rect is at 0), so lane x is the pointer's clientX
-// and a block's y is its clientY. At 64 px/s a time t is at x = 16 + 64·t;
+// and a block's y is its clientY. At 64 px/s a time t is at x = 20 + 64·t;
 // an expanded block has 0 dB at y 16 and −∞ at y 106. The sequence is 9 s
 // (A 5 s, B 4 s); the music is 20 s long.
 
 const PPS = 64;
-const ORIGIN = 16;
+const ORIGIN = 20;
 const x = (t: number) => ORIGIN + t * PPS;
 /** y of a gain in the expanded block (√ level). */
 const y = (gain: number) => 16 + (1 - Math.sqrt(gain)) * 90;
@@ -157,10 +157,10 @@ const doubleClickAt = (clientX: number, clientY: number) => {
 const content = () => screen.getByTestId("stitch-lanes").firstElementChild as HTMLElement;
 const rect = (left: number, top: number): DOMRect =>
   ({ left, top, right: left, bottom: top, width: 0, height: 0, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
-/** Every audio box's and header's place, as drawn. */
+/** Every audio box's and row controls' place, as drawn. */
 const placesOf = () =>
-  [...screen.getAllByRole("option").filter((el) => el.dataset.audioClipId), ...document.querySelectorAll<HTMLElement>("[data-audio-row-header]")].map(
-    (el) => `${el.dataset.audioClipId ?? el.dataset.audioRowHeader}:${el.style.left}:${el.style.top}:${el.style.width}:${el.style.height}`,
+  [...screen.getAllByRole("option").filter((el) => el.dataset.audioClipId), ...document.querySelectorAll<HTMLElement>("[data-audio-row-controls]")].map(
+    (el) => `${el.dataset.audioClipId ?? el.dataset.audioRowControls}:${el.style.left}:${el.style.top}:${el.style.width}:${el.style.height}`,
   );
 
 beforeEach(async () => {
@@ -190,68 +190,93 @@ afterEach(() => {
 });
 
 describe("Audio section", () => {
-  it("draws the music as a clip on Audio 1: its waveform, name and curve, hatched past the last frame", () => {
+  it("draws the music as a clip on Audio 1: its grey waveform alone at rest, its length on hover, hatched past the last frame", () => {
     seed();
     openEditor([
       { t: 0, gain: 0 },
       { t: 1, gain: 1 },
     ]);
     expect(rows()).toHaveLength(1);
-    expect(rows()[0].style.height).toBe("64px");
+    expect(rows()[0].style.height).toBe("52px");
     expect(musicBox().style.left).toBe(`${x(0)}px`);
     expect(musicBox().style.width).toBe(`${20 * PPS}px`);
+    expect(musicBox().style.height).toBe("44px");
+    expect(musicBox()).toHaveClass("bg-edit-clip");
     expect(musicBox()).toHaveAccessibleName("score.mp3, Audio 1, starts 0:00.00");
-    expect(within(musicBox()).getByText("score.mp3")).toBeInTheDocument();
-    expect(within(musicBox()).getByText("Audio input")).toBeInTheDocument();
+    // Only the length shows, on hover, as on a video clip; the name is the box's tooltip, the source the rail's
+    const length = within(musicBox()).getByText("20.0 s");
+    expect(length).toHaveClass("opacity-0", "group-hover:opacity-100");
+    expect(within(musicBox()).queryByText("score.mp3")).toBeNull();
+    expect(musicBox()).toHaveAttribute("title", "score.mp3");
+    expect(within(musicBox()).queryByText("Audio input")).toBeNull();
     expect(within(musicBox()).getByTestId("stitch-waveform")).toBeInTheDocument();
-    expect(within(musicBox()).getByTestId("stitch-curve")).toBeInTheDocument();
-    // The point at the clip's In gets no dot (the boards draw none at the ends); the other is r 4
-    expect(points()).toHaveLength(1);
-    expect(points()[0]).toHaveAttribute("r", "4");
+    // At rest the waveform alone, as on the boards: a curve that shapes the sound shows once the clip is selected
+    expect(within(musicBox()).queryByTestId("stitch-curve")).toBeNull();
+    expect(points()).toHaveLength(0);
+    expect(musicBox().querySelector("[data-selected-ring]")).toBeNull();
     expect(screen.queryByTestId("stitch-db-guides")).toBeNull();
     // The 11 s past the 9 s sequence are not heard
     const hatch = within(musicBox()).getByTestId("stitch-audio-after-end");
     expect(hatch.style.left).toBe(`${9 * PPS}px`);
     expect(hatch).toHaveAttribute("title", "After the last frame: not heard");
-    // The label bar is drawn over the curve, as on the boards
-    const label = within(musicBox()).getByText("score.mp3").parentElement!;
-    expect(screen.getByTestId("stitch-curve").compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Selected: the white ring, the curve in white, and its point (the one at the clip's In gets no dot, as on the
+    // boards; the other is r 4)
+    click(musicBox());
+    expect(musicBox().querySelector("[data-selected-ring]")).toHaveClass("border-neutral-100");
+    expect(within(musicBox()).getByTestId("stitch-curve").querySelector("polyline")).toHaveClass("stroke-neutral-100");
+    expect(points()).toHaveLength(1);
+    expect(points()[0]).toHaveAttribute("r", "4");
+    // The length chip is drawn over the curve
+    expect(screen.getByTestId("stitch-curve").compareDocumentPosition(length) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // On the open row a clip that is not selected shows its curve faintly, without its points
+    toggle(0);
+    act(() => editor().select(null));
+    expect(within(musicBox()).getByTestId("stitch-curve").querySelector("polyline")).toHaveClass("stroke-white/35");
+    expect(points()).toHaveLength(0);
   });
 
-  it("grows a row only by its header's toggle, never by a selection", () => {
+  it("draws no curve on a clip whose volume is flat at 0 dB until it is selected", () => {
     seed();
     openEditor();
-    // Two clips (Stacked would want 2 rows): 24 + 113 + one audio row and the strip
-    expect(timelineEl().style.height).toBe("225px");
+    expect(within(musicBox()).queryByTestId("stitch-curve")).toBeNull();
+    click(musicBox());
+    expect(within(musicBox()).getByTestId("stitch-curve")).toBeInTheDocument();
+  });
+
+  it("grows a row only by its volume-curve toggle, never by a selection", () => {
+    seed();
+    openEditor();
+    // Track: the edge, the ruler, the clips row, one audio row and the strip
+    expect(timelineEl().style.height).toBe(`${1 + 28 + 80 + 52 + 28}px`);
     click(musicBox());
     expect(editor().selection).toMatchObject({ kind: "audio", clipId: MUSIC_CLIP_ID, point: null });
-    expect(rows()[0].style.height).toBe("64px");
-    expect(timelineEl().style.height).toBe("225px");
+    expect(rows()[0].style.height).toBe("52px");
+    expect(timelineEl().style.height).toBe("189px");
     expect(rail()).toBeInTheDocument();
     const show = screen.getByRole("button", { name: "Show volume curve" });
     expect(show).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(show);
     expect(editor().audioExpandedRow).toBe(0);
     expect(editor().past).toHaveLength(0);
-    expect(rows()[0].style.height).toBe("136px");
+    expect(rows()[0].style.height).toBe("128px");
     expect(musicBox().style.height).toBe("120px");
-    expect(timelineEl().style.height).toBe("297px");
+    expect(timelineEl().style.height).toBe("265px");
+    // The 0 dB and −12 dB guides, unlabelled: a dragged point's readout says its level
     expect(screen.getByTestId("stitch-db-guides")).toBeInTheDocument();
-    // The labels stand above the header's controls: −∞ sits at their level, so it is left out
-    expect(screen.getAllByTestId("stitch-db-label").map((el) => el.textContent)).toEqual(["0 dB", "−12"]);
+    expect(screen.queryAllByTestId("stitch-db-label")).toHaveLength(0);
     // The same button, now the one that hides it
     expect(screen.getByRole("button", { name: "Hide volume curve" })).toBe(show);
     expect(show).toHaveAttribute("aria-expanded", "true");
     // Selecting a video clip leaves the row as it is
     click(screen.getByRole("option", { name: "Clip 1" }), 100, 0);
-    expect(rows()[0].style.height).toBe("136px");
-    expect(timelineEl().style.height).toBe("297px");
+    expect(rows()[0].style.height).toBe("128px");
+    expect(timelineEl().style.height).toBe("265px");
     fireEvent.click(show);
     expect(editor().audioExpandedRow).toBeNull();
-    expect(rows()[0].style.height).toBe("64px");
+    expect(rows()[0].style.height).toBe("52px");
   });
 
-  it("moves no box and no header when a clip on another row is clicked while row 0 is expanded", () => {
+  it("moves no box and no row controls when a clip on another row is clicked while row 0 is expanded", () => {
     seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
     openEditor();
     toggle(0);
@@ -317,12 +342,16 @@ describe("Audio section", () => {
     expect(within(rail()).getByRole("button", { name: "Fade in" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("mutes the music with M when no audio clip is selected, and from its row's header", () => {
+  it("mutes the music with M when no audio clip is selected, and from its row's controls", () => {
     seed();
     openEditor([{ t: 2, gain: 0.5 }]);
     press("m");
     expect(music().muted).toBe(true);
-    expect(within(musicBox()).getByTestId("stitch-audio-muted")).toHaveTextContent("Muted");
+    // The muted badge is the video clips' icon square, no word; the box's name says it is muted
+    const badge = within(musicBox()).getByTestId("stitch-audio-muted");
+    expect(badge.textContent).toBe("");
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(badge).toHaveClass("h-[18px]", "w-[18px]", "bg-black/60", "text-neutral-300", "top-1.5");
     expect(screen.queryByTestId("stitch-curve")).toBeNull();
     expect(musicBox()).toHaveAccessibleName("score.mp3, Audio 1, starts 0:00.00, muted");
     fireEvent.click(screen.getByRole("button", { name: "Unmute Audio 1" }));
@@ -348,14 +377,22 @@ describe("Audio section", () => {
     expect("audioClips" in data).toBe(false);
   });
 
-  it("says how to add audio when there is none, wide enough for its copy", () => {
+  it("draws an empty row when there is no audio, \"+ Audio\" under it adding some", () => {
     seed({ music: false });
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
     openEditor();
     act(() => editor().setZoom(8));
+    // An outline, not the add slots' fill: it cannot be pressed. The node's dialog says audio can come from the node
     const placeholder = screen.getByTestId("stitch-audio-placeholder");
-    expect(placeholder).toHaveTextContent("Connect audio to the node, or add it from the library");
+    expect(placeholder).toHaveClass("border-dashed", "border-edit-line", "pointer-events-none");
+    expect(placeholder).not.toHaveClass("bg-edit-slot");
+    expect(placeholder.textContent).toBe("Connect audio to the node");
     expect(placeholder.style.width).toBe("260px");
+    // An edit has no node: the row says nothing, and "+ Audio" is the one way in
+    act(() => useStitchEditorStore.setState({ editId: "edit-1" }));
+    expect(screen.getByTestId("stitch-audio-placeholder").textContent).toBe("");
+    expect(screen.getByTestId("stitch-audio-placeholder")).toHaveAttribute("aria-hidden", "true");
+    act(() => useStitchEditorStore.setState({ editId: null }));
     expect(screen.queryAllByRole("option").filter((el) => el.dataset.audioClipId)).toHaveLength(0);
     expect(screen.queryByRole("button", { name: /^Mute Audio/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Show volume curve" })).toBeNull();
@@ -386,10 +423,14 @@ describe("Audio section", () => {
     openEditor();
     act(() => useStitchEditorStore.getState());
     const notConnected = box("No audio connected");
-    expect(notConnected).toHaveClass("border-dashed", "border-handle-audio/30");
+    expect(notConnected).toHaveClass("border-dashed", "border-white/15");
     expect(notConnected.style.width).toBe("160px");
     const broken = box("Can't read this audio");
-    expect(broken).toHaveClass("border-dashed", "border-red-400/40");
+    expect(broken).toHaveClass("border-dashed", "border-white/25");
+    // What is wrong shows at rest
+    const words = within(broken).getByText("Can't read this audio");
+    expect(words.className).not.toMatch(/opacity-0/);
+    expect(broken).not.toHaveAttribute("title");
     // A record length draws it; no handles until the file's own length is read
     expect(broken.style.width).toBe(`${2 * PPS}px`);
     expect(broken.querySelector("[data-trim-handle]")).toBeNull();
@@ -405,7 +446,7 @@ describe("Audio section", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     const gone = box("Not in the library");
-    expect(gone).toHaveClass("border-red-400/40");
+    expect(gone).toHaveClass("border-dashed", "border-white/25");
   });
 
   it("draws boxes with no video yet at 64 px/s, all hatched, and they can be selected", () => {
@@ -625,16 +666,23 @@ describe("Audio section", () => {
     openEditor();
     const heights = () => rows().map((row) => `${row.style.top}/${row.style.height}`);
     const before = heights();
-    // Row 1's block centre is at 96 in the rows; the strip starts at 128
-    down(box("tone1320.m4a"), x(3), 96);
-    pointer("pointermove", x(3), 96 + 20);
+    const foot = () => screen.getByTestId("stitch-timeline-foot");
+    expect(foot()).not.toHaveClass("invisible");
+    // Row 1's block centre is at 74 in the rows; the strip starts at 104
+    down(box("tone1320.m4a"), x(3), 74);
+    pointer("pointermove", x(3), 74 + 20);
     expect(heights()).toEqual(before);
-    pointer("pointermove", x(3), 96 + 40);
+    expect(foot()).not.toHaveClass("invisible");
+    pointer("pointermove", x(3), 74 + 40);
     expect(heights()).toEqual(before);
     expect(screen.getByTestId("stitch-audio-new-row")).toHaveTextContent("New row");
     expect(screen.getByTestId("stitch-audio-move-chip")).toHaveTextContent("New row");
+    // "+ Audio" gives the strip to "New row" while the clip would land there
+    expect(foot()).toHaveClass("invisible");
     expect(editor().draft!.audioClips.find((c) => c.id === "t")!.row).toBe(1);
-    pointer("pointerup", x(3), 96 + 40);
+    pointer("pointerup", x(3), 74 + 40);
+    expect(screen.queryByTestId("stitch-audio-new-row")).toBeNull();
+    expect(foot()).not.toHaveClass("invisible");
     expect(editor().draft!.audioClips.find((c) => c.id === "t")!.row).toBe(2);
     expect(editor().past).toHaveLength(1);
     // The emptied row stays, so nothing moved up under the pointer
@@ -648,14 +696,15 @@ describe("Audio section", () => {
     const rowBoxes = () => rows().map((row) => [row.style.top, row.style.height]);
     const before = rowBoxes();
     const u = within(lane()).getAllByRole("option").find((el) => el.dataset.audioClipId === "u")!;
-    down(u, x(1), 160);
-    pointer("pointermove", x(1), 160 - 128);
+    // Row 2's block centre (126) up to row 0's (22)
+    down(u, x(1), 126);
+    pointer("pointermove", x(1), 126 - 104);
     const line = screen.getByTestId("stitch-audio-insertion");
-    // Under row 0 (64px), on the line between it and the next
-    expect(line.style.top).toBe(`${64 - 1.5}px`);
+    // Under row 0 (52px), in the 8px gap between its block and the next row
+    expect(line.style.top).toBe(`${52 - 4 - 1.5}px`);
     // Nothing moves before the release
     expect(rowBoxes()).toEqual(before);
-    pointer("pointerup", x(1), 160 - 128);
+    pointer("pointerup", x(1), 126 - 104);
     const clips = editor().draft!.audioClips;
     expect(clips.find((c) => c.id === "u")!.row).toBe(1);
     expect(clips.find((c) => c.id === "t")!.row).toBe(2);
@@ -666,16 +715,16 @@ describe("Audio section", () => {
   it("moves a clip in time by the drag, and Escape puts it back", () => {
     seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
     openEditor();
-    down(box("tone1320.m4a"), x(3), 96);
-    pointer("pointermove", x(3) + PPS, 96, { shiftKey: true });
+    down(box("tone1320.m4a"), x(3), 74);
+    pointer("pointermove", x(3) + PPS, 74, { shiftKey: true });
     expect(screen.getByTestId("stitch-audio-move-chip")).toHaveTextContent("0:03.00–0:06.00 · +1.00 s");
     press("Escape");
-    pointer("pointerup", x(3) + PPS, 96);
+    pointer("pointerup", x(3) + PPS, 74);
     expect(editor().draft!.audioClips.find((c) => c.id === "t")!.startSec).toBe(2);
     expect(editor().past).toHaveLength(0);
-    down(box("tone1320.m4a"), x(3), 96);
-    pointer("pointermove", x(3) + PPS, 96, { shiftKey: true });
-    pointer("pointerup", x(3) + PPS, 96, { shiftKey: true });
+    down(box("tone1320.m4a"), x(3), 74);
+    pointer("pointermove", x(3) + PPS, 74, { shiftKey: true });
+    pointer("pointerup", x(3) + PPS, 74, { shiftKey: true });
     expect(editor().draft!.audioClips.find((c) => c.id === "t")!.startSec).toBeCloseTo(3);
     expect(editor().past).toHaveLength(1);
   });
@@ -683,12 +732,12 @@ describe("Audio section", () => {
   it("trims a clip's In with its sound kept in place", () => {
     seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
     openEditor();
-    click(box("tone1320.m4a"), x(3), 96);
+    click(box("tone1320.m4a"), x(3), 74);
     const handle = box("tone1320.m4a").querySelector<HTMLElement>('[data-trim-handle="in"]')!;
-    fireEvent.pointerDown(handle, { button: 0, clientX: x(2), clientY: 96, pointerId: 1, shiftKey: true });
-    pointer("pointermove", x(2) + 32, 96, { shiftKey: true });
+    fireEvent.pointerDown(handle, { button: 0, clientX: x(2), clientY: 74, pointerId: 1, shiftKey: true });
+    pointer("pointermove", x(2) + 32, 74, { shiftKey: true });
     expect(screen.getByTestId("stitch-audio-trim-chip")).toHaveTextContent("In 0:00.50");
-    pointer("pointerup", x(2) + 32, 96, { shiftKey: true });
+    pointer("pointerup", x(2) + 32, 74, { shiftKey: true });
     expect(editor().draft!.audioClips.find((c) => c.id === "t")).toMatchObject({ inSec: 0.5, startSec: 2.5, outSec: null });
     expect(editor().past).toHaveLength(1);
   });
@@ -726,5 +775,107 @@ describe("Audio section", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(within(musicBox()).getByTestId("stitch-waveform")).toBeInTheDocument();
+  });
+});
+
+describe("Audio row controls", () => {
+  /** A row's floating group (its mute over its volume-curve toggle). */
+  const group = (row: number) => document.querySelector<HTMLElement>(`[data-audio-row-controls="${row}"]`)!;
+  const shown = (row: number) => group(row).classList.contains("opacity-100") && group(row).classList.contains("pointer-events-auto");
+  /** jsdom lays nothing out: the controls' layer is given its place, the rows' view from y 200. */
+  const placeLayer = () => {
+    const layer = screen.getByTestId("stitch-audio-controls").parentElement!;
+    vi.spyOn(layer, "getBoundingClientRect").mockReturnValue({
+      ...rect(0, 200),
+      right: 20,
+      bottom: 304,
+      width: 20,
+      height: 104,
+    } as DOMRect);
+  };
+
+  it("shows a row's group while the pointer is over the row, anywhere across the lanes, and none during a drag", () => {
+    seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
+    openEditor();
+    placeLayer();
+    expect(shown(0)).toBe(false);
+    expect(shown(1)).toBe(false);
+    fireEvent.pointerMove(timelineEl(), { clientX: 600, clientY: 200 + 10 });
+    expect(shown(0)).toBe(true);
+    expect(shown(1)).toBe(false);
+    fireEvent.pointerMove(timelineEl(), { clientX: 900, clientY: 200 + 52 + 10 });
+    expect(shown(0)).toBe(false);
+    expect(shown(1)).toBe(true);
+    // A drag that started elsewhere (a held button) shows none
+    fireEvent.pointerMove(timelineEl(), { clientX: 900, clientY: 200 + 52 + 12, buttons: 1 });
+    expect(shown(1)).toBe(false);
+    fireEvent.pointerMove(timelineEl(), { clientX: 900, clientY: 200 + 52 + 12 });
+    expect(shown(1)).toBe(true);
+    fireEvent.pointerLeave(timelineEl());
+    expect(shown(1)).toBe(false);
+    // Hidden, a group keeps its labels and its tab stops: keyboard focus inside it shows it
+    for (const row of [0, 1]) {
+      expect(group(row)).toHaveClass("opacity-0", "focus-within:opacity-100", "focus-within:pointer-events-auto");
+      for (const button of within(group(row)).getAllByRole("button")) expect(button).not.toHaveAttribute("tabindex");
+    }
+    expect(within(group(1)).getByRole("button", { name: "Mute Audio 2" })).toBeInTheDocument();
+    expect(within(group(1)).getByRole("button", { name: "Show volume curve" })).toBeInTheDocument();
+  });
+
+  it("keeps the group a press started on until its release, so a click whose pointer drifts still lands", () => {
+    seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
+    openEditor();
+    placeLayer();
+    fireEvent.pointerMove(timelineEl(), { clientX: 10, clientY: 200 + 52 + 20 });
+    expect(shown(1)).toBe(true);
+    const mute = within(group(1)).getByRole("button", { name: "Mute Audio 2" });
+    fireEvent.pointerDown(mute, { button: 0, clientX: 10, clientY: 200 + 52 + 20, pointerId: 1 });
+    // A 1px drift with the button held: the group stays, and with it its pointer events
+    fireEvent.pointerMove(timelineEl(), { clientX: 11, clientY: 200 + 52 + 21, buttons: 1 });
+    expect(shown(1)).toBe(true);
+    pointer("pointerup", 11, 200 + 52 + 21);
+    fireEvent.click(mute);
+    expect(editor().draft!.audioClips.find((c) => c.id === "t")!.muted).toBe(true);
+    // Released, a held button hides it again
+    fireEvent.pointerMove(timelineEl(), { clientX: 11, clientY: 200 + 52 + 21, buttons: 1 });
+    expect(shown(1)).toBe(false);
+  });
+
+  it("shows the group of the focused clip's row, following the clip when ⌥↓ moves it to another row", () => {
+    seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
+    openEditor();
+    const t = () => box("tone1320.m4a");
+    click(t(), x(3), 74);
+    act(() => t().focus());
+    expect(shown(1)).toBe(true);
+    expect(shown(0)).toBe(false);
+    act(() => {
+      t().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(editor().draft!.audioClips.find((c) => c.id === "t")!.row).toBe(2);
+    expect(document.activeElement).toBe(t());
+    expect(shown(2)).toBe(true);
+    expect(shown(1)).toBe(false);
+    // Focus leaving the timeline hides it
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(shown(2)).toBe(false);
+  });
+
+  it("keeps the open row's group shown, at the foot of its block so the toggle stays under the pointer", () => {
+    seed({ stitch: { audioClips: [tone("t", { row: 1, startSec: 2 })] } });
+    openEditor();
+    // Its bottom 8px over the row's foot: 52 − 8 − 38 (two 18px controls, 2px apart)
+    expect(group(0).style.top).toBe("6px");
+    expect(group(1).style.top).toBe(`${52 + 6}px`);
+    toggle(0);
+    expect(shown(0)).toBe(true);
+    fireEvent.pointerLeave(timelineEl());
+    expect(shown(0)).toBe(true);
+    // The open row is 128px: its group moved down with the row's foot, and row 1's with its row
+    expect(group(0).style.top).toBe(`${128 - 8 - 38}px`);
+    expect(group(1).style.top).toBe(`${128 + 6}px`);
+    toggle(0);
+    expect(shown(0)).toBe(false);
+    expect(group(0).style.top).toBe("6px");
   });
 });

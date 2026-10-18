@@ -31,22 +31,41 @@ function fakeContext() {
 
 let rects: Rect[] = [];
 
+let fills: string[] = [];
+
 beforeEach(() => {
-  document.documentElement.style.setProperty("--color-handle-audio", "#22d3ee");
+  document.documentElement.style.setProperty("--color-edit-wave", "#5c5c5c");
+  document.documentElement.style.setProperty("--color-edit-wave-active", "#a3a3a3");
   const fake = fakeContext();
   rects = fake.rects;
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(fake.ctx as unknown as CanvasRenderingContext2D);
+  fills = [];
+  // Each bar's colour as it is filled
+  const ctx = new Proxy(fake.ctx, {
+    get: (target, key) =>
+      key === "fillRect"
+        ? (...r: Rect) => {
+            fills.push(target.fillStyle);
+            target.fillRect(...r);
+          }
+        : target[key as keyof typeof target],
+    set: (target, key, value) => {
+      (target as Record<string, unknown>)[key as string] = value;
+      return true;
+    },
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  document.documentElement.style.removeProperty("--color-handle-audio");
+  document.documentElement.style.removeProperty("--color-edit-wave");
+  document.documentElement.style.removeProperty("--color-edit-wave-active");
 });
 
-function draw(expanded: boolean, peak = 0.5) {
+function draw(expanded: boolean, peak = 0.5, selected = false) {
   const blockX = axis.timeToX(0);
   const blockWidth = axis.timeToX(axis.total) - blockX;
-  const height = expanded ? 120 : 48;
+  const height = expanded ? 120 : 44;
   render(
     <Waveform
       peaks={new Float32Array(256).fill(peak)}
@@ -55,7 +74,7 @@ function draw(expanded: boolean, peak = 0.5) {
       blockX={blockX}
       blockWidth={blockWidth}
       height={height}
-      expanded={expanded}
+      selected={selected}
       viewLeft={0}
       viewRight={2000}
     />,
@@ -64,18 +83,19 @@ function draw(expanded: boolean, peak = 0.5) {
 }
 
 describe("Waveform", () => {
-  it("draws 3px bars on whole pixels at an 8px pitch while collapsed, none inside the slot", () => {
+  it("draws 2px grey bars on whole pixels at a 3px pitch, none inside the slot", () => {
     const { blockX, blockWidth, height } = draw(false);
     const slot = axis.slots[0];
     expect(slot.width).toBe(160);
     expect(rects.length).toBeGreaterThan(0);
+    expect(new Set(fills)).toEqual(new Set(["#5c5c5c"]));
     for (const [x, y, w, h] of rects) {
-      expect(w).toBe(3);
-      // 2px into each 8px cell
-      expect((x - 2) % 8).toBe(0);
+      expect(w).toBe(2);
+      // At the start of each 3px cell
+      expect(x % 3).toBe(0);
       expect(Number.isInteger(x)).toBe(true);
-      // Height is the peak's share of 70% of the block, centred
-      expect(h).toBeCloseTo(0.5 * 0.7 * height);
+      // Height is the peak's share of 28px of the 44px block, centred
+      expect(h).toBeCloseTo(0.5 * 28);
       expect(y + h / 2).toBeCloseTo(height / 2);
       // Not a pixel of it inside the slot
       const laneX = blockX + x;
@@ -87,13 +107,14 @@ describe("Waveform", () => {
     expect(rects.some(([x]) => blockX + x >= slot.x + slot.width)).toBe(true);
   });
 
-  it("draws 4px bars 2px into each cell while expanded, as tall as the peak says", () => {
-    const { height } = draw(true, 1);
+  it("draws the same bars in an expanded row, as tall as the peak says, lighter while the clip is selected", () => {
+    const { height } = draw(true, 1, true);
     expect(rects.length).toBeGreaterThan(0);
+    expect(new Set(fills)).toEqual(new Set(["#a3a3a3"]));
     for (const [x, , w, h] of rects) {
-      expect(w).toBe(4);
-      expect((x - 2) % 8).toBe(0);
-      expect(h).toBeCloseTo(0.7 * height);
+      expect(w).toBe(2);
+      expect(x % 3).toBe(0);
+      expect(h).toBeCloseTo((28 / 44) * height);
     }
   });
 
@@ -111,8 +132,7 @@ describe("Waveform", () => {
           axis={axis}
           blockX={blockX}
           blockWidth={axis.timeToX(4) - blockX}
-          height={48}
-          expanded={false}
+          height={44}
           viewLeft={0}
           viewRight={2000}
           sourceOffset={sourceOffset}

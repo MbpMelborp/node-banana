@@ -84,7 +84,7 @@ export function MoveOverlay({
         ref={chipRef}
         aria-hidden="true"
         data-testid="stitch-move-chip"
-        className={cn(EDITOR_CHIP, "pointer-events-none absolute z-20 whitespace-nowrap font-mono tabular-nums text-neutral-200")}
+        className={cn(EDITOR_CHIP, "pointer-events-none absolute z-20 whitespace-nowrap tabular-nums text-neutral-200")}
         style={{ left: right + CHIP_GAP, top }}
       >
         {`${span} · ${formatSeconds(deltaSec, 2, { signed: true })}`}

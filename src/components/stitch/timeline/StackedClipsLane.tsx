@@ -35,7 +35,7 @@ const GAP_LABEL_TOP = GEOMETRY.ruler + 6;
 /** A placed stack's marks: each clip's share of the picture (weightPieces), by clip id, and the covering clips' names. */
 export interface LaneMarks {
   pieces: ReadonlyMap<string, readonly WeightPiece[]>;
-  /** The name of the clip in a row of the timeline the marks were built from, as the row headers show it. */
+  /** The name of the clip in a row of the timeline the marks were built from ("Clip 3"). */
   coverName: (row: number) => string;
 }
 
@@ -44,7 +44,7 @@ export interface LaneMarks {
  * 52px row per clip, its 40px compact box at the clip's own start on a
  * linear axis (an empty clip is a 160px slot at its instant), the marks of
  * how it layers, a black band over each gap, and after the latest end, in
- * the last row, the dashed + that adds from the library. A lined-up stack
+ * the last row, the + slot that adds from the library. A lined-up stack
  * marks its overlaps (CrossfadeMarks); a placed one marks each clip's share
  * of the picture (LayerMarks), hidden stretches included.
  *
@@ -53,7 +53,7 @@ export interface LaneMarks {
  * the side of the box they leave from.
  * While a clip's box is dragged it follows the pointer in time and across
  * rows, with a line where it will land; the others keep their places. While
- * a row header is dragged its box is lifted, at the start it will have in
+ * a row's grip is dragged its box is lifted, at the start it will have in
  * its new place (lined up) or at its own (placed). Either way every box is
  * marked as release will leave it. A drag of one of several selected clips
  * carries them all: each box at its own start plus the one time delta, and
@@ -104,7 +104,7 @@ export function StackedClipsLane({
   trim: TrimLive | null;
   reorder: ReorderLive | null;
   /**
-   * A row header's drag: each lifted clip's x at its start in the order it would drop into (lined up); null, or a clip
+   * A row grip's drag: each lifted clip's x at its start in the order it would drop into (lined up); null, or a clip
    * not in it, keeps its x.
    */
   liftedX: ReadonlyMap<string, number> | null;
@@ -180,6 +180,7 @@ export function StackedClipsLane({
         <div
           key={span.clip.id}
           aria-hidden="true"
+          data-stacked-row={span.clip.id}
           className={cn("absolute inset-x-0 border-b border-white/4", selectedIds.has(span.clip.id) && "bg-white/4")}
           style={{ top: i * ROW, height: ROW }}
         />
@@ -317,7 +318,7 @@ export function StackedClipsLane({
           <div
             aria-hidden="true"
             data-testid="stitch-trim-ghost"
-            className={cn("absolute overflow-hidden", ghost.side === "out" ? "rounded-r-media" : "rounded-l-media")}
+            className={cn("absolute overflow-hidden", ghost.side === "out" ? "rounded-r-md" : "rounded-l-md")}
             style={{ left: ghost.x, top: trimIndex * ROW + BOX_TOP, width: ghost.width, height: BOX_HEIGHT }}
           >
             <Filmstrip
@@ -339,7 +340,7 @@ export function StackedClipsLane({
           <div
             aria-hidden="true"
             data-testid="stitch-insertion-bar"
-            className="pointer-events-none absolute inset-x-0 z-20 h-[3px] rounded-[2px] bg-selection"
+            className="pointer-events-none absolute inset-x-0 z-20 h-[3px] rounded-[2px] bg-neutral-100"
             style={{ top: insertionY - 1.5 }}
           />
         )}

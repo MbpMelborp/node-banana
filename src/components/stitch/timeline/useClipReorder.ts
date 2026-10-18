@@ -22,7 +22,7 @@ import { groupTravel } from "./useClipMove";
  * step). Escape puts it back. A release onto a draft that changed under the
  * drag is dropped (the editor's keys wait while it runs).
  *
- * In Stacked it serves the row headers only (a box's body moves its clip in
+ * In Stacked it serves the rows' grips only (a box's body moves its clip in
  * time and across rows, useClipMove): the drag is vertical, the place comes
  * from the lifted box's centre crossing half a row, and the rows scroll by
  * themselves while the pointer is near their top or bottom.
@@ -31,7 +31,7 @@ import { groupTravel } from "./useClipMove";
  * press on one of several selected clips drags them all. In Track they move
  * as one block, in their order, to the drop point; the block is armed only
  * once the drop point has left where the press found it, so a wobble never
- * gathers clips that were apart. In Stacked (a row header) they move rows
+ * gathers clips that were apart. In Stacked (a row's grip) they move rows
  * together, their spacing kept and the group stopped at the first and last
  * rows.
  */

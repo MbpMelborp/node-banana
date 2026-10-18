@@ -18,8 +18,8 @@ import type { TrimDragResult } from "./trimDrag";
  * Pure: no React, no DOM.
  */
 
-/** Half the 4px gap the boards leave between clips that touch in time. */
-export const JOIN_INSET_PX = 2;
+/** Half the 2px gap the boards leave between clips that touch in time. */
+export const JOIN_INSET_PX = 1;
 /** A clip is never drawn narrower than this, so a very short piece at a low zoom can still be pressed. */
 export const MIN_DRAWN_PX = 4;
 

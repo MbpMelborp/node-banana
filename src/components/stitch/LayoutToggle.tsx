@@ -45,8 +45,9 @@ const OPTIONS: ReadonlyArray<{ mode: Mode; label: string; tip: string }> = [
  * Track | Stacked, in the control row under the video between Mute all and
  * Snap: two of the row's own icon buttons, the pressed one on the pressed
  * fill as Snap is, with a little room either side so they read as a pair. A
- * switch changes the timeline's height, and with it the stage's, so the
- * video and its row (the toggle in it) can move by the difference. A node
+ * switch changes the timeline's height, and with it the stage's; the
+ * workspace holds the timeline's height while the pointer is over the row,
+ * so the toggle stays under the pointer until it leaves. A node
  * setting, so a switch is one undo step and Done writes it; the editor
  * pauses on any switch (the modal's own effect). Inert, like the rest of the
  * row, while the draft has no clips.

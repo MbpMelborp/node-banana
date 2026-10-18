@@ -7,26 +7,10 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
   type RefObject,
 } from "react";
-import {
-  AlignEndVertical,
-  AlignStartVertical,
-  ArrowDown,
-  ArrowUp,
-  ClipboardPaste,
-  Copy,
-  CopyPlus,
-  Crosshair,
-  RotateCcw,
-  Scissors,
-  ScissorsLineDashed,
-  Trash,
-  Volume1,
-  VolumeX,
-} from "lucide-react";
-import { MenuDivider, MenuHeader, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
+import { cn } from "@/components/nodes/ui/cn";
+import { MenuDivider, MenuItem, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
 import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { clipName } from "@/lib/stitch/labels";
@@ -61,13 +45,16 @@ import {
 } from "../editorActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
-import { EDITOR_PANEL_SELECTOR } from "../editorStyles";
+import { EDIT_MENU_DIVIDER, EDIT_MENU_MUTED, EDIT_MENU_ROW, EDIT_MENU_SURFACE, EDITOR_PANEL_SELECTOR } from "../editorStyles";
 
-const MENU_WIDTH = 184;
+/** The edit menus' 220px. */
+const MENU_WIDTH = 220;
 const EDGE = 8;
-const ICON = { size: 11, strokeWidth: 1.75, className: "shrink-0" } as const;
 
-type ItemOpts = { shortcut?: string; disabled?: boolean; danger?: boolean; title?: string };
+type ItemOpts = { shortcut?: string; disabled?: boolean; title?: string };
+
+/** The menu's heading: the clip (and its source or row), or how many, as a muted line. */
+const HEADING = cn(EDIT_MENU_MUTED, "pb-1.5 pt-1.5");
 
 /**
  * What both menus share: the placement inside the window, focus on the first row and back to the panel however it
@@ -142,27 +129,21 @@ function useMenuChrome(ref: RefObject<HTMLDivElement | null>, x: number, y: numb
   return { position, close, onKeyDown };
 }
 
-/** One row: its icon, label and key, the same action as the key. */
+/** One row: its label and key, the same action as the key. */
 function menuItem(act: (run: () => void) => () => void) {
-  return function item(label: string, icon: ReactNode, run: () => void, opts: ItemOpts = {}) {
+  return function item(label: string, run: () => void, opts: ItemOpts = {}) {
     return (
-      <MenuItem
-        role="menuitem"
-        disabled={opts.disabled}
-        title={opts.title}
-        onClick={act(run)}
-        className={opts.danger ? "text-red-400 hover:text-red-300" : undefined}
-      >
-        {icon}
+      <MenuItem role="menuitem" disabled={opts.disabled} title={opts.title} onClick={act(run)} className={EDIT_MENU_ROW}>
         <span className="truncate">{label}</span>
-        {opts.shortcut && <MenuShortcut>{opts.shortcut}</MenuShortcut>}
+        {opts.shortcut && <MenuShortcut className="font-sans text-xs tabular-nums">{opts.shortcut}</MenuShortcut>}
       </MenuItem>
     );
   };
 }
 
 /**
- * A clip's right-click menu (an audio clip's is AudioMenu), on the app's menu skin: its sound, a split at
+ * A clip's right-click menu (an audio clip's is AudioMenu), on the edit menus' skin (the headers' ⋯): a muted
+ * heading, then its rows with their keys, no icons. Its sound, a split at
  * the playhead, in Stacked its place (start or end at the playhead, a row up
  * or down), its trim, copy, cut, paste and duplicate, its source node, and
  * removing it. The clip is the selection (the right-click selected it), so
@@ -252,59 +233,55 @@ function OpenMenu({
       aria-label={multi ? header : name}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => event.preventDefault()}
+      className={EDIT_MENU_SURFACE}
       style={{ left: position.left, top: position.top, width: MENU_WIDTH }}
     >
-      <MenuHeader className="px-2.5">
-        <MenuSectionLabel>{header}</MenuSectionLabel>
-      </MenuHeader>
-      <MenuList>
-        {muted
-          ? item("Unmute clip audio", <Volume1 {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })
-          : item("Mute clip audio", <VolumeX {...ICON} />, toggleSelectedClipMute, { shortcut: "⌥M" })}
-        {item("Split at playhead", <Scissors {...ICON} />, splitAtPlayhead, {
-          shortcut: "S",
-          disabled: !canSplit,
-          title: canSplit ? undefined : (splitBlocked ?? undefined),
-        })}
-        {stacked && (
-          <>
-            {item("Start at playhead", <AlignStartVertical {...ICON} />, startSelectedAtPlayhead, {
-              shortcut: "[",
-              disabled: multi || !canStart,
-              title: multi ? "Select one clip" : undefined,
-            })}
-            {item("End at playhead", <AlignEndVertical {...ICON} />, endSelectedAtPlayhead, {
-              shortcut: "]",
-              disabled: multi || !canEnd,
-              title: multi ? "Select one clip" : canEnd ? undefined : "The clip is longer than the time before the playhead",
-            })}
-            {item("Move up a row", <ArrowUp {...ICON} />, () => moveSelectedRow(-1), { shortcut: "⌥↑", disabled: !canRowUp })}
-            {item("Move down a row", <ArrowDown {...ICON} />, () => moveSelectedRow(1), {
-              shortcut: "⌥↓",
-              disabled: !canRowDown,
-            })}
-          </>
-        )}
-        {item("Reset trim", <RotateCcw {...ICON} />, resetSelectedTrim, { disabled: !trimmed })}
-        <MenuDivider role="separator" className="my-1" />
-        {item("Copy", <Copy {...ICON} />, copySelection, { shortcut: "⌘C" })}
-        {item("Cut", <ScissorsLineDashed {...ICON} />, cutSelection, { shortcut: "⌘X" })}
-        {item("Paste", <ClipboardPaste {...ICON} />, pasteClipboard, {
-          shortcut: "⌘V",
-          disabled: !pasteOn,
-        })}
-        {item("Duplicate", <CopyPlus {...ICON} />, duplicateSelection, { shortcut: "⌘D" })}
-        <MenuDivider role="separator" className="my-1" />
-        {!inEdit &&
-          item("Reveal source node", <Crosshair {...ICON} />, revealSelectedSource, {
-            disabled: multi || !canRevealSource(clip, view),
+      <div className={cn(HEADING, "truncate")}>{header}</div>
+      {muted
+        ? item("Unmute clip audio", toggleSelectedClipMute, { shortcut: "⌥M" })
+        : item("Mute clip audio", toggleSelectedClipMute, { shortcut: "⌥M" })}
+      {item("Split at playhead", splitAtPlayhead, {
+        shortcut: "S",
+        disabled: !canSplit,
+        title: canSplit ? undefined : (splitBlocked ?? undefined),
+      })}
+      {stacked && (
+        <>
+          {item("Start at playhead", startSelectedAtPlayhead, {
+            shortcut: "[",
+            disabled: multi || !canStart,
             title: multi ? "Select one clip" : undefined,
           })}
-        {item(multi ? `Remove ${group.length} clips` : "Remove clip", <Trash {...ICON} />, removeSelection, {
-          shortcut: "⌫",
-          danger: true,
+          {item("End at playhead", endSelectedAtPlayhead, {
+            shortcut: "]",
+            disabled: multi || !canEnd,
+            title: multi ? "Select one clip" : canEnd ? undefined : "The clip is longer than the time before the playhead",
+          })}
+          {item("Move up a row", () => moveSelectedRow(-1), { shortcut: "⌥↑", disabled: !canRowUp })}
+          {item("Move down a row", () => moveSelectedRow(1), {
+            shortcut: "⌥↓",
+            disabled: !canRowDown,
+          })}
+        </>
+      )}
+      {item("Reset trim", resetSelectedTrim, { disabled: !trimmed })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item("Copy", copySelection, { shortcut: "⌘C" })}
+      {item("Cut", cutSelection, { shortcut: "⌘X" })}
+      {item("Paste", pasteClipboard, {
+        shortcut: "⌘V",
+        disabled: !pasteOn,
+      })}
+      {item("Duplicate", duplicateSelection, { shortcut: "⌘D" })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {!inEdit &&
+        item("Reveal source node", revealSelectedSource, {
+          disabled: multi || !canRevealSource(clip, view),
+          title: multi ? "Select one clip" : undefined,
         })}
-      </MenuList>
+      {item(multi ? `Remove ${group.length} clips` : "Remove clip", removeSelection, {
+        shortcut: "⌫",
+      })}
     </MenuSurface>
   );
 }
@@ -371,64 +348,60 @@ function AudioMenu({
       aria-label={header}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => event.preventDefault()}
+      className={EDIT_MENU_SURFACE}
       style={{ left: position.left, top: position.top, width: MENU_WIDTH }}
     >
-      <MenuHeader className="px-2.5">
-        {/* A library file's name is long: it gives way, the row's name stays whole */}
-        <MenuSectionLabel className="flex min-w-0 whitespace-nowrap" title={multi ? undefined : name}>
-          {multi ? (
-            header
-          ) : (
-            <>
-              <span className="min-w-0 truncate">{name}</span>
-              <span className="shrink-0">&nbsp;· {audioRowName(clip.row)}</span>
-            </>
-          )}
-        </MenuSectionLabel>
-      </MenuHeader>
-      <MenuList>
-        {item("Split at playhead", <Scissors {...ICON} />, splitSelectedAudioAtPlayhead, {
-          shortcut: "S",
-          disabled: !canSplit,
-        })}
-        {item("Start at playhead", <AlignStartVertical {...ICON} />, startSelectedAudioAtPlayhead, {
-          shortcut: "[",
-          ...(oneClip ?? { disabled: !canStart }),
-        })}
-        {item("End at playhead", <AlignEndVertical {...ICON} />, endSelectedAudioAtPlayhead, {
-          shortcut: "]",
-          ...(oneClip ?? {
-            disabled: !canEnd,
-            title: canEnd ? undefined : "The clip is longer than the time before the playhead",
-          }),
-        })}
-        {item("Move up a row", <ArrowUp {...ICON} />, () => moveSelectedAudioRow(-1), {
-          shortcut: "⌥↑",
-          disabled: !canRowUp,
-        })}
-        {item("Move down a row", <ArrowDown {...ICON} />, () => moveSelectedAudioRow(1), {
-          shortcut: "⌥↓",
-          disabled: !canRowDown,
-        })}
-        {muted
-          ? item(multi ? "Unmute clips" : "Unmute clip", <Volume1 {...ICON} />, toggleSelectedAudioMute, { shortcut: "M" })
-          : item(multi ? "Mute clips" : "Mute clip", <VolumeX {...ICON} />, toggleSelectedAudioMute, { shortcut: "M" })}
-        <MenuDivider role="separator" className="my-1" />
-        {item("Copy", <Copy {...ICON} />, copySelection, { shortcut: "⌘C" })}
-        {item("Cut", <ScissorsLineDashed {...ICON} />, cutSelection, { shortcut: "⌘X" })}
-        {item("Paste", <ClipboardPaste {...ICON} />, pasteClipboard, { shortcut: "⌘V", disabled: !pasteOn })}
-        {item("Duplicate", <CopyPlus {...ICON} />, duplicateSelection, { shortcut: "⌘D" })}
-        <MenuDivider role="separator" className="my-1" />
-        {item(
-          multi ? `Remove ${group.length} clips` : "Remove clip",
-          <Trash {...ICON} />,
-          () => {
-            const s = useStitchEditorStore.getState();
-            s.untagCut(removeAudioClipsById(multi ? group.map((c) => c.id) : [clipId]));
-          },
-          { shortcut: "⌫", danger: true },
+      {/* A library file's name is long: it gives way, the row's name stays whole */}
+      <div className={cn(HEADING, "flex min-w-0 whitespace-nowrap")} title={multi ? undefined : name}>
+        {multi ? (
+          header
+        ) : (
+          <>
+            <span className="min-w-0 truncate">{name}</span>
+            <span className="shrink-0">&nbsp;· {audioRowName(clip.row)}</span>
+          </>
         )}
-      </MenuList>
+      </div>
+      {item("Split at playhead", splitSelectedAudioAtPlayhead, {
+        shortcut: "S",
+        disabled: !canSplit,
+      })}
+      {item("Start at playhead", startSelectedAudioAtPlayhead, {
+        shortcut: "[",
+        ...(oneClip ?? { disabled: !canStart }),
+      })}
+      {item("End at playhead", endSelectedAudioAtPlayhead, {
+        shortcut: "]",
+        ...(oneClip ?? {
+          disabled: !canEnd,
+          title: canEnd ? undefined : "The clip is longer than the time before the playhead",
+        }),
+      })}
+      {item("Move up a row", () => moveSelectedAudioRow(-1), {
+        shortcut: "⌥↑",
+        disabled: !canRowUp,
+      })}
+      {item("Move down a row", () => moveSelectedAudioRow(1), {
+        shortcut: "⌥↓",
+        disabled: !canRowDown,
+      })}
+      {muted
+        ? item(multi ? "Unmute clips" : "Unmute clip", toggleSelectedAudioMute, { shortcut: "M" })
+        : item(multi ? "Mute clips" : "Mute clip", toggleSelectedAudioMute, { shortcut: "M" })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item("Copy", copySelection, { shortcut: "⌘C" })}
+      {item("Cut", cutSelection, { shortcut: "⌘X" })}
+      {item("Paste", pasteClipboard, { shortcut: "⌘V", disabled: !pasteOn })}
+      {item("Duplicate", duplicateSelection, { shortcut: "⌘D" })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item(
+        multi ? `Remove ${group.length} clips` : "Remove clip",
+        () => {
+          const s = useStitchEditorStore.getState();
+          s.untagCut(removeAudioClipsById(multi ? group.map((c) => c.id) : [clipId]));
+        },
+        { shortcut: "⌫" },
+      )}
     </MenuSurface>
   );
 }

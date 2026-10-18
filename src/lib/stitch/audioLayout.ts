@@ -5,11 +5,12 @@
  * clip moves nothing. Pure: no React, no DOM.
  */
 
-export const AUDIO_ROW_PX = 64;
-/** The one row whose volume line is open for editing. */
-export const AUDIO_ROW_EXPANDED_PX = 136;
-/** The strip under the rows that holds "+ Add audio", and the "New row" drop target. */
-export const AUDIO_STRIP_PX = 24;
+/** A 44px clip block and the 8px under it. */
+export const AUDIO_ROW_PX = 52;
+/** The one row whose volume line is open for editing: a 120px block and the 8px under it. */
+export const AUDIO_ROW_EXPANDED_PX = 128;
+/** The strip under the rows that holds "+ Audio", and the "New row" drop target. */
+export const AUDIO_STRIP_PX = 28;
 /** Rows shown before the rest scroll. */
 export const AUDIO_ROWS_CAP = 2;
 

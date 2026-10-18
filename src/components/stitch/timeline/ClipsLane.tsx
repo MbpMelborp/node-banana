@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Plus } from "lucide-react";
+import { cn } from "@/components/nodes/ui/cn";
 import { selectedClipIds, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { insetBox, JOIN_INSET_PX, type LaneBox } from "@/lib/stitch/laneLayout";
 import { blockInsertionX, insertionX } from "@/lib/stitch/reorder";
@@ -122,7 +123,11 @@ export function useLaneFocus() {
   return { rowRef, onFocus, onBlur };
 }
 
-/** The dashed placeholder across an empty lane: it adds clips from the library (off while the library is). */
+/** Quiet filled slots that add clips: the empty lane's placeholder and the + after the last clip. */
+const ADD_SLOT =
+  "absolute flex items-center justify-center rounded-md bg-edit-slot text-ink-3 transition-colors hover:bg-white/4 hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
+
+/** The placeholder across an empty lane: it adds clips from the library (off while the library is). */
 export function EmptyLaneButton({
   libraryOn,
   left,
@@ -150,15 +155,15 @@ export function EmptyLaneButton({
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
       onBlur={onBlur}
-      className="absolute flex items-center justify-center rounded-md border border-dashed border-white/12 text-neutral-500 transition-colors hover:border-white/18 hover:bg-white/2 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:pointer-events-none"
+      className={cn(ADD_SLOT, "disabled:pointer-events-none")}
       style={{ left, top, width, height }}
     >
-      {libraryOn && <Plus size={16} strokeWidth={2} />}
+      {libraryOn && <Plus size={16} strokeWidth={1.5} />}
     </button>
   );
 }
 
-/** The dashed + after the last clip that adds clips from the library (off while the library is). */
+/** The + after the last clip that adds clips from the library (off while the library is). */
 export function AddSlotButton({
   libraryOn,
   left,
@@ -184,10 +189,10 @@ export function AddSlotButton({
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
       onBlur={onBlur}
-      className="absolute flex items-center justify-center rounded-media border border-dashed border-white/18 bg-white/2 text-neutral-500 transition-colors hover:border-white/24 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:opacity-40 disabled:hover:border-white/18 disabled:hover:text-neutral-500"
+      className={cn(ADD_SLOT, "disabled:opacity-40 disabled:hover:bg-edit-slot disabled:hover:text-ink-3")}
       style={{ left, top, width: GEOMETRY.addSlot, height }}
     >
-      <Plus size={16} strokeWidth={2} />
+      <Plus size={16} strokeWidth={1.5} />
     </button>
   );
 }
@@ -195,9 +200,9 @@ export function AddSlotButton({
 /**
  * The clips row: one box per clip (a fixed slot for a clip with no length),
  * the trim ghost, and the insertion bar while a clip is dragged to a new
- * place. After the last clip a dashed + adds clips from the library; an
- * empty sequence shows a dashed placeholder across the lane that does the
- * same (both off while the library is).
+ * place. After the last clip a quiet + slot adds clips from the library; an
+ * empty sequence shows a placeholder across the lane that does the same
+ * (both off while the library is).
  *
  * It is a listbox: the selected clip (the lead of several) is its one tab
  * stop, the arrows, Home and End select one clip, and the context-menu key
@@ -255,7 +260,7 @@ export function ClipsLane({
   const rowStyle = { top: GEOMETRY.ruler, height: GEOMETRY.clipRow };
   if (spans.length === 0) {
     return (
-      <div ref={rowRef} className="absolute inset-x-0 border-b border-white/6" style={rowStyle}>
+      <div ref={rowRef} className="absolute inset-x-0" style={rowStyle}>
         <EmptyLaneButton
           libraryOn={libraryOn}
           left={GEOMETRY.origin}
@@ -319,7 +324,7 @@ export function ClipsLane({
         onMouseDown={keepFocus}
         onFocus={onFocus}
         onBlur={onBlur}
-        className="absolute inset-x-0 border-b border-white/6"
+        className="absolute inset-x-0"
         style={rowStyle}
       >
         {spans.map((span, i) => {
@@ -376,7 +381,7 @@ export function ClipsLane({
           <div
             aria-hidden="true"
             data-testid="stitch-trim-ghost"
-            className={ghost.out ? "absolute overflow-hidden rounded-r-media" : "absolute overflow-hidden rounded-l-media"}
+            className={ghost.out ? "absolute overflow-hidden rounded-r-md" : "absolute overflow-hidden rounded-l-md"}
             style={{ left: ghost.x, top: GEOMETRY.clipTop, width: ghost.width, height: GEOMETRY.clipHeight }}
           >
             <Filmstrip
@@ -398,7 +403,7 @@ export function ClipsLane({
           <div
             aria-hidden="true"
             data-testid="stitch-insertion-bar"
-            className="absolute w-[3px] rounded-[2px] bg-selection"
+            className="absolute w-[3px] rounded-[2px] bg-neutral-100"
             style={{
               left: insertionBarX - 1.5,
               top: GEOMETRY.clipTop - 4,

@@ -8,8 +8,9 @@ import { libraryDrop } from "./libraryDrop";
 
 /** A sound or video of unknown length is drawn this wide. */
 const UNKNOWN_WIDTH_PX = 48;
-const GHOST = "pointer-events-none absolute z-30 rounded-[3px] ring-2 ring-selection bg-white/6";
-const BAR = "pointer-events-none absolute z-30 bg-selection";
+/** Where the item lands: a dashed outline, so it never reads as a selected clip (a solid white ring). */
+const GHOST = "pointer-events-none absolute z-30 rounded-md border border-dashed border-white/40 bg-white/6";
+const BAR = "pointer-events-none absolute z-30 bg-neutral-100";
 
 /**
  * Where a library drag from the Edit video view's pane would drop, in the lanes' content: Track's insertion bar

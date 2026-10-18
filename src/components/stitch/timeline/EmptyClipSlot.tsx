@@ -7,7 +7,7 @@ import { Spinner } from "@/components/nodes/ui/Spinner";
 import { clipName } from "@/lib/stitch/labels";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { clipLength, type ClipSpan } from "@/lib/stitch/timeline";
-import { GEOMETRY, LIFTED_CLIP, MOVING_CLIP } from "../editorStyles";
+import { GEOMETRY, LIFTED_CLIP, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { keepFocus, type ClipBoxMode } from "./ClipBox";
 
@@ -35,11 +35,6 @@ const COPY = {
   "past-end": "trim starts past the end",
   "under-frame": "trim is shorter than a frame",
 } as const;
-
-/** What an empty clip's slot says after its name ("not generated yet"); Stacked's row header shows it too. */
-export function emptyCopy(span: ClipSpan, view: ClipMediaView | undefined): string {
-  return COPY[emptyReason(span, view)];
-}
 
 /**
  * A clip with no length: a source that has not run, one still being read
@@ -93,15 +88,18 @@ export function EmptyClipSlot({
       onMouseDown={keepFocus}
       onContextMenu={onContextMenu}
       className={cn(
-        "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-media border border-dashed border-white/20 bg-white/2 text-[11px] text-neutral-500 select-none outline-none focus-visible:ring-2 focus-visible:ring-selection",
-        mode === "lifted" && cn(LIFTED_CLIP, "bg-editor-chrome"),
-        mode === "moving" && cn(MOVING_CLIP, "bg-editor-chrome"),
+        "absolute flex items-center justify-center gap-1.5 overflow-hidden rounded-md border border-dashed border-white/20 bg-white/2 text-[11px] text-neutral-500 select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
+        mode === "lifted" && cn(LIFTED_CLIP, "bg-edit-field"),
+        mode === "moving" && cn(MOVING_CLIP, "bg-edit-field"),
         stacked && mode === "rest" && "cursor-grab",
         mode === "dimmed" && "opacity-40",
-        mode === "rest" && selected && "ring-2 ring-selection",
       )}
       style={{ left: x, top, width, height }}
     >
+      {mode === "rest" && selected && (
+        // Over the dashed edge, as a clip's ring is over its frames
+        <span aria-hidden="true" data-selected-ring="" className={cn(SELECTED_RING, "-inset-px")} />
+      )}
       {reason === "loading" ? (
         <Spinner size={13} className="shrink-0" />
       ) : (
