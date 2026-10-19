@@ -1,14 +1,17 @@
 /**
  * Files the user adds from their computer, kept in the asset library as
- * uploads (`origin: "uploaded"`): the Edit video view's Add media and the
- * drop onto its pane. An upload is recorded like a render, under the edit
- * it came in through (its id and name stand in for a workflow; no workflow
- * snapshot, no project), or under "Uploads" when it came in outside an edit.
- * It keeps the file's own name as its display name; the library names the
- * file on disk itself. The same file added twice is two records sharing one
- * file, as for any recording.
+ * uploads (`origin: "uploaded"`): Add media, in the Edit video view and in
+ * an Edit Video node's editor, and a drop on the view's media pane. An
+ * upload is recorded like a render, under the edit it came in through (its
+ * id and name stand in for a workflow; no workflow snapshot, no project), or
+ * under "Uploads" when it came in outside an edit (the node's editor). It
+ * keeps the file's own name as its display name; the library names the file
+ * on disk itself. Only formats the library stores are taken. The same file
+ * added twice is two records sharing one file; an upload never shares one
+ * with a generated or edited asset.
  */
 
+import { MEDIA_TYPES, mediaTypeForExt, mediaTypeForMime, type MediaType } from "../mediaTypes";
 import { ASSET_NAME_MAX, oneLineName } from "../name";
 import type { AssetKind, AssetProducer, AssetRunContext, AssetView } from "../types";
 import { patchAsset } from "./api";
@@ -22,23 +25,59 @@ export const UPLOADS_WORKFLOW_ID = "uploads";
 const UPLOADS_WORKFLOW_NAME = "Uploads";
 
 export const NOT_MEDIA_REASON = "Only video and audio files can be added.";
+/** For video or audio in a format the library doesn't store (AVI, AIFF…). */
+export const UNSUPPORTED_MEDIA_REASON = "The library can't keep that kind of video or audio.";
 const UNREADABLE_REASON = "The file couldn't be read as video or audio.";
-
-const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "mov", "webm", "mkv", "avi"]);
-const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "aif", "aiff"]);
 
 /** How long the browser gets to read a file's length and size before the upload goes without them. */
 const MEASURE_TIMEOUT_MS = 3_000;
 
-/** Video or audio by the file's type, else by its extension; null for anything else. */
+type UploadType = MediaType & { kind: UploadKind };
+
+const isUploadType = (type: MediaType): type is UploadType => type.kind === "video" || type.kind === "audio";
+
+/** The video and audio formats the library stores, as the file chooser's `accept`: by type and by extension. */
+export const UPLOAD_ACCEPT = [
+  ...new Set(
+    MEDIA_TYPES.filter(isUploadType).flatMap((type) => [
+      type.mime,
+      ...[type.ext, ...(type.extAliases ?? [])].map((ext) => `.${ext}`),
+    ]),
+  ),
+].join(",");
+
+/** Common video and audio formats the library doesn't store, known by extension when the browser gives no type. */
+const OTHER_MEDIA_EXTENSIONS = new Set([
+  "avi", "mkv", "wmv", "asf", "flv", "f4v", "mpg", "mpeg", "m2ts", "mts", "vob", "3gp", "3g2", "ogv",
+  "aif", "aiff", "aifc", "caf", "wma", "amr", "ac3",
+]);
+
+const extOf = (name: string) => /\.([^.]+)$/.exec(name)?.[1];
+
+/**
+ * The library's video or audio type for a file, by the file's type, else by its extension; null for anything else,
+ * including video and audio in a format the library doesn't store (AVI, AIFF…).
+ */
+function uploadTypeOf(file: Pick<File, "name" | "type">): UploadType | null {
+  const type = mediaTypeForMime(file.type) ?? mediaTypeForExt(extOf(file.name));
+  return type && isUploadType(type) ? type : null;
+}
+
+/** Video or audio the library can keep, by the file's type, else by its extension; null for anything else. */
 export function uploadKindOf(file: Pick<File, "name" | "type">): UploadKind | null {
+  return uploadTypeOf(file)?.kind ?? null;
+}
+
+/**
+ * What a file is to Add media: video or audio the library keeps, video or audio in a format it doesn't
+ * ("unsupported": a video/ or audio/ type, or a common media extension such as .avi or .aiff), or anything else.
+ */
+export function uploadVerdict(file: Pick<File, "name" | "type">): UploadKind | "unsupported" | "other" {
+  const kind = uploadKindOf(file);
+  if (kind) return kind;
   const type = file.type.toLowerCase();
-  if (type.startsWith("video/")) return "video";
-  if (type.startsWith("audio/")) return "audio";
-  const ext = /\.([^.]+)$/.exec(file.name)?.[1]?.toLowerCase() ?? "";
-  if (VIDEO_EXTENSIONS.has(ext)) return "video";
-  if (AUDIO_EXTENSIONS.has(ext)) return "audio";
-  return null;
+  if (type.startsWith("video/") || type.startsWith("audio/")) return "unsupported";
+  return OTHER_MEDIA_EXTENSIONS.has(extOf(file.name)?.toLowerCase() ?? "") ? "unsupported" : "other";
 }
 
 export interface MeasuredMedia {
@@ -122,14 +161,15 @@ export interface UploadDeps {
 
 /**
  * Records a video or audio file into the library and resolves with its record. Rejects with an Error whose
- * message says why, as a sentence: not video or audio, the library refused or could not take it, or bytes nothing
- * can read. The recorder's own notice stays quiet; the caller tells the user. Bytes nothing can read are kept but
+ * message says why, as a sentence: not video or audio in a format the library stores, the library refused or could
+ * not take it, or bytes nothing can read. The recorder's own notice stays quiet; the caller tells the user. Bytes nothing can read are kept but
  * never listed, as for any recording; a file whose bytes are something else (a picture named `.mp4`) is put in
  * the Trash, so the library doesn't list what the user was told wasn't added.
  */
 export async function recordUpload(file: File, context: UploadContext = {}, deps: UploadDeps = {}): Promise<AssetView> {
-  const kind = uploadKindOf(file);
-  if (!kind) throw new Error(NOT_MEDIA_REASON);
+  const type = uploadTypeOf(file);
+  if (!type) throw new Error(uploadVerdict(file) === "unsupported" ? UNSUPPORTED_MEDIA_REASON : NOT_MEDIA_REASON);
+  const { kind } = type;
   const measured = await (deps.measure ?? measureMedia)(file, kind).catch((): MeasuredMedia => ({}));
   const { editId, editName } = context;
   const run: AssetRunContext = {
@@ -147,7 +187,8 @@ export async function recordUpload(file: File, context: UploadContext = {}, deps
       kind,
       origin: "uploaded",
       media: file,
-      mime: file.type || undefined,
+      // The library's own spelling, found from the extension when the browser gave no type
+      mime: type.mime,
       name: uploadName(file.name),
       producer,
       ...measured,

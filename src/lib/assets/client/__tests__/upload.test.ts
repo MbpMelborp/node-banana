@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RUN_ID_PATTERN, WORKFLOW_ID_PATTERN, type AssetRunContext, type RecordAssetInput } from "../../types";
 import type { RecordAssetOptions } from "../recorder";
-import { measureMedia, NOT_MEDIA_REASON, recordUpload, uploadKindOf, UPLOADS_WORKFLOW_ID } from "../upload";
+import {
+  measureMedia,
+  NOT_MEDIA_REASON,
+  recordUpload,
+  UNSUPPORTED_MEDIA_REASON,
+  UPLOAD_ACCEPT,
+  uploadKindOf,
+  uploadVerdict,
+  UPLOADS_WORKFLOW_ID,
+} from "../upload";
 import { assetView, recordResult } from "./helpers";
 
 const m = vi.hoisted(() => ({ recordAsset: vi.fn(), patchAsset: vi.fn() }));
@@ -59,17 +68,77 @@ describe("uploadKindOf", () => {
     expect(uploadKindOf({ name: "voice.mp4", type: "audio/mp4" })).toBe("audio");
   });
 
-  it("falls back to the extension when the browser gives no type", () => {
+  it("falls back to the extension when the browser gives no type, or one the library doesn't know", () => {
     expect(uploadKindOf({ name: "Take 2.MOV", type: "" })).toBe("video");
-    expect(uploadKindOf({ name: "clip.mkv", type: "application/octet-stream" })).toBe("video");
+    expect(uploadKindOf({ name: "clip.m4v", type: "application/octet-stream" })).toBe("video");
+    expect(uploadKindOf({ name: "clip.webm", type: "" })).toBe("video");
     expect(uploadKindOf({ name: "song.flac", type: "" })).toBe("audio");
-    expect(uploadKindOf({ name: "loop.aiff", type: "" })).toBe("audio");
+    expect(uploadKindOf({ name: "voice.opus", type: "" })).toBe("audio");
+    expect(uploadKindOf({ name: "intro.aac", type: "audio/vnd.dlna.adts" })).toBe("audio");
   });
 
   it("is null for anything else", () => {
     expect(uploadKindOf({ name: "notes.txt", type: "text/plain" })).toBeNull();
     expect(uploadKindOf({ name: "photo.png", type: "image/png" })).toBeNull();
     expect(uploadKindOf({ name: "README", type: "" })).toBeNull();
+  });
+
+  it("is null for video and audio in a format the library doesn't store", () => {
+    expect(uploadKindOf({ name: "holiday.avi", type: "video/x-msvideo" })).toBeNull();
+    expect(uploadKindOf({ name: "holiday.avi", type: "" })).toBeNull();
+    expect(uploadKindOf({ name: "clip.mkv", type: "video/x-matroska" })).toBeNull();
+    expect(uploadKindOf({ name: "clip.wmv", type: "video/x-ms-wmv" })).toBeNull();
+    expect(uploadKindOf({ name: "voice.aiff", type: "audio/x-aiff" })).toBeNull();
+    expect(uploadKindOf({ name: "loop.aif", type: "" })).toBeNull();
+    expect(uploadKindOf({ name: "memo.caf", type: "audio/x-caf" })).toBeNull();
+  });
+});
+
+describe("uploadVerdict", () => {
+  it("tells video and audio the library keeps, as uploadKindOf does", () => {
+    expect(uploadVerdict({ name: "clip.mov", type: "video/quicktime" })).toBe("video");
+    expect(uploadVerdict({ name: "Take 2.MOV", type: "" })).toBe("video");
+    expect(uploadVerdict({ name: "voice.mp4", type: "audio/mp4" })).toBe("audio");
+    expect(uploadVerdict({ name: "song.flac", type: "" })).toBe("audio");
+  });
+
+  it("calls video and audio in a format the library doesn't store unsupported, by its type or a common extension", () => {
+    for (const [name, type] of [
+      ["holiday.avi", "video/x-msvideo"],
+      ["clip.mkv", "video/x-matroska"],
+      ["clip.wmv", "video/x-ms-wmv"],
+      ["old.mpg", "video/mpeg"],
+      ["phone.3gp", "video/3gpp"],
+      ["voice.aiff", "audio/x-aiff"],
+      ["memo.caf", "audio/x-caf"],
+      ["song.wma", "audio/x-ms-wma"],
+      // A type the browser gives that no extension list knows
+      ["camera.xyz", "video/x-something"],
+      // No type, or the browser's catch-all: the extension says
+      ["holiday.AVI", ""],
+      ["clip.mkv", "application/octet-stream"],
+      ["loop.aif", ""],
+      ["memo.caf", ""],
+      ["old.mpeg", ""],
+    ]) {
+      expect(uploadVerdict({ name, type }), name).toBe("unsupported");
+    }
+  });
+
+  it("calls anything else other", () => {
+    expect(uploadVerdict({ name: "notes.txt", type: "text/plain" })).toBe("other");
+    expect(uploadVerdict({ name: "photo.png", type: "image/png" })).toBe("other");
+    expect(uploadVerdict({ name: "photo.png", type: "" })).toBe("other");
+    expect(uploadVerdict({ name: "README", type: "" })).toBe("other");
+  });
+});
+
+describe("UPLOAD_ACCEPT", () => {
+  it("lists the video and audio formats the library stores, by type and by extension, and nothing else", () => {
+    expect(UPLOAD_ACCEPT).toBe(
+      "video/mp4,.mp4,.m4v,video/webm,.webm,video/quicktime,.mov," +
+        "audio/mpeg,.mp3,audio/wav,.wav,audio/ogg,.ogg,.oga,.opus,audio/flac,.flac,audio/aac,.aac,audio/mp4,.m4a,audio/webm",
+    );
   });
 });
 
@@ -115,7 +184,7 @@ describe("recordUpload", () => {
     expect(run.workflowName).toBeNull();
   });
 
-  it("keeps the name to one line of 120 characters, its extension kept, and leaves out a type the browser didn't give", async () => {
+  it("keeps the name to one line of 120 characters, its extension kept", async () => {
     const long = `${"a".repeat(130)}.mp4`;
     await recordUpload(new File(["v"], long, { type: "" }), {}, { measure });
     await recordUpload(video("Day one\nfinal.mov", "video/quicktime"), {}, { measure });
@@ -123,9 +192,16 @@ describe("recordUpload", () => {
     const second = m.recordAsset.mock.calls[1][0] as RecordAssetInput;
     expect(first.name).toBe(`${"a".repeat(116)}.mp4`);
     expect(first.name).toHaveLength(120);
-    expect(first.mime).toBeUndefined();
     expect(first.kind).toBe("video");
     expect(second.name).toBe("Day one final.mov");
+  });
+
+  it("sends the library's type for the file, from its extension when the browser gave none", async () => {
+    await recordUpload(new File(["v"], "Take 2.MOV", { type: "" }), {}, { measure });
+    await recordUpload(new File(["a"], "hum.wav", { type: "audio/x-wav" }), {}, { measure });
+    await recordUpload(new File(["a"], "intro.aac", { type: "audio/vnd.dlna.adts" }), {}, { measure });
+    const mimes = m.recordAsset.mock.calls.map(([input]) => (input as RecordAssetInput).mime);
+    expect(mimes).toEqual(["video/quicktime", "audio/wav", "audio/aac"]);
   });
 
   it("doesn't cut a long name through the middle of an emoji", async () => {
@@ -138,6 +214,16 @@ describe("recordUpload", () => {
   it("refuses a file that is not video or audio before recording anything", async () => {
     await expect(recordUpload(new File(["x"], "notes.txt", { type: "text/plain" }), {}, { measure })).rejects.toThrow(NOT_MEDIA_REASON);
     expect(NOT_MEDIA_REASON).toBe("Only video and audio files can be added.");
+    expect(measure).not.toHaveBeenCalled();
+    expect(m.recordAsset).not.toHaveBeenCalled();
+  });
+
+  it("refuses video and audio the library can't store, rather than keep them under another format's name", async () => {
+    await expect(recordUpload(video("holiday.avi", "video/x-msvideo"), {}, { measure })).rejects.toThrow(UNSUPPORTED_MEDIA_REASON);
+    await expect(recordUpload(new File(["a"], "voice.aiff", { type: "" }), {}, { measure })).rejects.toThrow(
+      UNSUPPORTED_MEDIA_REASON,
+    );
+    expect(UNSUPPORTED_MEDIA_REASON).toBe("The library can't keep that kind of video or audio.");
     expect(measure).not.toHaveBeenCalled();
     expect(m.recordAsset).not.toHaveBeenCalled();
   });

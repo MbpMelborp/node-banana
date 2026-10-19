@@ -60,8 +60,9 @@ to the old project-only save.
 A workflow with a project keeps writing into `<project>/generations/` under
 the legacy `<prompt>_<md5>.<ext>` name, and the library indexes those files
 where they are. Files are never moved by classification. The same bytes
-produced twice are stored once per destination folder, and each production
-still gets its own record.
+produced twice are stored once per destination folder (an upload shares a
+file only with another upload, see below), and each production still gets
+its own record.
 
 ## Recording
 
@@ -91,10 +92,19 @@ to `/api/save-generation` for project workflows otherwise.
 - Uploaded assets (`origin: "uploaded"`) are video and audio files the user
   adds from the computer: Upload in Add media, and files dropped on Add
   media or on the Edit video view's media pane (`recordUpload` in
-  `src/lib/assets/client/upload.ts`). Whether a file is video or audio is
-  read from its type, else from its extension. A file added through an edit
-  is recorded under it, as a render is (producer `nodeType: "editProject"`,
-  operation `upload`; the edit's id and name stand in for the workflow). One
+  `src/lib/assets/client/upload.ts`). Only the formats the library stores
+  are taken (`MEDIA_TYPES` in `src/lib/assets/mediaTypes.ts`): MP4 and
+  M4V, MOV and WebM video; MP3, WAV, Ogg (OGA, Opus), FLAC, AAC, M4A and
+  WebM audio. The format is read from the file's type, else from its
+  extension, and the upload is recorded under the library's own type for
+  it. Video or audio in another format (AVI, MKV, AIFF, CAF…) is left out
+  in the browser with a notice of its own ("The library can't keep that
+  kind of video or audio."), and the file chooser offers only the formats
+  above. The server refuses an upload whose format neither its bytes nor
+  its type tell (415), rather than keep it under the kind's default
+  format. A file added through an edit is recorded under it, as a render
+  is (producer `nodeType: "editProject"`, operation `upload`; the edit's
+  id and name stand in for the workflow). One
   added in an Edit Video node's dialog goes under the workflow "Uploads"
   (`workflowId: "uploads"`, producer `nodeType: "upload"`). Neither has a
   project or a workflow snapshot, so the Assets view offers no workflow to
@@ -102,16 +112,19 @@ to `/api/save-generation` for project workflows otherwise.
   (one line, at most 120 characters, its extension kept); the file on disk
   is named as any other. The browser reads the length and a video's size
   from the file when it can within 3 s, and the server measures it too. The
-  same file added twice is two records sharing one file, as for any
-  recording. A file whose bytes turn out to be another kind (a picture
-  named `.mp4`) is put in the Trash; bytes nothing can read are kept but
+  same file added twice is two records sharing one file. An upload shares
+  a file only with another upload, never with a generated or edited asset
+  (nor takes a project file no record holds), and no other recording takes
+  an upload's file. A file whose bytes turn out to be another kind (a
+  picture named `.mp4`) is put in the Trash; bytes nothing can read are kept but
   never shown (see below). Either way the user is told the file couldn't be
   added. `recordUpload` records with `quiet`, which keeps the recorder's own
   notice back, and reads why a recording failed from the handle's `failed`.
   Node Banana 2.2.0 and earlier do not read records of this origin. They
   list no uploads, and a clip that uses one reads "Not in the library"
-  there. When they delete for good a record that shares its file with an
-  upload, they send the file to the OS Trash, and the upload loses it.
+  there. Since no record they read holds an upload's file, none of their
+  deletes releases it. Their Clean up can remove an upload's poster when
+  no record they read has its bytes; the upload then shows a blank cover.
 - A run that is one of a batch ("Run 10×") carries `batch` (`id`, `index`,
   `count`) in its run context, and every asset it records keeps it in its
   sidecar. The server drops a tag that does not hold up.

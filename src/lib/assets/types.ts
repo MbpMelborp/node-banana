@@ -43,7 +43,11 @@ export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 export const WORKFLOW_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export type AssetKind = "image" | "video" | "audio" | "3d";
-/** `uploaded`: a file the user added from their computer (the Edit video view's Add media and drop). */
+/**
+ * `uploaded`: a video or audio file the user added from their computer, through Add media (in the Edit video view,
+ * and in an Edit Video node's editor, where it goes under "Uploads") or a drop on the view's media pane
+ * (`src/lib/assets/client/upload.ts`). Node Banana 2.2.0 and earlier can't read records of this origin.
+ */
 export type AssetOrigin = "generated" | "edited" | "uploaded";
 
 export const ASSET_KINDS: readonly AssetKind[] = ["image", "video", "audio", "3d"];
