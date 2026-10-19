@@ -487,6 +487,8 @@ export interface VideoStitchNodeData extends BaseNodeData {
   audioClips?: StitchAudioClip[];
   /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
   sequenceLayout?: StitchSequenceLayout;
+  /** The edit project the editor's Save and Done keep in step with this node (see docs/edit-video.md, "Saved to Edits"). */
+  editProjectId?: string;
   outputVideo: string | null;     // Rendered video blob URL or data URL
   loopCount: 1 | 2 | 3;          // How many times to repeat the clip sequence (1 = no loop)
   status: NodeStatus;

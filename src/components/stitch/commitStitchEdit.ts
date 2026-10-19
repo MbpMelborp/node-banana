@@ -6,6 +6,7 @@ import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { stitchMusicEdge, stitchReadContext } from "@/lib/stitch/sources";
 import { edgeIdsInOrder } from "@/lib/stitch/timeline";
 import type { VideoStitchNodeData, WorkflowEdge } from "@/types";
+import { mirrorStitchEditToEdits, type MirrorInput } from "./mirrorStitchEdit";
 
 export type CommitResult = "closed" | "written" | "gone";
 export type SaveResult = "saved" | "unchanged" | "gone";
@@ -14,12 +15,21 @@ export type SaveResult = "saved" | "unchanged" | "gone";
  * Done. Writes the draft to the node and closes the editor; it does not
  * encode. "closed" when nothing changed, so a legacy node stays legacy.
  * An edit project's session has no node: nothing is written or closed.
+ * What was written is also kept in the Edits folder (mirrorStitchEditToEdits).
  */
 export function commitStitchEdit(): CommitResult {
   if (useStitchEditorStore.getState().editId !== null) return "closed";
   const written = writeStitchEdit();
+  const mirror = typeof written === "string" ? null : mirrorInputOf(written);
   useStitchEditorStore.getState().close();
+  if (mirror) void mirrorStitchEditToEdits(mirror);
   return written === "gone" ? "gone" : written === "unchanged" ? "closed" : "written";
+}
+
+/** What the Edits mirror needs, taken from the session before Done closes it (the graph is read at the write). */
+function mirrorInputOf(draft: StitchDraft): MirrorInput | null {
+  const s = useStitchEditorStore.getState();
+  return s.nodeId ? { nodeId: s.nodeId, draft, durations: s.durations } : null;
 }
 
 /**
@@ -44,6 +54,8 @@ export function saveStitchEdit(): SaveResult {
   const edges = useWorkflowStore.getState().edges;
   const kept = nodeId && musicEdgeGone(nodeId, edges, s.musicEdgeIdAtOpen) && hasMusicClip(s.draft?.audioClips ?? []);
   s.markSaved(written, kept ? s.musicEdgeIdAtOpen : nodeId ? (stitchMusicEdge(nodeId, edges)?.id ?? null) : null);
+  const mirror = mirrorInputOf(written);
+  if (mirror) void mirrorStitchEditToEdits(mirror);
   return "saved";
 }
 
