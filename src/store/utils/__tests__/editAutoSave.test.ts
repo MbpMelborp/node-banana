@@ -8,6 +8,7 @@ import { createEditAutoSave, startEditAutoSave } from "@/store/utils/editAutoSav
 import { EditApiError } from "@/lib/edits/client";
 import { createClip } from "@/lib/stitch/timeline";
 import type { EditDocument, SaveEditRequest } from "@/lib/edits/types";
+import type { AssetView } from "@/lib/assets/types";
 
 const api = vi.hoisted(() => ({ fetchEdit: vi.fn(), saveEdit: vi.fn(), fetchEditList: vi.fn(), show: vi.fn() }));
 vi.mock("@/lib/edits/client", async (importOriginal) => ({
@@ -90,6 +91,17 @@ describe("the edit autosave", () => {
     await advance(600);
     expect(api.saveEdit).toHaveBeenCalledTimes(1);
     expect(selectIsDirty(editor())).toBe(false);
+  });
+
+  it("saves a media item renamed in the pane, with nothing else changed, once", async () => {
+    const renamed = { id: "aclipaaaaaaaa1", kind: "video", filename: "aclipaaaaaaaa1.mp4", name: "Intro", workflow: { projectPath: null } };
+    useEditProjectStore.getState().noteAssetRenamed(renamed as unknown as AssetView);
+    expect(selectIsDirty(editor())).toBe(false);
+    await advance(AUTOSAVE_SETTLE_MS + 100);
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
+    expect((api.saveEdit.mock.calls[0][1] as SaveEditRequest).assets.aclipaaaaaaaa1.name).toBe("Intro");
+    await advance(AUTOSAVE_SETTLE_MS * 3);
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing with Save automatically off", async () => {

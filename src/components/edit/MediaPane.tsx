@@ -47,11 +47,13 @@ import {
   ICON_BUTTON,
   LIFTED_CLIP,
   QUIET_BUTTON,
+  STITCH_EDITOR_PANEL,
 } from "@/components/stitch/editorStyles";
 import {
   BlankCover,
   CoverImage,
   CoverLength,
+  DimmedCover,
   LIBRARY_ADD_HINT,
   LibraryTile,
   PendingTile,
@@ -78,7 +80,7 @@ const GHOST_WIDTH = 112;
 const GHOST_ROW_WIDTH = 200;
 /** A list row's cover, px wide: the thumbnail size asked for. */
 const LIST_COVER_WIDTH = 56;
-/** The ⋯ menu's height and gap, about: it opens upward when the pane has less room than this under its trigger. */
+/** The ⋯ menu's height and gap, about: it opens upward when the pane has less room than this under its item. */
 const MENU_PX = 140;
 /** Marks the pane's scroller, which a ⋯ menu measures its room in. */
 const MEDIA_SCROLLER = "data-media-scroller";
@@ -245,6 +247,7 @@ export function MediaPane() {
     try {
       const renamed = await patchAsset(view.id, { name });
       primeAssetInfo([renamed]);
+      useEditProjectStore.getState().noteAssetRenamed(renamed);
       followInAssets(renamed);
       return true;
     } catch (error) {
@@ -253,14 +256,41 @@ export function MediaPane() {
     }
   }, []);
 
+  // Remove from edit takes the row that had focus (its ⋯ menu, or the sheet that opened): focus goes to the next
+  // item once it is gone, else the one before it, else Add media
+  const focusAfterRemove = useRef<string[] | null>(null);
+  const addMediaRef = useRef<HTMLButtonElement>(null);
+  const removeNow = useCallback((id: string) => {
+    const draft = useStitchEditorStore.getState().draft;
+    const order = draft ? editMediaOf(draft) : NO_IDS;
+    const at = order.indexOf(id);
+    focusAfterRemove.current = [order[at + 1], order[at - 1]].filter((other) => other !== undefined);
+    if (!removeItem(id)) focusAfterRemove.current = null;
+  }, []);
+  useEffect(() => {
+    const beside = focusAfterRemove.current;
+    focusAfterRemove.current = null;
+    const active = document.activeElement;
+    if (!beside || (active && active !== document.body && active.isConnected)) return;
+    const rows = Array.from(scrollEl.current?.querySelectorAll<HTMLElement>("[data-media-id]") ?? []);
+    const target =
+      beside.map((id) => itemFocusTarget(rows.find((row) => row.dataset.mediaId === id))).find(Boolean) ??
+      addMediaRef.current ??
+      document.querySelector<HTMLElement>(`[${STITCH_EDITOR_PANEL}]`);
+    target?.focus({ preventScroll: true });
+  }, [ids]);
+
   const [removing, setRemoving] = useState<{ id: string; name: string; count: number } | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const remove = useCallback((item: MediaItem) => {
-    const draft = useStitchEditorStore.getState().draft;
-    const count = draft ? mediaUseCount(draft, item.id) : 0;
-    if (count > 0) setRemoving({ id: item.id, name: item.name, count });
-    else removeItem(item.id);
-  }, []);
+  const remove = useCallback(
+    (item: MediaItem) => {
+      const draft = useStitchEditorStore.getState().draft;
+      const count = draft ? mediaUseCount(draft, item.id) : 0;
+      if (count > 0) setRemoving({ id: item.id, name: item.name, count });
+      else removeNow(item.id);
+    },
+    [removeNow],
+  );
 
   const { consumeClick, onPointerDown } = drag;
   const add = useCallback(
@@ -321,7 +351,13 @@ export function MediaPane() {
           ))}
         </div>
         <div className="group relative flex shrink-0">
-          <button type="button" aria-label="Add media" className={HEADER_ICON_BUTTON} onClick={() => openLibraryPicker("all")}>
+          <button
+            ref={addMediaRef}
+            type="button"
+            aria-label="Add media"
+            className={HEADER_ICON_BUTTON}
+            onClick={() => openLibraryPicker("all")}
+          >
             <Plus size={16} strokeWidth={1.5} />
           </button>
           <Tooltip label="Add media" placement="bottom" />
@@ -370,9 +406,10 @@ export function MediaPane() {
       {fileDrop.over && <DropToAdd />}
       {removing && (
         <Sheet
-          label="Remove from edit?"
           title={
-            removing.count === 1 ? `Remove ${removing.name} and its clip?` : `Remove ${removing.name} and its ${removing.count} clips?`
+            removing.count === 1
+              ? `Remove “${removing.name}” and its clip?`
+              : `Remove “${removing.name}” and its ${removing.count} clips?`
           }
           description="The file stays in the asset library."
           onClose={() => setRemoving(null)}
@@ -386,7 +423,7 @@ export function MediaPane() {
             variant="danger"
             className={DIALOG_BUTTON_RING}
             onClick={() => {
-              removeItem(removing.id);
+              removeNow(removing.id);
               setRemoving(null);
             }}
           >
@@ -399,11 +436,21 @@ export function MediaPane() {
   );
 }
 
-/** Remove from edit, as one undo step; the item stops being the selected one. */
-function removeItem(id: string): void {
-  if (!removeMediaItem(id)) return;
+/** Remove from edit, as one undo step; the item stops being the selected one. Returns whether the edit changed. */
+function removeItem(id: string): boolean {
+  if (!removeMediaItem(id)) return false;
   const project = useEditProjectStore.getState();
   if (project.mediaFocus.id === id) project.selectMedia(null);
+  return true;
+}
+
+/** Where an item takes focus: its add button, or its ⋯ when it can no longer be placed. Null for none (or no item). */
+function itemFocusTarget(item: HTMLElement | null | undefined): HTMLElement | null {
+  return (
+    item?.querySelector<HTMLElement>("button[data-asset-id]:not(:disabled)") ??
+    item?.querySelector<HTMLElement>("button[aria-haspopup]") ??
+    null
+  );
 }
 
 /**
@@ -438,11 +485,7 @@ function useFocusAfterRename(renaming: boolean, itemRef: RefObject<HTMLLIElement
     if (!was || renaming) return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
-    const item = itemRef.current;
-    const target =
-      item?.querySelector<HTMLElement>("button[data-asset-id]:not(:disabled)") ??
-      item?.querySelector<HTMLElement>("button[aria-haspopup]");
-    target?.focus({ preventScroll: true });
+    itemFocusTarget(itemRef.current)?.focus({ preventScroll: true });
   }, [renaming, itemRef]);
 }
 
@@ -752,22 +795,13 @@ function MediaCover({ item, left, actions }: { item: MediaItem; left: boolean; a
           onPointerDown={actions.onPointerDown}
         />
       ) : (
-        <div
+        <DimmedCover
           data-asset-id={item.id}
           role="img"
           aria-label={item.lost ? `${item.name}, not in the library` : item.name}
           title={item.lost ? `${item.name}\n${NOT_IN_LIBRARY}` : item.name}
-          className="relative block aspect-video w-full overflow-hidden rounded-md bg-edit-field"
-        >
-          <span className="block h-full w-full opacity-40">
-            <BlankCover />
-          </span>
-          {item.lost && (
-            <span className="absolute bottom-1 right-1 rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none text-neutral-300">
-              {NOT_IN_LIBRARY}
-            </span>
-          )}
-        </div>
+          note={item.lost ? NOT_IN_LIBRARY : undefined}
+        />
       )}
       {!renameTarget && (
         <ItemMenu
@@ -817,11 +851,13 @@ function ItemMenu({
       onOpenChange(false);
       return;
     }
-    // Under the trigger while the pane has room for it there, else over it
+    // Under the item while the pane has room for it there, else over it. It hangs from the item's foot, not the
+    // trigger's: a row's, or a whole cover's (well under the ⋯ at its top)
     const trigger = triggerRef.current;
     const scroller = trigger?.closest(`[${MEDIA_SCROLLER}]`);
+    const anchor = trigger?.closest("[data-media-id]");
     const below =
-      trigger && scroller ? scroller.getBoundingClientRect().bottom - trigger.getBoundingClientRect().bottom : Infinity;
+      anchor && scroller ? scroller.getBoundingClientRect().bottom - anchor.getBoundingClientRect().bottom : Infinity;
     setUp(below < MENU_PX);
     onOpenChange(true);
   };

@@ -60,6 +60,7 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { __resetEditProjectForTests, useEditProjectStore } from "@/store/editProjectStore";
 import { __resetPosterRequestsForTests } from "@/components/assets/posterRequests";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
+import { UPLOAD_ACCEPT } from "@/lib/assets/client/upload";
 import { __resetAssetInfoForTests, getAssetInfo, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { __resetMediaInfoForTests, __setMediaExtractorForTests, __setMediaInfoForTests, mediaKeyOf } from "@/lib/stitch/mediaInfo";
 import { createClip, sourceKey } from "@/lib/stitch/timeline";
@@ -859,11 +860,13 @@ describe("LibraryPicker", () => {
   });
 
   describe("Upload", () => {
-    it("opens the file chooser for video and audio, many at once", async () => {
+    it("opens the file chooser for the video and audio formats the library keeps, many at once", async () => {
       openPicker();
       await within(dialog()).findByRole("button", { name: named("a1.mp4") });
       const input = fileInput();
-      expect(input).toHaveAttribute("accept", "video/*,audio/*");
+      // Not every video and audio file: an AVI or an AIFF couldn't be added
+      expect(input).toHaveAttribute("accept", UPLOAD_ACCEPT);
+      expect(UPLOAD_ACCEPT.split(",")).toEqual(expect.arrayContaining(["video/mp4", ".mov", "audio/wav", ".m4a"]));
       expect(input.multiple).toBe(true);
       // Never a stop of its own: Upload is
       expect(input).toHaveAttribute("tabindex", "-1");
@@ -1185,8 +1188,8 @@ describe("LibraryPicker over the editor", () => {
     });
     const editorDialog = screen.getByRole("dialog", { name: "Edit video" });
     // The + slot after the last clip (the timeline has no track headers, so no other +)
-    const [slotAdd] = within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" });
-    expect(within(editorDialog).getAllByRole("button", { name: "Add a clip from the library" })).toHaveLength(1);
+    const [slotAdd] = within(editorDialog).getAllByRole("button", { name: "Add media" });
+    expect(within(editorDialog).getAllByRole("button", { name: "Add media" })).toHaveLength(1);
     expect(slotAdd).toBe(screen.getByTestId("stitch-add-slot"));
     // A browser focuses a button it clicks; jsdom does not
     act(() => slotAdd.focus());

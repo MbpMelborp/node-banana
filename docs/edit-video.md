@@ -1003,7 +1003,8 @@ one keeps it picked. Enter in the search goes to the first file; Enter or
 Space picks it. Escape, Cancel or a click on the scrim closes the dialog.
 With the library off, the list says so and Upload is off.
 
-**Upload** opens the file chooser (video and audio, several at once).
+**Upload** opens the file chooser (video and audio in the formats the
+asset library keeps, several at once).
 Files dropped on the dialog do the same; while they are over it, a quiet
 frame and "Drop to add" show on the list. Each file is recorded into the
 asset library as an upload (see [asset-library.md](asset-library.md)): in
@@ -1011,8 +1012,12 @@ the Edit video view under the open edit, in the node's dialog under
 "Uploads". It shows at the top, in a group of its own, as "Uploading…"
 until its record exists, then as a picked tile, whatever the filters say.
 Anything that is not video or audio is left out, with one notice ("Only
-video and audio files can be added."); a file that cannot be added says so
-with its name and why, and its tile goes.
+video and audio files can be added."). So is video or audio in a format
+the library does not keep (AVI, MKV, AIFF…), with a notice of its own
+that names it ("Couldn't add “holiday.avi”", "The library can't keep that
+kind of video or audio."; for several, "Couldn't add 2 files" and their
+names). A file that cannot be added says so with its name and why, and its
+tile goes.
 
 The footer says what Add takes ("2 videos and 1 audio file · 0:34", or
 "Pick videos or audio to add") and, while files upload, "Uploading 2
@@ -1022,8 +1027,8 @@ uploading.
 **In the Edit video view**, Add puts the picks into the edit's media in
 the order they were picked, as one undo step, and nothing on the timeline.
 A file already in the media is skipped, and so is an upload whose bytes the
-media holds already. The media pane selects the last one and scrolls to it;
-a click or a drag there places it.
+media holds already. The media pane (shown again if it was hidden) selects
+the last one and scrolls to it; a click or a drag there places it.
 
 **In the node's dialog**, Add places the picks, as one undo step. The
 videos are added after the last clip, in the order they were picked, and
@@ -1136,9 +1141,10 @@ media, not the whole library. Its head reads "Media", then List and Grid
 (the pressed one filled, as Snap is; the choice is kept in
 `node-banana-edit-pane-layout`, List by default), Add media, and Hide
 media. A hidden pane stays hidden until the header's first button, Show
-media, shows it again (`node-banana-edit-library-pane`, named for the
-library pane it replaced). An edit with no media shows only "No media yet"
-and an Add media button. The list has one row per item, in the media's
+media, shows it again, or Add media's Add puts something in it
+(`node-banana-edit-library-pane`, named for the library pane it
+replaced). An edit with no media shows only "No media yet" and an Add
+media button. The list has one row per item, in the media's
 order: a 56 × 32 cover (a video's poster, or a sound's glyph), the name,
 and the length ("0:05"). The grid shows the same items in the same order:
 videos as covers two to a row with only their length on them, sounds as
@@ -1179,7 +1185,7 @@ save. The file on disk keeps its own name.
 (the Assets view opens on the file; off once the library has no record of
 it) and Remove from edit. Remove from edit takes the item out of the
 media. When clips use it, the menu reads "Remove from edit…" and asks
-first ("Remove sunset.mp4 and its 2 clips?", "The file stays in the asset
+first ("Remove “sunset.mp4” and its 2 clips?", "The file stays in the asset
 library."), then removes those clips too, video and audio. The clips after
 them close up as after any removal, except in a placed stack, where nothing
 else moves. Either way it is one undo step, so undo brings back the item
@@ -1196,7 +1202,9 @@ undo step for those ready together, and the pane selects the last and
 scrolls to it. A file whose bytes the media holds already adds nothing,
 and the pane selects the item it matches instead. Anything that is not
 video or audio is left out, with one notice ("Only video and audio files
-can be added."); a file that cannot be added says so with its name and why.
+can be added."), and so is video or audio in a format the library does
+not keep, with the notice Upload gives. A file that cannot be added says
+so with its name and why.
 A file still on its way in when the view is left, or another edit opens,
 joins its edit when that edit next opens; Save as a new edit takes it
 along.

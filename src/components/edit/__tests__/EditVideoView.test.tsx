@@ -36,6 +36,16 @@ vi.mock("@/lib/assets/client/upload", async (importOriginal) => ({
   ...uploadsApi,
 }));
 
+const poster = vi.hoisted(() => ({ ensurePoster: vi.fn(), listeners: new Set<(assetId: string) => void>() }));
+vi.mock("@/lib/assets/client/poster", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/assets/client/poster")>()),
+  ensurePoster: poster.ensurePoster,
+  onPosterReady: (listener: (assetId: string) => void) => {
+    poster.listeners.add(listener);
+    return () => poster.listeners.delete(listener);
+  },
+}));
+
 vi.mock("@/hooks/useStitchVideos", () => ({ checkEncoderSupport: async () => true, stitchVideosAsync: vi.fn() }));
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: toast }) } }));
@@ -61,6 +71,7 @@ vi.stubGlobal("localStorage", {
   clear: vi.fn(),
 });
 
+import { __resetPosterRequestsForTests } from "@/components/assets/posterRequests";
 import { EditApiError } from "@/lib/edits/client";
 import { editAssetIds } from "@/lib/edits/document";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
@@ -275,6 +286,8 @@ beforeEach(() => {
   useStitchClipboard.getState().setClipboard(null);
   __resetMediaUploadsForTests();
   uploadsApi.recordUpload.mockImplementation(() => new Promise(() => {}));
+  __resetPosterRequestsForTests();
+  poster.ensurePoster.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -738,7 +751,9 @@ describe("keys", () => {
       return checked.textContent;
     };
     act(() => editor().setPlaying(true));
-    const slot = screen.getAllByRole("button", { name: "Add a clip from the library" })[0];
+    // Named as its tooltip says: it opens Add media, whose Add puts nothing on the timeline here
+    const slot = screen.getByTestId("stitch-add-slot");
+    expect(slot).toHaveAccessibleName("Add media");
     expect(slot).toHaveAttribute("title", "Add media");
     fireEvent.click(slot);
     expect(editor().pickerOpen).toBe("video");
@@ -993,6 +1008,9 @@ describe("the media pane", () => {
     const pane = screen.getByRole("complementary", { name: "Media" });
     expect(within(pane).getByText("No media yet")).toBeInTheDocument();
     expect(tileIds()).toEqual([]);
+    // The empty lane's placeholder opens it too, and says so
+    expect(screen.getByTestId("stitch-empty-lane")).toHaveAccessibleName("Add media");
+    expect(screen.getByTestId("stitch-empty-lane")).toHaveAttribute("title", "Add media");
     // The head's and the empty pane's
     const adds = within(pane).getAllByRole("button", { name: "Add media" });
     expect(adds).toHaveLength(2);
@@ -1112,11 +1130,13 @@ describe("the media pane", () => {
   it("renames an item in place: Enter writes its name, Escape and an empty name keep it, a refused name says why", async () => {
     measure(A, B);
     assetsApi.patchAsset.mockImplementation(async (id: string, patch: { name: string }) => ({ ...LIBRARY[id], name: patch.name }));
-    // The Assets view has the item loaded, and its detail open
+    // The Assets view has the item loaded, among its new arrivals and its selection, and its detail open
     const assetsBefore = useAssetStore.getState();
     act(() =>
       useAssetStore.setState({
         items: [{ id: C, createdAt: T0, kind: "video", asset: LIBRARY[C], page: 0 }],
+        arrivals: [LIBRARY[B], LIBRARY[C]],
+        selectedRecords: { [B]: LIBRARY[B], [C]: LIBRARY[C] },
         detailId: C,
         detailAsset: LIBRARY[C],
       }),
@@ -1141,7 +1161,12 @@ describe("the media pane", () => {
       // It is the library's name now: the cache has it, so a clip of it is called that too, and so does the Assets view
       expect(getAssetInfo(C)?.name).toBe("Dune");
       expect(useAssetStore.getState().items[0].asset?.name).toBe("Dune");
+      expect(useAssetStore.getState().arrivals).toEqual([LIBRARY[B], { ...LIBRARY[C], name: "Dune" }]);
+      expect(useAssetStore.getState().selectedRecords).toEqual({ [B]: LIBRARY[B], [C]: { ...LIBRARY[C], name: "Dune" } });
       expect(useAssetStore.getState().detailAsset?.name).toBe("Dune");
+      // And the edit's snapshot names it so, which its next save sends with nothing else changed
+      expect(project().open?.assets[C]?.name).toBe("Dune");
+      expect(project().open?.snapshotStale).toBe(true);
       // The keys go back to the item
       expect(tile(C)).toHaveFocus();
 
@@ -1181,7 +1206,15 @@ describe("the media pane", () => {
       expect(await screen.findByText("Couldn't reach the asset library.")).toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "Rename Dunes" })).toBeInTheDocument();
     } finally {
-      act(() => useAssetStore.setState({ items: assetsBefore.items, detailId: null, detailAsset: null }));
+      act(() =>
+        useAssetStore.setState({
+          items: assetsBefore.items,
+          arrivals: assetsBefore.arrivals,
+          selectedRecords: assetsBefore.selectedRecords,
+          detailId: null,
+          detailAsset: null,
+        }),
+      );
     }
   });
 
@@ -1247,8 +1280,8 @@ describe("the media pane", () => {
 
     // Used twice: it asks, Cancel first
     pick(openMenu("sunset.mp4"), "Remove from edit…");
-    const sheet = await screen.findByRole("dialog", { name: "Remove from edit?" });
-    expect(sheet).toHaveTextContent("Remove sunset.mp4 and its 2 clips?");
+    // Named by its question, which says how many clips go
+    const sheet = await screen.findByRole("dialog", { name: "Remove “sunset.mp4” and its 2 clips?" });
     expect(sheet).toHaveTextContent("The file stays in the asset library.");
     expectWhiteRings(sheet);
     await waitFor(() => expect(within(sheet).getByRole("button", { name: "Cancel" })).toHaveFocus());
@@ -1261,7 +1294,9 @@ describe("the media pane", () => {
     expect(tileIds()).toEqual([A, B, M]);
 
     pick(openMenu("sunset.mp4"), "Remove from edit…");
-    fireEvent.click(within(await screen.findByRole("dialog", { name: "Remove from edit?" })).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "Remove “sunset.mp4” and its 2 clips?" })).getByRole("button", { name: "Remove" }),
+    );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(timelineIds()).toEqual([B]);
     expect(tileIds()).toEqual([B, M]);
@@ -1272,7 +1307,7 @@ describe("the media pane", () => {
 
     // One clip: "its clip"
     pick(openMenu("beach.mp4"), "Remove from edit…");
-    expect(await screen.findByRole("dialog", { name: "Remove from edit?" })).toHaveTextContent("Remove beach.mp4 and its clip?");
+    expect(await screen.findByRole("dialog", { name: "Remove “beach.mp4” and its clip?" })).toBeInTheDocument();
   });
 
   it("⋯ › Show in Assets opens the Assets view on the item; an item the library lost can only be removed", async () => {
@@ -1310,18 +1345,31 @@ describe("the media pane", () => {
     }
   });
 
-  it("opens an item's ⋯ menu under it while the pane has room there, else over it", async () => {
+  it("opens an item's ⋯ menu under it while the pane has room there, else over it; a cover's from under the cover", async () => {
     measure(A, B);
     await renderOpen(withMedia());
     await placeable(C);
     const box = (bottom: number) => ({ top: bottom - 28, bottom, left: 0, right: 28, width: 28, height: 28, x: 0, y: bottom - 28, toJSON: () => ({}) }) as DOMRect;
-    vi.spyOn(document.querySelector<HTMLElement>("[data-media-scroller]")!, "getBoundingClientRect").mockReturnValue(box(600));
-    const trigger = vi.spyOn(screen.getByRole("button", { name: "More for desert.mp4" }), "getBoundingClientRect");
-    trigger.mockReturnValue(box(100));
+    const scroller = () => document.querySelector<HTMLElement>("[data-media-scroller]")!;
+    vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(box(600));
+    const row = vi.spyOn(tile(C).closest("li")!, "getBoundingClientRect");
+    row.mockReturnValue(box(100));
     expect(openMenu("desert.mp4").parentElement).not.toHaveClass("bottom-full");
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    trigger.mockReturnValue(box(560));
+    row.mockReturnValue(box(560));
     expect(openMenu("desert.mp4").parentElement).toHaveClass("bottom-full");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+
+    // A cover's menu hangs from the cover's foot, well under its ⋯ at the top: that is where the room is measured
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(box(600));
+    const cover = vi.spyOn(tile(C).closest("li")!, "getBoundingClientRect");
+    vi.spyOn(screen.getByRole("button", { name: "More for desert.mp4" }), "getBoundingClientRect").mockReturnValue(box(455));
+    cover.mockReturnValue(box(490));
+    expect(openMenu("desert.mp4").parentElement).toHaveClass("bottom-full");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    cover.mockReturnValue(box(300));
+    expect(openMenu("desert.mp4").parentElement).not.toHaveClass("bottom-full");
   });
 
   it("selects the item a click adds, and scrolls to one revealed, also when the pane is shown again", async () => {
@@ -1361,6 +1409,213 @@ describe("the media pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show media" }));
     expect(screen.getByRole("complementary", { name: "Media" })).toBeInTheDocument();
     expect(storage[LIBRARY_PANE_KEY]).toBe("open");
+  });
+
+  it("Add from the timeline's + or + Audio with the pane hidden shows the pane, the last pick selected and scrolled to", async () => {
+    measure(A, B);
+    storage[LIBRARY_PANE_KEY] = "closed";
+    __resetEditProjectForTests();
+    const scrolledTo: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolledTo.push(this);
+    };
+    try {
+      await renderOpen();
+      expect(screen.queryByRole("complementary", { name: "Media" })).toBeNull();
+      fireEvent.click(screen.getByTestId("stitch-add-slot"));
+      const picker = await screen.findByRole("dialog", { name: "Add media" });
+      fireEvent.click(await within(picker).findByRole("button", { name: /^sunset\.mp4,/ }));
+      fireEvent.click(within(picker).getByRole("button", { name: /^desert\.mp4,/ }));
+      fireEvent.click(within(picker).getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add media" })).toBeNull());
+      expect(screen.getByRole("complementary", { name: "Media" })).toBeInTheDocument();
+      expect(storage[LIBRARY_PANE_KEY]).toBe("open");
+      expect(tileIds()).toEqual([A, B, C]);
+      expect(tile(C).closest("li")).toHaveAttribute("data-selected");
+      expect(scrolledTo).toEqual([tile(C).closest("li")]);
+      // Nothing went on the timeline
+      expect(timelineIds()).toEqual([A, B]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide media" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add audio" }));
+      const audioPicker = await screen.findByRole("dialog", { name: "Add media" });
+      fireEvent.click(await within(audioPicker).findByRole("button", { name: /^music\.m4a,/ }));
+      fireEvent.click(within(audioPicker).getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add media" })).toBeNull());
+      expect(screen.getByRole("complementary", { name: "Media" })).toBeInTheDocument();
+      expect(tileIds()).toEqual([A, B, C, M]);
+      expect(tile(M).closest("li")).toHaveAttribute("data-selected");
+      expect(editor().draft!.audioClips).toEqual([]);
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
+
+  it("Remove from edit asks with the whole question, a long name wrapping, and names the sheet by it", async () => {
+    measure(A, B);
+    const long = "143022_cinematic-drone-over-the-coastline-at-golden-hour_1a2b3c4d.mp4";
+    assetsApi.fetchAsset.mockImplementation(async (id: string) => (id === A ? { ...LIBRARY[A], filename: long } : (LIBRARY[id] ?? null)));
+    const sequence = {
+      ...doc().sequence,
+      timeline: ["v1", "v2", "v3"].map((id) => createClip({ kind: "asset", assetId: A }, { id })),
+    };
+    await renderOpen(withMedia({ sequence }));
+    await placeable(A);
+    pick(openMenu(long), "Remove from edit…");
+    const question = `Remove “${long}” and its 3 clips?`;
+    const sheet = await screen.findByRole("dialog", { name: question });
+    const title = within(sheet).getByRole("heading", { level: 2 });
+    expect(title).toHaveTextContent(question);
+    // It wraps, breaking the name where it must, so the count is never cut off
+    expect(title).not.toHaveClass("truncate");
+    expect(title).toHaveClass("[overflow-wrap:anywhere]");
+    expect(sheet).toHaveTextContent("The file stays in the asset library.");
+  });
+
+  describe("after Remove from edit, focus goes to the next item, else the one before, else Add media", () => {
+    const focusTarget = (id: string) => tile(id).closest("li")!.querySelector<HTMLElement>("button[data-asset-id]");
+    const removeFrom = async (name: string, used: boolean) => {
+      const trigger = screen.getByRole("button", { name: `More for ${name}` });
+      act(() => trigger.focus());
+      pick(openMenu(name), used ? "Remove from edit…" : "Remove from edit");
+      if (used) {
+        const sheet = await screen.findByRole("dialog", { name: new RegExp(`^Remove “${name.replace(/\./g, "\\.")}”`) });
+        await waitFor(() => expect(within(sheet).getByRole("button", { name: "Cancel" })).toHaveFocus());
+        fireEvent.click(within(sheet).getByRole("button", { name: "Remove" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      }
+    };
+
+    it("in the list, from the menu and from the sheet", async () => {
+      measure(A, B);
+      await renderOpen(withMedia());
+      await placeable(A, B, C, M);
+      // desert.mp4, unused: the next item, music.m4a
+      await removeFrom("desert.mp4", false);
+      expect(tileIds()).toEqual([A, B, M]);
+      await waitFor(() => expect(focusTarget(M)).toHaveFocus());
+      // music.m4a, the last: the one before, beach.mp4
+      await removeFrom("music.m4a", false);
+      await waitFor(() => expect(focusTarget(B)).toHaveFocus());
+      // sunset.mp4, through its sheet: the next, beach.mp4
+      await removeFrom("sunset.mp4", true);
+      expect(tileIds()).toEqual([B]);
+      await waitFor(() => expect(focusTarget(B)).toHaveFocus());
+      // beach.mp4, the only one left: Add media
+      await removeFrom("beach.mp4", true);
+      expect(screen.getByText("No media yet")).toBeInTheDocument();
+      const pane = screen.getByRole("complementary", { name: "Media" });
+      await waitFor(() => expect(within(pane).getAllByRole("button", { name: "Add media" })[0]).toHaveFocus());
+    });
+
+    it("in the grid, onto a sound's row and a cover", async () => {
+      measure(A, B);
+      await renderOpen(withMedia());
+      await placeable(A, B, C, M);
+      fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+      await removeFrom("desert.mp4", false);
+      await waitFor(() => expect(focusTarget(M)).toHaveFocus());
+      await removeFrom("music.m4a", false);
+      await waitFor(() => expect(tile(B)).toHaveFocus());
+      expect(tile(B).tagName).toBe("BUTTON");
+      // Cancel leaves it on the ⋯ that opened the sheet
+      const trigger = screen.getByRole("button", { name: "More for sunset.mp4" });
+      act(() => trigger.focus());
+      pick(openMenu("sunset.mp4"), "Remove from edit…");
+      const sheet = await screen.findByRole("dialog", { name: /^Remove “sunset\.mp4”/ });
+      fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(trigger).toHaveFocus());
+      await removeFrom("sunset.mp4", true);
+      await waitFor(() => expect(tile(B)).toHaveFocus());
+    });
+  });
+
+  it("takes the editor's white ring on keyboard focus, and shows ⋯ on hover or focus, in the list and the grid", async () => {
+    measure(A, B);
+    await renderOpen(withMedia());
+    await placeable(C, M);
+    const ring = [
+      "has-[[data-media-add]:focus-visible]:ring-2",
+      "has-[[data-media-add]:focus-visible]:ring-inset",
+      "has-[[data-media-add]:focus-visible]:ring-white/40",
+    ];
+    for (const id of [C, M]) {
+      const row = tile(id).closest("li")!;
+      expect(row).toHaveClass("group/row", ...ring);
+      expect(within(row).getByRole("button", { name: /^More for / })).toHaveClass(
+        "opacity-0",
+        "group-hover/row:opacity-100",
+        "group-focus-within/row:opacity-100",
+      );
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    // A cover rings itself; a sound is still a row
+    const cover = tile(C).closest("li")!;
+    expect(tile(C)).toHaveClass("focus-visible:ring-2", "focus-visible:ring-white/40");
+    expect(cover).toHaveClass("group/tile");
+    expect(within(cover).getByRole("button", { name: "More for desert.mp4" })).toHaveClass(
+      "opacity-0",
+      "group-hover/tile:opacity-100",
+      "group-focus-within/tile:opacity-100",
+    );
+    const sound = tile(M).closest("li")!;
+    expect(sound).toHaveClass("group/row", ...ring);
+    expect(within(sound).getByRole("button", { name: "More for music.m4a" })).toHaveClass("group-focus-within/row:opacity-100");
+  });
+
+  describe("a video with no poster", () => {
+    /** IntersectionObserver for the covers: none on screen until `show` says so. */
+    function stubObserver() {
+      const observed = new Map<Element, (visible: boolean) => void>();
+      class Observer {
+        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        observe(el: Element) {
+          observed.set(el, (visible) => this.callback([{ isIntersecting: visible }]));
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+      vi.stubGlobal("IntersectionObserver", Observer);
+      return {
+        show: (inside: Element) => {
+          const el = Array.from(observed.keys()).find((observedEl) => inside === observedEl || inside.contains(observedEl));
+          act(() => observed.get(el!)!(true));
+        },
+        restore: () => {
+          delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+        },
+      };
+    }
+    const src = (id: string) => tile(id).querySelector("img")!.getAttribute("src");
+    const ready = (id: string) => act(() => poster.listeners.forEach((listener) => listener(id)));
+
+    for (const layout of ["List", "Grid"] as const) {
+      it(`gets one made once it is on screen, and shows it when it is (${layout.toLowerCase()})`, async () => {
+        measure(A, B);
+        if (layout === "Grid") storage[PANE_LAYOUT_KEY] = "grid";
+        __resetEditProjectForTests();
+        assetsApi.fetchAsset.mockImplementation(async (id: string) =>
+          id === C ? { ...LIBRARY[C], hasPoster: false } : (LIBRARY[id] ?? null),
+        );
+        const observers = stubObserver();
+        try {
+          await renderOpen(withMedia());
+          await placeable(C);
+          expect(screen.getByRole("button", { name: layout })).toHaveAttribute("aria-pressed", "true");
+          expect(src(C)).not.toContain("poster=1");
+          expect(poster.ensurePoster).not.toHaveBeenCalled();
+          observers.show(tile(C));
+          await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: C }), expect.anything()));
+          expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
+          ready(C);
+          // The URL a cover with a poster has from the start
+          expect(src(C)).toBe(src(A)!.replace(LIBRARY[A].sha256, LIBRARY[C].sha256));
+          expect(src(C)).toContain("poster=1");
+        } finally {
+          observers.restore();
+        }
+      });
+    }
   });
 });
 
@@ -1544,7 +1799,7 @@ describe("dropping files on the media pane", () => {
     await placeable(A);
     fireEvent.click(screen.getByRole("button", { name: "More for sunset.mp4" }));
     fireEvent.click(within(screen.getByRole("menu", { name: "sunset.mp4" })).getByRole("menuitem", { name: "Remove from edit…" }));
-    const sheet = await screen.findByRole("dialog", { name: "Remove from edit?" });
+    const sheet = await screen.findByRole("dialog", { name: /^Remove “sunset\.mp4”/ });
     fireEvent.dragEnter(sheet, fileDrag());
     expect(fireEvent.dragOver(sheet, fileDrag())).toBe(true);
     expect(screen.queryByText("Drop to add")).toBeNull();
@@ -1563,6 +1818,26 @@ describe("dropping files on the media pane", () => {
     expect(editor().draft!.media).toEqual([A, B, C, M]);
     expect(editor().past.length).toBe(past);
     expect(tile(A).closest("li")).toHaveAttribute("data-selected");
+  });
+
+  it("in the grid, a file on its way and one the library lost are the same dimmed cover, each with its note", async () => {
+    measure(A, B);
+    assetsApi.fetchAsset.mockImplementation(async (id: string) => (id === B ? null : (LIBRARY[id] ?? null)));
+    await renderOpen(withMedia());
+    await waitFor(() => expect(tile(B)).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    fireEvent.drop(pane(), fileDrag([video("late.mp4")]));
+    const pending = pendingRows()[0].firstElementChild as HTMLElement;
+    const lost = tile(B);
+    expect(lost.className).toBe(pending.className);
+    expect(lost.firstElementChild!.className).toBe(pending.firstElementChild!.className);
+    // The note at the foot: "Not in the library" as "Adding…" is, the one chip both draw
+    const note = within(lost).getByText("Not in the library");
+    expect(note.className).toBe(within(pending).getByText("Adding…").className);
+    expect(note).toHaveClass("font-normal", "text-neutral-300");
+    // A file on its way shows its name at the top; a lost one is named by its label and tooltip
+    expect(within(pending).getByText("late.mp4")).toBeInTheDocument();
+    expect(lost).toHaveTextContent(/^Not in the library$/);
   });
 
   it("the empty pane takes a drop too", async () => {

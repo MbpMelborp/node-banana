@@ -1,6 +1,14 @@
 "use client";
 
-import { memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type HTMLAttributes,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 import { Check, Film, Music } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
@@ -94,6 +102,33 @@ export function CoverLength({ seconds }: { seconds: number }) {
 }
 
 /**
+ * A cover with nothing to show yet or any more: the blank frame dimmed, a `name` at its top and a `note` at its foot
+ * when given. A file on its way into the library, or (in the media pane's grid) one the library lost. The rest of the
+ * props (a role, a name, a title) go on the cover.
+ */
+export function DimmedCover({
+  name,
+  note,
+  ...props
+}: { name?: string; note?: string } & Omit<HTMLAttributes<HTMLDivElement>, "className" | "children">) {
+  return (
+    <div {...props} className="relative aspect-video w-full overflow-hidden rounded-md bg-edit-field">
+      <span aria-hidden="true" className="block h-full w-full opacity-40">
+        <BlankCover />
+      </span>
+      {name !== undefined && (
+        <span className="absolute inset-x-1 top-1 flex">
+          <span className={cn(COVER_CHIP, "max-w-full truncate")}>{name}</span>
+        </span>
+      )}
+      {note !== undefined && (
+        <span className={cn(COVER_CHIP, "absolute bottom-1 right-1 font-normal text-neutral-300")}>{note}</span>
+      )}
+    </div>
+  );
+}
+
+/**
  * A file on its way into the library (one uploaded in the picker, one dropped on the media pane's grid), until its
  * record exists: a blank cover with its name and `note` on it, or a sound's row with them. Nothing to press yet.
  */
@@ -107,17 +142,7 @@ export function PendingTile({ name, kind, note }: { name: string; kind: "video" 
       </div>
     );
   }
-  return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-md bg-edit-field">
-      <span aria-hidden="true" className="block h-full w-full opacity-40">
-        <BlankCover />
-      </span>
-      <span className="absolute inset-x-1 top-1 flex">
-        <span className={cn(COVER_CHIP, "max-w-full truncate")}>{name}</span>
-      </span>
-      <span className={cn(COVER_CHIP, "absolute bottom-1 right-1 font-normal text-neutral-300")}>{note}</span>
-    </div>
-  );
+  return <DimmedCover name={name} note={note} />;
 }
 
 /**

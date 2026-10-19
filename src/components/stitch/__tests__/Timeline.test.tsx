@@ -1134,7 +1134,7 @@ describe("Timeline, Stacked", () => {
     expect(within(foot()).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
       "Add audio",
     ]);
-    expect(screen.getAllByRole("button", { name: "Add a clip from the library" })).toEqual([
+    expect(screen.getAllByRole("button", { name: "Add media" })).toEqual([
       screen.getByTestId("stitch-add-slot"),
     ]);
     fireEvent.click(stacked);
@@ -1146,7 +1146,7 @@ describe("Timeline, Stacked", () => {
     expect(within(foot()).getAllByRole("button")).toEqual([within(foot()).getByRole("button", { name: "Add audio" }), lineUp]);
     expect(lineUp).toBeDisabled();
     expect(lineUp).toHaveAttribute("title", "The clips are lined up");
-    expect(screen.getAllByRole("button", { name: "Add a clip from the library" })).toEqual([
+    expect(screen.getAllByRole("button", { name: "Add media" })).toEqual([
       screen.getByTestId("stitch-add-slot"),
     ]);
     expect(editor().past).toHaveLength(1);

@@ -83,7 +83,10 @@ export function EditBanner({ banner }: { banner: NonNullable<ReturnType<typeof u
   );
 }
 
-/** A small question over the view (these, and the media pane's Remove from edit): Escape and the backdrop cancel. */
+/**
+ * A small question over the view (these, and the media pane's Remove from edit): Escape and the backdrop cancel. Its
+ * title wraps, a long name breaking where it must, so none of the question is cut off.
+ */
 export function Sheet({
   label,
   title,
@@ -92,7 +95,8 @@ export function Sheet({
   children,
   initialFocusRef,
 }: {
-  label: string;
+  /** The dialog's name; without one, its title names it. */
+  label?: string;
   title: string;
   description: string;
   onClose: () => void;
@@ -102,7 +106,10 @@ export function Sheet({
   return (
     <Dialog open onClose={onClose} size="xs" portal label={label} initialFocusRef={initialFocusRef}>
       <DialogHeader compact closeButton={false} className="pt-3.5 pb-1.5">
-        <DialogTitle compact>{title}</DialogTitle>
+        {/* text-clip drops the title's truncate (they merge as one), so it wraps */}
+        <DialogTitle compact className="text-clip [overflow-wrap:anywhere]">
+          {title}
+        </DialogTitle>
         <DialogDescription className="mt-0.5">{description}</DialogDescription>
       </DialogHeader>
       <DialogFooter compact className="mt-1.5 pb-3">

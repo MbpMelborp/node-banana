@@ -44,7 +44,7 @@ export interface LaneMarks {
  * 52px row per clip, its 40px compact box at the clip's own start on a
  * linear axis (an empty clip is a 160px slot at its instant), the marks of
  * how it layers, a black band over each gap, and after the latest end, in
- * the last row, the + slot that adds from the library. A lined-up stack
+ * the last row, the + slot that opens Add media. A lined-up stack
  * marks its overlaps (CrossfadeMarks); a placed one marks each clip's share
  * of the picture (LayerMarks), hidden stretches included.
  *

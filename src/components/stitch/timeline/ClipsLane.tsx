@@ -149,7 +149,7 @@ export function EmptyLaneButton({
     <button
       type="button"
       data-testid="stitch-empty-lane"
-      aria-label="Add a clip from the library"
+      aria-label="Add media"
       title={libraryOn ? "Add media" : undefined}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
@@ -183,7 +183,7 @@ export function AddSlotButton({
     <button
       type="button"
       data-testid="stitch-add-slot"
-      aria-label="Add a clip from the library"
+      aria-label="Add media"
       title={libraryOn ? "Add media" : "The asset library is off"}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
@@ -200,9 +200,9 @@ export function AddSlotButton({
 /**
  * The clips row: one box per clip (a fixed slot for a clip with no length),
  * the trim ghost, and the insertion bar while a clip is dragged to a new
- * place. After the last clip a quiet + slot adds clips from the library; an
- * empty sequence shows a placeholder across the lane that does the same
- * (both off while the library is).
+ * place. After the last clip a quiet + slot opens Add media; an empty
+ * sequence shows a placeholder across the lane that does the same (both off
+ * while the library is).
  *
  * It is a listbox: the selected clip (the lead of several) is its one tab
  * stop, the arrows, Home and End select one clip, and the context-menu key

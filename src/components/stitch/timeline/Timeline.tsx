@@ -461,7 +461,7 @@ export function Timeline({
     latest.current = latestValues;
   });
 
-  // A drag from the Edit video view's library pane asks where it would drop from the lanes as drawn now
+  // A drag from the Edit video view's media pane asks where it would drop from the lanes as drawn now
   useEffect(
     () =>
       libraryDrop.register(

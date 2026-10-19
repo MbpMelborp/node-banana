@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import { Upload } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Dialog, DialogButton, DialogCloseButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
-import { editUploadContext, placeInOpenEdit, uploadFiles, type FileUpload } from "@/components/edit/mediaUploads";
+import { addToOpenEditMedia, editUploadContext, uploadFiles, type FileUpload } from "@/components/edit/mediaUploads";
 import { DropToAdd, FILE_DROP_FRAME, useFileDrop } from "@/components/edit/useFileDrop";
 import { useEditProjectStore } from "@/store/editProjectStore";
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fetchFacets } from "@/lib/assets/client/api";
+import { UPLOAD_ACCEPT } from "@/lib/assets/client/upload";
 import type { AssetFacets, AssetView } from "@/lib/assets/types";
 import { DEFAULT_LIBRARY_QUERY, libraryKinds, type LibraryKind, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 import { draftSpans } from "@/lib/stitch/draft";
@@ -98,11 +99,12 @@ function whereText(videos: number, sounds: number, afterIndex: number, playhead:
  * from the computer into the library; each shows at the top as it uploads,
  * then as a picked tile, whatever the filters say. Add waits for them.
  *
- * In the Edit video view, Add puts the picks in the edit's media (the pane
- * selects the last), nothing on the timeline. In the node's dialog it puts
- * each video after the last clip and each sound on a new audio row of its own
- * at the playhead, as one undo step. The picker owns its query and its pages;
- * it never touches the Assets view's own list. Escape closes only the picker.
+ * In the Edit video view, Add puts the picks in the edit's media (the pane,
+ * shown if it was hidden, selects the last), nothing on the timeline. In the
+ * node's dialog it puts each video after the last clip and each sound on a
+ * new audio row of its own at the playhead, as one undo step. The picker owns
+ * its query and its pages; it never touches the Assets view's own list.
+ * Escape closes only the picker.
  */
 export function LibraryPicker() {
   const open = useStitchEditorStore((s) => s.pickerOpen);
@@ -212,7 +214,9 @@ function OpenPicker({ preset }: { preset: LibraryKind }) {
   const add = () => {
     if (inEdit) {
       added.current = "media";
-      placeInOpenEdit(picked, (asset) => uploadedIds.has(asset.id));
+      // The picks go to the pane, so a hidden one is shown (the timeline's + and + Audio open the picker without it)
+      useEditProjectStore.getState().setPaneOpen(true);
+      addToOpenEditMedia(picked, (asset) => uploadedIds.has(asset.id));
       closePicker();
       return;
     }
@@ -326,7 +330,7 @@ function OpenPicker({ preset }: { preset: LibraryKind }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="video/*,audio/*"
+              accept={UPLOAD_ACCEPT}
               multiple
               hidden
               tabIndex={-1}

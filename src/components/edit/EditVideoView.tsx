@@ -15,7 +15,7 @@ import { EditHeader } from "./EditHeader";
 import { EditHome } from "./EditHome";
 import { EDIT_BANNER_PX, EditBanner, EditSheets, useEditBanner } from "./EditSheets";
 import { editViewKeyAction, runEditViewKey } from "./editViewKeys";
-import { usePlaceRecordedUploads } from "./mediaUploads";
+import { useAddRecordedUploads } from "./mediaUploads";
 import { MediaPane } from "./MediaPane";
 
 /** Marked as the editor's panel: the editor's controls hand focus back to it, as they do to the dialog's. */
@@ -123,7 +123,7 @@ function OpenEdit() {
   const composition = useEditorComposition(rootRef, HEADER_PX + (banner ? EDIT_BANNER_PX : 0), { assetFallback });
   useStitchEditorKeys(rootRef, stayOpen, { ...KEY_OPTIONS, zoom: composition.zoom });
   // Files dropped on this edit's pane that were recorded while it was not open join its media now, pane shown or not
-  usePlaceRecordedUploads();
+  useAddRecordedUploads();
 
   // Space plays at once: the editor takes focus as it opens
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({ recordUpload: vi.fn(), show: vi.fn() }));
 vi.mock("@/lib/assets/client/upload", async (importOriginal) => ({
@@ -9,18 +9,19 @@ vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: m.sh
 
 import type { AssetView } from "@/lib/assets/types";
 import type { StitchDraft } from "@/lib/stitch/draft";
-import { NOT_MEDIA_REASON } from "@/lib/assets/client/upload";
+import { NOT_MEDIA_REASON, UNSUPPORTED_MEDIA_REASON } from "@/lib/assets/client/upload";
 import { __resetAssetInfoForTests, getAssetInfo, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { createClip } from "@/lib/stitch/timeline";
 import { __resetEditProjectForTests, useEditProjectStore } from "@/store/editProjectStore";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import {
   __resetMediaUploadsForTests,
+  GESTURE_IDLE_MS,
   addFilesToEdit,
   editUploadContext,
   moveEditUploads,
-  placeInOpenEdit,
-  placeRecordedUploads,
+  addToOpenEditMedia,
+  addRecordedUploads,
   uploadFiles,
   useMediaUploads,
 } from "../mediaUploads";
@@ -132,6 +133,28 @@ describe("uploadFiles", () => {
     expect(uploadFiles([file("a.txt", "text/plain")], {}, { recorded })).toEqual([]);
     expect(m.recordUpload).toHaveBeenCalledTimes(2);
   });
+
+  it("leaves out video and audio the library can't keep with a notice of its own, naming the files", () => {
+    answers();
+    const recorded = vi.fn();
+    const started = uploadFiles(
+      [file("a.avi", "video/x-msvideo"), file("notes.txt", "text/plain"), file("b.aiff", ""), file("ok.mp4", "video/mp4")],
+      {},
+      { recorded },
+    );
+    expect(started.map((u) => u.name)).toEqual(["ok.mp4"]);
+    expect(m.recordUpload).toHaveBeenCalledTimes(1);
+    expect(m.show.mock.calls).toEqual([
+      [NOT_MEDIA_REASON, "info"],
+      ["Couldn't add 2 files", "error", false, "The library can't keep that kind of video or audio: a.avi, b.aiff."],
+    ]);
+
+    // One file is named in the title
+    m.show.mockClear();
+    expect(uploadFiles([file("memo.caf", "audio/x-caf")], {}, { recorded })).toEqual([]);
+    expect(m.show.mock.calls).toEqual([["Couldn't add “memo.caf”", "error", false, UNSUPPORTED_MEDIA_REASON]]);
+    expect(m.recordUpload).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("addFilesToEdit", () => {
@@ -241,15 +264,74 @@ describe("addFilesToEdit", () => {
     expect(editor().draft!.media).toEqual([A]);
     expect(pending().map((u) => u.asset?.id)).toEqual([X, Y]);
     // Not while another edit is open
-    placeRecordedUploads(EDIT);
+    addRecordedUploads(EDIT);
     expect(pending()).toHaveLength(2);
 
     openEdit(EDIT);
-    placeRecordedUploads(EDIT);
+    addRecordedUploads(EDIT);
     expect(pending()).toEqual([]);
     expect(editor().draft!.media).toEqual([A, X]);
     expect(project().mediaFocus.id).toBe(X);
     expect(editor().past).toHaveLength(1);
+  });
+});
+
+describe("a file recorded while a gesture runs", () => {
+  /** Lets the fake timers and the recordings' promises run. */
+  const tick = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
+  const loop = (count: 1 | 2 | 3, gestureKey: string) => editor().apply((d) => ({ ...d, loopCount: count }), { gestureKey });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits for the gesture to end, which stays one undo step, then joins as a step of its own", async () => {
+    openEdit();
+    const calls = answers();
+    addFilesToEdit([file("one.mp4", "video/mp4")], { editId: EDIT });
+    // A volume drag: every tick shares one key, and so one undo step
+    loop(2, "volume:v1");
+    calls[0].resolve(view(X));
+    await tick();
+    expect(editor().draft!.media).toEqual([A]);
+    expect(pending().map((u) => u.asset?.id)).toEqual([X]);
+    loop(3, "volume:v1");
+    expect(editor().past).toHaveLength(1);
+
+    editor().endGesture();
+    expect(editor().draft!.media).toEqual([A, X]);
+    expect(pending()).toEqual([]);
+    expect(project().mediaFocus.id).toBe(X);
+    expect(editor().past).toHaveLength(2);
+    editor().undo();
+    expect(editor().draft).toMatchObject({ media: [A], loopCount: 3 });
+    editor().undo();
+    expect(editor().draft).toMatchObject({ media: [A], loopCount: 1 });
+  });
+
+  it("joins once a gesture whose key is left set has changed nothing for a while (a run of nudges)", async () => {
+    openEdit();
+    const calls = answers();
+    addFilesToEdit([file("one.mp4", "video/mp4")], { editId: EDIT });
+    loop(2, "nudge:v1");
+    await tick(GESTURE_IDLE_MS - 400);
+    calls[0].resolve(view(X));
+    await tick();
+    expect(editor().draft!.media).toEqual([A]);
+    // Another nudge of the run: it waits that much longer
+    await tick(100);
+    loop(3, "nudge:v1");
+    await tick(GESTURE_IDLE_MS - 1);
+    expect(editor().draft!.media).toEqual([A]);
+    expect(editor().past).toHaveLength(1);
+    await tick(1);
+    expect(editor().draft!.media).toEqual([A, X]);
+    expect(pending()).toEqual([]);
+    expect(editor().past).toHaveLength(2);
   });
 });
 
@@ -274,18 +356,18 @@ describe("moveEditUploads", () => {
   });
 });
 
-describe("placeInOpenEdit (Add media's Add in the view)", () => {
+describe("addToOpenEditMedia (Add media's Add in the view)", () => {
   it("adds what the media lacks, in order, as one undo step; one there already, or with its bytes, adds nothing; the last is shown", () => {
     openEdit(EDIT, [A]);
     primeAssetInfo([view(A, { sha256: "sunset" })]);
-    placeInOpenEdit([view(X), view(A, { sha256: "sunset" }), view(Y, { sha256: "sunset" })]);
+    addToOpenEditMedia([view(X), view(A, { sha256: "sunset" }), view(Y, { sha256: "sunset" })]);
     expect(editor().draft!.media).toEqual([A, X]);
     expect(editor().past).toHaveLength(1);
     // Y is sunset's bytes again: the one there is shown
     expect(project().mediaFocus).toMatchObject({ id: A, reveal: 1 });
     expect(getAssetInfo(X)?.filename).toBe(`${X}.mp4`);
 
-    placeInOpenEdit([view(Y, { sha256: "other" })]);
+    addToOpenEditMedia([view(Y, { sha256: "other" })]);
     expect(editor().draft!.media).toEqual([A, X, Y]);
     expect(project().mediaFocus).toMatchObject({ id: Y, reveal: 2 });
     expect(editor().past).toHaveLength(2);
@@ -295,7 +377,7 @@ describe("placeInOpenEdit (Add media's Add in the view)", () => {
     openEdit(EDIT, [A]);
     primeAssetInfo([view(A, { sha256: "sunset" })]);
     // X was picked in the library, Y uploaded: both sunset's bytes
-    placeInOpenEdit([view(X, { sha256: "sunset" }), view(Y, { sha256: "sunset" })], (asset) => asset.id === Y);
+    addToOpenEditMedia([view(X, { sha256: "sunset" }), view(Y, { sha256: "sunset" })], (asset) => asset.id === Y);
     expect(editor().draft!.media).toEqual([A, X]);
     expect(project().mediaFocus).toMatchObject({ id: A });
     expect(editor().past).toHaveLength(1);
