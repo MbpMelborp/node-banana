@@ -48,7 +48,7 @@ export const SEGMENT_OFF = "text-ink-3 hover:text-neutral-200";
 /** The headers' height (the view's and the dialog's h-14): what sits over the stage in the editor's column. */
 export const HEADER_PX = 56;
 
-/** The headers' 32px icon buttons (Undo, Redo, ⋯, Show the library): dimmed when off, filled while open. */
+/** The headers' 32px icon buttons (Undo, Redo, ⋯, Show media): dimmed when off, filled while open. */
 export const HEADER_ICON_BUTTON =
   "h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-lg text-neutral-400 transition-colors hover:text-neutral-100 hover:bg-white/6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 aria-expanded:bg-edit-pressed aria-expanded:text-neutral-100 disabled:text-neutral-600 disabled:hover:bg-transparent";
 

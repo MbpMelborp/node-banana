@@ -10,7 +10,8 @@ import { inputClass } from "@/components/ui/Controls";
  * name selected. Enter or leaving the field commits; Escape puts the name
  * back. A refused name ("Another edit has that name") keeps the field open
  * with the note under it. Its focus rings are the editor's white, not the
- * app's blue.
+ * app's blue. The media pane renames its items with it too (`maxLength`,
+ * `inputLabel`).
  */
 export function EditNameField({
   name,
@@ -20,6 +21,8 @@ export function EditNameField({
   error,
   className,
   buttonClassName,
+  maxLength = 80,
+  inputLabel = "Edit name",
 }: {
   name: string;
   editing: boolean;
@@ -29,6 +32,9 @@ export function EditNameField({
   error: string | null;
   className?: string;
   buttonClassName?: string;
+  maxLength?: number;
+  /** The field's accessible name. */
+  inputLabel?: string;
 }) {
   if (!editing) {
     return (
@@ -45,7 +51,17 @@ export function EditNameField({
       </button>
     );
   }
-  return <NameInput name={name} onEditingChange={onEditingChange} onCommit={onCommit} error={error} className={className} />;
+  return (
+    <NameInput
+      name={name}
+      onEditingChange={onEditingChange}
+      onCommit={onCommit}
+      error={error}
+      className={className}
+      maxLength={maxLength}
+      label={inputLabel}
+    />
+  );
 }
 
 /** The field, from the name it opened with. */
@@ -55,12 +71,16 @@ function NameInput({
   onCommit,
   error,
   className,
+  maxLength,
+  label,
 }: {
   name: string;
   onEditingChange: (editing: boolean) => void;
   onCommit: (name: string) => Promise<boolean>;
   error: string | null;
   className?: string;
+  maxLength: number;
+  label: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(name);
@@ -87,10 +107,10 @@ function NameInput({
     <div className={cn("relative min-w-0", className)}>
       <input
         ref={inputRef}
-        aria-label="Edit name"
+        aria-label={label}
         aria-invalid={error !== null || undefined}
         value={value}
-        maxLength={80}
+        maxLength={maxLength}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {

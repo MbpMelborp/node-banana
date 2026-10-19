@@ -14,7 +14,7 @@ export interface LibraryVideoQuery {
   sort: AssetSort;
 }
 
-/** Which kinds a library list holds: the Edit video view's pane shows both, or one. */
+/** Which kinds a library list holds: both (the Edit video view's Add media), or one (a + on the timeline). */
 export type LibraryKind = "all" | "video" | "audio";
 
 const KINDS: Record<LibraryKind, readonly AssetKind[]> = { all: ["video", "audio"], video: ["video"], audio: ["audio"] };

@@ -3,6 +3,7 @@ import { coverEditMedia } from "@/lib/edits/document";
 import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/audioClips";
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
+import type { LibraryKind } from "@/lib/stitch/libraryRequest";
 import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
 import { edgeIdsInOrder, type SourceDurations, type SourceKey } from "@/lib/stitch/timeline";
 
@@ -108,8 +109,8 @@ export interface StitchEditorState {
   pxPerSec: number | null;
   menu: StitchContextMenu | null;
   discardOpen: boolean;
-  /** The library picker, and what it adds. */
-  pickerOpen: false | "video" | "audio";
+  /** The library picker, and the kinds it lists ("all": the Edit video view's Add media). */
+  pickerOpen: false | LibraryKind;
   /** Set by a drag hook while a pointer gesture runs; Escape calls it. */
   cancelGesture: (() => void) | null;
   /**
@@ -161,7 +162,7 @@ export interface StitchEditorState {
   setZoom(pxPerSec: number | null): void;
   openMenu(menu: StitchContextMenu | null): void;
   setDiscardOpen(open: boolean): void;
-  setPickerOpen(open: false | "video" | "audio"): void;
+  setPickerOpen(open: false | LibraryKind): void;
   setCancelGesture(cancel: (() => void) | null): void;
   /** A clip keeps the first tag it gets: a pasted clip cut and brought back by undo is still a pasted clip. */
   tagClips(ids: readonly string[], origin: ClipOrigin): void;

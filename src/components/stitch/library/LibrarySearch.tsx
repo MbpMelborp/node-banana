@@ -36,16 +36,16 @@ const FOCUSABLE = 'button:not(:disabled):not([tabindex="-1"]), input:not(:disabl
  * and inside it at the right the filter button, which opens a small popover
  * under the field with the rest of the list's controls (`filters`: project,
  * kind, favourites, sort). A dot on the button says something in it is not
- * at its default. The pane and the picker both use it.
+ * at its default. The library picker uses it.
  *
  * The popover takes focus as it opens. Escape closes it and gives focus back
  * to the button (a menu open inside it hears its own Escape first); a press
  * outside it, or focus leaving it and the button for anything else, closes
  * it. A press on its own padding or a row's label keeps focus in it (it is
- * focusable itself), so it stays open and still hears Escape. In the Edit
- * video view it owns the keys while open, as the view's menus do (its
- * `viewMenuOpen`), so Space toggles a switch in it rather than playing. It
- * closes when the search is turned off, and stays closed when it comes back.
+ * focusable itself), so it stays open and still hears Escape. The picker
+ * around it keeps the editor's keys off while it is up, so Space toggles a
+ * switch in it rather than playing. It closes when the search is turned off,
+ * and stays closed when it comes back.
  */
 export function LibrarySearch({
   inputRef,

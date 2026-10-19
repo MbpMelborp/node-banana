@@ -120,7 +120,7 @@ function openPicker({
   clips = 2,
   clipSec = 4,
   sequenceLayout = TRACK_LAYOUT as StitchSequenceLayout,
-  kind = "video" as "video" | "audio",
+  kind = "video" as "video" | "audio" | "all",
 } = {}) {
   useWorkflowStore.setState({ workflowId });
   act(() => {
@@ -729,6 +729,49 @@ describe("LibraryPicker", () => {
     expect(filterButton()).toHaveFocus();
     expect(editor().pickerOpen).toBe("video");
   });
+
+  it("never leaves its filters open with focus elsewhere, and turns its search and filters off with the library", async () => {
+    const libraryStatus = (available: boolean) =>
+      ({
+        available,
+        reasonCode: available ? undefined : "hosted",
+        root: null,
+        source: "default",
+        defaultRoot: "/x",
+        cacheDir: "/x",
+        platform: "darwin",
+      }) as LibraryStatus;
+    openPicker();
+    await within(dialog()).findByRole("button", { name: named("a1.mp4") });
+    const open = () => within(dialog()).queryByRole("dialog", { name: "Filter and sort" });
+    const search = () => within(dialog()).getByRole("textbox", { name: "Search videos" });
+
+    // Shift+Tab out of it: to its button (still open), then on to the search, which closes it
+    filters();
+    act(() => filterButton().focus());
+    expect(open()).not.toBeNull();
+    act(() => search().focus());
+    expect(open()).toBeNull();
+
+    // Tab on from it to a tile
+    expect(within(filters()).getByRole("button", { name: "Project: All projects" })).toHaveFocus();
+    act(() => tile("a1.mp4").focus());
+    expect(open()).toBeNull();
+
+    // The library going off closes it and turns the search and its button off; it does not come back with the library
+    filters();
+    try {
+      act(() => applyLibraryStatus(libraryStatus(false)));
+      expect(open()).toBeNull();
+      expect(search()).toBeDisabled();
+      expect(filterButton()).toBeDisabled();
+    } finally {
+      act(() => applyLibraryStatus(libraryStatus(true)));
+    }
+    expect(open()).toBeNull();
+    expect(filterButton()).toHaveAttribute("aria-expanded", "false");
+    expect(search()).toBeEnabled();
+  });
 });
 
 describe("LibraryPicker over the editor", () => {
@@ -927,6 +970,29 @@ describe("LibraryPicker over the editor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add audio" }));
       expect(editor().pickerOpen).toBe("audio");
       expect(await within(audioDialog()).findByRole("button", { name: named("t1.m4a") })).toBeInTheDocument();
+    });
+  });
+
+  describe("set to both kinds (the Edit video view's Add media)", () => {
+    it("lists videos and audio in one list, and adds each where its own picker would", async () => {
+      const sound = asset("t1", { kind: "audio", mime: "audio/mp4", ext: "m4a", filename: "t1.m4a", durationSec: 3, hasPoster: false });
+      api.fetchAssetPage.mockResolvedValue(page([asset("a1"), sound]));
+      openPicker({ kind: "all" });
+      act(() => editor().setPlayhead(1.5));
+      await within(dialog()).findByRole("button", { name: named("t1.m4a") });
+      expect(api.fetchAssetPage.mock.calls[0][0]).toEqual({ kinds: ["video", "audio"], limit: 60 });
+      fireEvent.click(tile("t1.m4a"));
+      fireEvent.click(tile("a1.mp4"));
+      fireEvent.click(within(dialog()).getByRole("button", { name: "Add 2 clips" }));
+      // The video after the last clip, the sound on a new row at the playhead
+      expect(editor().draft!.timeline.map((c) => c.source)).toEqual([
+        { kind: "edge", edgeId: "e0" },
+        { kind: "edge", edgeId: "e1" },
+        { kind: "asset", assetId: "a1" },
+      ]);
+      expect(editor().draft!.audioClips.map((c) => [c.source, c.row, c.startSec])).toEqual([[{ kind: "asset", assetId: "t1" }, 0, 1.5]]);
+      expect(editor().selection).toMatchObject({ kind: "clip" });
+      expect(editor().pickerOpen).toBe(false);
     });
   });
 });

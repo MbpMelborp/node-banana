@@ -44,6 +44,7 @@ import {
   type LibraryDropTarget,
   type LibraryItem,
 } from "@/lib/stitch/libraryInsert";
+import type { LibraryKind } from "@/lib/stitch/libraryRequest";
 import { makeSelection } from "@/lib/stitch/selection";
 import {
   appendClips,
@@ -674,17 +675,12 @@ export function lineUpClips(): void {
 
 /**
  * The library picker over a paused preview: for video (the Clips track's +, the slot after the last clip and the
- * empty lane) or audio (the audio strip's +). In the Edit video view the library pane beside the timeline takes its
- * place: it opens if hidden, shows that kind and focuses its search.
+ * empty lane), audio (the audio strip's +) or both (the Edit video view's Add media). The same in the dialog and in
+ * the view.
  */
-export function openLibraryPicker(kind: "video" | "audio" = "video"): void {
+export function openLibraryPicker(kind: LibraryKind = "video"): void {
   const s = editor();
   if (!s.draft) return;
-  if (s.editId !== null) {
-    s.openMenu(null);
-    useEditProjectStore.getState().requestPaneFocus(kind);
-    return;
-  }
   s.setPlaying(false);
   s.openMenu(null);
   s.setPickerOpen(kind);
@@ -720,7 +716,7 @@ export function libraryAddBlockedReason(item: LibraryItem, s: StitchEditorState 
 }
 
 /**
- * The library pane's add: one video or sound at the target (the playhead's when none is given: a click), as one undo
+ * The media pane's add: one video or sound at the target (the playhead's when none is given: a click), as one undo
  * step. The new clip is selected and the playhead goes to its start. A Stacked add that would pin while a clip is
  * still loading does nothing. Returns the new clip's id, or null when nothing was added.
  */

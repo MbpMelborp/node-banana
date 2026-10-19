@@ -43,20 +43,18 @@ export interface LibraryTileContext {
 }
 
 /**
- * The pane's narrow column: two covers a row, one sound a row. The picker's: four covers, two sounds. The quiet
- * text (group labels, notices): ink-3 on the pane; neutral-400 on the picker's lighter card, where ink-3 falls
- * under 4.5:1.
+ * The picker's columns: four covers a row, two sounds. The quiet text (group labels, notices): neutral-400 on the
+ * picker's lighter card, where ink-3 falls under 4.5:1.
  */
 const GRID = {
-  pane: { covers: "grid-cols-2 gap-2", sounds: "grid-cols-1 gap-1", muted: "text-ink-3" },
   picker: { covers: "grid-cols-4 gap-3", sounds: "grid-cols-2 gap-x-3 gap-y-1", muted: "text-neutral-400" },
 } as const;
 
 /**
- * The scroll area under the library's search, in the pane and in the
- * picker: the list grouped by project (a quiet label, the covers in a grid,
- * the sounds as rows under them), or what stands in for it (the library
- * off, the first page loading, failing with Try again, or nothing to show).
+ * The scroll area under the library's search, in the picker: the list
+ * grouped by project (a quiet label, the covers in a grid, the sounds as
+ * rows under them), or what stands in for it (the library off, the first
+ * page loading, failing with Try again, or nothing to show).
  * The next page comes as the end of the list scrolls near; one that fails
  * says so with Try again, and the list stays. A new query's list starts at
  * the top. A poster made for a tile since its page was read is passed on, so

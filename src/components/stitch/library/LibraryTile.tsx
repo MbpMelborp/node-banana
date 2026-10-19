@@ -13,11 +13,11 @@ import { formatTimecode } from "@/lib/stitch/timecode";
 /** About a quarter of the 880px dialog, for the thumbnail size asked for. */
 const TILE_WIDTH = 200;
 
-/** What a click or a drag does with a tile in the Edit video view's pane: its tooltip's second line. */
-const LIBRARY_ADD_HINT = "Click to add at the playhead, or drag onto the timeline.";
+/** What a click or a drag does with an item in the Edit video view's media pane: its tooltip's second line. */
+export const LIBRARY_ADD_HINT = "Click to add at the playhead, or drag onto the timeline.";
 
 /** Whether the element is inside the scroll area's view (always, where IntersectionObserver is missing). */
-function useOnScreen(ref: RefObject<HTMLElement | null>, root: HTMLElement | null): boolean {
+export function useOnScreen(ref: RefObject<HTMLElement | null>, root: HTMLElement | null): boolean {
   const [onScreen, setOnScreen] = useState(typeof IntersectionObserver === "undefined");
   useEffect(() => {
     const el = ref.current;
@@ -38,6 +38,49 @@ export function BlankCover() {
   );
 }
 
+/** A video's thumbnail filling its cover, or the blank frame when there is none to show (a 204, a file that is gone). */
+export function CoverImage({
+  asset,
+  hasPoster,
+  gone = false,
+  width = TILE_WIDTH,
+}: {
+  asset: Pick<AssetView, "sha256">;
+  hasPoster: boolean;
+  gone?: boolean;
+  /** The cover's width, for the thumbnail size asked for. */
+  width?: number;
+}) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const url = tileThumbUrl({ sha256: asset.sha256, hasPoster }, width);
+  if (gone || failed === url) return <BlankCover />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onError={() => setFailed(url)}
+      className="pointer-events-none h-full w-full object-cover"
+    />
+  );
+}
+
+/**
+ * A video without a poster gets one made while it is on screen, through the Assets view's own capture queue; one
+ * scrolled past before its turn is withdrawn.
+ */
+export function usePosterRequest(asset: AssetView | null | undefined, needsPoster: boolean, onScreen: boolean): void {
+  useEffect(() => {
+    if (!needsPoster || !onScreen || !asset) return;
+    return requestPoster(asset);
+    // Once per asset, whatever else about the record changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsPoster, onScreen, asset?.id]);
+}
+
 /** A chip on a cover: its length at rest, its name on keyboard focus. */
 const COVER_CHIP = "rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none text-neutral-100";
 
@@ -51,16 +94,16 @@ export function CoverLength({ seconds }: { seconds: number }) {
 }
 
 /**
- * One library file, as the library pane and the picker show it, under its
- * project's name. A video is a 16:9 cover with nothing on it but its length;
- * an audio file is a one-line row (a music glyph, its name, its length). Its
- * name, project and whether it is a favourite are in its accessible name, and
- * the name is its tooltip's first line. A video without a poster on screen
- * gets one made, through the Assets view's own capture queue; a file that is
- * gone cannot be picked or added.
+ * One library file, as the picker shows it under its project's name (and the
+ * Edit video view's media pane its covers, in the grid). A video is a 16:9
+ * cover with nothing on it but its length; an audio file is a one-line row (a
+ * music glyph, its name, its length). Its name, project and whether it is a
+ * favourite are in its accessible name, and the name is its tooltip's first
+ * line. A video without a poster on screen gets one made, through the Assets
+ * view's own capture queue; a file that is gone cannot be picked or added.
  *
  * In the picker (`mode="pick"`) a tile is a toggle button, ringed in white
- * once picked (a sound's row also checks it). In the Edit video view's pane
+ * once picked (a sound's row also checks it). In the media pane
  * (`mode="add"`) a click (or Enter) adds it at the playhead and a press can
  * start a drag onto the timeline, which the tooltip says. A tile that cannot
  * be added yet says why in its tooltip. A cover carries nothing but its
@@ -93,21 +136,11 @@ export const LibraryTile = memo(function LibraryTile({
   const ref = useRef<HTMLButtonElement>(null);
   const onScreen = useOnScreen(ref, scrollRoot);
   const hasPoster = !!asset.hasPoster || posterReady;
-  const [thumbFailed, setThumbFailed] = useState<string | null>(null);
-  const thumbUrl = tileThumbUrl({ sha256: asset.sha256, hasPoster }, TILE_WIDTH);
   const missing = !!asset.missing;
   const audio = asset.kind === "audio";
   const adding = mode === "add";
   const blocked = adding && !missing && disabledReason !== null;
-
-  // Only while on screen: one scrolled past before its turn is withdrawn
-  const needsPoster = !audio && !hasPoster && !missing;
-  useEffect(() => {
-    if (!needsPoster || !onScreen) return;
-    return requestPoster(asset);
-    // Once per asset, whatever else about the record changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsPoster, onScreen, asset.id]);
+  usePosterRequest(asset, !audio && !hasPoster && !missing, onScreen);
 
   const duration = typeof asset.durationSec === "number" && asset.durationSec > 0 ? asset.durationSec : null;
   const project = projectLabel(asset.workflow?.projectPath ?? null);
@@ -183,20 +216,7 @@ export const LibraryTile = memo(function LibraryTile({
       {...shared}
       className={cn("group relative block aspect-video w-full min-w-0 overflow-hidden rounded-md bg-edit-field", rings)}
     >
-      {!missing && thumbFailed !== thumbUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element -- a library thumbnail route, which can answer 204
-        <img
-          src={thumbUrl}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          onError={() => setThumbFailed(thumbUrl)}
-          className="pointer-events-none h-full w-full object-cover"
-        />
-      ) : (
-        <BlankCover />
-      )}
+      <CoverImage asset={asset} hasPoster={hasPoster} gone={missing} />
       {duration !== null && <CoverLength seconds={duration} />}
       {/* What the title says on hover, for the keys: inside the cover, so a scrolling list never clips it */}
       <span

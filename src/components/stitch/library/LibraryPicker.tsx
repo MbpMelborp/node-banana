@@ -13,8 +13,8 @@ import {
 import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { fetchFacets } from "@/lib/assets/client/api";
-import type { AssetFacets, AssetKind, AssetView } from "@/lib/assets/types";
-import { DEFAULT_LIBRARY_QUERY, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
+import type { AssetFacets, AssetView } from "@/lib/assets/types";
+import { DEFAULT_LIBRARY_QUERY, libraryKinds, type LibraryKind, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
 import { isPlaced } from "@/lib/stitch/timeline";
@@ -29,8 +29,6 @@ import { useLibraryAvailable } from "./useLibraryAvailable";
 import { useLibraryVideos } from "./useLibraryVideos";
 
 const NO_PROJECTS: AssetFacets["projects"] = [];
-const VIDEO_KINDS: readonly AssetKind[] = ["video"];
-const AUDIO_KINDS: readonly AssetKind[] = ["audio"];
 
 const closePicker = () => useStitchEditorStore.getState().setPickerOpen(false);
 
@@ -52,8 +50,8 @@ function goesAfterIndex(s: StitchEditorState): number {
 
 /**
  * "Add from library", over the Stitch editor: the library's videos (or, from
- * "+ Audio", its audio files) grouped by project, as the Edit video view's
- * library pane shows them, searched, and narrowed by project, favourites and
+ * "+ Audio", its audio files; from the Edit video view's Add media, both)
+ * grouped by project, searched, and narrowed by project, favourites and
  * this workflow, newest or oldest first, in the search's filter popover.
  * Files are picked in order. Add appends one video clip each, in that order, after the last
  * clip; for audio it puts each file on a new audio row of its own, starting
@@ -66,14 +64,14 @@ export function LibraryPicker() {
   return <OpenPicker key={open} kind={open} />;
 }
 
-function OpenPicker({ kind }: { kind: "video" | "audio" }) {
+function OpenPicker({ kind }: { kind: LibraryKind }) {
   const workflowId = useWorkflowStore((s) => s.workflowId);
   const afterIndex = useStitchEditorStore(goesAfterIndex);
   const playhead = useStitchEditorStore(drawnPlayhead);
   const libraryOn = useLibraryAvailable();
   const audio = kind === "audio";
   const [query, setQuery] = useState<LibraryVideoQuery>(DEFAULT_LIBRARY_QUERY);
-  const list = useLibraryVideos(query, workflowId, libraryOn, audio ? AUDIO_KINDS : VIDEO_KINDS);
+  const list = useLibraryVideos(query, workflowId, libraryOn, libraryKinds(kind));
   const update = (patch: Partial<LibraryVideoQuery>) => setQuery((q) => ({ ...q, ...patch }));
 
   // Focus goes to the search through the Dialog (not autoFocus), so the Dialog records the + that opened it and
@@ -111,8 +109,12 @@ function OpenPicker({ kind }: { kind: "video" | "audio" }) {
   );
   const add = () => {
     added.current = true;
-    if (audio) addAudioFromLibrary(picked);
-    else addAssetClips(picked);
+    // One list can hold both (Add media): each kind goes where its own picker would put it, the sounds first, at the
+    // playhead the user saw (adding videos moves it to the first new clip)
+    const videos = picked.filter((a) => a.kind === "video");
+    const sounds = picked.filter((a) => a.kind === "audio");
+    if (sounds.length > 0) addAudioFromLibrary(sounds);
+    if (videos.length > 0) addAssetClips(videos);
   };
 
   // The scrim closes the picker only for a press that starts and ends on it: a drag out of the search field

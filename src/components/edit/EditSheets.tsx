@@ -83,7 +83,8 @@ export function EditBanner({ banner }: { banner: NonNullable<ReturnType<typeof u
   );
 }
 
-function Sheet({
+/** A small question over the view (these, and the media pane's Remove from edit): Escape and the backdrop cancel. */
+export function Sheet({
   label,
   title,
   description,

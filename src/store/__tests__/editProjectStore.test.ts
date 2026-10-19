@@ -8,6 +8,7 @@ import {
   handleDesktopSave,
   LAST_EDIT_KEY,
   LIBRARY_PANE_KEY,
+  PANE_LAYOUT_KEY,
   useEditProjectStore,
 } from "@/store/editProjectStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
@@ -139,10 +140,11 @@ const saved = (base: EditDocument, request: SaveEditRequest, updatedAt: number):
 beforeEach(() => {
   vi.clearAllMocks();
   api.assetInfoThrows = false;
+  // Cleared first: the reset reads the pane's remembered state
+  localStorage.clear();
   __resetEditProjectForTests();
   __resetAssetInfoForTests();
   editor().close();
-  localStorage.clear();
   useAssetStore.setState({ appView: "edit" });
   useWorkflowStore.setState({ autoSaveEnabled: true });
   useSaveRequestStore.setState({ request: null });
@@ -982,7 +984,7 @@ describe("the edit's media", () => {
   });
 });
 
-describe("the library pane", () => {
+describe("the media pane", () => {
   it("is open by default and remembers being hidden", () => {
     expect(store().pane.open).toBe(true);
     store().setPaneOpen(false);
@@ -991,12 +993,38 @@ describe("the library pane", () => {
     expect(store().pane.open).toBe(false);
   });
 
-  it("+ opens it, sets its kind and asks for its search's focus", () => {
-    store().setPaneOpen(false);
-    store().requestPaneFocus("audio");
-    expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 1 });
-    store().requestPaneFocus();
-    expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 2 });
+  it("is a list by default and remembers the grid", () => {
+    expect(store().pane).toEqual({ open: true, layout: "list" });
+    store().setPaneLayout("grid");
+    expect(store().pane.layout).toBe("grid");
+    expect(localStorage.getItem(PANE_LAYOUT_KEY)).toBe("grid");
+    __resetEditProjectForTests();
+    expect(store().pane.layout).toBe("grid");
+    localStorage.setItem(PANE_LAYOUT_KEY, "tiles");
+    __resetEditProjectForTests();
+    expect(store().pane.layout).toBe("list");
+  });
+
+  it("selects an item, and counts each request to scroll one into view", () => {
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 0 });
+    store().selectMedia("abeachaaaaaaa1");
+    expect(store().mediaFocus).toEqual({ id: "abeachaaaaaaa1", reveal: 0 });
+    store().revealMedia("aclipaaaaaaaa1");
+    store().revealMedia("aclipaaaaaaaa1");
+    expect(store().mediaFocus).toEqual({ id: "aclipaaaaaaaa1", reveal: 2 });
+    __resetEditProjectForTests();
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 0 });
+  });
+
+  it("forgets the selected item when an edit opens and when it closes", async () => {
+    await openDoc(doc());
+    store().revealMedia("aclipaaaaaaaa1");
+    await store().goHome();
+    // The count goes on: a pane still shown hears the next reveal
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 1 });
+    store().selectMedia("aclipaaaaaaaa1");
+    await openDoc(doc());
+    expect(store().mediaFocus.id).toBeNull();
   });
 });
 

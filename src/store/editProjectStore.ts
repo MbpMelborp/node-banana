@@ -47,7 +47,8 @@ import { useWorkflowStore } from "./workflowStore";
 export type EditSaveState = "saved" | "saving" | "failed" | "conflict" | "waiting" | "gone";
 /** What one save attempt ended as. "unchanged": nothing to save. */
 export type EditSaveOutcome = "saved" | "unchanged" | "failed" | "conflict" | "waiting" | "gone";
-export type EditPaneKind = "all" | "video" | "audio";
+/** How the media pane shows the edit's media: one row each, or covers two to a row. */
+export type EditPaneLayout = "list" | "grid";
 export type EditSwitch = { action: "new" } | { action: "home" } | { action: "open"; id: string } | { action: "duplicate"; id: string };
 
 export interface OpenEditMeta {
@@ -78,7 +79,12 @@ export interface EditProjectState {
   /** The open edit's session while the view is not shown. */
   parked: StitchParkedSession | null;
   render: { state: "idle" | "rendering" | "failed"; editId: string | null; progress: number; message: string | null };
-  pane: { open: boolean; kind: EditPaneKind; focusRequest: number };
+  pane: { open: boolean; layout: EditPaneLayout };
+  /**
+   * The media pane's selected item, and a count that goes up each time the pane should scroll it into view (an item
+   * just added). The item is cleared when an edit opens or closes.
+   */
+  mediaFocus: { id: string | null; reveal: number };
   /** The unsaved-changes sheet's question: what to do once it is answered. */
   pendingSwitch: EditSwitch | null;
   /** The edit the delete confirmation asks about. */
@@ -116,19 +122,24 @@ export interface EditProjectState {
   stopRender(): void;
   setRenderState(render: Partial<EditProjectState["render"]>): void;
   setPaneOpen(open: boolean): void;
-  setPaneKind(kind: EditPaneKind): void;
-  /** "+" in the view: the pane opens, takes the kind and focuses its search. */
-  requestPaneFocus(kind?: "video" | "audio"): void;
+  setPaneLayout(layout: EditPaneLayout): void;
+  /** Selects an item in the media pane, without scrolling to it (null: none). */
+  selectMedia(id: string | null): void;
+  /** Selects an item in the media pane and scrolls the pane to it. */
+  revealMedia(id: string): void;
 }
 
 export const LAST_EDIT_KEY = "node-banana-edit-last";
-/** "open" | "closed"; absent = open. */
+/** The media pane: "open" | "closed"; absent = open. Named for the library pane it replaced, so the choice carries over. */
 export const LIBRARY_PANE_KEY = "node-banana-edit-library-pane";
+/** The media pane's layout: "list" | "grid"; absent = list. */
+export const PANE_LAYOUT_KEY = "node-banana-edit-pane-layout";
 export const EDIT_UNSAVED_WARNING = "An edit in the Edit video view has changes that are not saved.";
 /** A paused library is asked again no sooner than this. */
 export const EDIT_PAUSED_MIN_WAIT_MS = 3_000;
 
 const SAVED: EditProjectState["save"] = { state: "saved", error: null, conflict: null, retryAt: null };
+const NO_MEDIA_FOCUS: EditProjectState["mediaFocus"] = { id: null, reveal: 0 };
 
 function readStorage(key: string): string | null {
   try {
@@ -318,6 +329,14 @@ function saveNow(reason: "auto" | "manual"): Promise<EditSaveOutcome> {
 }
 
 /**
+ * No media item selected. The reveal count only goes up: a pane that stays mounted across an open (a conflict's other
+ * version) still hears the next reveal.
+ */
+function unselectedMedia(): EditProjectState["mediaFocus"] {
+  return { id: null, reveal: get().mediaFocus.reveal };
+}
+
+/**
  * Opens `document` into the editor, only when `token` is still the latest open and the view still shows (D14). A
  * created edit dropped here still exists and is in the list.
  */
@@ -325,7 +344,16 @@ function applyOpen(token: number, document: EditDocument): boolean {
   if (token !== openSeq || useAssetStore.getState().appView !== "edit") return false;
   const editor = useStitchEditorStore.getState();
   if (editor.isOpen && editor.nodeId !== null) return false;
-  set({ open: metaOf(document), opening: null, openError: null, save: SAVED, parked: null, pendingSwitch: null, renameError: null });
+  set({
+    open: metaOf(document),
+    opening: null,
+    openError: null,
+    save: SAVED,
+    parked: null,
+    pendingSwitch: null,
+    renameError: null,
+    mediaFocus: unselectedMedia(),
+  });
   const draft = draftFromEditSequence(document.sequence, document.media);
   editor.openEdit({ editId: document.id, draft });
   writeLast(document.id);
@@ -337,7 +365,7 @@ function applyOpen(token: number, document: EditDocument): boolean {
 function closeCurrent(): void {
   const editor = useStitchEditorStore.getState();
   if (editor.isOpen && editor.editId !== null) editor.close();
-  set({ open: null, parked: null, save: SAVED, renameError: null });
+  set({ open: null, parked: null, save: SAVED, renameError: null, mediaFocus: unselectedMedia() });
 }
 
 async function readAndOpen(id: string, opts: { quiet?: boolean } = {}): Promise<void> {
@@ -423,7 +451,10 @@ async function switchTo(next: EditSwitch): Promise<void> {
 }
 
 function initialPane(): EditProjectState["pane"] {
-  return { open: readStorage(LIBRARY_PANE_KEY) !== "closed", kind: "all", focusRequest: 0 };
+  return {
+    open: readStorage(LIBRARY_PANE_KEY) !== "closed",
+    layout: readStorage(PANE_LAYOUT_KEY) === "grid" ? "grid" : "list",
+  };
 }
 
 export const useEditProjectStore = create<EditProjectState>(() => ({
@@ -436,6 +467,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
   parked: null,
   render: { state: "idle", editId: null, progress: 0, message: null },
   pane: initialPane(),
+  mediaFocus: NO_MEDIA_FOCUS,
   pendingSwitch: null,
   confirmDelete: null,
   renameError: null,
@@ -667,13 +699,14 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
     set({ pane: { ...get().pane, open } });
   },
 
-  setPaneKind: (kind) => set({ pane: { ...get().pane, kind } }),
-
-  requestPaneFocus: (kind) => {
-    const pane = get().pane;
-    if (!pane.open) writeStorage(LIBRARY_PANE_KEY, "open");
-    set({ pane: { open: true, kind: kind ?? pane.kind, focusRequest: pane.focusRequest + 1 } });
+  setPaneLayout: (layout) => {
+    writeStorage(PANE_LAYOUT_KEY, layout);
+    set({ pane: { ...get().pane, layout } });
   },
+
+  selectMedia: (id) => set({ mediaFocus: { ...get().mediaFocus, id } }),
+
+  revealMedia: (id) => set({ mediaFocus: { id, reveal: get().mediaFocus.reveal + 1 } }),
 }));
 
 /** For tests: the queue, the chained save and the tokens back to their start. */
@@ -693,6 +726,7 @@ export function __resetEditProjectForTests(): void {
     parked: null,
     render: { state: "idle", editId: null, progress: 0, message: null },
     pane: initialPane(),
+    mediaFocus: NO_MEDIA_FOCUS,
     pendingSwitch: null,
     confirmDelete: null,
     renameError: null,

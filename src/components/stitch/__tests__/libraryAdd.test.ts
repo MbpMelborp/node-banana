@@ -43,16 +43,21 @@ beforeEach(() => {
   __resetAssetInfoForTests();
 });
 
-describe("openLibraryPicker in the Edit video view", () => {
-  it("focuses the library pane instead of opening the picker", () => {
+describe("openLibraryPicker", () => {
+  it("opens the picker over a paused preview in the Edit video view, for the kind asked (Add media: both)", () => {
     openEdit();
     useEditProjectStore.getState().setPaneOpen(false);
+    editor().setPlaying(true);
     openLibraryPicker("audio");
-    expect(editor().pickerOpen).toBe(false);
-    expect(useEditProjectStore.getState().pane).toMatchObject({ open: true, kind: "audio", focusRequest: 1 });
+    expect(editor().pickerOpen).toBe("audio");
+    expect(editor().playing).toBe(false);
+    // The pane is left as it was
+    expect(useEditProjectStore.getState().pane.open).toBe(false);
+    openLibraryPicker("all");
+    expect(editor().pickerOpen).toBe("all");
   });
 
-  it("still opens the picker in the dialog", () => {
+  it("opens it in the dialog as before", () => {
     editor().open({
       nodeId: "s1",
       draft: { timeline: [], audioClips: [], legacyAudio: { curve: [], muted: false }, loopCount: 1, sequenceLayout: { mode: "track", overlapSec: 1, crossfade: true } },
@@ -60,7 +65,11 @@ describe("openLibraryPicker in the Edit video view", () => {
     });
     openLibraryPicker("video");
     expect(editor().pickerOpen).toBe("video");
-    expect(useEditProjectStore.getState().pane.focusRequest).toBe(0);
+  });
+
+  it("does nothing with no editor open", () => {
+    openLibraryPicker("video");
+    expect(editor().pickerOpen).toBe(false);
   });
 });
 
