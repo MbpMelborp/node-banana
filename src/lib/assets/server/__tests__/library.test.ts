@@ -235,6 +235,33 @@ describe("mutations", () => {
     expect(sidecar.trashedAt).toBeUndefined();
   });
 
+  it("names an asset, finds it by that name, and clears the name with an empty one", async () => {
+    const r = await record({ prompt: "A cat in a hat" });
+    const sidecarPath = path.join(root, ".nodebanana", "assets", `${r.asset.id}.json`);
+    const renamed = await patchAsset(r.asset.id, { name: "  Sunset over the bay " });
+    expect(renamed).toMatchObject({ name: "Sunset over the bay", filename: r.asset.filename });
+    expect((await getAsset(r.asset.id))?.name).toBe("Sunset over the bay");
+    expect(JSON.parse(fs.readFileSync(sidecarPath, "utf8")).name).toBe("Sunset over the bay");
+    expect(await ids({ q: "sunset BAY" })).toEqual([r.asset.id]);
+    expect(await ids({ q: "cat" })).toEqual([r.asset.id]);
+
+    // Another process reads it from the sidecar, and its rename reaches this one through the journal.
+    const other = new AssetLibrary(root);
+    await other.ready();
+    expect((await other.query({ q: "sunset" })).assets.map((x) => x.id)).toEqual([r.asset.id]);
+    await other.patch(r.asset.id, { name: "Dusk" });
+    expect((await getAsset(r.asset.id))?.name).toBe("Dusk");
+    await other.drain();
+
+    const cleared = await patchAsset(r.asset.id, { name: "" });
+    expect(cleared?.name).toBeUndefined();
+    expect(cleared?.filename).toBe(r.asset.filename);
+    expect("name" in JSON.parse(fs.readFileSync(sidecarPath, "utf8"))).toBe(false);
+    expect(await ids({ q: "dusk" })).toEqual([]);
+    await expect(patchAsset(r.asset.id, { name: "Sun\nset" })).rejects.toMatchObject({ status: 400 });
+    await expect(patchAsset(r.asset.id, { name: "x".repeat(121) })).rejects.toMatchObject({ status: 400 });
+  });
+
   it("applies bulk ops to ids and to query selections", async () => {
     const one = await record({ prompt: "alpha" });
     const two = await record({ prompt: "beta" });
@@ -978,6 +1005,27 @@ describe("loading sidecars", () => {
     // A write after the torn line still reaches other processes.
     await fresh.patch(r.asset.id, { tags: ["after-crash"] });
     expect((await getAsset(r.asset.id))?.tags).toEqual(["after-crash"]);
+    await fresh.drain();
+  });
+});
+
+describe("loading a display name", () => {
+  it("keeps one a rename could have set, trimmed, and drops any other without dropping the record", async () => {
+    const assets = path.join(root, ".nodebanana", "assets");
+    const names: unknown[] = ["  Sunset ", "Sun\nset", "x".repeat(121), "", 7];
+    const recorded: RecordAssetResult[] = [];
+    for (let i = 0; i < names.length; i++) recorded.push(await record());
+    recorded.forEach((r, i) => {
+      const file = path.join(assets, `${r.asset.id}.json`);
+      fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), name: names[i] }));
+    });
+
+    const fresh = new AssetLibrary(root);
+    await fresh.ready();
+    const loaded = recorded.map((r) => fresh.allRecords().find((x) => x.id === r.asset.id));
+    expect(loaded.every(Boolean)).toBe(true);
+    expect(loaded[0]?.name).toBe("Sunset");
+    for (const record of loaded.slice(1)) expect(record && "name" in record).toBe(false);
     await fresh.drain();
   });
 });

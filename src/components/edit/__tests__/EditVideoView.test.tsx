@@ -884,13 +884,14 @@ describe("adding from the library", () => {
 
   it("a sound's ghost is its row: the music glyph, its name and length, no picture", async () => {
     measure(A, B);
+    assetsApi.fetchAssetPage.mockResolvedValue(page([LIBRARY[C], LIBRARY[B], LIBRARY[A], { ...LIBRARY[M], name: "Morning score" }]));
     await renderOpen();
     const unregister = libraryDrop.register(() => ({ lane: "audio", startSec: 1, row: 0, newRow: true }), () => null);
     try {
       fireEvent.pointerDown(tile(M), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
       fireEvent.pointerMove(tile(M), { pointerId: 1, clientX: 60, clientY: 300 });
       const ghost = screen.getByTestId("library-drag-ghost");
-      expect(ghost).toHaveTextContent(/^music\.m4a0:20$/);
+      expect(ghost).toHaveTextContent(/^Morning score0:20$/);
       expect(ghost.querySelector("img")).toBeNull();
       expect(ghost.querySelector("svg")).not.toBeNull();
       press(document.body, "Escape");

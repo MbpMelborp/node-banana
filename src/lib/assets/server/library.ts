@@ -16,6 +16,7 @@
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
+import { cleanAssetName } from "../name";
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from "../query";
 import {
   ASSET_KINDS,
@@ -213,6 +214,9 @@ export function parseRecord(value: unknown, expectedId: string, root: string, ra
     favorite: raw.favorite === true,
   };
   if (optionalNumber(raw.trashedAt) === undefined) delete record.trashedAt;
+  const name = cleanAssetName(raw.name);
+  if (name === undefined) delete record.name;
+  else record.name = name;
   if (raw.unreadable === true) record.unreadable = true;
   else delete record.unreadable;
   for (const key of ["width", "height", "durationSec"] as const) {
@@ -228,6 +232,7 @@ function sameMutableState(a: AssetRecord, b: AssetRecord): boolean {
     a.trashedAt === b.trashedAt &&
     a.hasPoster === b.hasPoster &&
     a.unreadable === b.unreadable &&
+    a.name === b.name &&
     a.tags.length === b.tags.length &&
     a.tags.every((tag, index) => tag === b.tags[index])
   );
@@ -1355,6 +1360,8 @@ export class AssetLibrary {
       if (patch.favorite !== undefined) next.favorite = patch.favorite;
       if (patch.trashed === true && next.trashedAt === undefined) next.trashedAt = now;
       if (patch.trashed === false) delete next.trashedAt;
+      if (patch.name) next.name = patch.name;
+      else if (patch.name === "") delete next.name;
       return next;
     });
     if (line) await this.publish([line]);

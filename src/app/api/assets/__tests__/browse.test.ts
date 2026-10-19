@@ -168,6 +168,25 @@ describe("GET/PATCH /api/assets/[id]", () => {
     expect(facade.patchAsset).toHaveBeenCalledWith(ASSET_ID, { favorite: true, tags: ["cats"] });
   });
 
+  it("passes a display name through trimmed, and refuses one of more than one line", async () => {
+    vi.mocked(facade.patchAsset).mockResolvedValue(assetView({ name: "Sunset" }));
+    const response = await patchAsset(
+      page(`/api/assets/${ASSET_ID}`, { method: "PATCH", json: { name: " Sunset " } }),
+      ctx({ id: ASSET_ID }),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).name).toBe("Sunset");
+    expect(facade.patchAsset).toHaveBeenCalledWith(ASSET_ID, { name: "Sunset" });
+
+    const refused = await patchAsset(
+      page(`/api/assets/${ASSET_ID}`, { method: "PATCH", json: { name: "Sun\nset" } }),
+      ctx({ id: ASSET_ID }),
+    );
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ error: "name must be one line.", code: "bad_request" });
+    expect(facade.patchAsset).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an empty patch, and answers 404 for a missing asset", async () => {
     const empty = await patchAsset(page(`/api/assets/${ASSET_ID}`, { method: "PATCH", json: {} }), ctx({ id: ASSET_ID }));
     expect(empty.status).toBe(400);

@@ -28,7 +28,7 @@ export interface EditSequence {
 
 /** What the library said about an asset when the edit was last saved, so a clip the library lost can still be named. */
 export interface EditAssetSnapshot {
-  /** The asset's file name. */
+  /** The asset's display name when saved. */
   name: string;
   kind: "video" | "audio";
   /** The project folder's name; null when the asset is in no project. */

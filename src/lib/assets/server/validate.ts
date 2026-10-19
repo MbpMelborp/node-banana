@@ -5,6 +5,7 @@
  */
 
 import path from "path";
+import { assetNameProblem, cleanAssetName } from "../name";
 import {
   ASSET_ID_PATTERN,
   ASSET_KINDS,
@@ -376,6 +377,9 @@ export function scrubRecord(record: AssetRecord): AssetRecord {
     else out[key] = value;
   }
   out.filename = clip(record.filename, MAX_STRING_LENGTH);
+  const name = cleanAssetName(record.name);
+  if (name === undefined) delete out.name;
+  else out.name = name;
   out.workflowName =
     record.workflowName === null ? null : (scrubString(record.workflowName, MAX_STRING_LENGTH) ?? null);
   if (record.model) {
@@ -544,6 +548,12 @@ export function validatePatch(value: unknown): AssetPatch {
   if (value.trashed !== undefined) {
     if (typeof value.trashed !== "boolean") throw new LibraryError("trashed must be true or false", 400, "bad_request");
     patch.trashed = value.trashed;
+  }
+  if (value.name !== undefined) {
+    if (typeof value.name !== "string") throw new LibraryError("name must be a string", 400, "bad_request");
+    const problem = assetNameProblem(value.name);
+    if (problem) throw new LibraryError(problem.replace(/\.$/, ""), 400, "bad_request");
+    patch.name = value.name.trim();
   }
   return patch;
 }

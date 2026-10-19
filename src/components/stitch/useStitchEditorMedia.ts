@@ -6,6 +6,7 @@ import { useStitchAssetInfo } from "@/hooks/useStitchAssetInfo";
 import { useStitchMediaInfo, type StitchMediaEntry } from "@/hooks/useStitchMediaInfo";
 import { modelLabel, operationLabel } from "@/components/assets/assetFormat";
 import { assetFileUrl } from "@/lib/assets/client/api";
+import { assetName } from "@/lib/assets/name";
 import type { AssetView } from "@/lib/assets/types";
 import type { EditAssetSnapshot } from "@/lib/edits/types";
 import { audioSourceKey, type AudioSourceKey } from "@/lib/stitch/audioClips";
@@ -59,7 +60,7 @@ export interface AudioClipView {
   src: string | null;
   /** The waveform cache's key for src. */
   mediaKey: string | null;
-  /** The music's file name, or the library file's. */
+  /** The music's file name, or the library file's display name. */
   fileName: string;
   /** Where it comes from, for the rail's line ("Audio Input", "Library · Kling 3"); see RailSource. */
   railSource: RailSource;
@@ -336,7 +337,7 @@ export function useStitchEditorMedia({ assetFallback }: StitchEditorMediaOptions
         source: clip.source,
         src,
         mediaKey,
-        fileName: clip.source.kind === "music" ? musicFileName || "Audio" : asset?.filename || lost?.name || "Audio",
+        fileName: clip.source.kind === "music" ? musicFileName || "Audio" : (asset && assetName(asset)) || lost?.name || "Audio",
         railSource: lost ? { kind: NOT_IN_LIBRARY, detail: lost.name } : { kind, detail: model !== kind ? model : null },
         duration,
         recordDuration,

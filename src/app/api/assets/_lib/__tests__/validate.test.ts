@@ -133,10 +133,25 @@ describe("parsePatch", () => {
   });
 
   it("refuses an empty patch and wrong types", () => {
-    expect400(() => parsePatch({}), /changes nothing/);
+    expect400(() => parsePatch({}), /changes nothing: send tags, favorite, trashed or name/);
     expect400(() => parsePatch({ favorite: "yes" }), /favorite/);
     expect400(() => parsePatch({ tags: "a" }), /tags/);
     expect400(() => parsePatch({ tags: ["x".repeat(201)] }), /longer than/);
+  });
+
+  it("keeps a display name trimmed, and an empty one as the request to clear it", () => {
+    expect(parsePatch({ name: "  Sunset over the bay " })).toEqual({ name: "Sunset over the bay" });
+    expect(parsePatch({ name: "" })).toEqual({ name: "" });
+    expect(parsePatch({ name: "   " })).toEqual({ name: "" });
+    expect(parsePatch({ name: "x".repeat(120), favorite: true })).toEqual({ name: "x".repeat(120), favorite: true });
+  });
+
+  it("refuses a display name that is not a string, too long or more than one line", () => {
+    expect400(() => parsePatch({ name: 3 }), /^name must be a string\.$/);
+    expect400(() => parsePatch({ name: null }), /^name must be a string\.$/);
+    expect400(() => parsePatch({ name: "x".repeat(121) }), /^name is longer than 120 characters\.$/);
+    expect400(() => parsePatch({ name: "Sun\nset" }), /^name must be one line\.$/);
+    expect400(() => parsePatch({ name: "Sun\u2028set" }), /^name must be one line\.$/);
   });
 });
 

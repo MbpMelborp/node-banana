@@ -5,6 +5,7 @@
  */
 
 import { baseName } from "@/components/assets/assetFormat";
+import { assetName } from "@/lib/assets/name";
 import { ASSET_ID_PATTERN, type AssetView } from "@/lib/assets/types";
 import { compactAudioRows, sanitizeAudioClips } from "@/lib/stitch/audioClips";
 import { draftDuration, readSequenceLayout, type StitchDraft } from "@/lib/stitch/draft";
@@ -110,7 +111,7 @@ export function editAssetIds(seq: Pick<EditSequence, "timeline" | "audioClips">)
 
 function snapshotFromView(view: AssetView, kind: EditAssetSnapshot["kind"]): EditAssetSnapshot {
   return {
-    name: view.filename,
+    name: assetName(view),
     kind,
     project: view.workflow.projectPath ? baseName(view.workflow.projectPath) : null,
     durationSec: finite(view.durationSec) ? view.durationSec : null,

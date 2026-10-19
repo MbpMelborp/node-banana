@@ -362,6 +362,7 @@ export function matchesAssetQuery(asset: AssetView, query: AssetQuery, platform?
   if (terms.length) {
     const text = [
       asset.prompt ?? "",
+      asset.name ?? "",
       asset.filename,
       asset.model?.modelId ?? "",
       asset.model?.displayName ?? "",

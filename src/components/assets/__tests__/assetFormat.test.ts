@@ -111,6 +111,14 @@ describe("labels", () => {
     ).toBe("Video");
   });
 
+  it("titles an asset by the name it was given, before its prompt", () => {
+    expect(assetTitle({ name: "Sunset", prompt: "A cat astronaut", filename: "x.png" })).toBe("Sunset");
+    expect(
+      assetTitle({ name: "Opening shot", prompt: undefined, filename: "v.mp4", kind: "video", origin: "generated", producer: { nodeId: "v", nodeType: "generateVideo" }, workflowName: "Trip" }),
+    ).toBe("Opening shot");
+    expect(assetTitle({ name: undefined, prompt: "A cat astronaut", filename: "x.png" })).toBe("A cat astronaut");
+  });
+
   it("writes the detail eyebrow from kind, origin or operation, and date", () => {
     expect(assetEyebrow({ kind: "image", origin: "generated", createdAt: NOW, producer: { nodeId: "n", nodeType: "nanoBanana" } })).toBe(
       "Image · Generated · 27 Sep 2026",

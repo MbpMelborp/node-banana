@@ -284,9 +284,14 @@ function DetailPanel({ asset }: { asset: AssetView }) {
     >
       <div className="px-6 pb-4 pt-5">
         <DialogEyebrow className="block">{assetEyebrow(asset)}</DialogEyebrow>
-        <h2 className="mt-1.5 line-clamp-3 select-text font-display text-xl font-semibold leading-6 tracking-[-0.02em] text-neutral-100" title={asset.prompt ?? asset.filename}>
+        <h2 className="mt-1.5 line-clamp-3 select-text font-display text-xl font-semibold leading-6 tracking-[-0.02em] text-neutral-100" title={asset.name ?? asset.prompt ?? asset.filename}>
           {assetTitle(asset)}
         </h2>
+        {asset.name && asset.name !== asset.filename && (
+          <p className="mt-1 select-text truncate text-xs text-ink-3" title={asset.filename}>
+            {asset.filename}
+          </p>
+        )}
 
         {asset.missing && (
           <div role="alert" className="mt-4 flex flex-col gap-2 rounded-lg border border-error/40 bg-error/10 p-3">

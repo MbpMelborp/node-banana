@@ -172,14 +172,15 @@ export function workflowLabel(name: string | null | undefined, at: number): stri
   return trimmed ? trimmed : `Untitled · ${formatShortStamp(at)}`;
 }
 
-/** The asset's title: the prompt's first line, else the file name. */
 /**
- * The first line of the prompt; without one, what made the asset and where:
- * "Split to nodes · cell 3 · Product shots", "Video · Untitled".
+ * The name the user gave the asset; else the first line of the prompt; else
+ * what made the asset and where: "Split to nodes · cell 3 · Product shots",
+ * "Video · Untitled".
  */
 export function assetTitle(
-  asset: Pick<AssetView, "prompt" | "filename"> & Partial<Pick<AssetView, "kind" | "origin" | "producer" | "workflowName" | "workflow">>,
+  asset: Pick<AssetView, "prompt" | "filename" | "name"> & Partial<Pick<AssetView, "kind" | "origin" | "producer" | "workflowName" | "workflow">>,
 ): string {
+  if (asset.name) return asset.name;
   const line = asset.prompt?.split(/\r?\n/).find((l) => l.trim())?.trim();
   if (line) return line.length > 120 ? `${line.slice(0, 117).trimEnd()}…` : line;
   if (!asset.kind) return asset.filename;

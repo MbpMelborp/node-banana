@@ -13,6 +13,7 @@ import {
   normaliseTags,
   projectFileName,
   scrubRecord,
+  validatePatch,
   validateRecordMeta,
 } from "../validate";
 
@@ -152,6 +153,35 @@ describe("validateRecordMeta", () => {
     expect(validateRecordMeta({ ...valid, batch: { ...batch, count: 2.5 } }).batch).toBeUndefined();
     expect(validateRecordMeta({ ...valid, batch: { index: 1, count: 2 } }).batch).toBeUndefined();
     expect(validateRecordMeta({ ...valid, batch: "batch-1" }).batch).toBeUndefined();
+  });
+});
+
+describe("validatePatch", () => {
+  it("keeps a display name trimmed, and an empty one as the request to clear it", () => {
+    expect(validatePatch({ name: " Sunset " })).toEqual({ name: "Sunset" });
+    expect(validatePatch({ name: "" })).toEqual({ name: "" });
+    expect(validatePatch({ name: "x".repeat(120), favorite: true })).toEqual({ name: "x".repeat(120), favorite: true });
+  });
+
+  it("refuses a display name that is not a string, too long or more than one line", () => {
+    for (const [name, message] of [
+      [3, /^name must be a string$/],
+      ["x".repeat(121), /^name is longer than 120 characters$/],
+      ["Sun\nset", /^name must be one line$/],
+      ["Sun\u2029set", /^name must be one line$/],
+    ] as const) {
+      expect(() => validatePatch({ name })).toThrow(expect.objectContaining({ status: 400, code: "bad_request", message: expect.stringMatching(message) }));
+    }
+  });
+});
+
+describe("scrubRecord name", () => {
+  it("keeps a display name a rename could have set, trimmed, and drops any other", () => {
+    expect(scrubRecord(baseRecord({ name: " Sunset " })).name).toBe("Sunset");
+    expect("name" in scrubRecord(baseRecord({ name: "" }))).toBe(false);
+    expect("name" in scrubRecord(baseRecord({ name: "Sun\nset" }))).toBe(false);
+    expect("name" in scrubRecord(baseRecord({ name: "x".repeat(121) }))).toBe(false);
+    expect("name" in scrubRecord(baseRecord({ name: 7 as unknown as string }))).toBe(false);
   });
 });
 

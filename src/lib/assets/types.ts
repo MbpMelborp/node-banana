@@ -106,6 +106,8 @@ export interface AssetRecord {
   file: AssetFileLocation;
   /** Basename of the file on disk. */
   filename: string;
+  /** The name the user gave it; absent = `filename`. One line, at most 120 characters (`src/lib/assets/name.ts`). */
+  name?: string;
   width?: number;
   height?: number;
   durationSec?: number;
@@ -190,7 +192,7 @@ export type AssetScope = "library" | "trash" | "missing";
  */
 export interface AssetQuery {
   scope?: AssetScope;
-  /** Case-insensitive substring over prompt, filename, model, workflow name and tags. */
+  /** Case-insensitive substring over prompt, name, filename, model, workflow name and tags. */
   q?: string;
   kinds?: AssetKind[];
   origins?: AssetOrigin[];
@@ -282,6 +284,8 @@ export interface AssetPatch {
   tags?: string[];
   favorite?: boolean;
   trashed?: boolean;
+  /** The display name; `""` clears it. */
+  name?: string;
 }
 
 /** `present`: a record exists (live or trashed) and the file is there. `gone`: permanently deleted, or the record's file is verified absent. `unknown`: this library has never seen the id, or is unavailable. Carousels prune only `gone`. */

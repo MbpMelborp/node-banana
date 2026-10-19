@@ -216,6 +216,11 @@ describe("snapshotEditAssets (T-DOC-4)", () => {
     expect(snapshotEditAssets(["a0000000000099"], () => undefined, previous)).toEqual({});
   });
 
+  it("keeps the name the asset was given rather than its file's", () => {
+    const lookup = () => view(A, { name: "Opening shot" });
+    expect(snapshotEditAssets([A], lookup, previous)[A]).toMatchObject({ name: "Opening shot" });
+  });
+
   it("says no project for an asset in none", () => {
     const lookup = () => view(M, { kind: "audio", durationSec: undefined, workflow: { id: "w", name: null, projectPath: null } });
     expect(snapshotEditAssets([M], lookup, {})).toEqual({ [M]: { name: `${M}.mp4`, kind: "audio", project: null, durationSec: null } });

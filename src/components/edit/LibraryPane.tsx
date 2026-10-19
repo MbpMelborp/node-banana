@@ -7,6 +7,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { fetchFacets } from "@/lib/assets/client/api";
 import { onAssetRecorded } from "@/lib/assets/client/recorder";
+import { assetName } from "@/lib/assets/name";
 import type { AssetFacets, AssetView } from "@/lib/assets/types";
 import { WAITING_FOR_CLIPS } from "@/lib/stitch/libraryInsert";
 import { DEFAULT_LIBRARY_QUERY, libraryKinds, type LibraryVideoQuery } from "@/lib/stitch/libraryRequest";
@@ -243,7 +244,7 @@ function DragGhost() {
         style={{ ...place, width: GHOST_ROW_WIDTH }}
       >
         <Music size={14} strokeWidth={1.5} className="shrink-0 text-ink-3" />
-        <span className="min-w-0 flex-1 truncate text-xs text-neutral-200">{asset.filename}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-neutral-200">{assetName(asset)}</span>
         {duration !== null && <span className="shrink-0 text-[11px] tabular-nums text-ink-3">{formatTimecode(duration, 0)}</span>}
       </div>
     );

@@ -651,6 +651,15 @@ describe("LibraryPicker", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("calls a cover by the name it was given, in its focus chip, its tooltip and its accessible name", async () => {
+    api.fetchAssetPage.mockResolvedValue(page([asset("a2", { name: "Opening shot" })]));
+    openPicker();
+    const cover = await within(dialog()).findByRole("button", { name: named("Opening shot") });
+    expect(within(cover).getByTestId("library-tile-focus-name")).toHaveTextContent(/^Opening shot$/);
+    expect(cover).toHaveAttribute("title", "Opening shot");
+    expect(cover).toHaveAccessibleName("Opening shot, 0:05.0, Launch film");
+  });
+
   it("rings a picked cover in white, and draws nothing on a cover but its picture and length", async () => {
     openPicker();
     await within(dialog()).findByRole("button", { name: named("a1.mp4") });
@@ -891,6 +900,15 @@ describe("LibraryPicker over the editor", () => {
       expect(editor().selection).toMatchObject({ kind: "audio", clipId: clips[0].id });
       expect(editor().pickerOpen).toBe(false);
       expect(getAssetInfo("t2")?.filename).toBe("t2.m4a");
+    });
+
+    it("calls a file by the name it was given, in its row, its tooltip and its accessible name", async () => {
+      api.fetchAssetPage.mockResolvedValue(page([{ ...audioAsset("t1", 3), name: "Morning score" }]));
+      openPicker({ kind: "audio" });
+      const row = await within(audioDialog()).findByRole("button", { name: named("Morning score") });
+      expect(row).toHaveTextContent("Morning score0:03");
+      expect(row).toHaveAttribute("title", "Morning score");
+      expect(row).not.toHaveTextContent("t1.m4a");
     });
 
     it("says when the library has no audio, and when nothing matches", async () => {

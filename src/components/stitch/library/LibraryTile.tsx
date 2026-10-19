@@ -6,6 +6,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { tileThumbUrl } from "@/components/assets/AssetTile";
 import { projectLabel } from "@/components/assets/assetFormat";
 import { requestPoster } from "@/components/assets/posterRequests";
+import { assetName } from "@/lib/assets/name";
 import type { AssetView } from "@/lib/assets/types";
 import { formatTimecode } from "@/lib/stitch/timecode";
 
@@ -110,9 +111,10 @@ export const LibraryTile = memo(function LibraryTile({
 
   const duration = typeof asset.durationSec === "number" && asset.durationSec > 0 ? asset.durationSec : null;
   const project = projectLabel(asset.workflow?.projectPath ?? null);
+  const name = assetName(asset);
   // Everything the tile knows, for a screen reader (the pressed state is aria-pressed)
   const label = [
-    adding ? `Add ${asset.filename}` : asset.filename,
+    adding ? `Add ${name}` : name,
     duration !== null ? formatTimecode(duration, 1) : null,
     project,
     asset.favorite ? "favorite" : null,
@@ -122,7 +124,7 @@ export const LibraryTile = memo(function LibraryTile({
     .join(", ");
   // The name the tile no longer shows, then what a press does or why it does nothing
   const title = [
-    asset.filename,
+    name,
     missing ? "The file is missing" : blocked ? disabledReason : adding ? LIBRARY_ADD_HINT : null,
   ]
     .filter(Boolean)
@@ -164,7 +166,7 @@ export const LibraryTile = memo(function LibraryTile({
       >
         <Music size={14} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-ink-3" />
         <span className={cn("min-w-0 flex-1 truncate text-xs", selected ? "text-neutral-100" : "text-neutral-300")}>
-          {asset.filename}
+          {name}
         </span>
         {selected && (
           <span aria-label="Selected" className="flex shrink-0 text-neutral-100">
@@ -202,7 +204,7 @@ export const LibraryTile = memo(function LibraryTile({
         data-testid="library-tile-focus-name"
         className="pointer-events-none absolute inset-x-1 top-1 flex flex-col items-start gap-0.5 opacity-0 transition-opacity group-focus-visible:opacity-100"
       >
-        <span className={cn(COVER_CHIP, "max-w-full truncate")}>{asset.filename}</span>
+        <span className={cn(COVER_CHIP, "max-w-full truncate")}>{name}</span>
         {blocked && <span className={cn(COVER_CHIP, "max-w-full truncate font-normal text-neutral-300")}>{disabledReason}</span>}
       </span>
     </button>

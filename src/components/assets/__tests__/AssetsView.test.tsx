@@ -259,6 +259,26 @@ describe("AssetsView", () => {
     expect(useAssetStore.getState()).toMatchObject({ detailId: null, detailAsset: null, focusedId: "a2" });
   });
 
+  it("titles a renamed asset by its name, with its file's name under it, and no file line when it has no name or that name", async () => {
+    await renderView([asset("a3", { name: "a3.png" }), asset("a2", { name: "Opening shot" }), asset("a1")]);
+    expect(tile("a2")).toHaveAttribute("aria-label", expect.stringContaining("Opening shot"));
+    fireEvent.click(tile("a2"));
+    const panel = screen.getByRole("complementary", { name: "Asset details" });
+    const heading = within(panel).getByRole("heading", { name: "Opening shot" });
+    expect(heading).toHaveAttribute("title", "Opening shot");
+    expect(within(panel).getByText("a2.png")).toHaveAttribute("title", "a2.png");
+
+    fireEvent.click(tile("a1"));
+    const next = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(next).getByRole("heading", { name: "A cat called a1" })).toBeInTheDocument();
+    expect(within(next).queryByText("a1.png")).toBeNull();
+
+    fireEvent.click(tile("a3"));
+    const same = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(same).getByRole("heading", { name: "a3.png" })).toBeInTheDocument();
+    expect(within(same).getAllByText("a3.png")).toHaveLength(1);
+  });
+
   it("offers a project asset its project, and the copy as it was when made", async () => {
     await renderView([asset("a1", { workflow: { id: "wf_1", name: "Cat ads", projectPath: "/p/Cat ads" }, file: { root: "external", path: "/p/Cat ads/generations/x.png" } })]);
     fireEvent.click(tile("a1"));
