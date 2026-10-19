@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **A node's edit is in Edits too** — Save or Done in an Edit Video node's editor also keeps the sequence in the Edits folder, so it is listed in the Edit video view (bare E): created on the first save, named after the node's title or the workflow, and replaced on every later save. Socket clips become the library videos they play and the music the connected audio; a clip the library does not hold is left out, and a toast says so.
+
 ## [2.2.0] - 2026-10-19
 
 The Video Stitch node becomes Edit Video, with a full-screen editor on a

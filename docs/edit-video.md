@@ -1022,9 +1022,10 @@ Bare **E** (or **Edit video** in the tab strip or the menu) shows the Edit
 video view over the canvas, as A shows Assets and C the chat. It edits
 **edit projects**: timelines of their own, not tied to any node or
 workflow, with videos and audio from the asset library of any project.
-The Edit Video node and its dialog are unchanged; the two never share a
-timeline. E, A or C in the view go to the canvas, Assets or the chat;
-Escape never leaves it.
+The Edit Video node and its dialog are the same editor over a node's
+sockets; the two never share a session, but a node's edit is kept in the
+Edits folder too (see "Saved to Edits"). E, A or C in the view go to the
+canvas, Assets or the chat; Escape never leaves it.
 
 **Edit projects.** Each is one file, `<Node Banana folder>/Edits/<name>.nbedit`
 (JSON): a stable id, the name, when it was made and last changed, the
@@ -1136,6 +1137,34 @@ open workflow's canvas, and its toast offers Go to canvas.
 **Show in Finder.** The home screen's folder button (its tooltip says
 Show in Finder) opens the Edits folder (it is created if it is not there
 yet); the edit menu's and a row's ⋯ show the edit's own file.
+
+## Saved to Edits
+
+A node's dialog writes to the node, and the same Save or Done also keeps
+the edit in the Edits folder, so the sequence finished on a node is listed
+in the Edit video view (`src/components/stitch/mirrorStitchEdit.ts`). The
+first write creates the edit, named after the node's title, else the
+workflow's name (the server numbers a taken name: "Raid 2"), and the node
+keeps its id in `editProjectId`; every later write replaces that edit's
+sequence, assets and summary (`force`, so a change made to it in the view
+since is overwritten: the node is the original). An edit whose file is
+gone is made again under a new id. The node's own save never waits on it:
+the requests run after the write, and a failure is one toast ("The edit
+was kept on the node but couldn't be saved to Edits: …").
+
+An edit project holds clips by library id only (`mirrorDraft` in
+`src/lib/stitch/editMirror.ts`), so each socket clip becomes the library
+asset its video is: the output the source node shows, from its carousel
+(`videoHistory`, `audioHistory`) or a Comfy app's selected run, read past
+a router or switch to the node the edge comes from. The music clip becomes
+an audio clip of the connected audio's asset, with its row, trim, mute and
+curve; library clips pass through. A clip whose media the library does
+not hold (an upload in a Video Input, a Trim or Ease Curve output, a node
+that has not run) is left out, and the toast says how many ("Saved to
+Edits without one clip that is not in the library."). When nothing is in
+the library, nothing is written. The measured lengths of the socket clips
+carry over to their assets for the summary's length; the asset snapshot is
+read from the editor's cache or the library at the write.
 
 ## Frame to canvas
 

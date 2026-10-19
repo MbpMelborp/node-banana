@@ -10,6 +10,9 @@ import type { StitchSequenceLayout, VideoStitchNodeData, VolumePoint, WorkflowEd
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
+const mirror = vi.fn().mockResolvedValue(null);
+vi.mock("../mirrorStitchEdit", () => ({ mirrorStitchEditToEdits: (...args: unknown[]) => mirror(...args) }));
+
 // Real stores: what Done does to the canvas, and how it undoes.
 
 const wf = () => useWorkflowStore.getState();
@@ -534,5 +537,37 @@ describe("audio clips on Done", () => {
     editor().apply((d) => ({ ...d, loopCount: 2 }));
     commitStitchEdit();
     expect(edgeIds()).toContain("eM");
+  });
+});
+
+describe("the Edits mirror", () => {
+  beforeEach(() => mirror.mockClear());
+
+  it("is not written when nothing changed", () => {
+    expect(commitStitchEdit()).toBe("closed");
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it("gets what Done wrote to the node, with the session's lengths, after the editor closes", () => {
+    remove("clip:eA");
+    expect(commitStitchEdit()).toBe("written");
+    expect(mirror).toHaveBeenCalledTimes(1);
+    const input = mirror.mock.calls[0][0];
+    expect(input.nodeId).toBe("stitch");
+    expect(input.draft.timeline.map((c: { source: unknown }) => c.source)).toEqual([{ kind: "edge", edgeId: "eB" }]);
+    expect(input.durations).toBe(DURATIONS);
+    expect(editor().isOpen).toBe(false);
+  });
+
+  it("gets what Save wrote, and again on the next Save", () => {
+    remove("clip:eA");
+    expect(saveStitchEdit()).toBe("saved");
+    expect(mirror).toHaveBeenCalledTimes(1);
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(mirror).toHaveBeenCalledTimes(1);
+    editor().apply((d) => ({ ...d, loopCount: 2 }));
+    expect(saveStitchEdit()).toBe("saved");
+    expect(mirror).toHaveBeenCalledTimes(2);
+    expect(mirror.mock.calls[1][0].draft.loopCount).toBe(2);
   });
 });
