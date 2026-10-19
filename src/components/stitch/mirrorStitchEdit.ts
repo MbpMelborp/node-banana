@@ -121,6 +121,8 @@ async function lookupAssets(ids: readonly string[]): Promise<(id: string) => Ass
 
 interface MirrorBody {
   sequence: EditSequence;
+  /** The sequence's assets in first-use order: the node is the original, so media only the view added goes. */
+  media: string[];
   assets: Record<string, EditAssetSnapshot>;
   summary: EditSummaryFields;
 }
@@ -129,12 +131,14 @@ async function mirrorBody(input: MirrorInput, sources: MirrorSources): Promise<{
   const mirror = mirrorDraft(input.draft, sources, input.durations);
   if (mirrorIsEmpty(mirror)) return null;
   const sequence = editSequenceFromDraft(mirror.draft);
-  const lookup = await lookupAssets(editAssetIds(sequence));
+  const media = editAssetIds(sequence);
+  const lookup = await lookupAssets(media);
   const durations = provisionalDurations(mirror.draft, mirror.durations, lookup, {});
   return {
     body: {
       sequence,
-      assets: snapshotEditAssets(editAssetIds(sequence), lookup, {}),
+      media,
+      assets: snapshotEditAssets(media, lookup, {}),
       summary: summarizeEdit(mirror.draft, durations),
     },
     leftOut: mirror.leftOut,

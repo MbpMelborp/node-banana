@@ -5,7 +5,7 @@ import * as editsApi from "@/lib/edits/client";
 import { EditApiError } from "@/lib/edits/client";
 import {
   draftFromEditSequence,
-  editAssetIds,
+  editMediaOf,
   editSequenceFromDraft,
   normalizeEditName,
   snapshotEditAssets,
@@ -233,12 +233,13 @@ function markSent(editId: string, sent: StitchDraft): void {
   if (parked?.editId === editId) set({ parked: { ...parked, initial: sent } });
 }
 
-/** What a save sends for this session: the sequence, the asset snapshot and the summary the list shows. */
+/** What a save sends for this session: the sequence, the media, their asset snapshot and the summary the list shows. */
 function saveBody(open: OpenEditMeta, draft: StitchDraft, session: StitchParkedSession) {
-  const sequence = editSequenceFromDraft(draft);
+  const media = editMediaOf(draft);
   return {
-    sequence,
-    assets: snapshotEditAssets(editAssetIds(sequence), getAssetInfo, open.assets),
+    sequence: editSequenceFromDraft(draft),
+    media,
+    assets: snapshotEditAssets(media, getAssetInfo, open.assets),
     summary: summarizeEdit(draft, provisionalDurations(draft, session.durations, getAssetInfo, open.assets)),
   };
 }
@@ -275,8 +276,10 @@ async function saveOnce(force: boolean): Promise<EditSaveOutcome> {
     const document = await editsApi.saveEdit(sentId, request);
     const now = get().open;
     if (now?.id !== sentId) return "saved";
+    // The snapshots of media that left stay: an undone removal still names an asset the library has lost
+    const assets = { ...now.assets, ...document.assets };
     set({
-      open: { ...now, name: document.name, baseUpdatedAt: document.updatedAt, assets: document.assets, renders: document.renders },
+      open: { ...now, name: document.name, baseUpdatedAt: document.updatedAt, assets, renders: document.renders },
       save: SAVED,
     });
     markSent(sentId, sent);
@@ -323,9 +326,10 @@ function applyOpen(token: number, document: EditDocument): boolean {
   const editor = useStitchEditorStore.getState();
   if (editor.isOpen && editor.nodeId !== null) return false;
   set({ open: metaOf(document), opening: null, openError: null, save: SAVED, parked: null, pendingSwitch: null, renameError: null });
-  editor.openEdit({ editId: document.id, draft: draftFromEditSequence(document.sequence) });
+  const draft = draftFromEditSequence(document.sequence, document.media);
+  editor.openEdit({ editId: document.id, draft });
   writeLast(document.id);
-  requestAssetInfo(editAssetIds(document.sequence));
+  requestAssetInfo(draft.media ?? []);
   return true;
 }
 

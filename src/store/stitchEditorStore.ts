@@ -1,4 +1,5 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import { coverEditMedia } from "@/lib/edits/document";
 import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/audioClips";
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
@@ -293,7 +294,7 @@ const sameIds = (a: SelectionIds, b: SelectionIds) =>
  * audio selection forgets its point, so ⌫ never removes a point by a stale
  * index.
  */
-function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
+export function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
   if (selection?.kind === "clip") {
     const order = draft.timeline.map((c) => c.id);
     const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
@@ -371,7 +372,8 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     apply: (recipe, opts) => {
       const { draft, gestureKey, past, selection, musicHeld } = get();
       if (!draft) return;
-      const next = recipe(draft);
+      // An edit's media holds every asset its clips use, so a clip added any way brings its asset in, in the same step
+      const next = coverEditMedia(recipe(draft));
       // Most recipes rebuild the draft object, so an unchanged value is told apart by content
       if (next === draft || (sameDraft(next, draft) && sameAudioRows(next, draft))) return;
       // A point index means nothing once the lead's curve has changed under it

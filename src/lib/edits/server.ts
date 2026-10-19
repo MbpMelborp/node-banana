@@ -38,6 +38,7 @@ import {
   parseEditDocument,
   readRender,
   sanitizeEditAssets,
+  sanitizeEditMedia,
   sanitizeEditSequence,
   sanitizeEditSummary,
   type ParsedEdit,
@@ -304,6 +305,11 @@ function optionalObject(value: unknown, label: string): void {
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw badRequest(`Invalid ${label}.`);
 }
 
+/** Strings that are not asset ids are dropped when the document is built (sanitizeEditMedia). */
+function optionalMedia(value: unknown): void {
+  if (value !== undefined && (!Array.isArray(value) || value.some((id) => typeof id !== "string"))) throw badRequest("Invalid media.");
+}
+
 export function checkEditId(id: unknown): string {
   if (typeof id !== "string" || !EDIT_ID_PATTERN.test(id)) throw badRequest("Invalid edit id.");
   return id;
@@ -311,7 +317,7 @@ export function checkEditId(id: unknown): string {
 
 export function parseCreateRequest(raw: unknown): CreateEditRequest {
   const fields = fieldsOf(raw);
-  const { name, from, sequence, assets, summary, separate } = fields;
+  const { name, from, sequence, media, assets, summary, separate } = fields;
   if (separate !== undefined) {
     if (
       typeof separate !== "string" ||
@@ -327,9 +333,11 @@ export function parseCreateRequest(raw: unknown): CreateEditRequest {
   if (name !== undefined && typeof name !== "string") throw badRequest("Invalid name.");
   if (from !== undefined) checkEditId(from);
   optionalObject(sequence, "sequence");
+  optionalMedia(media);
   optionalObject(assets, "assets");
   optionalObject(summary, "summary");
   if (from !== undefined && sequence !== undefined) throw badRequest("Send from or sequence, not both.");
+  if (from !== undefined && media !== undefined) throw badRequest("Send from or media, not both.");
   return fields as CreateEditRequest;
 }
 
@@ -338,6 +346,7 @@ export function parseSaveRequest(raw: unknown): SaveEditRequest {
   if (typeof fields.baseUpdatedAt !== "number" || !Number.isFinite(fields.baseUpdatedAt)) throw badRequest("Invalid baseUpdatedAt.");
   if (fields.force !== undefined && typeof fields.force !== "boolean") throw badRequest("Invalid force.");
   if (!fields.sequence || typeof fields.sequence !== "object" || Array.isArray(fields.sequence)) throw badRequest("Invalid sequence.");
+  optionalMedia(fields.media);
   optionalObject(fields.assets, "assets");
   optionalObject(fields.summary, "summary");
   if (fields.renders !== undefined && !Array.isArray(fields.renders)) throw badRequest("Invalid renders.");
@@ -403,14 +412,27 @@ export async function createEdit(raw: unknown, deps: EditsDeps = {}): Promise<Ed
     writeInLibraryRoot(async (root) => {
       const now = clock(deps);
       const folder = await readFolder(editsDir(root));
-      let base: { name: string; sequence: EditSequence; assets: unknown; summary: unknown };
+      let base: { name: string; sequence: EditSequence; media: unknown; assets: unknown; summary: unknown };
       if (request.from !== undefined) {
         const source = requireEdit(folder, request.from).document;
-        base = { name: copyName(source.name), sequence: source.sequence, assets: source.assets, summary: source.summary };
+        base = {
+          name: copyName(source.name),
+          sequence: source.sequence,
+          media: source.media,
+          assets: source.assets,
+          summary: source.summary,
+        };
       } else {
         const sequence = request.sequence ? sanitizeEditSequence(request.sequence) : emptyEditSequence();
-        base = { name: normalizeEditName(request.name ?? ""), sequence, assets: request.assets, summary: request.summary };
+        base = {
+          name: normalizeEditName(request.name ?? ""),
+          sequence,
+          media: request.media,
+          assets: request.assets,
+          summary: request.summary,
+        };
       }
+      const media = sanitizeEditMedia(base.media, base.sequence);
       const taken = new Set(folder.files.map((file) => fileKey(file.fileName)));
       const name = firstFreeName(base.name, taken, (candidate) => fileKey(editFileName(candidate)));
       const ids = new Set(folder.files.map((file) => (file.parsed.ok ? file.parsed.document.id : file.parsed.id)));
@@ -424,7 +446,8 @@ export async function createEdit(raw: unknown, deps: EditsDeps = {}): Promise<Ed
         createdAt: now,
         updatedAt: now,
         sequence: base.sequence,
-        assets: sanitizeEditAssets(base.assets, base.sequence),
+        media,
+        assets: sanitizeEditAssets(base.assets, media),
         renders: [],
         summary: sanitizeEditSummary(base.summary, base.sequence),
       };
@@ -464,7 +487,10 @@ async function separateEdit(fileName: string, deps: EditsDeps): Promise<EditDocu
   );
 }
 
-/** Saves the sequence. 409 (with `current`) when the stored edit is not the one the save is based on, unless `force`. */
+/**
+ * Saves the sequence and the media (a save without media keeps the stored media). 409 (with `current`) when the
+ * stored edit is not the one the save is based on, unless `force`.
+ */
 export async function saveEdit(id: string, raw: unknown, deps: EditsDeps = {}): Promise<EditDocument> {
   const editId = checkEditId(id);
   const request = parseSaveRequest(raw);
@@ -475,10 +501,12 @@ export async function saveEdit(id: string, raw: unknown, deps: EditsDeps = {}): 
       const current = edit.document;
       if (request.force !== true && current.updatedAt !== request.baseUpdatedAt) throw new EditConflictError(current);
       const sequence = sanitizeEditSequence(request.sequence);
+      const media = sanitizeEditMedia(request.media ?? current.media, sequence);
       const document: EditDocument = {
         ...current,
         sequence,
-        assets: sanitizeEditAssets(request.assets, sequence),
+        media,
+        assets: sanitizeEditAssets(request.assets, media),
         summary: sanitizeEditSummary(request.summary, sequence),
         renders: mergeEditRenders(current.renders, request.renders ?? []),
         updatedAt: nextUpdatedAt(clock(deps), current.updatedAt),

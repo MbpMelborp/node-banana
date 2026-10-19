@@ -6,13 +6,17 @@ import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import {
   containsMediaString,
   copyName,
+  coverEditMedia,
   draftFromEditSequence,
   editAssetIds,
+  editMediaOf,
   editSequenceFromDraft,
   emptyEditSequence,
   firstFreeName,
   normalizeEditName,
   parseEditDocument,
+  sanitizeEditAssets,
+  sanitizeEditMedia,
   sanitizeEditSequence,
   snapshotEditAssets,
   summarizeEdit,
@@ -38,6 +42,7 @@ function documentOf(overrides: Partial<EditDocument> = {}): EditDocument {
     createdAt: 1,
     updatedAt: 2,
     sequence: { ...emptyEditSequence(), timeline: [video("c1", A)] },
+    media: [A],
     assets: { [A]: { name: "a.mp4", kind: "video", project: "Trip", durationSec: 4 } },
     renders: [],
     summary: { clipCount: 1, audioClipCount: 0, durationSec: 4, posterAssetId: A },
@@ -306,5 +311,72 @@ describe("containsMediaString (T-DOC-7)", () => {
   it("lets a name start with the word", () => {
     expect(containsMediaString({ name: "Data: Q3 review" })).toBe(false);
     expect(containsMediaString({ name: "blob: the movie" })).toBe(false);
+  });
+});
+
+describe("media (T-DOC-8)", () => {
+  const sequence: EditSequence = { ...emptyEditSequence(), timeline: [video("c1", B), video("c2", A)], audioClips: [audio("m1", M)] };
+
+  it("reads a file saved before edits had media as the sequence's assets, in first-use order", () => {
+    const raw: Record<string, unknown> = { ...documentOf({ sequence }) };
+    delete raw.media;
+    const parsed = parseEditDocument(raw);
+    expect(parsed).toMatchObject({ ok: true, document: { media: [B, A, M] } });
+    expect(sanitizeEditMedia("not a list", sequence)).toEqual([B, A, M]);
+  });
+
+  it("keeps asset ids once each in their order, drops anything else, and adds the sequence's assets it lacks", () => {
+    const C = "a0000000000004";
+    expect(sanitizeEditMedia([C, "../x", 7, A, C, null, "data:,x"], sequence)).toEqual([C, A, B, M]);
+    expect(sanitizeEditMedia([], emptyEditSequence())).toEqual([]);
+  });
+
+  it("keeps the snapshot of media the timeline does not use, and drops the rest", () => {
+    const C = "a0000000000004";
+    const parsed = parseEditDocument({
+      ...documentOf(),
+      media: [C, A],
+      assets: {
+        [A]: { name: "a.mp4", kind: "video", project: null, durationSec: 4 },
+        [C]: { name: "beach.mp4", kind: "video", project: "Trip", durationSec: 2 },
+        [B]: { name: "gone.mp4", kind: "video", project: null, durationSec: 1 },
+      },
+    });
+    expect(parsed.ok && parsed.document.media).toEqual([C, A]);
+    expect(parsed.ok && Object.keys(parsed.document.assets)).toEqual([C, A]);
+    expect(sanitizeEditAssets({ [A]: { name: "a.mp4", kind: "video" } }, [B])).toEqual({});
+  });
+
+  it("opens the draft with the edit's media, or the sequence's assets when it has none", () => {
+    expect(draftFromEditSequence(sequence, [M, "a0000000000004"]).media).toEqual([M, "a0000000000004", B, A]);
+    expect(draftFromEditSequence(sequence).media).toEqual([B, A, M]);
+  });
+
+  it("saves the draft's media with any asset its clips use appended", () => {
+    const draft = draftFromEditSequence(sequence, [A, B, M]);
+    expect(editMediaOf({ ...draft, timeline: [...draft.timeline, video("c3", "a0000000000005")] })).toEqual([
+      A,
+      B,
+      M,
+      "a0000000000005",
+    ]);
+    expect(editMediaOf({ ...draft, media: undefined })).toEqual([B, A, M]);
+  });
+
+  it("covers a clip's asset into an edit's media, and leaves a covered draft and a node's draft as they are", () => {
+    const draft = draftFromEditSequence(sequence, [M, A, B]);
+    expect(coverEditMedia(draft)).toBe(draft);
+    const added = { ...draft, audioClips: [...draft.audioClips, audio("m2", "a0000000000005")] };
+    expect(coverEditMedia(added).media).toEqual([M, A, B, "a0000000000005"]);
+    const node = { ...added, media: undefined };
+    expect(coverEditMedia(node)).toBe(node);
+  });
+
+  it("tells drafts apart by their media alone, and a node's drafts (no media) still match", () => {
+    expect(sameDraft(draftFromEditSequence(sequence, [A, B, M]), draftFromEditSequence(sequence, [B, A, M]))).toBe(false);
+    expect(sameDraft(draftFromEditSequence(sequence, [A, B, M]), draftFromEditSequence(sequence, [A, B, M]))).toBe(true);
+    const node = { ...draftFromEditSequence(sequence), media: undefined };
+    expect(sameDraft(node, { ...node })).toBe(true);
+    expect(sameDraft(node, draftFromEditSequence(sequence))).toBe(false);
   });
 });

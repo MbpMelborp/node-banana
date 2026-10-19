@@ -311,6 +311,21 @@ describe("draftPatch", () => {
     const back = readStitchDraft({ ...nodeData(), ...patch }, { liveEdgeIds: ["e1"], hasMusic: false });
     expect(sameDraft(back, d)).toBe(true);
   });
+
+  it("never writes an edit's media to a node, and a node reads none", () => {
+    const d: StitchDraft = {
+      timeline: [edgeClip("a", "e1")],
+      audioClips: [],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: TRACK_LAYOUT,
+      media: ["a0000000000001"],
+    };
+    const patch = draftPatch(d);
+    expect(patch).not.toHaveProperty("media");
+    const data = { ...nodeData(), ...patch, media: ["a0000000000001"] } as VideoStitchNodeData;
+    expect(readStitchDraft(data, { liveEdgeIds: ["e1"], hasMusic: false })).not.toHaveProperty("media");
+  });
 });
 
 const music = (init: Partial<StitchAudioClip> = {}) => createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID, ...init });

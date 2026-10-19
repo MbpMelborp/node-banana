@@ -64,6 +64,7 @@ vi.stubGlobal("localStorage", {
 });
 
 import { EditApiError } from "@/lib/edits/client";
+import { editAssetIds } from "@/lib/edits/document";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import { __resetAssetInfoForTests } from "@/lib/stitch/assetInfo";
 import { __resetMediaInfoForTests, __setMediaExtractorForTests, __setMediaInfoForTests, assetMediaKey } from "@/lib/stitch/mediaInfo";
@@ -157,6 +158,12 @@ const status = (available: boolean) =>
   }) as LibraryStatus;
 
 function doc(overrides: Partial<EditDocument> = {}, layout: "track" | "stacked" = "track"): EditDocument {
+  const sequence = overrides.sequence ?? {
+    timeline: [createClip({ kind: "asset", assetId: A }, { id: "v1" }), createClip({ kind: "asset", assetId: B }, { id: "v2" })],
+    audioClips: [],
+    loopCount: 1,
+    sequenceLayout: { mode: layout, overlapSec: 0.5, crossfade: true },
+  };
   return {
     kind: "node-banana-edit",
     version: 1,
@@ -164,12 +171,8 @@ function doc(overrides: Partial<EditDocument> = {}, layout: "track" | "stacked" 
     name: "Trip",
     createdAt: 1000,
     updatedAt: 2000,
-    sequence: {
-      timeline: [createClip({ kind: "asset", assetId: A }, { id: "v1" }), createClip({ kind: "asset", assetId: B }, { id: "v2" })],
-      audioClips: [],
-      loopCount: 1,
-      sequenceLayout: { mode: layout, overlapSec: 0.5, crossfade: true },
-    },
+    sequence,
+    media: editAssetIds(sequence),
     assets: { [A]: { name: "sunset.mp4", kind: "video", project: "Launch film", durationSec: 5 } },
     renders: [],
     summary: { clipCount: 2, audioClipCount: 0, durationSec: 10, posterAssetId: A },
@@ -267,7 +270,9 @@ beforeEach(() => {
   assetsApi.fetchAsset.mockImplementation(async (id: string) => LIBRARY[id] ?? null);
   assetsApi.fetchAssetPage.mockResolvedValue(page([LIBRARY[C], LIBRARY[B], LIBRARY[A], LIBRARY[M]]));
   assetsApi.fetchFacets.mockResolvedValue(facets);
-  edits.saveEdit.mockImplementation(async (_id: string, request: { sequence: EditDocument["sequence"] }) => doc({ updatedAt: 3000, sequence: request.sequence }));
+  edits.saveEdit.mockImplementation(async (_id: string, request: Pick<EditDocument, "sequence" | "media">) =>
+    doc({ updatedAt: 3000, sequence: request.sequence, media: request.media }),
+  );
   edits.revealEditsFolder.mockResolvedValue(undefined);
   recorded.listeners.clear();
   useStitchClipboard.getState().setClipboard(null);

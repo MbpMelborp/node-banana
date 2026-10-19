@@ -58,6 +58,7 @@ const doc = (id = ID): EditDocument => ({
     loopCount: 2,
     sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: false },
   },
+  media: ["aclipaaaaaaaa1"],
   assets: {},
   renders: [],
   summary: { clipCount: 1, audioClipCount: 0, durationSec: 0, posterAssetId: "aclipaaaaaaaa1" },

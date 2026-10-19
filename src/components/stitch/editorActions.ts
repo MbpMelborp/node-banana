@@ -1,5 +1,6 @@
 import {
   audioSelectionOf,
+  pruneSelection,
   selectedAudioIds,
   selectedClipIds,
   selectIsMulti,
@@ -81,7 +82,14 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchAudioClip, StitchAudioSource, StitchSequenceLayout, StitchTimelineClip, VolumePoint } from "@/types";
+import type {
+  StitchAudioClip,
+  StitchAudioSource,
+  StitchClipSource,
+  StitchSequenceLayout,
+  StitchTimelineClip,
+  VolumePoint,
+} from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { liveFitZoom } from "./liveFitZoom";
 
@@ -767,6 +775,69 @@ export function addAssetClips(views: readonly AssetView[]): void {
   after.select({ kind: "clip", clipId: clips[0].id });
   after.setPlayhead(first?.start ?? editorTotal(s));
   after.setPickerOpen(false);
+}
+
+// An edit project's media (the Edit video view's pane): the assets that belong to the edit, used on the timeline or
+// not. They ride in the draft, so each change is one undo step and is saved with the edit; a node's draft has none.
+
+/**
+ * Add media: the videos and sounds not already in the edit's media, appended in the order given, as one undo step.
+ * Nothing goes on the timeline. The records go to the asset cache so the media is labelled at once. Returns the ids
+ * added; none outside an edit.
+ */
+export function addMediaItems(views: readonly AssetView[]): string[] {
+  const s = editor();
+  const media = s.draft?.media;
+  if (!s.draft || media === undefined) return [];
+  const playable = views.filter((view) => view.kind === "video" || view.kind === "audio");
+  primeAssetInfo(playable);
+  const added = [...new Set(playable.map((view) => view.id))].filter((id) => !media.includes(id));
+  if (added.length === 0) return [];
+  s.apply((d) => ({ ...d, media: [...(d.media ?? []), ...added] }));
+  return added;
+}
+
+const usesAsset = (source: StitchClipSource | StitchAudioSource, assetId: string) =>
+  source.kind === "asset" && source.assetId === assetId;
+
+/** How many clips, video and audio, use the asset. */
+export function mediaUseCount(draft: Pick<StitchDraft, "timeline" | "audioClips">, assetId: string): number {
+  return (
+    draft.timeline.filter((clip) => usesAsset(clip.source, assetId)).length +
+    draft.audioClips.filter((clip) => usesAsset(clip.source, assetId)).length
+  );
+}
+
+/**
+ * Remove from edit: the asset leaves the edit's media and every clip that uses it goes with it, video and audio, as
+ * one undo step (the library keeps the file). A lined-up stack closes up; a placed one is pinned first, so nothing
+ * else moves. The selection keeps the clips that remain. Returns whether the edit changed.
+ */
+export function removeMediaItem(assetId: string): boolean {
+  const s = editor();
+  const draft = s.draft;
+  if (!draft || draft.media === undefined) return false;
+  const videoIds = new Set(draft.timeline.filter((clip) => usesAsset(clip.source, assetId)).map((clip) => clip.id));
+  const audioIds = new Set(draft.audioClips.filter((clip) => usesAsset(clip.source, assetId)).map((clip) => clip.id));
+  if (!draft.media.includes(assetId) && videoIds.size === 0 && audioIds.size === 0) return false;
+  let timeline = draft.timeline;
+  if (videoIds.size > 0) {
+    const from = placedOf(s) ? pinStarts(draft.timeline, s.durations, overlapOf(s)) : draft.timeline;
+    timeline = removeClips(from, videoIds).timeline;
+  }
+  const audio = removeAudioClips(draft.audioClips, audioIds);
+  const media = draft.media.filter((id) => id !== assetId);
+  s.apply((d) => ({ ...d, timeline, audioClips: audio.clips, media }));
+  if (audioIds.size > 0) remapExpandedRow(audio.rowMap);
+  const gone = new Set([...videoIds, ...audioIds]);
+  editor().untagCut([...gone]);
+  // A selection that held some of them keeps the rest, as after an undo; one that held none is left alone
+  const after = editor();
+  const selection = after.selection;
+  if (after.draft && selection && [selection.clipId, ...(selection.clipIds ?? [])].some((id) => gone.has(id))) {
+    after.select(pruneSelection(selection, after.draft));
+  }
+  return true;
 }
 
 /** The node an edge clip comes from, or null (an asset clip, or an edge that is gone). */

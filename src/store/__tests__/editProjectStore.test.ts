@@ -16,9 +16,12 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { useSaveRequestStore } from "@/store/saveRequestStore";
 import { editAutoSaveState } from "@/store/utils/editAutoSave";
 import { openStitchEditor } from "@/components/stitch/openStitchEditor";
+import { addMediaItems, mediaUseCount, removeMediaItem } from "@/components/stitch/editorActions";
 import { EditApiError } from "@/lib/edits/client";
+import { editAssetIds } from "@/lib/edits/document";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
-import { createClip, type SourceKey } from "@/lib/stitch/timeline";
+import { createAudioClip } from "@/lib/stitch/audioClips";
+import { createClip, pinStarts, type SourceKey } from "@/lib/stitch/timeline";
 import type { EditDocument, EditSequence, SaveEditRequest } from "@/lib/edits/types";
 import type { AssetView } from "@/lib/assets/types";
 import type { WorkflowNode } from "@/types";
@@ -85,6 +88,7 @@ function sequence(assetIds: string[] = ["aclipaaaaaaaa1", "aclipaaaaaaaa2"]): Ed
 }
 
 function doc(id = ID, overrides: Partial<EditDocument> = {}): EditDocument {
+  const seq = overrides.sequence ?? sequence();
   return {
     kind: "node-banana-edit",
     version: 1,
@@ -92,7 +96,8 @@ function doc(id = ID, overrides: Partial<EditDocument> = {}): EditDocument {
     name: id === ID ? "Trip" : "Other",
     createdAt: 1000,
     updatedAt: 2000,
-    sequence: sequence(),
+    sequence: seq,
+    media: editAssetIds(seq),
     assets: {},
     renders: [],
     summary: { clipCount: 2, audioClipCount: 0, durationSec: 0, posterAssetId: "aclipaaaaaaaa1" },
@@ -126,6 +131,7 @@ const saved = (base: EditDocument, request: SaveEditRequest, updatedAt: number):
   ...base,
   updatedAt,
   sequence: request.sequence,
+  media: request.media,
   assets: request.assets,
   summary: request.summary,
 });
@@ -796,6 +802,183 @@ describe("renders in the file", () => {
     expect(api.show).not.toHaveBeenCalled();
     expect(store().open?.renders).toEqual([]);
     warn.mockRestore();
+  });
+});
+
+describe("the edit's media", () => {
+  const CLIP1 = "aclipaaaaaaaa1";
+  const CLIP2 = "aclipaaaaaaaa2";
+  const BEACH = "abeachaaaaaaa1";
+  const SOUND = "asoundaaaaaaa1";
+  const view = (id: string, kind = "video", filename = `${id}.mp4`) =>
+    ({ id, kind, filename, durationSec: 4, workflow: { projectPath: "/p/Launch" } }) as unknown as AssetView;
+  const snapshot = (name: string, kind: "video" | "audio" = "video") => ({ name, kind, project: "Launch", durationSec: 4 });
+  const sound = (id: string, assetId: string, row: number) => createAudioClip({ kind: "asset", assetId }, { id, row });
+
+  it("opens the draft with the edit's media and asks the library about every item", async () => {
+    await openDoc(doc(ID, { media: [BEACH, CLIP1, CLIP2] }));
+    expect(editor().draft?.media).toEqual([BEACH, CLIP1, CLIP2]);
+    expect(api.requestAssetInfo).toHaveBeenCalledWith([BEACH, CLIP1, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(false);
+  });
+
+  it("reads an edit without media as the sequence's assets", async () => {
+    const older: Partial<EditDocument> = doc();
+    delete older.media;
+    await openDoc(older as EditDocument);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+  });
+
+  it("Add media appends what is new as one undo step, and the save sends it with a snapshot of each item", async () => {
+    await openDoc(doc(ID, { assets: { [CLIP2]: snapshot("old-2.mp4") } }));
+    const image = view("aimageaaaaaaa1", "image", "still.png");
+    expect(addMediaItems([view(BEACH), view(CLIP1), image, view(SOUND, "audio", "song.m4a"), view(BEACH)])).toEqual([BEACH, SOUND]);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2, BEACH, SOUND]);
+    expect(editor().draft?.timeline).toHaveLength(2);
+    expect(editor().past).toHaveLength(1);
+    expect(selectIsDirty(editor())).toBe(true);
+    expect(editHasUnsavedWork()).toBe(true);
+    expect(addMediaItems([view(BEACH)])).toEqual([]);
+    expect(editor().past).toHaveLength(1);
+
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody().media).toEqual([CLIP1, CLIP2, BEACH, SOUND]);
+    expect(sentBody().assets).toEqual({
+      [CLIP1]: snapshot(`${CLIP1}.mp4`),
+      [CLIP2]: snapshot("old-2.mp4"),
+      [BEACH]: snapshot(`${BEACH}.mp4`),
+      [SOUND]: snapshot("song.m4a", "audio"),
+    });
+    expect(selectIsDirty(editor())).toBe(false);
+
+    editor().undo();
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(true);
+  });
+
+  it("Save as a new edit carries the media", async () => {
+    await openDoc();
+    addMediaItems([view(BEACH)]);
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
+    await store().saveNow("auto");
+    api.createEdit.mockResolvedValueOnce(doc(OTHER, { name: "Trip", updatedAt: 9000 }));
+    await store().saveAsNew();
+    expect(api.createEdit.mock.calls[0][0]).toMatchObject({ name: "Trip", media: [CLIP1, CLIP2, BEACH] });
+  });
+
+  it("Remove from edit takes the item and every clip using it out, as one undo step", async () => {
+    await openDoc(doc(ID, { sequence: sequence([CLIP1, CLIP2, CLIP1]), media: [CLIP1, BEACH, CLIP2] }));
+    editor().select({ kind: "clip", clipId: "v1", clipIds: ["v1", "v2"] });
+    expect(mediaUseCount(editor().draft!, CLIP1)).toBe(2);
+    expect(mediaUseCount(editor().draft!, BEACH)).toBe(0);
+
+    expect(removeMediaItem(CLIP1)).toBe(true);
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v2"]);
+    expect(editor().draft?.media).toEqual([BEACH, CLIP2]);
+    expect(editor().past).toHaveLength(1);
+    expect(editor().selection).toEqual({ kind: "clip", clipId: "v2" });
+    expect(selectIsDirty(editor())).toBe(true);
+
+    editor().undo();
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v1", "v2", "v3"]);
+    expect(editor().draft?.media).toEqual([CLIP1, BEACH, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(false);
+
+    // Media no clip uses goes alone
+    expect(removeMediaItem(BEACH)).toBe(true);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+    expect(editor().draft?.timeline).toHaveLength(3);
+    expect(removeMediaItem(BEACH)).toBe(false);
+    expect(editor().past).toHaveLength(1);
+  });
+
+  it("removes a sound's clips from every row, the rows closing up and the selection keeping the rest", async () => {
+    const OTHER_SOUND = "asoundaaaaaaa2";
+    const seq = { ...sequence([CLIP1]), audioClips: [sound("s1", SOUND, 0), sound("s2", OTHER_SOUND, 1), sound("s3", SOUND, 2)] };
+    await openDoc(doc(ID, { sequence: seq, media: [CLIP1, SOUND, OTHER_SOUND] }));
+    editor().setAudioExpandedRow(1);
+    editor().select({ kind: "audio", clipId: "s1", clipIds: ["s1", "s2"], point: null, onCurve: false });
+    expect(mediaUseCount(editor().draft!, SOUND)).toBe(2);
+
+    removeMediaItem(SOUND);
+    expect(editor().draft?.audioClips.map((c) => [c.id, c.row])).toEqual([["s2", 0]]);
+    expect(editor().draft?.media).toEqual([CLIP1, OTHER_SOUND]);
+    expect(editor().audioExpandedRow).toBe(0);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: null, onCurve: false });
+    expect(editor().past).toHaveLength(1);
+    editor().undo();
+    expect(editor().draft?.audioClips.map((c) => c.id)).toEqual(["s1", "s2", "s3"]);
+  });
+
+  it("keeps the lead that remains, clears a selection it took entirely, and leaves one it did not touch", async () => {
+    const OTHER_SOUND = "asoundaaaaaaa2";
+    const seq = {
+      ...sequence([CLIP1, CLIP2, CLIP1]),
+      audioClips: [sound("s1", SOUND, 0), sound("s2", OTHER_SOUND, 1), sound("s3", SOUND, 2)],
+    };
+    await openDoc(doc(ID, { sequence: seq, media: [CLIP1, CLIP2, SOUND, OTHER_SOUND] }));
+
+    // The lead stays and leads; its point is forgotten, as after an undo
+    editor().select({ kind: "audio", clipId: "s2", clipIds: ["s1", "s2"], point: 0, onCurve: false });
+    removeMediaItem(SOUND);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: null, onCurve: false });
+    editor().undo();
+
+    // Untouched: a point on a clip the removal did not reach is kept
+    editor().select({ kind: "audio", clipId: "s2", point: 0, onCurve: true });
+    removeMediaItem(CLIP1);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: 0, onCurve: true });
+    editor().undo();
+
+    // Every selected clip gone: nothing is selected (no neighbour takes it, the user was not on the timeline)
+    editor().select({ kind: "clip", clipId: "v1", clipIds: ["v1", "v3"] });
+    removeMediaItem(CLIP1);
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v2"]);
+    expect(editor().selection).toBeNull();
+  });
+
+  it("keeps the name of an item the library has lost when its removal is undone after a save", async () => {
+    await openDoc(doc(ID, { media: [CLIP1, CLIP2, BEACH], assets: { [BEACH]: snapshot("beach.mp4") } }));
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    removeMediaItem(BEACH);
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody(0).assets).not.toHaveProperty(BEACH);
+
+    editor().undo();
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody(1).media).toEqual([CLIP1, CLIP2, BEACH]);
+    expect(sentBody(1).assets[BEACH]).toEqual(snapshot("beach.mp4"));
+  });
+
+  it("pins a placed stack before taking clips out, so the others stay where they are", async () => {
+    const seq: EditSequence = {
+      ...sequence([CLIP1, BEACH, CLIP2]),
+      sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true },
+    };
+    seq.timeline[0] = { ...seq.timeline[0], startSec: 0 };
+    await openDoc(doc(ID, { sequence: seq }));
+    const durations = new Map<SourceKey, number>([
+      [`asset:${CLIP1}`, 5],
+      [`asset:${BEACH}`, 4],
+      [`asset:${CLIP2}`, 3],
+    ]);
+    editor().setDurations(durations);
+    const pinned = pinStarts(editor().draft!.timeline, durations, 1);
+    removeMediaItem(BEACH);
+    expect(editor().draft?.timeline.map((c) => [c.id, c.startSec])).toEqual([
+      ["v1", 0],
+      ["v3", pinned[2].startSec],
+    ]);
+    expect(pinned[2].startSec).toBeGreaterThan(0);
+  });
+
+  it("does nothing in a node's session", () => {
+    editor().open({ nodeId: "stitch", draft: { ...sequence([CLIP1]), legacyAudio: { curve: [], muted: false } }, canvasGeneration: 0 });
+    expect(addMediaItems([view(BEACH)])).toEqual([]);
+    expect(removeMediaItem(CLIP1)).toBe(false);
+    expect(editor().draft).not.toHaveProperty("media");
+    expect(editor().past).toEqual([]);
   });
 });
 

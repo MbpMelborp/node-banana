@@ -61,6 +61,7 @@ function saveOf(doc: EditDocument, overrides: Partial<SaveEditRequest> = {}): Sa
   return {
     baseUpdatedAt: doc.updatedAt,
     sequence: doc.sequence,
+    media: doc.media,
     assets: doc.assets,
     summary: doc.summary,
     renders: doc.renders,
@@ -432,6 +433,61 @@ describe("refusals (T-SRV-12, T-SRV-13)", () => {
     process.env.VERCEL = "1";
     await expect(listEdits()).rejects.toMatchObject({ status: 503, code: "unavailable" });
     await expect(createEdit({}, deps)).rejects.toMatchObject({ status: 503, code: "unavailable" });
+  });
+});
+
+describe("media (T-SRV-16)", () => {
+  const C = "a0000000000003";
+  const snapshot = (name: string) => ({ name, kind: "video" as const, project: null, durationSec: 2 });
+
+  it("starts a new edit with no media, and saves as a new edit with the media sent", async () => {
+    expect((await createEdit({}, deps)).media).toEqual([]);
+    const fresh = await createEdit(
+      { name: "Trip", sequence: sequenceOf(A), media: [C, "../x", A, C], assets: { [A]: snapshot("a.mp4"), [C]: snapshot("c.mp4") } },
+      deps,
+    );
+    expect(fresh.media).toEqual([C, A]);
+    expect(fresh.assets).toEqual({ [C]: snapshot("c.mp4"), [A]: snapshot("a.mp4") });
+    expect(stored("Trip.nbedit").media).toEqual([C, A]);
+    expect((await createEdit({ name: "Older", sequence: sequenceOf(B, A) }, deps)).media).toEqual([B, A]);
+  });
+
+  it("duplicates the media, the media the timeline does not use and its snapshot included", async () => {
+    const original = await createEdit({ name: "Trip", sequence: sequenceOf(A), media: [A, C], assets: { [C]: snapshot("c.mp4") } }, deps);
+    const copy = await createEdit({ from: original.id }, deps);
+    expect(copy.media).toEqual([A, C]);
+    expect(copy.assets).toEqual({ [C]: snapshot("c.mp4") });
+    await expect(createEdit({ from: original.id, media: [C] }, deps)).rejects.toMatchObject({
+      status: 400,
+      message: "Send from or media, not both.",
+    });
+  });
+
+  it("saves the media sent, appending the sequence's assets it lacks and dropping ids that are not asset ids", async () => {
+    const edit = await createEdit({}, deps);
+    now += 1;
+    const saved = await saveEdit(edit.id, saveOf(edit, { sequence: sequenceOf(A, B), media: [C, "aclip", B], assets: { [C]: snapshot("c.mp4") } }), deps);
+    expect(saved.media).toEqual([C, B, A]);
+    expect(saved.assets).toEqual({ [C]: snapshot("c.mp4") });
+    expect(stored("Untitled edit.nbedit")).toEqual(saved);
+    expect(await readEdit(edit.id)).toEqual(saved);
+  });
+
+  it("keeps the stored media when a save sends none", async () => {
+    const edit = await createEdit({ sequence: sequenceOf(A), media: [C, A] }, deps);
+    now += 1;
+    const request: Record<string, unknown> = { ...saveOf(edit, { sequence: sequenceOf(B) }) };
+    delete request.media;
+    expect((await saveEdit(edit.id, request, deps)).media).toEqual([C, A, B]);
+  });
+
+  it("refuses media that is not a list of strings", async () => {
+    const edit = await createEdit({}, deps);
+    for (const media of ["a0000000000001", { [A]: true }, [A, 7], null]) {
+      await expect(saveEdit(edit.id, { ...saveOf(edit), media }, deps)).rejects.toMatchObject({ status: 400, message: "Invalid media." });
+      await expect(createEdit({ sequence: sequenceOf(A), media }, deps)).rejects.toMatchObject({ status: 400, message: "Invalid media." });
+    }
+    expect(stored("Untitled edit.nbedit")).toEqual(edit);
   });
 });
 

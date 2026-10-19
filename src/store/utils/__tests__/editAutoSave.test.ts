@@ -37,6 +37,7 @@ const document: EditDocument = {
     loopCount: 1,
     sequenceLayout: { mode: "track", overlapSec: 0.5, crossfade: true },
   },
+  media: ["aclipaaaaaaaa1"],
   assets: {},
   renders: [],
   summary: { clipCount: 1, audioClipCount: 0, durationSec: 0, posterAssetId: "aclipaaaaaaaa1" },
@@ -46,6 +47,7 @@ const answer = async (_id: string, request: SaveEditRequest): Promise<EditDocume
   ...document,
   updatedAt: ++updatedAt,
   sequence: request.sequence,
+  media: request.media,
 });
 const edit = () => editor().apply((d) => ({ ...d, loopCount: d.loopCount === 3 ? 1 : ((d.loopCount + 1) as 2 | 3) }));
 /** Lets the timers and the save's promises run. */

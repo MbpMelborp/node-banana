@@ -140,6 +140,8 @@ describe("mirrorStitchEditToEdits", () => {
       { kind: "asset", assetId: "B1" },
     ]);
     expect(request.sequence.audioClips).toEqual([{ ...music, source: { kind: "asset", assetId: "S1" } }]);
+    // The edit's media is what the node's clips use, in first-use order
+    expect(request.media).toEqual(["A1", "B1", "S1"]);
     expect(request.assets).toEqual({
       A1: { name: "a.mp4", kind: "video", project: "Raid", durationSec: 5 },
       B1: { name: "b.mp4", kind: "video", project: "Raid", durationSec: 4 },
@@ -164,6 +166,8 @@ describe("mirrorStitchEditToEdits", () => {
     expect(saveEdit.mock.calls[0][0]).toBe("ed000000000old");
     expect(saveEdit.mock.calls[0][1]).toMatchObject({ force: true, renders: [] });
     expect(saveEdit.mock.calls[0][1].sequence.timeline).toHaveLength(2);
+    // Media the view added to the edit goes: the node is the original
+    expect(saveEdit.mock.calls[0][1].media).toEqual(["A1", "B1", "S1"]);
   });
 
   it("makes a new edit when the one it made is gone from the folder", async () => {
