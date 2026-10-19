@@ -6,7 +6,7 @@ import { WAITING_FOR_CLIPS, type LibraryDropTarget } from "@/lib/stitch/libraryI
 import { createClip, isPlaced, type SourceKey } from "@/lib/stitch/timeline";
 import type { StitchDraft } from "@/lib/stitch/draft";
 import type { AssetView } from "@/lib/assets/types";
-import { addLibraryItemAt, libraryAddBlockedReason, openLibraryPicker } from "../editorActions";
+import { addLibraryClips, addLibraryItemAt, libraryAddBlockedReason, openLibraryPicker } from "../editorActions";
 import { libraryDrop } from "../timeline/libraryDrop";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
@@ -178,6 +178,45 @@ describe("addLibraryItemAt", () => {
     expect(addLibraryItemAt({ ...view("aimage0000001", "video", 1), kind: "image" } as AssetView)).toBeNull();
     editor().close();
     expect(addLibraryItemAt(view("anewvideo00001", "video", 3))).toBeNull();
+  });
+});
+
+describe("addLibraryClips (the dialog's Add media)", () => {
+  const sources = () => editor().draft!.timeline.map((c) => (c.source.kind === "asset" ? c.source.assetId : c.id));
+
+  it("puts each video after the last clip and each sound on a new row at the playhead, as one undo step", () => {
+    openEdit();
+    editor().setPlayhead(1.5);
+    editor().setPickerOpen("all");
+    addLibraryClips([view("asound0000001", "audio", 2), view("anewvideo00001", "video", 3), view("asound0000002", "audio", 4)]);
+    const draft = editor().draft!;
+    expect(sources()).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2", "anewvideo00001"]);
+    expect(draft.audioClips.map((c) => [c.source, c.row, c.startSec])).toEqual([
+      [{ kind: "asset", assetId: "asound0000001" }, 0, 1.5],
+      [{ kind: "asset", assetId: "asound0000002" }, 1, 1.5],
+    ]);
+    expect(editor().past).toHaveLength(1);
+    // The new video is selected, the playhead at its start (after the 4 s and 6 s clips)
+    expect(editor().selection).toEqual({ kind: "clip", clipId: draft.timeline[2].id });
+    expect(editor().playhead).toBe(10);
+    expect(editor().pickerOpen).toBe(false);
+    expect(getAssetInfo("asound0000002")?.filename).toBe("asound0000002.m4a");
+    editor().undo();
+    expect(sources()).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2"]);
+    expect(editor().draft!.audioClips).toEqual([]);
+  });
+
+  it("with sounds alone selects the first and leaves the playhead; with nothing does nothing", () => {
+    openEdit();
+    editor().setPlayhead(2);
+    addLibraryClips([]);
+    expect(editor().past).toHaveLength(0);
+    addLibraryClips([view("asound0000001", "audio", 2)]);
+    const clip = editor().draft!.audioClips[0];
+    expect(editor().selection).toMatchObject({ kind: "audio", clipId: clip.id });
+    expect(editor().playhead).toBe(2);
+    expect(sources()).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2"]);
+    expect(editor().past).toHaveLength(1);
   });
 });
 

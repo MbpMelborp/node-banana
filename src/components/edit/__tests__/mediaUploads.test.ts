@@ -17,7 +17,9 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import {
   __resetMediaUploadsForTests,
   addFilesToEdit,
+  editUploadContext,
   moveEditUploads,
+  placeInOpenEdit,
   placeRecordedUploads,
   uploadFiles,
   useMediaUploads,
@@ -269,5 +271,41 @@ describe("moveEditUploads", () => {
     await settle();
     expect(editor().draft!.media).toEqual([A, X]);
     expect(pending().map((u) => u.name)).toEqual(["other.mp4"]);
+  });
+});
+
+describe("placeInOpenEdit (Add media's Add in the view)", () => {
+  it("adds what the media lacks, in order, as one undo step; one there already, or with its bytes, adds nothing; the last is shown", () => {
+    openEdit(EDIT, [A]);
+    primeAssetInfo([view(A, { sha256: "sunset" })]);
+    placeInOpenEdit([view(X), view(A, { sha256: "sunset" }), view(Y, { sha256: "sunset" })]);
+    expect(editor().draft!.media).toEqual([A, X]);
+    expect(editor().past).toHaveLength(1);
+    // Y is sunset's bytes again: the one there is shown
+    expect(project().mediaFocus).toMatchObject({ id: A, reveal: 1 });
+    expect(getAssetInfo(X)?.filename).toBe(`${X}.mp4`);
+
+    placeInOpenEdit([view(Y, { sha256: "other" })]);
+    expect(editor().draft!.media).toEqual([A, X, Y]);
+    expect(project().mediaFocus).toMatchObject({ id: Y, reveal: 2 });
+    expect(editor().past).toHaveLength(2);
+  });
+
+  it("weighs the bytes only of the files just recorded from the computer: a pick from the library is added as it is", () => {
+    openEdit(EDIT, [A]);
+    primeAssetInfo([view(A, { sha256: "sunset" })]);
+    // X was picked in the library, Y uploaded: both sunset's bytes
+    placeInOpenEdit([view(X, { sha256: "sunset" }), view(Y, { sha256: "sunset" })], (asset) => asset.id === Y);
+    expect(editor().draft!.media).toEqual([A, X]);
+    expect(project().mediaFocus).toMatchObject({ id: A });
+    expect(editor().past).toHaveLength(1);
+  });
+});
+
+describe("editUploadContext", () => {
+  it("names the edit while it is the open one", () => {
+    useEditProjectStore.setState({ open: { id: EDIT, name: "Trip", createdAt: 1, baseUpdatedAt: 2, renders: [], assets: {} } });
+    expect(editUploadContext(EDIT)).toEqual({ editId: EDIT, editName: "Trip" });
+    expect(editUploadContext(OTHER)).toEqual({ editId: OTHER });
   });
 });

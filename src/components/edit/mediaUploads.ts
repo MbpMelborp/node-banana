@@ -109,14 +109,22 @@ function sameFileInMedia(asset: AssetView): string | null {
 }
 
 /**
- * Recorded files into the open edit's media, in order, as one undo step; one whose bytes the media holds already
- * adds nothing. The pane scrolls to the last of them (the one already there, for a file dropped twice).
+ * Files into the open edit's media, in order, as one undo step (Add media's picks, the files dropped on the pane);
+ * one already there adds nothing. Nor does a file just recorded from the computer (`fromComputer`: every one dropped
+ * on the pane) whose bytes the media holds already: the same file added twice is a second record of it. A pick from
+ * the library is added whatever its bytes. The pane selects the last of them and scrolls to it (the one already
+ * there, for a file added twice).
  */
-function placeInOpenEdit(assets: readonly AssetView[]): void {
+export function placeInOpenEdit(
+  assets: readonly AssetView[],
+  fromComputer: (asset: AssetView) => boolean = () => true,
+): void {
   let last: string | null = null;
   const fresh: AssetView[] = [];
   for (const asset of assets) {
-    const existing = sameFileInMedia(asset) ?? fresh.find((other) => other.sha256 === asset.sha256)?.id ?? null;
+    const existing = fromComputer(asset)
+      ? (sameFileInMedia(asset) ?? fresh.find((other) => other.sha256 === asset.sha256)?.id ?? null)
+      : null;
     if (existing) last = existing;
     else {
       fresh.push(asset);
@@ -125,6 +133,12 @@ function placeInOpenEdit(assets: readonly AssetView[]): void {
   }
   addMediaItems(fresh);
   if (last) useEditProjectStore.getState().revealMedia(last);
+}
+
+/** What a file added to an edit is recorded under: the edit, and its name while it is the open one. */
+export function editUploadContext(editId: string): { editId: string; editName?: string } {
+  const open = useEditProjectStore.getState().open;
+  return { editId, editName: open?.id === editId ? open.name : undefined };
 }
 
 /** The edit an upload is going into now: Save as a new edit moves them. */

@@ -674,9 +674,9 @@ export function lineUpClips(): void {
 }
 
 /**
- * The library picker over a paused preview: for video (the Clips track's +, the slot after the last clip and the
- * empty lane), audio (the audio strip's +) or both (the Edit video view's Add media). The same in the dialog and in
- * the view.
+ * Add media (the library picker) over a paused preview, its kind filter set to video (the Clips track's +, the slot
+ * after the last clip and the empty lane), audio (the audio strip's +) or both (the media pane's Add media). The
+ * same in the dialog and in the view.
  */
 export function openLibraryPicker(kind: LibraryKind = "video"): void {
   const s = editor();
@@ -749,21 +749,42 @@ export function addLibraryItemAt(view: AssetView, target?: LibraryDropTarget | n
 }
 
 /**
- * The picker's Add: one clip per picked video, in the order they were picked, after the last clip, as one undo
- * step. The first of them is selected with the playhead at its start, and the picker closes. The records go to
- * the asset cache so the clips are labelled at once; the clips themselves hold only the ids.
+ * The picker's Add in the dialog, as one undo step: one clip per picked video, in the order they were picked, after
+ * the last clip, and one per picked sound, each on its own new row at the bottom, starting at the playhead the user
+ * saw. The first new video clip is selected with the playhead at its start (the first sound when no video was
+ * picked), and the picker closes. The records go to the asset cache so the clips are labelled (and the sounds'
+ * lengths known for overlap checks) at once; the clips themselves hold only the ids.
  */
-export function addAssetClips(views: readonly AssetView[]): void {
+export function addLibraryClips(views: readonly AssetView[]): void {
   const s = editor();
   if (!s.draft || views.length === 0) return;
   primeAssetInfo(views);
-  const clips = views.map((view) => createClip({ kind: "asset", assetId: view.id }));
-  s.apply((d) => ({ ...d, timeline: appendClips(d.timeline, clips) }));
+  const videos = views.filter((view) => view.kind !== "audio");
+  const sounds = views.filter((view) => view.kind === "audio");
+  const clips = videos.map((view) => createClip({ kind: "asset", assetId: view.id }));
+  const audio =
+    sounds.length > 0
+      ? addAudioAt(
+          s.draft.audioClips,
+          sounds.map((view): StitchAudioSource => ({ kind: "asset", assetId: view.id })),
+          drawnPlayhead(s),
+        )
+      : null;
+  s.apply((d) => ({
+    ...d,
+    timeline: clips.length > 0 ? appendClips(d.timeline, clips) : d.timeline,
+    audioClips: audio ? audio.clips : d.audioClips,
+  }));
+  if (clips.length === 0) {
+    if (audio) selectAudioClips(audio.ids.slice(0, 1));
+    editor().setPickerOpen(false);
+    return;
+  }
   const after = editor();
   // In Stacked the first new clip starts under the last one: place it with the records' lengths, which the
   // editor has not measured yet
   const provisional = new Map<SourceKey, number>(after.durations);
-  for (const view of views) {
+  for (const view of videos) {
     const key = sourceKey({ kind: "asset", assetId: view.id });
     if (!provisional.has(key) && typeof view.durationSec === "number") provisional.set(key, view.durationSec);
   }
@@ -907,22 +928,6 @@ function forgetPointOfMutedLead(): void {
   const selection = s.selection;
   if (selection?.kind !== "audio" || selection.point === null) return;
   if (s.draft?.audioClips.find((c) => c.id === selection.clipId)?.muted) s.select({ ...selection, point: null });
-}
-
-/**
- * The picker's Add for audio: one clip per picked file, each on its own new row at the bottom, each starting at the
- * playhead, in pick order, as one undo step. The first is selected and the picker closes. The records go to the asset
- * cache, so the clips are labelled (and their lengths known for overlap checks) at once.
- */
-export function addAudioFromLibrary(views: readonly AssetView[]): void {
-  const s = editor();
-  if (!s.draft || views.length === 0) return;
-  primeAssetInfo(views);
-  const sources = views.map((view): StitchAudioSource => ({ kind: "asset", assetId: view.id }));
-  const { clips, ids } = addAudioAt(s.draft.audioClips, sources, drawnPlayhead(s));
-  s.apply((d) => ({ ...d, audioClips: clips }));
-  selectAudioClips(ids.slice(0, 1));
-  editor().setPickerOpen(false);
 }
 
 /**

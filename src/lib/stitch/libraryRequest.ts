@@ -1,7 +1,7 @@
 import type { AssetKind, AssetPageRequest, AssetSort } from "@/lib/assets/types";
 
 /**
- * The Stitch editor's "Add from library" query, and the asset page request
+ * The Stitch editor's Add media query, and the asset page request
  * it becomes. Pure: the picker's hook sends what this builds.
  */
 

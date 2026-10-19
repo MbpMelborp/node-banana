@@ -109,7 +109,7 @@ export interface StitchEditorState {
   pxPerSec: number | null;
   menu: StitchContextMenu | null;
   discardOpen: boolean;
-  /** The library picker, and the kinds it lists ("all": the Edit video view's Add media). */
+  /** Add media (the library picker), and the kind its filter opens on ("all": the media pane's Add media). */
   pickerOpen: false | LibraryKind;
   /** Set by a drag hook while a pointer gesture runs; Escape calls it. */
   cancelGesture: (() => void) | null;

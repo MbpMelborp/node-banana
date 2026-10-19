@@ -27,7 +27,7 @@ import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
 import { createAudioClip, legacyMusicClip, setAudioClipCurve, type AudioSourceKey } from "@/lib/stitch/audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
-  addAssetClips,
+  addLibraryClips,
   canEndAtPlayhead,
   canLineUp,
   canMoveRow,
@@ -724,7 +724,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
 
   it("adds library clips to a placed stack unpinned, Overlap before the latest end, with the playhead there", () => {
     setClipStart("c", 10);
-    addAssetClips([{ id: "n1", durationSec: 3 }] as AssetView[]);
+    addLibraryClips([{ id: "n1", durationSec: 3 }] as AssetView[]);
     const added = store().draft!.timeline[3];
     expect(added.startSec).toBeUndefined();
     // c ends at 14
@@ -733,7 +733,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
 
   it("changes Overlap in a placed stack without moving any clip, in one step", () => {
     setClipStart("c", 10);
-    addAssetClips([{ id: "n1", durationSec: 3 }, { id: "n2", durationSec: 2 }] as AssetView[]);
+    addLibraryClips([{ id: "n1", durationSec: 3 }, { id: "n2", durationSec: 2 }] as AssetView[]);
     store().setDurations(
       new Map<SourceKey, number>([...DURATIONS, ["asset:n1", 3], ["asset:n2", 2]]),
     );

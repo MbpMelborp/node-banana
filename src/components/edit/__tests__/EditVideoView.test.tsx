@@ -727,16 +727,25 @@ describe("keys", () => {
     expect(useWorkflowStore.getState().shortcutsDialogOpen).toBe(true);
   });
 
-  it("the timeline's + opens the library picker over a paused preview; + Audio opens it for audio", async () => {
+  it("the timeline's + opens Add media over a paused preview, set to videos; + Audio opens it set to audio", async () => {
     measure(A, B);
     await renderOpen();
     const lastRequest = () => assetsApi.fetchAssetPage.mock.calls[assetsApi.fetchAssetPage.mock.calls.length - 1][0];
+    const kindChecked = (picker: HTMLElement) => {
+      fireEvent.click(within(picker).getByRole("button", { name: "Filter and sort" }));
+      const checked = within(within(picker).getByRole("radiogroup", { name: "Kind" })).getByRole("radio", { checked: true });
+      fireEvent.keyDown(checked, { key: "Escape" });
+      return checked.textContent;
+    };
     act(() => editor().setPlaying(true));
-    fireEvent.click(screen.getAllByRole("button", { name: "Add a clip from the library" })[0]);
+    const slot = screen.getAllByRole("button", { name: "Add a clip from the library" })[0];
+    expect(slot).toHaveAttribute("title", "Add media");
+    fireEvent.click(slot);
     expect(editor().pickerOpen).toBe("video");
     expect(editor().playing).toBe(false);
-    const picker = await screen.findByRole("dialog", { name: "Add from library" });
+    const picker = await screen.findByRole("dialog", { name: "Add media" });
     await waitFor(() => expect(lastRequest()).toMatchObject({ kinds: ["video"] }));
+    expect(kindChecked(picker)).toBe("Video");
     // It owns the keys: Space neither plays nor reaches the editor
     press(document.body, " ");
     expect(editor().playing).toBe(false);
@@ -744,11 +753,14 @@ describe("keys", () => {
     expect(editor().pickerOpen).toBe(false);
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Add audio/ }));
+    const addAudio = screen.getByRole("button", { name: "Add audio" });
+    expect(addAudio).toHaveAttribute("title", "Add audio");
+    fireEvent.click(addAudio);
     expect(editor().pickerOpen).toBe("audio");
-    await screen.findByRole("dialog", { name: "Add audio from the library" });
+    const audioPicker = await screen.findByRole("dialog", { name: "Add media" });
     await waitFor(() => expect(lastRequest()).toMatchObject({ kinds: ["audio"] }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Add audio from the library" })).getByRole("button", { name: "Cancel" }));
+    expect(kindChecked(audioPicker)).toBe("Audio");
+    fireEvent.click(within(audioPicker).getByRole("button", { name: "Cancel" }));
     expect(editor().pickerOpen).toBe(false);
   });
 });
@@ -986,11 +998,64 @@ describe("the media pane", () => {
     expect(adds).toHaveLength(2);
     fireEvent.click(adds[1]);
     expect(editor().pickerOpen).toBe("all");
-    await screen.findByRole("dialog", { name: "Add from library" });
+    await screen.findByRole("dialog", { name: "Add media" });
     await waitFor(() => expect(lastRequest()).toEqual({ kinds: ["video", "audio"], limit: 60 }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Add from library" })).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Add media" })).getByRole("button", { name: "Cancel" }));
     fireEvent.click(adds[0]);
     expect(editor().pickerOpen).toBe("all");
+  });
+
+  it("Add media's Add puts the picks in the pane, selects and shows the last, and places nothing", async () => {
+    measure(A, B);
+    const scrolledTo: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolledTo.push(this);
+    };
+    try {
+      await renderOpen();
+      await placeable(A, B);
+      const opener = within(screen.getByRole("complementary", { name: "Media" })).getByRole("button", { name: "Add media" });
+      act(() => opener.focus());
+      fireEvent.click(opener);
+      const picker = await screen.findByRole("dialog", { name: "Add media" });
+      const pick = (name: string) =>
+        fireEvent.click(within(picker).getByRole("button", { name: new RegExp(`^${name.replace(/\./g, "\\.")},`) }));
+      await within(picker).findByRole("button", { name: /^desert\.mp4,/ });
+      pick("desert.mp4");
+      pick("music.m4a");
+      expect(within(picker).getByText("1 video and 1 audio file")).toBeInTheDocument();
+      // Nothing about where clips go: nothing goes on the timeline
+      expect(within(picker).queryByText(/goes after|on a new row/)).toBeNull();
+      const past = editor().past.length;
+      fireEvent.click(within(picker).getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add media" })).toBeNull());
+      expect(editor().draft!.media).toEqual([A, B, C, M]);
+      expect(tileIds()).toEqual([A, B, C, M]);
+      expect(timelineIds()).toEqual([A, B]);
+      expect(editor().draft!.audioClips).toEqual([]);
+      expect(editor().past.length).toBe(past + 1);
+      const row = tile(M).closest("li")!;
+      expect(row).toHaveAttribute("data-selected");
+      expect(scrolledTo).toEqual([row]);
+      // Focus goes back to Add media
+      await waitFor(() => expect(opener).toHaveFocus());
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
+
+  it("Add media from the empty pane: focus goes to the item it added, its button being gone", async () => {
+    await renderOpen(doc({ sequence: { ...doc().sequence, timeline: [] } }));
+    const empty = within(screen.getByRole("complementary", { name: "Media" })).getAllByRole("button", { name: "Add media" })[1];
+    act(() => empty.focus());
+    fireEvent.click(empty);
+    const picker = await screen.findByRole("dialog", { name: "Add media" });
+    fireEvent.click(await within(picker).findByRole("button", { name: /^desert\.mp4,/ }));
+    fireEvent.click(within(picker).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add media" })).toBeNull());
+    expect(screen.queryByText("No media yet")).toBeNull();
+    expect(tileIds()).toEqual([C]);
+    await waitFor(() => expect(tile(C)).toHaveFocus());
   });
 
   it("the grid: covers two to a row with their length, sounds a row each, in the media's order; the layout is kept", async () => {

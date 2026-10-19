@@ -425,7 +425,7 @@ export function TimelineFoot({
       <button
         type="button"
         aria-label="Add audio"
-        title={libraryOn ? "Add audio from the library" : "The asset library is off"}
+        title={libraryOn ? "Add audio" : "The asset library is off"}
         disabled={!libraryOn}
         onClick={() => openLibraryPicker("audio")}
         className={cn(TEXT_GHOST, "pointer-events-auto")}

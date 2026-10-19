@@ -94,6 +94,33 @@ export function CoverLength({ seconds }: { seconds: number }) {
 }
 
 /**
+ * A file on its way into the library (one uploaded in the picker, one dropped on the media pane's grid), until its
+ * record exists: a blank cover with its name and `note` on it, or a sound's row with them. Nothing to press yet.
+ */
+export function PendingTile({ name, kind, note }: { name: string; kind: "video" | "audio"; note: string }) {
+  if (kind === "audio") {
+    return (
+      <div className="flex h-8 w-full min-w-0 items-center gap-2 rounded-md bg-edit-field px-2">
+        <Music size={14} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-ink-3" />
+        <span className="min-w-0 flex-1 truncate text-xs text-neutral-400">{name}</span>
+        <span className="shrink-0 text-[11px] text-ink-3">{note}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="relative aspect-video w-full overflow-hidden rounded-md bg-edit-field">
+      <span aria-hidden="true" className="block h-full w-full opacity-40">
+        <BlankCover />
+      </span>
+      <span className="absolute inset-x-1 top-1 flex">
+        <span className={cn(COVER_CHIP, "max-w-full truncate")}>{name}</span>
+      </span>
+      <span className={cn(COVER_CHIP, "absolute bottom-1 right-1 font-normal text-neutral-300")}>{note}</span>
+    </div>
+  );
+}
+
+/**
  * One library file, as the picker shows it under its project's name (and the
  * Edit video view's media pane its covers, in the grid). A video is a 16:9
  * cover with nothing on it but its length; an audio file is a one-line row (a
@@ -177,13 +204,13 @@ export const LibraryTile = memo(function LibraryTile({
     onPointerDown: adding && !missing ? (event: ReactPointerEvent<HTMLButtonElement>) => onPointerDown?.(event, asset) : undefined,
   };
   // The pick is the white ring; keyboard focus a fainter one, set off from a pick by its offset. The offset is the
-  // surface the tile sits on: the pane in the view, the dialog's card in the picker
+  // surface the tile sits on: the pane, in the view and in the picker
   const rings = cn(
     "focus-visible:outline-none",
     selected
       ? "ring-2 ring-neutral-100 focus-visible:ring-offset-2"
       : "focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-1",
-    adding ? "focus-visible:ring-offset-pane" : "focus-visible:ring-offset-card",
+    "focus-visible:ring-offset-pane",
     missing && "opacity-40",
     adding && !missing && "touch-none select-none",
   );

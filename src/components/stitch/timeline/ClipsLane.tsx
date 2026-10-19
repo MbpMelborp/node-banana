@@ -127,7 +127,7 @@ export function useLaneFocus() {
 const ADD_SLOT =
   "absolute flex items-center justify-center rounded-md bg-edit-slot text-ink-3 transition-colors hover:bg-white/4 hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
 
-/** The placeholder across an empty lane: it adds clips from the library (off while the library is). */
+/** The placeholder across an empty lane: it opens Add media for videos (off while the library is). */
 export function EmptyLaneButton({
   libraryOn,
   left,
@@ -150,7 +150,7 @@ export function EmptyLaneButton({
       type="button"
       data-testid="stitch-empty-lane"
       aria-label="Add a clip from the library"
-      title={libraryOn ? "Add from library" : undefined}
+      title={libraryOn ? "Add media" : undefined}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
@@ -163,7 +163,7 @@ export function EmptyLaneButton({
   );
 }
 
-/** The + after the last clip that adds clips from the library (off while the library is). */
+/** The + after the last clip, which opens Add media for videos (off while the library is). */
 export function AddSlotButton({
   libraryOn,
   left,
@@ -184,7 +184,7 @@ export function AddSlotButton({
       type="button"
       data-testid="stitch-add-slot"
       aria-label="Add a clip from the library"
-      title={libraryOn ? "Add from library" : "The asset library is off"}
+      title={libraryOn ? "Add media" : "The asset library is off"}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}

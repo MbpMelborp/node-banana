@@ -9,7 +9,7 @@ import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
 import type { StitchAudioClip, VolumePoint } from "@/types";
 import {
-  addAudioFromLibrary,
+  addLibraryClips,
   applyAudioFadeIn,
   applyAudioFadeOut,
   canEndAudioAtPlayhead,
@@ -100,9 +100,9 @@ describe("adding audio from the library", () => {
     openOn();
     store().setPlayhead(4.2);
     store().setPickerOpen("audio");
-    addAudioFromLibrary([
-      { id: TONE, durationSec: 3 },
-      { id: RAIN, durationSec: 8 },
+    addLibraryClips([
+      { id: TONE, kind: "audio", durationSec: 3 },
+      { id: RAIN, kind: "audio", durationSec: 8 },
     ] as AssetView[]);
     const added = clips().slice(2);
     expect(added.map((c) => [c.source, c.row, c.startSec])).toEqual([
