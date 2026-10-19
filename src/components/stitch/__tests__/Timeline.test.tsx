@@ -2971,6 +2971,42 @@ describe("Timeline, heights and the audio section", () => {
     expect(timelineEl().style.height).toBe("189px");
   });
 
+  it("drags taller or shorter by its top edge, keeps that height through a switch, and fits its rows on a double-click", () => {
+    seedWith([5, 5, 5]);
+    openEditor();
+    const edge = screen.getByRole("separator", { name: "Timeline height" });
+    expect(timelineEl().style.height).toBe("189px");
+    fireEvent.pointerDown(edge, { button: 0, buttons: 1, pointerId: 1, clientY: 600 });
+    fireEvent.pointerMove(edge, { buttons: 1, pointerId: 1, clientY: 480 });
+    expect(timelineEl().style.height).toBe("309px");
+    expect(edge).toHaveAttribute("aria-valuenow", "309");
+    // Never under the least the timeline takes
+    fireEvent.pointerMove(edge, { buttons: 1, pointerId: 1, clientY: 900 });
+    expect(timelineEl().style.height).toBe("189px");
+    fireEvent.pointerMove(edge, { buttons: 1, pointerId: 1, clientY: 480 });
+    fireEvent.pointerUp(edge, { pointerId: 1, clientY: 480 });
+    // A move after the release changes nothing
+    fireEvent.pointerMove(edge, { pointerId: 1, clientY: 300 });
+    expect(timelineEl().style.height).toBe("309px");
+    // Stacked keeps the height chosen; its three rows (156) sit in it
+    fireEvent.click(within(toggleGroup()).getByRole("button", { name: "Stacked" }));
+    expect(timelineEl().style.height).toBe("309px");
+    // ↑ and ↓ on the edge move it, and leave the selected clip's row alone
+    const second = editor().draft!.timeline[1].id;
+    act(() => editor().select({ kind: "clip", clipId: second }));
+    act(() => edge.focus());
+    pressOnFocus("ArrowUp");
+    expect(timelineEl().style.height).toBe("317px");
+    act(() => {
+      edge.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(timelineEl().style.height).toBe("253px");
+    expect(editor().selection).toMatchObject({ kind: "clip", clipId: second });
+    expect(editor().draft!.timeline[1].id).toBe(second);
+    fireEvent.doubleClick(edge);
+    expect(timelineEl().style.height).toBe(`${1 + 28 + 156 + 52 + 28}px`);
+  });
+
   it("shows the rows above once the height settles: a switch to Stacked with Clip 2 selected leaves Clip 1 whole", () => {
     seedWith([5, 5, 5, 5]);
     openEditor();

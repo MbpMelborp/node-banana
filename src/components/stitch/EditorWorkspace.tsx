@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { SourceKey } from "@/lib/stitch/timeline";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { EditorRail } from "./EditorRail";
 import { EditorStage } from "./EditorStage";
 import { EditorTransport } from "./EditorTransport";
+import { TimelineResizeHandle } from "./TimelineResizeHandle";
 import { Timeline } from "./timeline/Timeline";
 import type { EditorComposition } from "./useEditorComposition";
 
@@ -20,12 +21,15 @@ import type { EditorComposition } from "./useEditorComposition";
  * gives or takes the difference, which would move the control row. While
  * the pointer is over that row the timeline keeps the height it had as the
  * pointer came in, so a switch never moves the toggle from under it; it
- * settles once the pointer leaves.
+ * settles once the pointer leaves. Its top edge drags it taller or shorter
+ * (TimelineResizeHandle); the height chosen stays through a switch, and a
+ * double-click on the edge fits the rows again.
  */
 export function EditorWorkspace({ composition }: { composition: EditorComposition }) {
   const { byClip, audioByClip, spans, total, empty, stacked, zoom } = composition;
-  const timelineHeight = useRef(0);
+  const [drawnHeight, setDrawnHeight] = useState(0);
   const [heldHeight, setHeldHeight] = useState<number | null>(null);
+  const [chosenHeight, setChosenHeight] = useState<number | null>(null);
 
   // An edit that pins a lined-up stack waits for these (clipsLoading)
   useEffect(() => {
@@ -48,7 +52,7 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
           registerAudio={composition.registerAudio}
         >
           <div
-            onPointerEnter={() => setHeldHeight(timelineHeight.current > 0 ? timelineHeight.current : null)}
+            onPointerEnter={() => setHeldHeight(drawnHeight > 0 ? drawnHeight : null)}
             onPointerLeave={() => setHeldHeight(null)}
           >
             <EditorTransport
@@ -63,6 +67,11 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
         </EditorStage>
         <EditorRail media={byClip} audio={audioByClip} />
       </div>
+      <TimelineResizeHandle
+        height={drawnHeight}
+        maxHeight={composition.maxTimeline}
+        onChange={setChosenHeight}
+      />
       <Timeline
         spans={spans}
         media={byClip}
@@ -72,7 +81,8 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
         stacked={stacked}
         maxHeight={composition.maxTimeline}
         heldHeight={heldHeight}
-        heightRef={timelineHeight}
+        chosenHeight={chosenHeight}
+        onHeight={setDrawnHeight}
       />
     </>
   );
