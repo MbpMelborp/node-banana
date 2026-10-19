@@ -1,7 +1,9 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import { coverEditMedia } from "@/lib/edits/document";
 import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/audioClips";
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
+import type { LibraryKind } from "@/lib/stitch/libraryRequest";
 import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
 import { edgeIdsInOrder, type SourceDurations, type SourceKey } from "@/lib/stitch/timeline";
 
@@ -107,8 +109,8 @@ export interface StitchEditorState {
   pxPerSec: number | null;
   menu: StitchContextMenu | null;
   discardOpen: boolean;
-  /** The library picker, and what it adds. */
-  pickerOpen: false | "video" | "audio";
+  /** Add media (the library picker), and the kind its filter opens on ("all": the media pane's Add media). */
+  pickerOpen: false | LibraryKind;
   /** Set by a drag hook while a pointer gesture runs; Escape calls it. */
   cancelGesture: (() => void) | null;
   /**
@@ -160,7 +162,7 @@ export interface StitchEditorState {
   setZoom(pxPerSec: number | null): void;
   openMenu(menu: StitchContextMenu | null): void;
   setDiscardOpen(open: boolean): void;
-  setPickerOpen(open: false | "video" | "audio"): void;
+  setPickerOpen(open: false | LibraryKind): void;
   setCancelGesture(cancel: (() => void) | null): void;
   /** A clip keeps the first tag it gets: a pasted clip cut and brought back by undo is still a pasted clip. */
   tagClips(ids: readonly string[], origin: ClipOrigin): void;
@@ -293,7 +295,7 @@ const sameIds = (a: SelectionIds, b: SelectionIds) =>
  * audio selection forgets its point, so ⌫ never removes a point by a stale
  * index.
  */
-function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
+export function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
   if (selection?.kind === "clip") {
     const order = draft.timeline.map((c) => c.id);
     const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
@@ -371,7 +373,8 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     apply: (recipe, opts) => {
       const { draft, gestureKey, past, selection, musicHeld } = get();
       if (!draft) return;
-      const next = recipe(draft);
+      // An edit's media holds every asset its clips use, so a clip added any way brings its asset in, in the same step
+      const next = coverEditMedia(recipe(draft));
       // Most recipes rebuild the draft object, so an unchanged value is told apart by content
       if (next === draft || (sameDraft(next, draft) && sameAudioRows(next, draft))) return;
       // A point index means nothing once the lead's curve has changed under it

@@ -40,6 +40,11 @@ export interface StitchDraft {
   legacyAudio: { curve: VolumePoint[]; muted: boolean };
   loopCount: 1 | 2 | 3;
   sequenceLayout: StitchSequenceLayout;
+  /**
+   * An edit project's media: the asset ids that belong to the edit, in the order they were added, every one its clips
+   * use among them. Undefined in a node's draft, which never writes it.
+   */
+  media?: string[];
 }
 
 /** What made a clip in this editing session, for the discard sheet: a paste, a duplicate, or (for a clip gone) a cut. */
@@ -163,9 +168,15 @@ function legacyAudioCounts(a: StitchDraft, b: StitchDraft): boolean {
   return a.audioClips.length === 0 && b.audioClips.length === 0;
 }
 
+function sameMedia(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (a === b) return true;
+  return a !== undefined && b !== undefined && a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
 export function sameDraft(a: StitchDraft, b: StitchDraft): boolean {
   return (
     a.loopCount === b.loopCount &&
+    sameMedia(a.media, b.media) &&
     sameLayout(a.sequenceLayout, b.sequenceLayout) &&
     a.timeline.length === b.timeline.length &&
     a.timeline.every((clip, i) => sameClip(clip, b.timeline[i])) &&

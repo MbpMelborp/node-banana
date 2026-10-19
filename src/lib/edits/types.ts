@@ -28,7 +28,7 @@ export interface EditSequence {
 
 /** What the library said about an asset when the edit was last saved, so a clip the library lost can still be named. */
 export interface EditAssetSnapshot {
-  /** The asset's file name. */
+  /** The asset's display name when saved. */
   name: string;
   kind: "video" | "audio";
   /** The project folder's name; null when the asset is in no project. */
@@ -60,6 +60,9 @@ export interface EditDocument {
   /** Content or name changed; strictly increasing per file. A render added does not change it. */
   updatedAt: number;
   sequence: EditSequence;
+  /** The assets that belong to the edit, in the order they were added; every asset the sequence uses is in it. */
+  media: string[];
+  /** Keyed by the ids in media; an item whose library record was never read has no entry. */
   assets: Record<string, EditAssetSnapshot>;
   renders: EditRender[];
   summary: EditSummaryFields;
@@ -98,10 +101,12 @@ export interface EditList {
 export interface CreateEditRequest {
   /** Normalised; a name whose file is taken gets the next free one ("Untitled edit 2"). */
   name?: string;
-  /** Duplicate: copy that edit's sequence, assets and summary (not its renders), named "<name> copy". */
+  /** Duplicate: copy that edit's sequence, media, assets and summary (not its renders), named "<name> copy". */
   from?: string;
   /** "Save as a new edit" after a save found the edit gone. */
   sequence?: EditSequence;
+  /** Absent = the sequence's assets. */
+  media?: string[];
   assets?: Record<string, EditAssetSnapshot>;
   summary?: EditSummaryFields;
   /**
@@ -116,6 +121,8 @@ export interface SaveEditRequest {
   /** true only for the conflict's "Keep mine": overwrite whatever is there (a missing edit still answers 404). */
   force?: boolean;
   sequence: EditSequence;
+  /** Ids that are not asset ids are dropped, and the sequence's assets are added when missing. */
+  media: string[];
   assets: Record<string, EditAssetSnapshot>;
   summary: EditSummaryFields;
   /** Merged with the stored ones by assetId. */

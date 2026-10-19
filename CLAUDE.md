@@ -629,7 +629,8 @@ All routes in `src/app/api/`:
 - `node-banana-models-cache` - The browse dialog's model list, one entry per set of configured providers
 - `node-banana-models-notices-dismissed` - Provider failure notices the user closed in the browse dialog (by provider, the error text); cleared by Refresh catalog
 - `node-banana-edit-last` - The edit the Edit video view opens on E
-- `node-banana-edit-library-pane` - The Edit video view's library pane shown or hidden (absent means shown)
+- `node-banana-edit-library-pane` - The Edit video view's media pane shown or hidden (absent means shown; named for the library pane it replaced)
+- `node-banana-edit-pane-layout` - The media pane's layout, `list` or `grid` (absent means list)
 
 The asset library's location and index live on disk, not in localStorage
 (the desktop and web origins do not share it): `~/.node-banana/library.json`

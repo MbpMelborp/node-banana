@@ -60,8 +60,9 @@ to the old project-only save.
 A workflow with a project keeps writing into `<project>/generations/` under
 the legacy `<prompt>_<md5>.<ext>` name, and the library indexes those files
 where they are. Files are never moved by classification. The same bytes
-produced twice are stored once per destination folder, and each production
-still gets its own record.
+produced twice are stored once per destination folder (an upload shares a
+file only with another upload, see below), and each production still gets
+its own record.
 
 ## Recording
 
@@ -88,9 +89,65 @@ to `/api/save-generation` for project workflows otherwise.
   the Edit video view (producer `nodeType: "editProject"`; the edit's id
   and name stand in for the workflow, with no workflow snapshot). An edited output
   identical to the previous one is not recorded again.
+- Uploaded assets (`origin: "uploaded"`) are video and audio files the user
+  adds from the computer: Upload in Add media, and files dropped on Add
+  media or on the Edit video view's media pane (`recordUpload` in
+  `src/lib/assets/client/upload.ts`). Only the formats the library stores
+  are taken (`MEDIA_TYPES` in `src/lib/assets/mediaTypes.ts`): MP4 and
+  M4V, MOV and WebM video; MP3, WAV, Ogg (OGA, Opus), FLAC, AAC, M4A and
+  WebM audio. The format is read from the file's type, else from its
+  extension, and the upload is recorded under the library's own type for
+  it. Video or audio in another format (AVI, MKV, AIFF, CAF…) is left out
+  in the browser with a notice of its own ("The library can't keep that
+  kind of video or audio."), and the file chooser offers only the formats
+  above. The server refuses an upload whose format neither its bytes nor
+  its type tell (415), rather than keep it under the kind's default
+  format. A file added through an edit is recorded under it, as a render
+  is (producer `nodeType: "editProject"`, operation `upload`; the edit's
+  id and name stand in for the workflow). One
+  added in an Edit Video node's dialog goes under the workflow "Uploads"
+  (`workflowId: "uploads"`, producer `nodeType: "upload"`). Neither has a
+  project or a workflow snapshot, so the Assets view offers no workflow to
+  open and shows no Node row. The file's own name becomes the display name
+  (one line, at most 120 characters, its extension kept); the file on disk
+  is named as any other. The browser reads the length and a video's size
+  from the file when it can within 3 s, and the server measures it too. The
+  same file added twice is two records sharing one file. An upload shares
+  a file only with another upload, never with a generated or edited asset
+  (nor takes a project file no record holds), and no other recording takes
+  an upload's file. A file whose bytes turn out to be another kind (a
+  picture named `.mp4`) is put in the Trash; bytes nothing can read are kept but
+  never shown (see below). Either way the user is told the file couldn't be
+  added. `recordUpload` records with `quiet`, which keeps the recorder's own
+  notice back, and reads why a recording failed from the handle's `failed`.
+  Node Banana 2.2.0 and earlier do not read records of this origin. They
+  list no uploads, and a clip that uses one reads "Not in the library"
+  there. Since no record they read holds an upload's file, none of their
+  deletes releases it. Their Clean up can remove an upload's poster when
+  no record they read has its bytes; the upload then shows a blank cover.
 - A run that is one of a batch ("Run 10×") carries `batch` (`id`, `index`,
   `count`) in its run context, and every asset it records keeps it in its
   sidecar. The server drops a tag that does not hold up.
+
+## Display names
+
+An asset can carry a display name, `name` in its record, beside
+`filename`, the file's name on disk, which never changes. `PATCH
+/api/assets/[id]` with `{ name }` sets it (`patchAsset` in the browser):
+trimmed, one line, 1 to 120 characters. An empty name clears it. A longer
+name, a line break or a value that is not a string is refused with a 400
+that says why. A recording can carry one too
+(`RecordAssetInput.name`, as an upload does), under the same rule. A
+sidecar whose name breaks the rule is read without it. The rule and
+`assetName()`, which returns the name else the file's name, are in
+`src/lib/assets/name.ts`.
+
+Search (`q`) matches the name as well as the file name. The Assets view
+titles an asset by its name, before its prompt, and its detail shows the
+file's name under the title when the two differ. The Assets view has no
+rename: the Edit video view's media pane renames (see
+[edit-video.md](edit-video.md)), and an edit's asset snapshot keeps the name
+it had at the save.
 
 ## Files nothing can read
 
@@ -289,7 +346,7 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 
 | Purpose | Location |
 |---|---|
-| Contracts (records, queries, snapshots, routes) | `src/lib/assets/types.ts`, `src/lib/assets/query.ts` |
+| Contracts (records, queries, snapshots, routes), display names | `src/lib/assets/types.ts`, `src/lib/assets/query.ts`, `src/lib/assets/name.ts` |
 | Server facade the routes call | `src/lib/assets/server/index.ts` |
 | Index, journal, queries, deletes | `src/lib/assets/server/library.ts`, `search.ts` |
 | Upload/URL ingest, dedupe, downloads (SSRF-guarded) | `src/lib/assets/server/ingest.ts`, `download.ts` |
@@ -302,7 +359,7 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 | Reveal / OS Trash (Electron bridge or OS tools) | `src/lib/assets/server/desktop.ts`, `electron/lib/bridge.cjs` |
 | Request guard | `src/lib/assets/server/guard.ts` |
 | Routes | `src/app/api/assets/**` |
-| Recorder, snapshots, open workflow | `src/lib/assets/client/` |
+| Recorder, uploads, snapshots, open workflow | `src/lib/assets/client/` |
 | Store integration | `src/store/execution/assetRecording.ts`, `workflowStore.ts` (`_currentRun`, `ensureWorkflowId`, `recordUiAsset`) |
 | Assets view | `src/store/assetStore.ts`, `src/components/assets/` |
 | Settings → Storage | `src/components/settings/LibrarySettingsTab.tsx` |

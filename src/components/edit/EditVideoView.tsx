@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, type HTMLAttributes } from "react";
 import { DialogSpinner } from "@/components/ui/Dialog";
 import { EditorWorkspace } from "@/components/stitch/EditorWorkspace";
+import { LibraryPicker } from "@/components/stitch/library/LibraryPicker";
 import { isTypingTarget } from "@/components/stitch/editorKeys";
 import { HEADER_PX, STITCH_EDITOR_PANEL } from "@/components/stitch/editorStyles";
 import { useEditorComposition } from "@/components/stitch/useEditorComposition";
@@ -14,7 +15,8 @@ import { EditHeader } from "./EditHeader";
 import { EditHome } from "./EditHome";
 import { EDIT_BANNER_PX, EditBanner, EditSheets, useEditBanner } from "./EditSheets";
 import { editViewKeyAction, runEditViewKey } from "./editViewKeys";
-import { LibraryPane } from "./LibraryPane";
+import { useAddRecordedUploads } from "./mediaUploads";
+import { MediaPane } from "./MediaPane";
 
 /** Marked as the editor's panel: the editor's controls hand focus back to it, as they do to the dialog's. */
 const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLDivElement>;
@@ -22,7 +24,7 @@ const EDITOR_PANEL_PROPS = { [STITCH_EDITOR_PANEL]: "" } as HTMLAttributes<HTMLD
 /** Escape with nothing to cancel leaves the view alone: it is left on purpose (E, the tab strip), never by dismissing. */
 const stayOpen = () => {};
 
-/** The view's own menus (the header's, the library's filter popover and its project menu) own the keys while open. */
+/** The view's own menus (the header's, a media item's ⋯) own the keys while open. */
 const viewMenuOpen = () => document.querySelector("[data-edit-chrome] [role='menu'], [data-edit-chrome] [role='dialog']") !== null;
 
 const KEY_OPTIONS: StitchEditorKeyOptions = {
@@ -39,7 +41,7 @@ const KEY_OPTIONS: StitchEditorKeyOptions = {
  * The Edit video view, laid over the canvas while `appView` is "edit" (bare E,
  * the tab strip's toggle, the menu's row). It edits edit projects, not nodes:
  * with none open it lists them (EditHome, which takes focus as it shows: on
- * the newest edit, so Enter opens it); with one open, the library pane
+ * the newest edit, so Enter opens it); with one open, the media pane
  * runs down the left beside the editor (header, stage with its control row,
  * rail and timeline, the dialog's own body and keys), all on the pane colour.
  *
@@ -106,7 +108,10 @@ export function EditVideoView() {
   );
 }
 
-/** One edit open: the library pane, then the header, a banner when one is needed, and the editor's body. */
+/**
+ * One edit open: the media pane, then the header, a banner when one is needed, and the editor's body; Add media (and
+ * the timeline's +) opens the library picker over it all.
+ */
 function OpenEdit() {
   const rootRef = useRef<HTMLDivElement>(null);
   const paneOpen = useEditProjectStore((s) => s.pane.open);
@@ -117,6 +122,8 @@ function OpenEdit() {
   const assetFallback = useCallback((assetId: string) => snapshot?.[assetId], [snapshot]);
   const composition = useEditorComposition(rootRef, HEADER_PX + (banner ? EDIT_BANNER_PX : 0), { assetFallback });
   useStitchEditorKeys(rootRef, stayOpen, { ...KEY_OPTIONS, zoom: composition.zoom });
+  // Files dropped on this edit's pane that were recorded while it was not open join its media now, pane shown or not
+  useAddRecordedUploads();
 
   // Space plays at once: the editor takes focus as it opens
   useEffect(() => {
@@ -125,7 +132,7 @@ function OpenEdit() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      {paneOpen && <LibraryPane />}
+      {paneOpen && <MediaPane />}
       <div
         ref={rootRef}
         tabIndex={-1}
@@ -136,6 +143,7 @@ function OpenEdit() {
         {banner && <EditBanner banner={banner} />}
         <EditorWorkspace composition={composition} />
       </div>
+      <LibraryPicker />
     </div>
   );
 }

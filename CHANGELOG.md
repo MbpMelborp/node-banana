@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **A node's edit is in Edits too** — Save or Done in an Edit Video node's editor also keeps the sequence in the Edits folder, so it is listed in the Edit video view (bare E): created on the first save, named after the node's title or the workflow, and replaced on every later save. Socket clips become the library videos they play and the music the connected audio; a clip the library does not hold is left out, and a toast says so.
+- **Add media, with Upload** — **Add media** opens the asset library in a quiet dialog with its search and filters (kind, project, favorites, sort) and, at the top right, **Upload** for videos and audio from your computer; files can also be dropped on the dialog or on the Edit video view's media pane. Uploaded files are kept in the asset library, under the edit they came in through (or Uploads). The timeline's + and + Audio open the same dialog, in the Edit Video node's editor too.
+- **Rename media** — Double-click a name in the media pane, or choose Rename in its ⋯ menu. The new name is the asset's display name, so the Assets view and every edit show it; the file on disk keeps its own name.
+
+### Changed
+
+- **The Edit video view's pane is the edit's media** — The pane beside the timeline holds the videos and sounds that belong to the open edit, not the whole library: a new edit shows only Add media. Show them as a list (the default) or a grid, click one to add it at the playhead or drag it onto the timeline, and take one out of the edit from its ⋯ menu (its clips go with it after a question, and one undo brings both back).
 
 ## [2.2.0] - 2026-10-19
 

@@ -32,7 +32,7 @@ import { openClipMenu } from "./ClipsLane";
 const CONTROL_PX = 16;
 /**
  * How far in from the timeline's left edge the controls sit, px: their focus ring clears the hairline beside the
- * timeline (the library pane's edge) and, as the padding is 20px, the playhead's line at 0:00.
+ * timeline (the media pane's edge) and, as the padding is 20px, the playhead's line at 0:00.
  */
 const CONTROL_INSET_PX = 2;
 /** An audio row's group: its two controls stacked, 2px apart. */
@@ -387,8 +387,8 @@ function LineUpButton() {
 
 /**
  * The quiet line under the last audio row, over the lanes' strip (where a
- * dragged audio clip drops onto a new row): "+ Audio", which adds audio from
- * the library (off while the library is); in Stacked, Line up; and at the
+ * dragged audio clip drops onto a new row): "+ Audio", which opens Add media
+ * on audio (off while the library is); in Stacked, Line up; and at the
  * right, how many audio rows are out of view. It gives way to the strip's
  * "New row" while a dragged clip would land there.
  */
@@ -425,7 +425,7 @@ export function TimelineFoot({
       <button
         type="button"
         aria-label="Add audio"
-        title={libraryOn ? "Add audio from the library" : "The asset library is off"}
+        title={libraryOn ? "Add audio" : "The asset library is off"}
         disabled={!libraryOn}
         onClick={() => openLibraryPicker("audio")}
         className={cn(TEXT_GHOST, "pointer-events-auto")}

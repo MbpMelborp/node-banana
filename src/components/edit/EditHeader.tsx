@@ -92,8 +92,8 @@ const NAME_FIELD = cn(
 );
 
 /**
- * The open edit's 56px header, quiet on the pane: the library's Show button
- * while it is hidden, then "Edits › name" (Edits goes home; the name renames
+ * The open edit's 56px header, quiet on the pane: Show media while the pane
+ * is hidden, then "Edits › name" (Edits goes home; the name renames
  * in place) and how saving stands; at the right Undo, Redo and the ⋯ menu
  * (which also holds Loop and what the sequence is), then Save (only with
  * Save automatically off) and Render. A render in progress replaces Save and
@@ -134,14 +134,14 @@ export function EditHeader({ composition }: { composition: EditorComposition }) 
         <div className="group relative flex shrink-0">
           <button
             type="button"
-            aria-label="Show the library"
+            aria-label="Show media"
             aria-expanded={false}
             className={HEADER_ICON_BUTTON}
             onClick={() => store().setPaneOpen(true)}
           >
             <PanelLeft size={16} strokeWidth={1.5} />
           </button>
-          <Tooltip label="Show the library" placement="bottom" align="start" />
+          <Tooltip label="Show media" placement="bottom" align="start" />
         </div>
       )}
       <div className="flex min-w-0 flex-1 items-center">

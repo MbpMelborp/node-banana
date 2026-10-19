@@ -16,7 +16,7 @@ near-full-screen `Dialog`, 24 px from every edge of the window like the
 annotation editor (so nothing in it sits in the desktop app's drag region).
 Its header, stage, rail and timeline all sit on the pane colour, as in the
 Edit video view, with `edit-line` hairlines between regions (the rail's left
-edge, the timeline's top edge; in the view also the library pane's right
+edge, the timeline's top edge; in the view also the media pane's right
 edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
 
 - **Header**: "Edit video"; Undo, Redo and the ⋯ menu, which holds
@@ -66,7 +66,7 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   11 px ink-3, tabular, at each tall tick, and one short mark half-way
   between), the Clips lane (filmstrips 2 px apart that you drag to reorder
   and trim by their edges, a context menu, and a quiet `+` slot after the
-  last clip that adds videos from the library) and the audio rows (each
+  last clip that opens Add media) and the audio rows (each
   audio clip's waveform in grey) and, under them, a quiet **+ Audio**. A
   clip shows only its frames (or its waveform) at rest; its length shows on
   hover or keyboard focus, and on hover its trim handles and, on a video
@@ -394,8 +394,8 @@ stage. More rows scroll up and down under the fixed ruler, above the audio
 rows. While the preview plays, the row under the playhead is kept in view,
 and so is a clip selected by a key, a split or an undo. A wheel over the
 grips scrolls the rows as one over the lanes does, and a right press on a
-grip opens its clip's menu. The `+` slot that adds from the library sits in
-the last row, after the latest end, and Line up is under the audio rows.
+grip opens its clip's menu. The `+` slot that opens Add media sits in the
+last row, after the latest end, and Line up is under the audio rows.
 
 **Moving a clip.** Drag a clip's box, or an empty clip's slot, anywhere:
 sideways moves it in time, up or down moves it to another row, and one
@@ -601,10 +601,10 @@ at 0:00. A music clip whose music is not connected is kept, drawn dashed
 
 **Adding audio.** With no audio the first row is an empty outline (in a
 node's dialog it says "Connect audio to the node"). **+ Audio**, under the
-audio rows, opens **Add audio from the library**: audio files only, as
-one-line rows grouped by project, with the same search and filter button as
-for videos. Each picked file goes on a
-new row of its own, starting at the playhead. A library clip stores only the
+audio rows, opens **Add media** with its Kind set to Audio (see Library
+clips). In the node's dialog each picked file goes on a new row of its own,
+starting at the playhead; in the Edit video view Add puts it in the edit's
+media, to be placed from the pane. A library clip stores only the
 asset's id; a clip whose file is gone is drawn "Not in the library" and
 stops a render until it is removed.
 
@@ -980,25 +980,70 @@ move the curve: press Fade out again after a move that changes the end.
 
 ## Library clips
 
-The `+` slot after the last clip (in Stacked, in the last row), or the
-empty lane opens **Add from
-library**: videos only, grouped by project as in the Edit video view's
-library pane, with the same tiles (a cover and its length; the name is the
-tooltip) and one search. The filter button inside the search opens the
-project, Favourites, This workflow and the sort (newest or oldest first);
-a dot on it says one of them is set. A picked video is ringed in white. The
-picked videos are added after the last clip, in
-the order they were picked, as one undo step. The playhead goes to the
-first added clip's start. In Stacked each added clip gets a row of its own
-at the bottom. In a lined-up stack it overlaps the clip before it like any
-other; in a placed stack it starts Overlap before the latest end among the
-rows above it, so several added clips chain, and it has no start of its
-own until an edit places the clips (see Stacked). Until the editor has
-read a new file, the playhead is placed with the length in the library's
-record. The picker's footer says what the videos go after ("goes after
-Clip 3": the last clip, or in a placed stack the clip that ends last) and
-their own total length, which in Stacked is more than the sequence grows
-by.
+**Add media** (`src/components/stitch/library/LibraryPicker.tsx`) brings
+videos and audio from the asset library, or from the computer. The node's
+dialog and the Edit video view open the same one: 880 px wide, on the pane
+colour with `edit-line` hairlines. The `+` slot after the last clip
+(in Stacked, in the last row) and the empty lane open it on videos, **+
+Audio** on audio, and the media pane's Add media on both (see The Edit
+video view).
+
+Its header holds the title "Add media", one search and, at the right,
+**Upload** and the close button. The search matches a file's display name
+as well as its file name. The filter button inside the search opens Kind
+(All, Video, Audio), Project, Favorites, This workflow (in the node's
+dialog only) and Sort (newest or oldest first); a dot on it says one of
+them is not as the dialog opened (the kind it opened on is its default).
+The popover keeps the editor's keys while it is open (Space toggles a
+switch in it); Escape closes it. The files are grouped by project: a video
+is a cover with its length on it, a sound a one-line row with its name and
+length, and the name is the tooltip. A picked file is ringed in white.
+Picks keep the order they were made in, and a search or filter that hides
+one keeps it picked. Enter in the search goes to the first file; Enter or
+Space picks it. Escape, Cancel or a click on the scrim closes the dialog.
+With the library off, the list says so and Upload is off.
+
+**Upload** opens the file chooser (video and audio in the formats the
+asset library keeps, several at once).
+Files dropped on the dialog do the same; while they are over it, a quiet
+frame and "Drop to add" show on the list. Each file is recorded into the
+asset library as an upload (see [asset-library.md](asset-library.md)): in
+the Edit video view under the open edit, in the node's dialog under
+"Uploads". It shows at the top, in a group of its own, as "Uploading…"
+until its record exists, then as a picked tile, whatever the filters say.
+Anything that is not video or audio is left out, with one notice ("Only
+video and audio files can be added."). So is video or audio in a format
+the library does not keep (AVI, MKV, AIFF…), with a notice of its own
+that names it ("Couldn't add “holiday.avi”", "The library can't keep that
+kind of video or audio."; for several, "Couldn't add 2 files" and their
+names). A file that cannot be added says so with its name and why, and its
+tile goes.
+
+The footer says what Add takes ("2 videos and 1 audio file · 0:34", or
+"Pick videos or audio to add") and, while files upload, "Uploading 2
+files…". Add is off with nothing picked and while a file is still
+uploading.
+
+**In the Edit video view**, Add puts the picks into the edit's media in
+the order they were picked, as one undo step, and nothing on the timeline.
+A file already in the media is skipped, and so is an upload whose bytes the
+media holds already. The media pane (shown again if it was hidden) selects
+the last one and scrolls to it; a click or a drag there places it.
+
+**In the node's dialog**, Add places the picks, as one undo step. The
+videos are added after the last clip, in the order they were picked, and
+the playhead goes to the first one's start. In Stacked each added clip gets
+a row of its own at the bottom. In a lined-up stack it overlaps the clip
+before it like any other; in a placed stack it starts Overlap before the
+latest end among the rows above it, so several added clips chain, and it
+has no start of its own until an edit places the clips (see Stacked). Until
+the editor has read a new file, the playhead is placed with the length in
+the library's record. Each picked sound goes on a new audio row of its
+own, starting at the playhead; with no video picked, the first sound is
+selected. After the picks' total length (which in Stacked is more than
+the sequence grows by), the footer says where they go: "goes after Clip 3"
+(the last clip, or in a placed stack the clip that ends last), "starts at
+0:04.00 on a new row".
 
 A library clip stores only the asset's id (`source: { kind: "asset" }`); a
 saved clip whose id is not an asset id is dropped on read, so no URL is built
@@ -1014,7 +1059,7 @@ does not read) counts 0 s with "not in the library" on the card and in the
 editor, and a run fails with the message above until it is removed. Library clips have no
 socket, so they never disconnect anything. **This workflow** means assets
 recorded under the current workflow's id only, not under an earlier copy of
-it. In the Edit video view the library pane replaces the picker.
+it.
 
 ## The Edit video view
 
@@ -1029,12 +1074,26 @@ canvas, Assets or the chat; Escape never leaves it.
 
 **Edit projects.** Each is one file, `<Node Banana folder>/Edits/<name>.nbedit`
 (JSON): a stable id, the name, when it was made and last changed, the
-sequence (video clips, audio clips, loop count, Track or Stacked), what
-the library said about each asset it uses (name, kind, project, length,
-so a clip the library lost can still be named), a summary for the list,
-and the renders made from it. Media are referenced by asset id only. A
+sequence (video clips, audio clips, loop count, Track or Stacked), its
+media, what the library said about each of them (name, kind, project,
+length, so a clip the library lost can still be named), a summary for the
+list, and the renders made from it. Media are referenced by asset id only. A
 library move carries the Edits folder with it; switching to another
 library folder leaves it behind, as it leaves Generations.
+
+**Media.** `media` lists the assets that belong to the edit, by id, in the
+order they came in, whether a clip uses them or not. Every asset the
+sequence uses is in it: a clip added any way (a click, a drag, a paste, a
+duplicate) brings its asset in, in the same undo step, and a save adds any
+that is still missing. Read from a file, ids that are not asset ids and
+repeats are dropped, and a file saved before edits had media reads as the
+sequence's assets in first-use order. The server refuses a `media` that is
+not a list of strings ("Invalid media."); a save without one keeps the
+stored media. Duplicate and Save as a new edit keep it. A node's Save and
+Done send the sequence's assets (see "Saved to Edits"). Node Banana 2.2.0
+opens these files but drops `media`: if it writes the edit (a save, a
+rename or a render), the media no clip uses are lost from it (the files
+stay in the library).
 
 **Home.** With no edit open, the view is an index of the edits, newest
 first: one name to a row, in large type with its length, beside a preview
@@ -1067,41 +1126,88 @@ Finder copy. With no edits the list holds one entry, New edit, beside an
 empty frame. A new edit is called "Untitled edit" (then "Untitled edit 2",
 …).
 
-**Editing.** The open edit shows the library on the left and the same
+**Editing.** The open edit shows its media pane on the left and the same
 editor as the dialog: stage, control row, rail and timeline, with the same
-keys. The library lists every project's videos and sounds, grouped by
-project in the list's order: videos as covers with only their length on
-them, sounds as one-line rows with their name and length.
-A tile's tooltip gives its name and says how to add it; on keyboard
-focus a cover shows its name (and why it cannot be added yet) at its top,
-as no tooltip follows the keys. There is one
-search; the filter button inside it opens a small popover with Kind (All,
-Video, Audio), Project, Favourites and Sort (newest or oldest first), and
-a dot on the button says one of them is not at its default. The popover
-keeps the editor's keys while it is open (Space toggles a switch in it);
-Escape closes it. Click a video or a sound in the library (or press Enter on it) to
-add it at the playhead: in Track after the clip under the playhead (the
-new clip is selected with the playhead at its start, so clicks in a row
-add in the order clicked), in Stacked on a new bottom row starting at the playhead, or after the last
-clip when the stack is lined up and the playhead is at the end. Drag it
-onto the timeline to put it exactly there: a bar between clips in Track, a
-new row at the row boundary nearest the pointer in Stacked, or an audio
-row (a new row under it when the sound would overlap a clip there). Its
-start snaps to the playhead and the clips' edges, and ⇧ turns that off.
-Escape cancels a drag. While a clip of a Stacked edit is still loading,
-adding a video there waits ("Waiting for the clips to load"), so nothing
-is placed from a length the editor does not know yet. Videos recorded
-while the view is open wait behind "N new · Show" at the top of the
-library, so the tiles never move under the pointer. `+` on the timeline
-goes to the library's search (the audio rows' + also sets Kind to Audio). The library pane hides with the button in
-its corner and stays hidden until shown again (the header's first button
-shows it). The header reads "Edits › name": Edits goes home, and a click on
+keys. The header reads "Edits › name": Edits goes home, and a click on
 the name renames the edit in place. Its ⋯ menu offers Rename, Duplicate,
 Show in Finder, Loop (a submenu of Off, 2×, 3×; its row reads the one set,
 with no chevron, and is the same row in the node's dialog) and Delete (to the Trash; renders stay in the library), and ends with what
 the sequence is ("4 clips · 1280 × 720 · 24 fps"). New edit and the other
 edits are on the home, behind Edits. The rail has no Reveal source node:
 an edit's clips come from the library.
+
+**The media pane** (`src/components/edit/MediaPane.tsx`) holds the edit's
+media, not the whole library. Its head reads "Media", then List and Grid
+(the pressed one filled, as Snap is; the choice is kept in
+`node-banana-edit-pane-layout`, List by default), Add media, and Hide
+media. A hidden pane stays hidden until the header's first button, Show
+media, shows it again, or Add media's Add puts something in it
+(`node-banana-edit-library-pane`, named for the library pane it
+replaced). An edit with no media shows only "No media yet" and an Add
+media button. The list has one row per item, in the media's
+order: a 56 × 32 cover (a video's poster, or a sound's glyph), the name,
+and the length ("0:05"). The grid shows the same items in the same order:
+videos as covers two to a row with only their length on them, sounds as
+one-line rows across both columns. On keyboard focus a cover shows its
+name (and why it cannot be added yet) at its top, as no tooltip follows the
+keys. An item whose file the library has lost says "Not in the library"
+where its length goes, and cannot be placed. The Add media button, in the
+head or under "No media yet", opens the Add media dialog on both kinds;
+the timeline's `+` opens it on videos and + Audio on audio. Its Add puts
+the picks into the media, not on the timeline (see Library clips).
+
+**Placing.** Click an item (or press Enter on it) to add it at the
+playhead: in Track after the clip under the playhead (the new clip is
+selected with the playhead at its start, so clicks in a row add in the
+order clicked), in Stacked on a new bottom row starting at the playhead, or after the last
+clip when the stack is lined up and the playhead is at the end. The item
+clicked becomes the pane's selected one. A click on the name waits a
+moment first, so that a double-click there renames instead. Drag an item
+onto the timeline to put it exactly there: a bar between clips in Track, a
+new row at the row boundary nearest the pointer in Stacked, or an audio
+row (a new row under it when the sound would overlap a clip there). Its
+start snaps to the playhead and the clips' edges, and ⇧ turns that off.
+Escape cancels a drag. While a clip of a Stacked edit is still loading,
+adding a video there waits ("Waiting for the clips to load"), so nothing
+is placed from a length the editor does not know yet. An item's tooltip
+gives its name and says how to add it, or why it cannot.
+
+**Renaming.** A double-click on an item's name, or ⋯ › Rename, turns the
+name into a field (at most 120 characters). Enter or leaving the field
+keeps the new name; Escape puts the old one back, and so does an empty
+field. A name the library refuses keeps the field open with the reason
+under it. The name is the asset's display name (see
+[asset-library.md](asset-library.md)), so the Assets view and every edit
+that uses the file show it, and the edit's snapshot takes it at its next
+save. The file on disk keeps its own name.
+
+**The ⋯ menu** shows on an item's hover or focus: Rename, Show in Assets
+(the Assets view opens on the file; off once the library has no record of
+it) and Remove from edit. Remove from edit takes the item out of the
+media. When clips use it, the menu reads "Remove from edit…" and asks
+first ("Remove “sunset.mp4” and its 2 clips?", "The file stays in the asset
+library."), then removes those clips too, video and audio. The clips after
+them close up as after any removal, except in a placed stack, where nothing
+else moves. Either way it is one undo step, so undo brings back the item
+and its clips.
+
+**Dropping files.** Video and audio files dropped from the computer onto
+the pane (its empty state too) join the edit's media. While files are over
+the pane, a quiet frame and "Drop to add" show along its foot; what it
+holds stays in view. Each file is recorded into the asset library as an
+upload under the edit (see [asset-library.md](asset-library.md)) and shows
+after the media as "Adding…" until its record exists. The files join in
+the order they were dropped (one waits for any dropped before it), as one
+undo step for those ready together, and the pane selects the last and
+scrolls to it. A file whose bytes the media holds already adds nothing,
+and the pane selects the item it matches instead. Anything that is not
+video or audio is left out, with one notice ("Only video and audio files
+can be added."), and so is video or audio in a format the library does
+not keep, with the notice Upload gives. A file that cannot be added says
+so with its name and why.
+A file still on its way in when the view is left, or another edit opens,
+joins its edit when that edit next opens; Save as a new edit takes it
+along.
 
 **Saving.** An edit is a document. With "Save automatically" on (Settings
 › Project) it saves 3 s after the last change; ⌘S and File › Save save it
@@ -1146,8 +1252,10 @@ in the Edit video view (`src/components/stitch/mirrorStitchEdit.ts`). The
 first write creates the edit, named after the node's title, else the
 workflow's name (the server numbers a taken name: "Raid 2"), and the node
 keeps its id in `editProjectId`; every later write replaces that edit's
-sequence, assets and summary (`force`, so a change made to it in the view
-since is overwritten: the node is the original). An edit whose file is
+sequence, media, assets and summary (`force`, so a change made to it in the view
+since is overwritten: the node is the original). The media it writes are
+the sequence's assets in first-use order, so media added in the view that
+no clip uses are dropped. An edit whose file is
 gone is made again under a new id. The node's own save never waits on it:
 the requests run after the write, and a failure is one toast ("The edit
 was kept on the node but couldn't be saved to Edits: …").

@@ -122,7 +122,7 @@ export function EditorStage({
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ width: number; height: number } | null>(null);
-  // An edit project has no node: its clips come from the library pane
+  // An edit project has no node: its clips come from its media, added through the media pane or Add media
   const inEdit = useStitchEditorStore((s) => s.editId !== null);
 
   // Measured by observation, not getBoundingClientRect: the dialog opens with a scale transform. Before the first

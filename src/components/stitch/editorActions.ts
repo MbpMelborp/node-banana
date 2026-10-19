@@ -1,5 +1,6 @@
 import {
   audioSelectionOf,
+  pruneSelection,
   selectedAudioIds,
   selectedClipIds,
   selectIsMulti,
@@ -43,6 +44,7 @@ import {
   type LibraryDropTarget,
   type LibraryItem,
 } from "@/lib/stitch/libraryInsert";
+import type { LibraryKind } from "@/lib/stitch/libraryRequest";
 import { makeSelection } from "@/lib/stitch/selection";
 import {
   appendClips,
@@ -81,7 +83,14 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchAudioClip, StitchAudioSource, StitchSequenceLayout, StitchTimelineClip, VolumePoint } from "@/types";
+import type {
+  StitchAudioClip,
+  StitchAudioSource,
+  StitchClipSource,
+  StitchSequenceLayout,
+  StitchTimelineClip,
+  VolumePoint,
+} from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { liveFitZoom } from "./liveFitZoom";
 
@@ -665,18 +674,13 @@ export function lineUpClips(): void {
 }
 
 /**
- * The library picker over a paused preview: for video (the Clips track's +, the slot after the last clip and the
- * empty lane) or audio (the audio strip's +). In the Edit video view the library pane beside the timeline takes its
- * place: it opens if hidden, shows that kind and focuses its search.
+ * Add media (the library picker) over a paused preview, its kind filter set to video (the Clips track's +, the slot
+ * after the last clip and the empty lane), audio (the audio strip's +) or both (the media pane's Add media). The
+ * same in the dialog and in the view.
  */
-export function openLibraryPicker(kind: "video" | "audio" = "video"): void {
+export function openLibraryPicker(kind: LibraryKind = "video"): void {
   const s = editor();
   if (!s.draft) return;
-  if (s.editId !== null) {
-    s.openMenu(null);
-    useEditProjectStore.getState().requestPaneFocus(kind);
-    return;
-  }
   s.setPlaying(false);
   s.openMenu(null);
   s.setPickerOpen(kind);
@@ -712,7 +716,7 @@ export function libraryAddBlockedReason(item: LibraryItem, s: StitchEditorState 
 }
 
 /**
- * The library pane's add: one video or sound at the target (the playhead's when none is given: a click), as one undo
+ * The media pane's add: one video or sound at the target (the playhead's when none is given: a click), as one undo
  * step. The new clip is selected and the playhead goes to its start. A Stacked add that would pin while a clip is
  * still loading does nothing. Returns the new clip's id, or null when nothing was added.
  */
@@ -745,21 +749,42 @@ export function addLibraryItemAt(view: AssetView, target?: LibraryDropTarget | n
 }
 
 /**
- * The picker's Add: one clip per picked video, in the order they were picked, after the last clip, as one undo
- * step. The first of them is selected with the playhead at its start, and the picker closes. The records go to
- * the asset cache so the clips are labelled at once; the clips themselves hold only the ids.
+ * The picker's Add in the dialog, as one undo step: one clip per picked video, in the order they were picked, after
+ * the last clip, and one per picked sound, each on its own new row at the bottom, starting at the playhead the user
+ * saw. The first new video clip is selected with the playhead at its start (the first sound when no video was
+ * picked), and the picker closes. The records go to the asset cache so the clips are labelled (and the sounds'
+ * lengths known for overlap checks) at once; the clips themselves hold only the ids.
  */
-export function addAssetClips(views: readonly AssetView[]): void {
+export function addLibraryClips(views: readonly AssetView[]): void {
   const s = editor();
   if (!s.draft || views.length === 0) return;
   primeAssetInfo(views);
-  const clips = views.map((view) => createClip({ kind: "asset", assetId: view.id }));
-  s.apply((d) => ({ ...d, timeline: appendClips(d.timeline, clips) }));
+  const videos = views.filter((view) => view.kind !== "audio");
+  const sounds = views.filter((view) => view.kind === "audio");
+  const clips = videos.map((view) => createClip({ kind: "asset", assetId: view.id }));
+  const audio =
+    sounds.length > 0
+      ? addAudioAt(
+          s.draft.audioClips,
+          sounds.map((view): StitchAudioSource => ({ kind: "asset", assetId: view.id })),
+          drawnPlayhead(s),
+        )
+      : null;
+  s.apply((d) => ({
+    ...d,
+    timeline: clips.length > 0 ? appendClips(d.timeline, clips) : d.timeline,
+    audioClips: audio ? audio.clips : d.audioClips,
+  }));
+  if (clips.length === 0) {
+    if (audio) selectAudioClips(audio.ids.slice(0, 1));
+    editor().setPickerOpen(false);
+    return;
+  }
   const after = editor();
   // In Stacked the first new clip starts under the last one: place it with the records' lengths, which the
   // editor has not measured yet
   const provisional = new Map<SourceKey, number>(after.durations);
-  for (const view of views) {
+  for (const view of videos) {
     const key = sourceKey({ kind: "asset", assetId: view.id });
     if (!provisional.has(key) && typeof view.durationSec === "number") provisional.set(key, view.durationSec);
   }
@@ -767,6 +792,69 @@ export function addAssetClips(views: readonly AssetView[]): void {
   after.select({ kind: "clip", clipId: clips[0].id });
   after.setPlayhead(first?.start ?? editorTotal(s));
   after.setPickerOpen(false);
+}
+
+// An edit project's media (the Edit video view's pane): the assets that belong to the edit, used on the timeline or
+// not. They ride in the draft, so each change is one undo step and is saved with the edit; a node's draft has none.
+
+/**
+ * Add media: the videos and sounds not already in the edit's media, appended in the order given, as one undo step.
+ * Nothing goes on the timeline. The records go to the asset cache so the media is labelled at once. Returns the ids
+ * added; none outside an edit.
+ */
+export function addMediaItems(views: readonly AssetView[]): string[] {
+  const s = editor();
+  const media = s.draft?.media;
+  if (!s.draft || media === undefined) return [];
+  const playable = views.filter((view) => view.kind === "video" || view.kind === "audio");
+  primeAssetInfo(playable);
+  const added = [...new Set(playable.map((view) => view.id))].filter((id) => !media.includes(id));
+  if (added.length === 0) return [];
+  s.apply((d) => ({ ...d, media: [...(d.media ?? []), ...added] }));
+  return added;
+}
+
+const usesAsset = (source: StitchClipSource | StitchAudioSource, assetId: string) =>
+  source.kind === "asset" && source.assetId === assetId;
+
+/** How many clips, video and audio, use the asset. */
+export function mediaUseCount(draft: Pick<StitchDraft, "timeline" | "audioClips">, assetId: string): number {
+  return (
+    draft.timeline.filter((clip) => usesAsset(clip.source, assetId)).length +
+    draft.audioClips.filter((clip) => usesAsset(clip.source, assetId)).length
+  );
+}
+
+/**
+ * Remove from edit: the asset leaves the edit's media and every clip that uses it goes with it, video and audio, as
+ * one undo step (the library keeps the file). A lined-up stack closes up; a placed one is pinned first, so nothing
+ * else moves. The selection keeps the clips that remain. Returns whether the edit changed.
+ */
+export function removeMediaItem(assetId: string): boolean {
+  const s = editor();
+  const draft = s.draft;
+  if (!draft || draft.media === undefined) return false;
+  const videoIds = new Set(draft.timeline.filter((clip) => usesAsset(clip.source, assetId)).map((clip) => clip.id));
+  const audioIds = new Set(draft.audioClips.filter((clip) => usesAsset(clip.source, assetId)).map((clip) => clip.id));
+  if (!draft.media.includes(assetId) && videoIds.size === 0 && audioIds.size === 0) return false;
+  let timeline = draft.timeline;
+  if (videoIds.size > 0) {
+    const from = placedOf(s) ? pinStarts(draft.timeline, s.durations, overlapOf(s)) : draft.timeline;
+    timeline = removeClips(from, videoIds).timeline;
+  }
+  const audio = removeAudioClips(draft.audioClips, audioIds);
+  const media = draft.media.filter((id) => id !== assetId);
+  s.apply((d) => ({ ...d, timeline, audioClips: audio.clips, media }));
+  if (audioIds.size > 0) remapExpandedRow(audio.rowMap);
+  const gone = new Set([...videoIds, ...audioIds]);
+  editor().untagCut([...gone]);
+  // A selection that held some of them keeps the rest, as after an undo; one that held none is left alone
+  const after = editor();
+  const selection = after.selection;
+  if (after.draft && selection && [selection.clipId, ...(selection.clipIds ?? [])].some((id) => gone.has(id))) {
+    after.select(pruneSelection(selection, after.draft));
+  }
+  return true;
 }
 
 /** The node an edge clip comes from, or null (an asset clip, or an edge that is gone). */
@@ -840,22 +928,6 @@ function forgetPointOfMutedLead(): void {
   const selection = s.selection;
   if (selection?.kind !== "audio" || selection.point === null) return;
   if (s.draft?.audioClips.find((c) => c.id === selection.clipId)?.muted) s.select({ ...selection, point: null });
-}
-
-/**
- * The picker's Add for audio: one clip per picked file, each on its own new row at the bottom, each starting at the
- * playhead, in pick order, as one undo step. The first is selected and the picker closes. The records go to the asset
- * cache, so the clips are labelled (and their lengths known for overlap checks) at once.
- */
-export function addAudioFromLibrary(views: readonly AssetView[]): void {
-  const s = editor();
-  if (!s.draft || views.length === 0) return;
-  primeAssetInfo(views);
-  const sources = views.map((view): StitchAudioSource => ({ kind: "asset", assetId: view.id }));
-  const { clips, ids } = addAudioAt(s.draft.audioClips, sources, drawnPlayhead(s));
-  s.apply((d) => ({ ...d, audioClips: clips }));
-  selectAudioClips(ids.slice(0, 1));
-  editor().setPickerOpen(false);
 }
 
 /**

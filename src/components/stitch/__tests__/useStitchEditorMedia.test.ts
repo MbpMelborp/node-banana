@@ -111,6 +111,14 @@ describe("useStitchEditorMedia's audio clips", () => {
     expect(views.get("g")).toMatchObject({ missing: true, duration: null });
   });
 
+  it("names a library clip by the name its file was given", async () => {
+    api.fetchAsset.mockImplementation(async (id: string) => (id === RAIN ? { ...records[RAIN], name: "Rain on the roof" } : (records[id] ?? null)));
+    seed(true);
+    const { result } = renderHook(() => useStitchEditorMedia());
+    await waitFor(() => expect(result.current.audioByClip.get("r")?.fileName).toBe("Rain on the roof"));
+    expect(result.current.audioByClip.get("t")?.fileName).toBe("tone1320.m4a");
+  });
+
   it("decodes each source once, every clip of the draft, and none the library is known not to have", async () => {
     seed(true);
     const first = renderHook(() => useStitchEditorMedia());

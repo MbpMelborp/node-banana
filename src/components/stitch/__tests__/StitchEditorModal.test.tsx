@@ -869,13 +869,13 @@ describe("StitchEditorModal", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
     openEditor();
     const placeholder = screen.getByTestId("stitch-empty-lane");
-    expect(placeholder).toHaveAttribute("title", "Add from library");
+    expect(placeholder).toHaveAttribute("title", "Add media");
     // No separate slot while the lane is empty
     expect(screen.queryByTestId("stitch-add-slot")).toBeNull();
     fireEvent.click(placeholder);
     expect(editor().pickerOpen).toBe("video");
-    expect(screen.getByRole("dialog", { name: "Add from library" })).toBeInTheDocument();
-    expect(screen.getByText("Pick videos to add")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add media" })).toBeInTheDocument();
+    expect(screen.getByText("Pick videos or audio to add")).toBeInTheDocument();
   });
 
   it("closes without writing when the canvas is replaced", () => {

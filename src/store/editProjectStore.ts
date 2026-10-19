@@ -5,12 +5,13 @@ import * as editsApi from "@/lib/edits/client";
 import { EditApiError } from "@/lib/edits/client";
 import {
   draftFromEditSequence,
-  editAssetIds,
+  editMediaOf,
   editSequenceFromDraft,
   normalizeEditName,
   snapshotEditAssets,
   summarizeEdit,
 } from "@/lib/edits/document";
+import type { AssetView } from "@/lib/assets/types";
 import type {
   EditAssetSnapshot,
   EditDocument,
@@ -47,7 +48,8 @@ import { useWorkflowStore } from "./workflowStore";
 export type EditSaveState = "saved" | "saving" | "failed" | "conflict" | "waiting" | "gone";
 /** What one save attempt ended as. "unchanged": nothing to save. */
 export type EditSaveOutcome = "saved" | "unchanged" | "failed" | "conflict" | "waiting" | "gone";
-export type EditPaneKind = "all" | "video" | "audio";
+/** How the media pane shows the edit's media: one row each, or covers two to a row. */
+export type EditPaneLayout = "list" | "grid";
 export type EditSwitch = { action: "new" } | { action: "home" } | { action: "open"; id: string } | { action: "duplicate"; id: string };
 
 export interface OpenEditMeta {
@@ -58,6 +60,8 @@ export interface OpenEditMeta {
   baseUpdatedAt: number;
   assets: Record<string, EditAssetSnapshot>;
   renders: EditRender[];
+  /** A media item was renamed since the last save: the next save sends the asset snapshot, the draft changed or not. */
+  snapshotStale?: boolean;
 }
 
 export interface EditProjectState {
@@ -78,7 +82,12 @@ export interface EditProjectState {
   /** The open edit's session while the view is not shown. */
   parked: StitchParkedSession | null;
   render: { state: "idle" | "rendering" | "failed"; editId: string | null; progress: number; message: string | null };
-  pane: { open: boolean; kind: EditPaneKind; focusRequest: number };
+  pane: { open: boolean; layout: EditPaneLayout };
+  /**
+   * The media pane's selected item, and a count that goes up each time the pane should scroll it into view (an item
+   * just added). The item is cleared when an edit opens or closes.
+   */
+  mediaFocus: { id: string | null; reveal: number };
   /** The unsaved-changes sheet's question: what to do once it is answered. */
   pendingSwitch: EditSwitch | null;
   /** The edit the delete confirmation asks about. */
@@ -116,19 +125,26 @@ export interface EditProjectState {
   stopRender(): void;
   setRenderState(render: Partial<EditProjectState["render"]>): void;
   setPaneOpen(open: boolean): void;
-  setPaneKind(kind: EditPaneKind): void;
-  /** "+" in the view: the pane opens, takes the kind and focuses its search. */
-  requestPaneFocus(kind?: "video" | "audio"): void;
+  setPaneLayout(layout: EditPaneLayout): void;
+  /** Selects an item in the media pane, without scrolling to it (null: none). */
+  selectMedia(id: string | null): void;
+  /** Selects an item in the media pane and scrolls the pane to it. */
+  revealMedia(id: string): void;
+  /** A media item was renamed in the library: the open edit's snapshot names it so, and the next save sends that. */
+  noteAssetRenamed(view: AssetView): void;
 }
 
 export const LAST_EDIT_KEY = "node-banana-edit-last";
-/** "open" | "closed"; absent = open. */
+/** The media pane: "open" | "closed"; absent = open. Named for the library pane it replaced, so the choice carries over. */
 export const LIBRARY_PANE_KEY = "node-banana-edit-library-pane";
+/** The media pane's layout: "list" | "grid"; absent = list. */
+export const PANE_LAYOUT_KEY = "node-banana-edit-pane-layout";
 export const EDIT_UNSAVED_WARNING = "An edit in the Edit video view has changes that are not saved.";
 /** A paused library is asked again no sooner than this. */
 export const EDIT_PAUSED_MIN_WAIT_MS = 3_000;
 
 const SAVED: EditProjectState["save"] = { state: "saved", error: null, conflict: null, retryAt: null };
+const NO_MEDIA_FOCUS: EditProjectState["mediaFocus"] = { id: null, reveal: 0 };
 
 function readStorage(key: string): string | null {
   try {
@@ -159,6 +175,8 @@ let inflight: Promise<EditSaveOutcome> | null = null;
 let again: Promise<EditSaveOutcome> | null = null;
 let openSeq = 0;
 let listSeq = 0;
+/** The switches under way (saving first or leaving); the sheet asking is `pendingSwitch`. */
+let switching = 0;
 
 /** Every write to an edit runs here, one after another, in call order. */
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -178,6 +196,44 @@ export async function editWritesIdle(): Promise<void> {
 
 /** A save is running or queued (the autosave waits for it). */
 export const editSaveInFlight = (): boolean => inflight !== null;
+
+type EditIdListener = (from: string, to: string) => void;
+const editIdListeners = new Set<EditIdListener>();
+
+/** Save as a new edit gave the open edit a new id: what is kept by edit id (files on their way in) follows it. */
+export function onEditIdMoved(listener: EditIdListener): () => void {
+  editIdListeners.add(listener);
+  return () => editIdListeners.delete(listener);
+}
+
+const switchEndedListeners = new Set<() => void>();
+
+/**
+ * A switch away from the open edit is under way: its changes being saved first, the sheet asking, or the edit being
+ * left. The draft may then be closed without another save, so nothing should join it meanwhile.
+ */
+export const editSwitchInProgress = (): boolean => switching > 0 || get().pendingSwitch !== null;
+
+/** No switch is under way any more: it left the edit, or was cancelled or refused and the edit is still open. */
+export function onEditSwitchEnded(listener: () => void): () => void {
+  switchEndedListeners.add(listener);
+  return () => switchEndedListeners.delete(listener);
+}
+
+function switchSettled(): void {
+  if (!editSwitchInProgress()) for (const listener of switchEndedListeners) listener();
+}
+
+/** Runs `fn` as a switch: editSwitchInProgress() holds until it has settled. */
+async function asSwitch<T>(fn: () => Promise<T>): Promise<T> {
+  switching++;
+  try {
+    return await fn();
+  } finally {
+    switching = Math.max(0, switching - 1);
+    switchSettled();
+  }
+}
 
 const get = () => useEditProjectStore.getState();
 const set = (patch: Partial<EditProjectState>) => useEditProjectStore.setState(patch);
@@ -233,12 +289,13 @@ function markSent(editId: string, sent: StitchDraft): void {
   if (parked?.editId === editId) set({ parked: { ...parked, initial: sent } });
 }
 
-/** What a save sends for this session: the sequence, the asset snapshot and the summary the list shows. */
+/** What a save sends for this session: the sequence, the media, their asset snapshot and the summary the list shows. */
 function saveBody(open: OpenEditMeta, draft: StitchDraft, session: StitchParkedSession) {
-  const sequence = editSequenceFromDraft(draft);
+  const media = editMediaOf(draft);
   return {
-    sequence,
-    assets: snapshotEditAssets(editAssetIds(sequence), getAssetInfo, open.assets),
+    sequence: editSequenceFromDraft(draft),
+    media,
+    assets: snapshotEditAssets(media, getAssetInfo, open.assets),
     summary: summarizeEdit(draft, provisionalDurations(draft, session.durations, getAssetInfo, open.assets)),
   };
 }
@@ -261,7 +318,7 @@ async function saveOnce(force: boolean): Promise<EditSaveOutcome> {
   const { open, save } = get();
   const session = currentEditSession();
   if (!open || !session?.draft) return "unchanged";
-  if (!force && save.state === "saved" && !sessionIsDirty(session)) return "unchanged";
+  if (!force && save.state === "saved" && !sessionIsDirty(session) && !open.snapshotStale) return "unchanged";
   const sentId = open.id;
   const sent = session.draft;
   set({ save: { ...save, state: "saving", error: null, retryAt: null } });
@@ -275,8 +332,13 @@ async function saveOnce(force: boolean): Promise<EditSaveOutcome> {
     const document = await editsApi.saveEdit(sentId, request);
     const now = get().open;
     if (now?.id !== sentId) return "saved";
+    // A rename made while the save was out is not in what it sent: its entry stays, and the next save sends it
+    const renamed = Object.entries(now.assets).filter(([id, entry]) => open.assets[id] !== entry);
+    // The snapshots of media that left stay: an undone removal still names an asset the library has lost
+    const assets = { ...now.assets, ...document.assets, ...Object.fromEntries(renamed) };
+    const snapshotStale = renamed.length > 0;
     set({
-      open: { ...now, name: document.name, baseUpdatedAt: document.updatedAt, assets: document.assets, renders: document.renders },
+      open: { ...now, name: document.name, baseUpdatedAt: document.updatedAt, assets, renders: document.renders, snapshotStale },
       save: SAVED,
     });
     markSent(sentId, sent);
@@ -315,6 +377,14 @@ function saveNow(reason: "auto" | "manual"): Promise<EditSaveOutcome> {
 }
 
 /**
+ * No media item selected. The reveal count only goes up: a pane that stays mounted across an open (a conflict's other
+ * version) still hears the next reveal.
+ */
+function unselectedMedia(): EditProjectState["mediaFocus"] {
+  return { id: null, reveal: get().mediaFocus.reveal };
+}
+
+/**
  * Opens `document` into the editor, only when `token` is still the latest open and the view still shows (D14). A
  * created edit dropped here still exists and is in the list.
  */
@@ -322,10 +392,20 @@ function applyOpen(token: number, document: EditDocument): boolean {
   if (token !== openSeq || useAssetStore.getState().appView !== "edit") return false;
   const editor = useStitchEditorStore.getState();
   if (editor.isOpen && editor.nodeId !== null) return false;
-  set({ open: metaOf(document), opening: null, openError: null, save: SAVED, parked: null, pendingSwitch: null, renameError: null });
-  editor.openEdit({ editId: document.id, draft: draftFromEditSequence(document.sequence) });
+  set({
+    open: metaOf(document),
+    opening: null,
+    openError: null,
+    save: SAVED,
+    parked: null,
+    pendingSwitch: null,
+    renameError: null,
+    mediaFocus: unselectedMedia(),
+  });
+  const draft = draftFromEditSequence(document.sequence, document.media);
+  editor.openEdit({ editId: document.id, draft });
   writeLast(document.id);
-  requestAssetInfo(editAssetIds(document.sequence));
+  requestAssetInfo(draft.media ?? []);
   return true;
 }
 
@@ -333,7 +413,7 @@ function applyOpen(token: number, document: EditDocument): boolean {
 function closeCurrent(): void {
   const editor = useStitchEditorStore.getState();
   if (editor.isOpen && editor.editId !== null) editor.close();
-  set({ open: null, parked: null, save: SAVED, renameError: null });
+  set({ open: null, parked: null, save: SAVED, renameError: null, mediaFocus: unselectedMedia() });
 }
 
 async function readAndOpen(id: string, opts: { quiet?: boolean } = {}): Promise<void> {
@@ -384,9 +464,14 @@ async function createAndOpen(from?: string): Promise<void> {
  */
 async function readyToSwitch(next: EditSwitch): Promise<boolean> {
   await editWritesIdle();
-  if (!sessionIsDirty(currentEditSession())) return true;
   const state = get().save.state;
-  if (useWorkflowStore.getState().autoSaveEnabled && state !== "conflict" && state !== "gone") {
+  const autoSave = useWorkflowStore.getState().autoSaveEnabled && state !== "conflict" && state !== "gone";
+  if (!sessionIsDirty(currentEditSession())) {
+    // A renamed item is no change to ask about; with Save automatically on, its snapshot still goes out first
+    if (autoSave && get().open?.snapshotStale) await saveNow("manual");
+    return true;
+  }
+  if (autoSave) {
     const outcome = await saveNow("manual");
     if (outcome === "saved" || outcome === "unchanged") return true;
   }
@@ -414,12 +499,31 @@ async function performSwitch(next: EditSwitch): Promise<void> {
   }
 }
 
-async function switchTo(next: EditSwitch): Promise<void> {
-  if (await readyToSwitch(next)) await performSwitch(next);
+function switchTo(next: EditSwitch): Promise<void> {
+  return asSwitch(async () => {
+    if (await readyToSwitch(next)) await performSwitch(next);
+  });
+}
+
+/**
+ * Whether any of the edit's media was, or might have been, recorded under the edit (a file dropped on its pane): its
+ * saved media, and for the open edit the session's too (a file not saved yet). An item the asset cache has not read
+ * yet (an edit renamed from the home screen) might be.
+ */
+function holdsOwnUploads(editId: string, saved: readonly string[]): boolean {
+  const session = get().open?.id === editId ? currentEditSession() : null;
+  const media = session?.draft ? [...saved, ...editMediaOf(session.draft)] : saved;
+  return media.some((id) => {
+    const view = getAssetInfo(id);
+    return view === undefined || view?.workflowId === editId;
+  });
 }
 
 function initialPane(): EditProjectState["pane"] {
-  return { open: readStorage(LIBRARY_PANE_KEY) !== "closed", kind: "all", focusRequest: 0 };
+  return {
+    open: readStorage(LIBRARY_PANE_KEY) !== "closed",
+    layout: readStorage(PANE_LAYOUT_KEY) === "grid" ? "grid" : "list",
+  };
 }
 
 export const useEditProjectStore = create<EditProjectState>(() => ({
@@ -432,6 +536,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
   parked: null,
   render: { state: "idle", editId: null, progress: 0, message: null },
   pane: initialPane(),
+  mediaFocus: NO_MEDIA_FOCUS,
   pendingSwitch: null,
   confirmDelete: null,
   renameError: null,
@@ -474,6 +579,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
     ++openSeq;
     const parked = useStitchEditorStore.getState().park();
     set({ opening: null, pendingSwitch: null, ...(parked ? { parked } : {}) });
+    switchSettled();
     if (parked && useWorkflowStore.getState().autoSaveEnabled && sessionIsDirty(parked)) void saveNow("auto");
   },
 
@@ -507,10 +613,10 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
         const baseUpdatedAt = previousUpdatedAt === open.baseUpdatedAt ? document.updatedAt : open.baseUpdatedAt;
         set({ open: { ...open, name: document.name, baseUpdatedAt } });
       }
-      // Assets labels an edit's renders by the name the library's workflows table holds for its id
-      if (document.renders.length > 0) {
+      // Assets labels an edit's renders and uploads by the name the library's workflows table holds for its id
+      if (document.renders.length > 0 || holdsOwnUploads(editId, document.media)) {
         void upsertWorkflowEntry(editId, { name: document.name, projectPath: null, asOf: Date.now() }).catch((error) =>
-          console.warn("[EditVideo] Couldn't rename the edit's renders in the library:", error),
+          console.warn("[EditVideo] Couldn't rename the edit's renders and uploads in the library:", error),
         );
       }
       void get().refreshList();
@@ -603,6 +709,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
         const parked = get().parked;
         if (parked?.editId === sentId) set({ parked: { ...parked, editId: document.id, initial: sent } });
       }
+      for (const listener of editIdListeners) listener(sentId, document.id);
       set({ open: metaOf(document), save: SAVED });
       writeLast(document.id);
       void get().refreshList();
@@ -619,20 +726,25 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
     }
     const current = get().save.conflict;
     if (!current) return;
-    await editWritesIdle();
-    applyOpen(++openSeq, current);
+    // The draft is replaced: nothing joins it until the other version is open
+    await asSwitch(async () => {
+      await editWritesIdle();
+      applyOpen(++openSeq, current);
+    });
   },
 
   resolveSwitch: async (choice) => {
     const next = get().pendingSwitch;
     if (!next) return;
-    set({ pendingSwitch: null });
-    if (choice === "cancel") return;
-    if (choice === "save") {
-      const outcome = await saveNow("manual");
-      if (outcome !== "saved" && outcome !== "unchanged") return;
-    }
-    await performSwitch(next);
+    await asSwitch(async () => {
+      set({ pendingSwitch: null });
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        const outcome = await saveNow("manual");
+        if (outcome !== "saved" && outcome !== "unchanged") return;
+      }
+      await performSwitch(next);
+    });
   },
 
   addRender: async (editId, render) => {
@@ -663,12 +775,22 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
     set({ pane: { ...get().pane, open } });
   },
 
-  setPaneKind: (kind) => set({ pane: { ...get().pane, kind } }),
+  setPaneLayout: (layout) => {
+    writeStorage(PANE_LAYOUT_KEY, layout);
+    set({ pane: { ...get().pane, layout } });
+  },
 
-  requestPaneFocus: (kind) => {
-    const pane = get().pane;
-    if (!pane.open) writeStorage(LIBRARY_PANE_KEY, "open");
-    set({ pane: { open: true, kind: kind ?? pane.kind, focusRequest: pane.focusRequest + 1 } });
+  selectMedia: (id) => set({ mediaFocus: { ...get().mediaFocus, id } }),
+
+  revealMedia: (id) => set({ mediaFocus: { id, reveal: get().mediaFocus.reveal + 1 } }),
+
+  noteAssetRenamed: (view) => {
+    const open = get().open;
+    const draft = currentEditSession()?.draft;
+    if (!open || !draft || !editMediaOf(draft).includes(view.id)) return;
+    const snapshot = snapshotEditAssets([view.id], () => view, open.assets)[view.id];
+    if (!snapshot) return;
+    set({ open: { ...open, assets: { ...open.assets, [view.id]: snapshot }, snapshotStale: true } });
   },
 }));
 
@@ -679,6 +801,7 @@ export function __resetEditProjectForTests(): void {
   again = null;
   openSeq = 0;
   listSeq = 0;
+  switching = 0;
   useEditProjectStore.setState({
     list: { status: "idle", edits: [], problems: [], folder: null, error: null },
     open: null,
@@ -689,6 +812,7 @@ export function __resetEditProjectForTests(): void {
     parked: null,
     render: { state: "idle", editId: null, progress: 0, message: null },
     pane: initialPane(),
+    mediaFocus: NO_MEDIA_FOCUS,
     pendingSwitch: null,
     confirmDelete: null,
     renameError: null,

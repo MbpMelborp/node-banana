@@ -45,6 +45,7 @@ const DOC: EditDocument = {
   createdAt: 1,
   updatedAt: 2,
   sequence: emptyEditSequence(),
+  media: [],
   assets: {},
   renders: [],
   summary: { clipCount: 0, audioClipCount: 0, durationSec: 0, posterAssetId: null },

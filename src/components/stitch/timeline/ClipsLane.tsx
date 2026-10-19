@@ -127,7 +127,7 @@ export function useLaneFocus() {
 const ADD_SLOT =
   "absolute flex items-center justify-center rounded-md bg-edit-slot text-ink-3 transition-colors hover:bg-white/4 hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40";
 
-/** The placeholder across an empty lane: it adds clips from the library (off while the library is). */
+/** The placeholder across an empty lane: it opens Add media for videos (off while the library is). */
 export function EmptyLaneButton({
   libraryOn,
   left,
@@ -149,8 +149,8 @@ export function EmptyLaneButton({
     <button
       type="button"
       data-testid="stitch-empty-lane"
-      aria-label="Add a clip from the library"
-      title={libraryOn ? "Add from library" : undefined}
+      aria-label="Add media"
+      title={libraryOn ? "Add media" : undefined}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
@@ -163,7 +163,7 @@ export function EmptyLaneButton({
   );
 }
 
-/** The + after the last clip that adds clips from the library (off while the library is). */
+/** The + after the last clip, which opens Add media for videos (off while the library is). */
 export function AddSlotButton({
   libraryOn,
   left,
@@ -183,8 +183,8 @@ export function AddSlotButton({
     <button
       type="button"
       data-testid="stitch-add-slot"
-      aria-label="Add a clip from the library"
-      title={libraryOn ? "Add from library" : "The asset library is off"}
+      aria-label="Add media"
+      title={libraryOn ? "Add media" : "The asset library is off"}
       disabled={!libraryOn}
       onClick={() => openLibraryPicker("video")}
       onFocus={onFocus}
@@ -200,9 +200,9 @@ export function AddSlotButton({
 /**
  * The clips row: one box per clip (a fixed slot for a clip with no length),
  * the trim ghost, and the insertion bar while a clip is dragged to a new
- * place. After the last clip a quiet + slot adds clips from the library; an
- * empty sequence shows a placeholder across the lane that does the same
- * (both off while the library is).
+ * place. After the last clip a quiet + slot opens Add media; an empty
+ * sequence shows a placeholder across the lane that does the same (both off
+ * while the library is).
  *
  * It is a listbox: the selected clip (the lead of several) is its one tab
  * stop, the arrows, Home and End select one clip, and the context-menu key

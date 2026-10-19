@@ -27,7 +27,7 @@ import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
 import { createAudioClip, legacyMusicClip, setAudioClipCurve, type AudioSourceKey } from "@/lib/stitch/audioClips";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
-  addAssetClips,
+  addLibraryClips,
   canEndAtPlayhead,
   canLineUp,
   canMoveRow,
@@ -724,7 +724,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
 
   it("adds library clips to a placed stack unpinned, Overlap before the latest end, with the playhead there", () => {
     setClipStart("c", 10);
-    addAssetClips([{ id: "n1", durationSec: 3 }] as AssetView[]);
+    addLibraryClips([{ id: "n1", durationSec: 3 }] as AssetView[]);
     const added = store().draft!.timeline[3];
     expect(added.startSec).toBeUndefined();
     // c ends at 14
@@ -733,7 +733,7 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
 
   it("changes Overlap in a placed stack without moving any clip, in one step", () => {
     setClipStart("c", 10);
-    addAssetClips([{ id: "n1", durationSec: 3 }, { id: "n2", durationSec: 2 }] as AssetView[]);
+    addLibraryClips([{ id: "n1", durationSec: 3 }, { id: "n2", durationSec: 2 }] as AssetView[]);
     store().setDurations(
       new Map<SourceKey, number>([...DURATIONS, ["asset:n1", 3], ["asset:n2", 2]]),
     );
@@ -1145,6 +1145,40 @@ describe("stitchEditorStore: edit project sessions", () => {
     expect(store().playing).toBe(true);
     store().close();
     expect(store().park()).toBeNull();
+  });
+
+  it("takes the asset of a clip added any way into the edit's media, in the same undo step", () => {
+    openEdit(makeDraft({ timeline: [assetClip("v1", "a1")], media: ["a1", "a9"] }));
+    store().apply((d) => ({
+      ...d,
+      timeline: [...d.timeline, assetClip("v2", "a2"), assetClip("v3", "a1")],
+      audioClips: [createAudioClip({ kind: "asset", assetId: "m1" }, { id: "s1" })],
+    }));
+    expect(store().draft!.media).toEqual(["a1", "a9", "a2", "m1"]);
+    expect(store().past).toHaveLength(1);
+    store().undo();
+    expect(store().draft!.media).toEqual(["a1", "a9"]);
+    store().redo();
+    expect(store().draft!.media).toEqual(["a1", "a9", "a2", "m1"]);
+    // Taking a clip away leaves its asset in the media
+    store().apply((d) => ({ ...d, timeline: d.timeline.slice(0, 1) }));
+    expect(store().draft!.media).toEqual(["a1", "a9", "a2", "m1"]);
+  });
+
+  it("counts a change to the media alone as an undo step that makes the edit dirty", () => {
+    openEdit(makeDraft({ timeline: [assetClip("v1", "a1")], media: ["a1"] }));
+    store().apply((d) => ({ ...d, media: [...(d.media ?? []), "a9"] }));
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+    store().undo();
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("gives a node's draft no media", () => {
+    openOn();
+    store().apply((d) => ({ ...d, timeline: [...d.timeline, assetClip("n", "a5")] }));
+    expect(store().draft).not.toHaveProperty("media");
+    expect(store().past).toHaveLength(1);
   });
 
   it("setEditId moves an edit session to another edit and never touches a node session", () => {

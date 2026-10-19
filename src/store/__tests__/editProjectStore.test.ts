@@ -8,6 +8,7 @@ import {
   handleDesktopSave,
   LAST_EDIT_KEY,
   LIBRARY_PANE_KEY,
+  PANE_LAYOUT_KEY,
   useEditProjectStore,
 } from "@/store/editProjectStore";
 import { selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
@@ -16,9 +17,13 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { useSaveRequestStore } from "@/store/saveRequestStore";
 import { editAutoSaveState } from "@/store/utils/editAutoSave";
 import { openStitchEditor } from "@/components/stitch/openStitchEditor";
+import { addMediaItems, mediaUseCount, removeMediaItem } from "@/components/stitch/editorActions";
+import { __resetMediaUploadsForTests, addFilesToEdit, useMediaUploads, type PendingMedia } from "@/components/edit/mediaUploads";
 import { EditApiError } from "@/lib/edits/client";
+import { editAssetIds } from "@/lib/edits/document";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
-import { createClip, type SourceKey } from "@/lib/stitch/timeline";
+import { createAudioClip } from "@/lib/stitch/audioClips";
+import { createClip, pinStarts, type SourceKey } from "@/lib/stitch/timeline";
 import type { EditDocument, EditSequence, SaveEditRequest } from "@/lib/edits/types";
 import type { AssetView } from "@/lib/assets/types";
 import type { WorkflowNode } from "@/types";
@@ -37,6 +42,7 @@ const api = vi.hoisted(() => ({
   upsertWorkflowEntry: vi.fn(),
   show: vi.fn(),
   requestAssetInfo: vi.fn(),
+  recordUpload: vi.fn(),
   assetInfoThrows: false,
 }));
 vi.mock("@/lib/edits/client", async (importOriginal) => {
@@ -68,6 +74,10 @@ vi.mock("@/lib/stitch/assetInfo", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/lib/assets/client/upload", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/assets/client/upload")>()),
+  recordUpload: api.recordUpload,
+}));
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: api.show }) } }));
 
 const ID = "ed0000000000a1";
@@ -85,6 +95,7 @@ function sequence(assetIds: string[] = ["aclipaaaaaaaa1", "aclipaaaaaaaa2"]): Ed
 }
 
 function doc(id = ID, overrides: Partial<EditDocument> = {}): EditDocument {
+  const seq = overrides.sequence ?? sequence();
   return {
     kind: "node-banana-edit",
     version: 1,
@@ -92,7 +103,8 @@ function doc(id = ID, overrides: Partial<EditDocument> = {}): EditDocument {
     name: id === ID ? "Trip" : "Other",
     createdAt: 1000,
     updatedAt: 2000,
-    sequence: sequence(),
+    sequence: seq,
+    media: editAssetIds(seq),
     assets: {},
     renders: [],
     summary: { clipCount: 2, audioClipCount: 0, durationSec: 0, posterAssetId: "aclipaaaaaaaa1" },
@@ -126,6 +138,7 @@ const saved = (base: EditDocument, request: SaveEditRequest, updatedAt: number):
   ...base,
   updatedAt,
   sequence: request.sequence,
+  media: request.media,
   assets: request.assets,
   summary: request.summary,
 });
@@ -133,10 +146,12 @@ const saved = (base: EditDocument, request: SaveEditRequest, updatedAt: number):
 beforeEach(() => {
   vi.clearAllMocks();
   api.assetInfoThrows = false;
+  // Cleared first: the reset reads the pane's remembered state
+  localStorage.clear();
   __resetEditProjectForTests();
   __resetAssetInfoForTests();
+  __resetMediaUploadsForTests();
   editor().close();
-  localStorage.clear();
   useAssetStore.setState({ appView: "edit" });
   useWorkflowStore.setState({ autoSaveEnabled: true });
   useSaveRequestStore.setState({ request: null });
@@ -398,9 +413,11 @@ describe("conflicts", () => {
 });
 
 describe("an edit that is gone", () => {
-  it("stops autosave; Save as a new edit moves the session to the new edit, history kept", async () => {
+  it("stops autosave; Save as a new edit moves the session to the new edit, history kept, and the files on their way in", async () => {
     await openDoc();
     edit();
+    const upload = (key: string, editId: string): PendingMedia => ({ key, name: `${key}.mp4`, kind: "video", editId, asset: null });
+    useMediaUploads.setState({ uploads: [upload("dropped", ID), upload("elsewhere", "ed0000000000c3")] });
     api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
     expect(await store().saveNow("auto")).toBe("gone");
     expect(store().save.state).toBe("gone");
@@ -416,6 +433,10 @@ describe("an edit that is gone", () => {
     expect(store().open).toMatchObject({ id: OTHER, baseUpdatedAt: 9000 });
     expect(store().save.state).toBe("saved");
     expect(localStorage.getItem(LAST_EDIT_KEY)).toBe(OTHER);
+    expect(useMediaUploads.getState().uploads.map((u) => [u.key, u.editId])).toEqual([
+      ["dropped", OTHER],
+      ["elsewhere", "ed0000000000c3"],
+    ]);
   });
 
   it("stays gone, still offering Save as a new edit, when that save fails", async () => {
@@ -705,6 +726,113 @@ describe("switching edits", () => {
   });
 });
 
+describe("a file dropped on the pane while the edit is being left", () => {
+  const UPLOAD = "aupldaaaaaaaa1";
+  const recorded = {
+    id: UPLOAD,
+    kind: "video",
+    filename: "sunset.mp4",
+    sha256: "sha-sunset",
+    durationSec: 4,
+    workflowId: ID,
+    workflow: { projectPath: null },
+  } as unknown as AssetView;
+  const pending = () => useMediaUploads.getState().uploads;
+
+  /** Drops a video on the open edit's pane; its record exists once the test resolves the answer. */
+  function drop() {
+    const answer = deferred<AssetView>();
+    api.recordUpload.mockReturnValueOnce(answer.promise);
+    addFilesToEdit([new File(["v"], "sunset.mp4", { type: "video/mp4" })], { editId: ID, editName: "Trip" });
+    expect(pending()).toHaveLength(1);
+    return answer;
+  }
+
+  /** The file is still on its way into the edit, not in the draft the switch may close. */
+  function waiting() {
+    expect(editor().draft?.media ?? []).not.toContain(UPLOAD);
+    expect(pending()).toEqual([expect.objectContaining({ editId: ID, asset: recorded })]);
+  }
+
+  it("waits while the switch saves first, and joins the edit when it opens again", async () => {
+    await openDoc();
+    edit();
+    const upload = drop();
+    const first = deferred<EditDocument>();
+    api.saveEdit.mockReturnValueOnce(first.promise);
+    const leaving = store().goHome();
+    await flush();
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
+    upload.resolve(recorded);
+    await flush();
+    waiting();
+    first.resolve(saved(doc(), sentBody(0), 3000));
+    await leaving;
+    expect(editor().isOpen).toBe(false);
+    expect(pending()).toHaveLength(1);
+
+    await openDoc(doc(ID, { updatedAt: 3000 }));
+    expect(editor().draft?.media).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2", UPLOAD]);
+    expect(pending()).toEqual([]);
+  });
+
+  it("waits while the sheet asks: after Don't save it joins the edit's next open, after Cancel at once", async () => {
+    useWorkflowStore.setState({ autoSaveEnabled: false });
+    await openDoc();
+    edit();
+    let upload = drop();
+    await store().goHome();
+    expect(store().pendingSwitch).toEqual({ action: "home" });
+    upload.resolve(recorded);
+    await flush();
+    waiting();
+    await store().resolveSwitch("discard");
+    expect(editor().isOpen).toBe(false);
+    expect(pending()).toHaveLength(1);
+    await openDoc();
+    expect(editor().draft?.media).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2", UPLOAD]);
+    expect(pending()).toEqual([]);
+
+    // Cancel: the edit stays open, and the file joins it as the sheet closes. Its joining undone, so it can join again
+    editor().undo();
+    edit();
+    upload = drop();
+    await store().openEditById(OTHER);
+    expect(store().pendingSwitch).toEqual({ action: "open", id: OTHER });
+    upload.resolve(recorded);
+    await flush();
+    waiting();
+    await store().resolveSwitch("cancel");
+    expect(editor().editId).toBe(ID);
+    expect(editor().draft?.media).toEqual(["aclipaaaaaaaa1", "aclipaaaaaaaa2", UPLOAD]);
+    expect(pending()).toEqual([]);
+  });
+
+  it("waits while Use the other version replaces the draft, then joins that version", async () => {
+    await openDoc();
+    edit();
+    const theirs = doc(ID, { updatedAt: 2500, sequence: sequence(["aclipaaaaaaaa9"]) });
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("Changed elsewhere", 409, "conflict", theirs));
+    await store().saveNow("manual");
+    const upload = drop();
+    // A write still queued, which the other version waits for
+    const render = { assetId: "arender000001", renderedAt: 5, durationSec: 4 };
+    const written = deferred<{ document: EditDocument; previousUpdatedAt: number }>();
+    api.patchEdit.mockReturnValueOnce(written.promise);
+    const adding = store().addRender(ID, render);
+    const using = store().resolveConflict("useTheirs");
+    await flush();
+    upload.resolve(recorded);
+    await flush();
+    waiting();
+    written.resolve({ document: doc(ID, { renders: [render] }), previousUpdatedAt: 2000 });
+    await Promise.all([adding, using]);
+    expect(editor().draft?.timeline.map((c) => c.source)).toEqual([{ kind: "asset", assetId: "aclipaaaaaaaa9" }]);
+    expect(editor().draft?.media).toEqual(["aclipaaaaaaaa9", UPLOAD]);
+    expect(pending()).toEqual([]);
+  });
+});
+
 describe("rename, duplicate, delete", () => {
   it("shows a note when the name is taken", async () => {
     await openDoc();
@@ -721,8 +849,14 @@ describe("rename, duplicate, delete", () => {
     expect(store().open).toMatchObject({ name: "New", baseUpdatedAt: 2000 });
   });
 
-  it("renames the edit's renders in the library only when it has some", async () => {
+  /** A record the asset cache holds, made under the workflow (or edit) `workflowId`. */
+  const recordUnder = (id: string, workflowId: string) =>
+    ({ id, kind: "video", filename: `${id}.mp4`, durationSec: 4, workflowId, workflow: { projectPath: null } }) as unknown as AssetView;
+
+  it("renames the edit's renders in the library when it has some", async () => {
     await openDoc();
+    // Media made in a workflow, none of it recorded under the edit
+    primeAssetInfo([recordUnder("aclipaaaaaaaa1", "wf-launch"), recordUnder("aclipaaaaaaaa2", "wf-launch")]);
     api.patchEdit.mockResolvedValueOnce({ document: doc(ID, { name: "New", updatedAt: 2001 }), previousUpdatedAt: 2000 });
     await store().rename("New");
     expect(api.upsertWorkflowEntry).not.toHaveBeenCalled();
@@ -730,6 +864,40 @@ describe("rename, duplicate, delete", () => {
     api.patchEdit.mockResolvedValueOnce({ document: doc(ID, { name: "Newer", updatedAt: 2002, renders: [render] }), previousUpdatedAt: 2001 });
     await store().rename("Newer");
     expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(ID, expect.objectContaining({ name: "Newer", projectPath: null }));
+  });
+
+  it("renames the uploads recorded under the edit in the library, saved or not yet, with no render", async () => {
+    await openDoc();
+    primeAssetInfo([recordUnder("aclipaaaaaaaa1", ID), recordUnder("aclipaaaaaaaa2", "wf-launch")]);
+    api.patchEdit.mockResolvedValueOnce({ document: doc(ID, { name: "Holiday", updatedAt: 2001 }), previousUpdatedAt: 2000 });
+    await store().rename("Holiday");
+    expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(ID, expect.objectContaining({ name: "Holiday", projectPath: null }));
+
+    // A file dropped on the pane and not saved yet: only the session holds it
+    api.upsertWorkflowEntry.mockClear();
+    primeAssetInfo([recordUnder("aclipaaaaaaaa1", "wf-launch")]);
+    addMediaItems([recordUnder("aupldaaaaaaaa1", ID)]);
+    api.patchEdit.mockResolvedValueOnce({ document: doc(ID, { name: "Holiday 2", updatedAt: 2002 }), previousUpdatedAt: 2001 });
+    await store().rename("Holiday 2");
+    expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(ID, expect.objectContaining({ name: "Holiday 2" }));
+  });
+
+  it("from the home screen, renames them when the asset cache hasn't read the edit's media yet", async () => {
+    useEditProjectStore.setState({
+      list: { status: "ready", edits: [{ id: OTHER, name: "Other" } as never], problems: [], folder: null, error: null },
+    });
+    api.patchEdit.mockResolvedValueOnce({ document: doc(OTHER, { name: "Beach", updatedAt: 2001 }), previousUpdatedAt: 2000 });
+    expect(await store().rename("Beach", OTHER)).toBe(true);
+    expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(OTHER, expect.objectContaining({ name: "Beach", projectPath: null }));
+
+    // Media the cache knows was made elsewhere, or no media at all: nothing of the edit's to rename
+    api.upsertWorkflowEntry.mockClear();
+    primeAssetInfo([recordUnder("aclipaaaaaaaa1", "wf-launch"), recordUnder("aclipaaaaaaaa2", "wf-launch")]);
+    api.patchEdit.mockResolvedValueOnce({ document: doc(OTHER, { name: "Beach 2", updatedAt: 2002 }), previousUpdatedAt: 2001 });
+    await store().rename("Beach 2", OTHER);
+    api.patchEdit.mockResolvedValueOnce({ document: doc(OTHER, { name: "Beach 3", updatedAt: 2003, media: [] }), previousUpdatedAt: 2002 });
+    await store().rename("Beach 3", OTHER);
+    expect(api.upsertWorkflowEntry).not.toHaveBeenCalled();
   });
 
   it("duplicates and opens the copy", async () => {
@@ -799,7 +967,262 @@ describe("renders in the file", () => {
   });
 });
 
-describe("the library pane", () => {
+describe("the edit's media", () => {
+  const CLIP1 = "aclipaaaaaaaa1";
+  const CLIP2 = "aclipaaaaaaaa2";
+  const BEACH = "abeachaaaaaaa1";
+  const SOUND = "asoundaaaaaaa1";
+  const view = (id: string, kind = "video", filename = `${id}.mp4`) =>
+    ({ id, kind, filename, durationSec: 4, workflow: { projectPath: "/p/Launch" } }) as unknown as AssetView;
+  const snapshot = (name: string, kind: "video" | "audio" = "video") => ({ name, kind, project: "Launch", durationSec: 4 });
+  const sound = (id: string, assetId: string, row: number) => createAudioClip({ kind: "asset", assetId }, { id, row });
+
+  it("opens the draft with the edit's media and asks the library about every item", async () => {
+    await openDoc(doc(ID, { media: [BEACH, CLIP1, CLIP2] }));
+    expect(editor().draft?.media).toEqual([BEACH, CLIP1, CLIP2]);
+    expect(api.requestAssetInfo).toHaveBeenCalledWith([BEACH, CLIP1, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(false);
+  });
+
+  it("reads an edit without media as the sequence's assets", async () => {
+    const older: Partial<EditDocument> = doc();
+    delete older.media;
+    await openDoc(older as EditDocument);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+  });
+
+  it("Add media appends what is new as one undo step, and the save sends it with a snapshot of each item", async () => {
+    await openDoc(doc(ID, { assets: { [CLIP2]: snapshot("old-2.mp4") } }));
+    const image = view("aimageaaaaaaa1", "image", "still.png");
+    expect(addMediaItems([view(BEACH), view(CLIP1), image, view(SOUND, "audio", "song.m4a"), view(BEACH)])).toEqual([BEACH, SOUND]);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2, BEACH, SOUND]);
+    expect(editor().draft?.timeline).toHaveLength(2);
+    expect(editor().past).toHaveLength(1);
+    expect(selectIsDirty(editor())).toBe(true);
+    expect(editHasUnsavedWork()).toBe(true);
+    expect(addMediaItems([view(BEACH)])).toEqual([]);
+    expect(editor().past).toHaveLength(1);
+
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody().media).toEqual([CLIP1, CLIP2, BEACH, SOUND]);
+    expect(sentBody().assets).toEqual({
+      [CLIP1]: snapshot(`${CLIP1}.mp4`),
+      [CLIP2]: snapshot("old-2.mp4"),
+      [BEACH]: snapshot(`${BEACH}.mp4`),
+      [SOUND]: snapshot("song.m4a", "audio"),
+    });
+    expect(selectIsDirty(editor())).toBe(false);
+
+    editor().undo();
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(true);
+  });
+
+  it("Save as a new edit carries the media", async () => {
+    await openDoc();
+    addMediaItems([view(BEACH)]);
+    api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
+    await store().saveNow("auto");
+    api.createEdit.mockResolvedValueOnce(doc(OTHER, { name: "Trip", updatedAt: 9000 }));
+    await store().saveAsNew();
+    expect(api.createEdit.mock.calls[0][0]).toMatchObject({ name: "Trip", media: [CLIP1, CLIP2, BEACH] });
+  });
+
+  it("Remove from edit takes the item and every clip using it out, as one undo step", async () => {
+    await openDoc(doc(ID, { sequence: sequence([CLIP1, CLIP2, CLIP1]), media: [CLIP1, BEACH, CLIP2] }));
+    editor().select({ kind: "clip", clipId: "v1", clipIds: ["v1", "v2"] });
+    expect(mediaUseCount(editor().draft!, CLIP1)).toBe(2);
+    expect(mediaUseCount(editor().draft!, BEACH)).toBe(0);
+
+    expect(removeMediaItem(CLIP1)).toBe(true);
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v2"]);
+    expect(editor().draft?.media).toEqual([BEACH, CLIP2]);
+    expect(editor().past).toHaveLength(1);
+    expect(editor().selection).toEqual({ kind: "clip", clipId: "v2" });
+    expect(selectIsDirty(editor())).toBe(true);
+
+    editor().undo();
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v1", "v2", "v3"]);
+    expect(editor().draft?.media).toEqual([CLIP1, BEACH, CLIP2]);
+    expect(selectIsDirty(editor())).toBe(false);
+
+    // Media no clip uses goes alone
+    expect(removeMediaItem(BEACH)).toBe(true);
+    expect(editor().draft?.media).toEqual([CLIP1, CLIP2]);
+    expect(editor().draft?.timeline).toHaveLength(3);
+    expect(removeMediaItem(BEACH)).toBe(false);
+    expect(editor().past).toHaveLength(1);
+  });
+
+  it("removes a sound's clips from every row, the rows closing up and the selection keeping the rest", async () => {
+    const OTHER_SOUND = "asoundaaaaaaa2";
+    const seq = { ...sequence([CLIP1]), audioClips: [sound("s1", SOUND, 0), sound("s2", OTHER_SOUND, 1), sound("s3", SOUND, 2)] };
+    await openDoc(doc(ID, { sequence: seq, media: [CLIP1, SOUND, OTHER_SOUND] }));
+    editor().setAudioExpandedRow(1);
+    editor().select({ kind: "audio", clipId: "s1", clipIds: ["s1", "s2"], point: null, onCurve: false });
+    expect(mediaUseCount(editor().draft!, SOUND)).toBe(2);
+
+    removeMediaItem(SOUND);
+    expect(editor().draft?.audioClips.map((c) => [c.id, c.row])).toEqual([["s2", 0]]);
+    expect(editor().draft?.media).toEqual([CLIP1, OTHER_SOUND]);
+    expect(editor().audioExpandedRow).toBe(0);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: null, onCurve: false });
+    expect(editor().past).toHaveLength(1);
+    editor().undo();
+    expect(editor().draft?.audioClips.map((c) => c.id)).toEqual(["s1", "s2", "s3"]);
+  });
+
+  it("keeps the lead that remains, clears a selection it took entirely, and leaves one it did not touch", async () => {
+    const OTHER_SOUND = "asoundaaaaaaa2";
+    const seq = {
+      ...sequence([CLIP1, CLIP2, CLIP1]),
+      audioClips: [sound("s1", SOUND, 0), sound("s2", OTHER_SOUND, 1), sound("s3", SOUND, 2)],
+    };
+    await openDoc(doc(ID, { sequence: seq, media: [CLIP1, CLIP2, SOUND, OTHER_SOUND] }));
+
+    // The lead stays and leads; its point is forgotten, as after an undo
+    editor().select({ kind: "audio", clipId: "s2", clipIds: ["s1", "s2"], point: 0, onCurve: false });
+    removeMediaItem(SOUND);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: null, onCurve: false });
+    editor().undo();
+
+    // Untouched: a point on a clip the removal did not reach is kept
+    editor().select({ kind: "audio", clipId: "s2", point: 0, onCurve: true });
+    removeMediaItem(CLIP1);
+    expect(editor().selection).toEqual({ kind: "audio", clipId: "s2", point: 0, onCurve: true });
+    editor().undo();
+
+    // Every selected clip gone: nothing is selected (no neighbour takes it, the user was not on the timeline)
+    editor().select({ kind: "clip", clipId: "v1", clipIds: ["v1", "v3"] });
+    removeMediaItem(CLIP1);
+    expect(editor().draft?.timeline.map((c) => c.id)).toEqual(["v2"]);
+    expect(editor().selection).toBeNull();
+  });
+
+  it("keeps the name of an item the library has lost when its removal is undone after a save", async () => {
+    await openDoc(doc(ID, { media: [CLIP1, CLIP2, BEACH], assets: { [BEACH]: snapshot("beach.mp4") } }));
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    removeMediaItem(BEACH);
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody(0).assets).not.toHaveProperty(BEACH);
+
+    editor().undo();
+    expect(await store().saveNow("manual")).toBe("saved");
+    expect(sentBody(1).media).toEqual([CLIP1, CLIP2, BEACH]);
+    expect(sentBody(1).assets[BEACH]).toEqual(snapshot("beach.mp4"));
+  });
+
+  it("pins a placed stack before taking clips out, so the others stay where they are", async () => {
+    const seq: EditSequence = {
+      ...sequence([CLIP1, BEACH, CLIP2]),
+      sequenceLayout: { mode: "stacked", overlapSec: 1, crossfade: true },
+    };
+    seq.timeline[0] = { ...seq.timeline[0], startSec: 0 };
+    await openDoc(doc(ID, { sequence: seq }));
+    const durations = new Map<SourceKey, number>([
+      [`asset:${CLIP1}`, 5],
+      [`asset:${BEACH}`, 4],
+      [`asset:${CLIP2}`, 3],
+    ]);
+    editor().setDurations(durations);
+    const pinned = pinStarts(editor().draft!.timeline, durations, 1);
+    removeMediaItem(BEACH);
+    expect(editor().draft?.timeline.map((c) => [c.id, c.startSec])).toEqual([
+      ["v1", 0],
+      ["v3", pinned[2].startSec],
+    ]);
+    expect(pinned[2].startSec).toBeGreaterThan(0);
+  });
+
+  it("does nothing in a node's session", () => {
+    editor().open({ nodeId: "stitch", draft: { ...sequence([CLIP1]), legacyAudio: { curve: [], muted: false } }, canvasGeneration: 0 });
+    expect(addMediaItems([view(BEACH)])).toEqual([]);
+    expect(removeMediaItem(CLIP1)).toBe(false);
+    expect(editor().draft).not.toHaveProperty("media");
+    expect(editor().past).toEqual([]);
+  });
+});
+
+describe("a media item renamed in the pane", () => {
+  const CLIP1 = "aclipaaaaaaaa1";
+  const before = { name: "clip_123.mp4", kind: "video" as const, project: null, durationSec: 4 };
+  /** The record a rename answers with, which the pane puts in the asset cache before telling the store. */
+  const renamedTo = (name: string, id = CLIP1) =>
+    ({ id, kind: "video", filename: `${id}.mp4`, name, durationSec: 4, workflow: { projectPath: null } }) as unknown as AssetView;
+  const rename = (name: string, id = CLIP1) => {
+    const view = renamedTo(name, id);
+    primeAssetInfo([view]);
+    store().noteAssetRenamed(view);
+  };
+  const openTrip = () => openDoc(doc(ID, { assets: { [CLIP1]: before } }));
+
+  it("names it so in the open edit's snapshot, which the next save sends with nothing else changed", async () => {
+    await openTrip();
+    rename("Intro");
+    expect(store().open?.assets[CLIP1]).toEqual({ ...before, name: "Intro" });
+    expect(store().open?.snapshotStale).toBe(true);
+    expect(selectIsDirty(editor())).toBe(false);
+    // The edit autosave sees it as a change to save
+    expect(editAutoSaveState().hasUnsavedChanges).toBe(true);
+
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    expect(await store().saveNow("auto")).toBe("saved");
+    expect(sentBody().assets[CLIP1].name).toBe("Intro");
+    expect(store().open?.snapshotStale).toBe(false);
+    expect(editAutoSaveState().hasUnsavedChanges).toBe(false);
+    expect(await store().saveNow("auto")).toBe("unchanged");
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the snapshot alone for an item that isn't in the edit's media", async () => {
+    await openTrip();
+    store().noteAssetRenamed(renamedTo("Elsewhere", "aotheraaaaaaa1"));
+    expect(store().open?.assets).toEqual({ [CLIP1]: before });
+    expect(store().open?.snapshotStale).toBeFalsy();
+  });
+
+  it("keeps a rename made while a save is out for the next save", async () => {
+    await openTrip();
+    edit();
+    const first = deferred<EditDocument>();
+    api.saveEdit.mockReturnValueOnce(first.promise);
+    const save = store().saveNow("auto");
+    await flush();
+    rename("Intro");
+    first.resolve(saved(doc(), sentBody(0), 3000));
+    expect(await save).toBe("saved");
+    expect(sentBody(0).assets[CLIP1].name).toBe("clip_123.mp4");
+    expect(selectIsDirty(editor())).toBe(false);
+    expect(store().open?.assets[CLIP1].name).toBe("Intro");
+    expect(store().open?.snapshotStale).toBe(true);
+
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 4000));
+    expect(await store().saveNow("auto")).toBe("saved");
+    expect(sentBody(1).assets[CLIP1].name).toBe("Intro");
+    expect(store().open?.snapshotStale).toBe(false);
+  });
+
+  it("is saved before the edit is left with Save automatically on, and is never a change to ask about", async () => {
+    await openTrip();
+    rename("Intro");
+    api.saveEdit.mockImplementation(async (_id: string, request: SaveEditRequest) => saved(doc(), request, 3000));
+    await store().goHome();
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
+    expect(sentBody().assets[CLIP1].name).toBe("Intro");
+    expect(store().open).toBeNull();
+
+    useWorkflowStore.setState({ autoSaveEnabled: false });
+    await openTrip();
+    rename("Outro");
+    await store().goHome();
+    expect(store().pendingSwitch).toBeNull();
+    expect(store().open).toBeNull();
+    expect(api.saveEdit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the media pane", () => {
   it("is open by default and remembers being hidden", () => {
     expect(store().pane.open).toBe(true);
     store().setPaneOpen(false);
@@ -808,12 +1231,38 @@ describe("the library pane", () => {
     expect(store().pane.open).toBe(false);
   });
 
-  it("+ opens it, sets its kind and asks for its search's focus", () => {
-    store().setPaneOpen(false);
-    store().requestPaneFocus("audio");
-    expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 1 });
-    store().requestPaneFocus();
-    expect(store().pane).toEqual({ open: true, kind: "audio", focusRequest: 2 });
+  it("is a list by default and remembers the grid", () => {
+    expect(store().pane).toEqual({ open: true, layout: "list" });
+    store().setPaneLayout("grid");
+    expect(store().pane.layout).toBe("grid");
+    expect(localStorage.getItem(PANE_LAYOUT_KEY)).toBe("grid");
+    __resetEditProjectForTests();
+    expect(store().pane.layout).toBe("grid");
+    localStorage.setItem(PANE_LAYOUT_KEY, "tiles");
+    __resetEditProjectForTests();
+    expect(store().pane.layout).toBe("list");
+  });
+
+  it("selects an item, and counts each request to scroll one into view", () => {
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 0 });
+    store().selectMedia("abeachaaaaaaa1");
+    expect(store().mediaFocus).toEqual({ id: "abeachaaaaaaa1", reveal: 0 });
+    store().revealMedia("aclipaaaaaaaa1");
+    store().revealMedia("aclipaaaaaaaa1");
+    expect(store().mediaFocus).toEqual({ id: "aclipaaaaaaaa1", reveal: 2 });
+    __resetEditProjectForTests();
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 0 });
+  });
+
+  it("forgets the selected item when an edit opens and when it closes", async () => {
+    await openDoc(doc());
+    store().revealMedia("aclipaaaaaaaa1");
+    await store().goHome();
+    // The count goes on: a pane still shown hears the next reveal
+    expect(store().mediaFocus).toEqual({ id: null, reveal: 1 });
+    store().selectMedia("aclipaaaaaaaa1");
+    await openDoc(doc());
+    expect(store().mediaFocus.id).toBeNull();
   });
 });
 

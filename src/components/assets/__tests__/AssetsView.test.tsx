@@ -114,7 +114,7 @@ const facets = (overrides: Partial<AssetFacets> = {}): AssetFacets => ({
   trash: 0,
   missing: 0,
   kinds: { image: 3, video: 0, audio: 0, "3d": 0 },
-  origins: { generated: 3, edited: 0 },
+  origins: { generated: 3, edited: 0, uploaded: 0 },
   models: [],
   tags: [],
   workflows: [],
@@ -216,6 +216,56 @@ describe("AssetsView", () => {
     expect(within(panel).queryByRole("button", { name: /Open workflow|Open project/ })).toBeNull();
   });
 
+  it("lists an upload by its name, says it was uploaded, and offers no workflow or node for it", async () => {
+    const upload = (id: string, overrides: Partial<AssetView> = {}) =>
+      asset(id, {
+        kind: "video",
+        origin: "uploaded",
+        mime: "video/mp4",
+        ext: "mp4",
+        filename: `143205_upload_${id}.mp4`,
+        name: `${id} sunset.mp4`,
+        prompt: undefined,
+        model: undefined,
+        durationSec: 5,
+        hasPoster: true,
+        producer: { nodeId: "upload", nodeType: "upload", operation: "upload" },
+        workflowId: "uploads",
+        workflowName: "Uploads",
+        workflow: { id: "uploads", name: "Uploads", projectPath: null },
+        ...overrides,
+      });
+    const throughEdit = upload("a2", {
+      producer: { nodeId: "ed0000000000a1", nodeType: "editProject", nodeTitle: "Trip", operation: "upload" },
+      workflowId: "ed0000000000a1",
+      workflowName: "Trip",
+      workflow: { id: "ed0000000000a1", name: "Trip", projectPath: null },
+    });
+    await renderView([asset("a3"), throughEdit, upload("a1")]);
+    expect(document.querySelectorAll("[data-asset-tile]")).toHaveLength(3);
+    expect(tile("a1")).toHaveAttribute("aria-label", expect.stringContaining("a1 sunset.mp4"));
+
+    fireEvent.contextMenu(tile("a1"), { clientX: 10, clientY: 10 });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /Show in Finder/ })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /Open workflow|Open project/ })).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.click(tile("a1"));
+    const panel = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(panel).getByText("Video · Uploaded · 27 Sep 2026")).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "a1 sunset.mp4" })).toBeInTheDocument();
+    expect(within(panel).getByText("Uploads")).toBeInTheDocument();
+    expect(within(panel).queryByText("Node")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: /Open workflow|Open project/ })).toBeNull();
+
+    fireEvent.click(tile("a2"));
+    const edit = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(edit).getByText("Trip")).toBeInTheDocument();
+    expect(within(edit).queryByText("Node")).toBeNull();
+    expect(within(edit).queryByRole("button", { name: /Open workflow|Open project/ })).toBeNull();
+  });
+
   it("shows the bulk bar for a selection, and bulk Trash sends that selection", async () => {
     await renderView();
     fireEvent.click(tile("a3"), { metaKey: true });
@@ -257,6 +307,26 @@ describe("AssetsView", () => {
     await waitFor(() => expect(useAssetStore.getState().appView).toBe("canvas"));
     // Coming back lands on the grid, on that tile, not on the detail left behind
     expect(useAssetStore.getState()).toMatchObject({ detailId: null, detailAsset: null, focusedId: "a2" });
+  });
+
+  it("titles a renamed asset by its name, with its file's name under it, and no file line when it has no name or that name", async () => {
+    await renderView([asset("a3", { name: "a3.png" }), asset("a2", { name: "Opening shot" }), asset("a1")]);
+    expect(tile("a2")).toHaveAttribute("aria-label", expect.stringContaining("Opening shot"));
+    fireEvent.click(tile("a2"));
+    const panel = screen.getByRole("complementary", { name: "Asset details" });
+    const heading = within(panel).getByRole("heading", { name: "Opening shot" });
+    expect(heading).toHaveAttribute("title", "Opening shot");
+    expect(within(panel).getByText("a2.png")).toHaveAttribute("title", "a2.png");
+
+    fireEvent.click(tile("a1"));
+    const next = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(next).getByRole("heading", { name: "A cat called a1" })).toBeInTheDocument();
+    expect(within(next).queryByText("a1.png")).toBeNull();
+
+    fireEvent.click(tile("a3"));
+    const same = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(same).getByRole("heading", { name: "a3.png" })).toBeInTheDocument();
+    expect(within(same).getAllByText("a3.png")).toHaveLength(1);
   });
 
   it("offers a project asset its project, and the copy as it was when made", async () => {

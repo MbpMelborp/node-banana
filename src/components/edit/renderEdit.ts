@@ -55,16 +55,20 @@ function afterNodeDialog(then: () => void): void {
   });
 }
 
-function showInAssets(asset: AssetView): void {
-  afterNodeDialog(() => revealInAssets(asset));
+/**
+ * Show in Assets: the Assets view, with the asset's detail open. A render's toast shows one just made, which the list
+ * takes in as new; the media pane's ⋯ one the library already holds (`arrived: false`), which it must not.
+ */
+export function showInAssets(asset: AssetView, { arrived = true }: { arrived?: boolean } = {}): void {
+  afterNodeDialog(() => revealInAssets(asset, arrived));
 }
 
-function revealInAssets(asset: AssetView): void {
+function revealInAssets(asset: AssetView, arrived: boolean): void {
   const assets = useAssetStore.getState();
-  assets.receiveArrivals([asset]);
+  if (arrived) assets.receiveArrivals([asset]);
   assets.setAppView("assets");
   assets.openDetail(asset.id);
-  // Not on a loaded page (filters, or the view not loaded yet): the detail shows the record this render has
+  // Not on a loaded page (filters, the view not loaded yet, further down the list): the detail shows the record given
   if (useAssetStore.getState().detailAsset === null) useAssetStore.setState({ detailAsset: asset });
 }
 

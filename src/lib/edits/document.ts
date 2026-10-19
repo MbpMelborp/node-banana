@@ -1,10 +1,12 @@
 /**
  * Pure functions over edit documents, shared by the server and the browser:
- * reading a file's JSON, the sequence ⇄ editor draft, the asset snapshot,
- * the summary and names. Nothing here reads the clock, the DOM or the disk.
+ * reading a file's JSON, the sequence ⇄ editor draft, the media, the asset
+ * snapshot, the summary and names. Nothing here reads the clock, the DOM or
+ * the disk.
  */
 
 import { baseName } from "@/components/assets/assetFormat";
+import { assetName } from "@/lib/assets/name";
 import { ASSET_ID_PATTERN, type AssetView } from "@/lib/assets/types";
 import { compactAudioRows, sanitizeAudioClips } from "@/lib/stitch/audioClips";
 import { draftDuration, readSequenceLayout, type StitchDraft } from "@/lib/stitch/draft";
@@ -49,6 +51,7 @@ export function parseEditDocument(raw: unknown): ParsedEdit {
   if (fields.version !== EDIT_VERSION || id === null || name === null) return fail("unreadable");
   if (!finite(fields.createdAt) || !finite(fields.updatedAt) || !isFields(fields.sequence)) return fail("unreadable");
   const sequence = sanitizeEditSequence(fields.sequence);
+  const media = sanitizeEditMedia(fields.media, sequence);
   return {
     ok: true,
     document: {
@@ -59,7 +62,8 @@ export function parseEditDocument(raw: unknown): ParsedEdit {
       createdAt: fields.createdAt,
       updatedAt: fields.updatedAt,
       sequence,
-      assets: sanitizeEditAssets(fields.assets, sequence),
+      media,
+      assets: sanitizeEditAssets(fields.assets, media),
       renders: sanitizeEditRenders(fields.renders),
       summary: sanitizeEditSummary(fields.summary, sequence),
     },
@@ -84,10 +88,13 @@ export function emptyEditSequence(): EditSequence {
   return { timeline: [], audioClips: [], loopCount: 1, sequenceLayout: { ...DEFAULT_SEQUENCE_LAYOUT } };
 }
 
-/** The editor's draft for an edit: the sequence, with the node-only legacy audio at its neutral value. */
-export function draftFromEditSequence(seq: EditSequence): StitchDraft {
+/**
+ * The editor's draft for an edit: the sequence, its media (sanitizeEditMedia: the sequence's assets when none is
+ * given), and the node-only legacy audio at its neutral value.
+ */
+export function draftFromEditSequence(seq: EditSequence, media?: readonly string[]): StitchDraft {
   const clean = sanitizeEditSequence(seq);
-  return { ...clean, legacyAudio: { curve: [], muted: false } };
+  return { ...clean, legacyAudio: { curve: [], muted: false }, media: sanitizeEditMedia(media, clean) };
 }
 
 /** The inverse. Keeps asset sources only (an edit's draft has no other by construction) and compacts the audio rows. */
@@ -108,9 +115,41 @@ export function editAssetIds(seq: Pick<EditSequence, "timeline" | "audioClips">)
   return [...ids];
 }
 
+/** `media`, then the asset ids the sequence uses that it lacks, in first-use order. */
+function withSequenceAssets(media: readonly string[], seq: Pick<EditSequence, "timeline" | "audioClips">): string[] {
+  const have = new Set(media);
+  return [...media, ...editAssetIds(seq).filter((id) => !have.has(id))];
+}
+
+/**
+ * A stored or sent media list: asset ids only, once each, in their order, then any asset the sequence uses that it
+ * lacks. Not an array (a file saved before edits had media) → the sequence's assets in first-use order.
+ */
+export function sanitizeEditMedia(raw: unknown, seq: Pick<EditSequence, "timeline" | "audioClips">): string[] {
+  if (!Array.isArray(raw)) return editAssetIds(seq);
+  const ids = new Set<string>();
+  for (const id of raw as unknown[]) if (typeof id === "string" && ASSET_ID_PATTERN.test(id)) ids.add(id);
+  return withSequenceAssets([...ids], seq);
+}
+
+/** What a save sends as the edit's media: the draft's, with any asset its clips use that it lacks appended. */
+export function editMediaOf(draft: Pick<StitchDraft, "media" | "timeline" | "audioClips">): string[] {
+  return withSequenceAssets(draft.media ?? [], draft);
+}
+
+/**
+ * An edit's draft whose media lacks an asset its clips use, with it appended (a clip added from anywhere brings its
+ * asset into the edit). The same draft when nothing is missing, or for a node's draft (no media).
+ */
+export function coverEditMedia(draft: StitchDraft): StitchDraft {
+  if (draft.media === undefined) return draft;
+  const media = withSequenceAssets(draft.media, draft);
+  return media.length === draft.media.length ? draft : { ...draft, media };
+}
+
 function snapshotFromView(view: AssetView, kind: EditAssetSnapshot["kind"]): EditAssetSnapshot {
   return {
-    name: view.filename,
+    name: assetName(view),
     kind,
     project: view.workflow.projectPath ? baseName(view.workflow.projectPath) : null,
     durationSec: finite(view.durationSec) ? view.durationSec : null,
@@ -118,8 +157,8 @@ function snapshotFromView(view: AssetView, kind: EditAssetSnapshot["kind"]): Edi
 }
 
 /**
- * The snapshot to save: for each id in use, the library record's facts when the record is known, else the previous
- * snapshot's entry (unknown or gone). Ids no longer used are dropped. Never invents an entry.
+ * The snapshot to save: for each id in the edit's media, the library record's facts when the record is known, else
+ * the previous snapshot's entry (unknown or gone). Ids no longer in it are dropped. Never invents an entry.
  */
 export function snapshotEditAssets(
   ids: readonly string[],
@@ -158,11 +197,11 @@ function roundMs(sec: number): number {
   return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) / 1000 : 0;
 }
 
-/** Snapshot entries for ids the sequence uses, each field checked; anything else is dropped. */
-export function sanitizeEditAssets(raw: unknown, seq: EditSequence): Record<string, EditAssetSnapshot> {
+/** Snapshot entries for the given ids (the edit's media), each field checked; anything else is dropped. */
+export function sanitizeEditAssets(raw: unknown, ids: readonly string[]): Record<string, EditAssetSnapshot> {
   const out: Record<string, EditAssetSnapshot> = {};
   if (!isFields(raw)) return out;
-  for (const id of editAssetIds(seq)) {
+  for (const id of ids) {
     const entry = Object.hasOwn(raw, id) ? raw[id] : undefined;
     if (!isFields(entry) || typeof entry.name !== "string" || (entry.kind !== "video" && entry.kind !== "audio")) continue;
     out[id] = {

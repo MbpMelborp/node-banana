@@ -1,7 +1,7 @@
 import type { AssetKind, AssetPageRequest, AssetSort } from "@/lib/assets/types";
 
 /**
- * The Stitch editor's "Add from library" query, and the asset page request
+ * The Stitch editor's Add media query, and the asset page request
  * it becomes. Pure: the picker's hook sends what this builds.
  */
 
@@ -14,7 +14,7 @@ export interface LibraryVideoQuery {
   sort: AssetSort;
 }
 
-/** Which kinds a library list holds: the Edit video view's pane shows both, or one. */
+/** Which kinds a library list holds: both (the Edit video view's Add media), or one (a + on the timeline). */
 export type LibraryKind = "all" | "video" | "audio";
 
 const KINDS: Record<LibraryKind, readonly AssetKind[]> = { all: ["video", "audio"], video: ["video"], audio: ["audio"] };

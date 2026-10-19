@@ -33,7 +33,8 @@ export function editAutoSaveState(now: number = Date.now()): AutoSaveState {
   const session = currentEditSession();
   return {
     autoSaveEnabled: useWorkflowStore.getState().autoSaveEnabled && save.state !== "conflict" && save.state !== "gone",
-    hasUnsavedChanges: session ? dirtyOf(session.initial, session.draft) : false,
+    // A renamed media item's snapshot counts too: nothing else would send it
+    hasUnsavedChanges: session ? dirtyOf(session.initial, session.draft) || open?.snapshotStale === true : false,
     workflowId: open?.id,
     workflowName: open?.name,
     saveDirectoryPath: open ? "edits" : null,
