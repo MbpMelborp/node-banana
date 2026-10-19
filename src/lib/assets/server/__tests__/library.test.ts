@@ -29,7 +29,7 @@ import {
 import { Ingestor } from "../ingest";
 import { runCleanup, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
-import { fakeRecord, installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
+import { fakeRecord, installBridge, makePng, makeWav, meta, runId, sha256, streamOf, tempDir } from "./helpers";
 
 let base: string;
 let root: string;
@@ -167,6 +167,30 @@ describe("queries", () => {
     expect(second.assets.map((x) => x.id)).toEqual([d.asset.id]);
   });
 
+  it("lists an upload with everything else, finds it by its name, and counts it by origin", async () => {
+    const upload = await record(
+      {
+        createdAt: T0 + 4 * HOUR,
+        kind: "audio",
+        origin: "uploaded",
+        name: "Morning hum.wav",
+        prompt: undefined,
+        model: undefined,
+        producer: { nodeId: "upload", nodeType: "upload", operation: "upload" },
+        workflowId: "uploads",
+        workflowName: "Uploads",
+      },
+      makeWav(0.1),
+    );
+    expect(await ids()).toEqual([upload, d, c, b, a].map((r) => r.asset.id));
+    expect(await ids({ kinds: ["audio"] })).toEqual([upload.asset.id]);
+    expect(await ids({ origins: ["uploaded"] })).toEqual([upload.asset.id]);
+    expect(await ids({ q: "morning hum" })).toEqual([upload.asset.id]);
+    const facets = await getFacets();
+    expect(facets.origins).toEqual({ generated: 3, edited: 1, uploaded: 1 });
+    expect(facets.workflows.find((w) => w.id === "uploads")).toMatchObject({ name: "Uploads", count: 1 });
+  });
+
   it("rejects a forged cursor", async () => {
     await expect(listAssets({ cursor: "zz.../../x" })).rejects.toMatchObject({ status: 400 });
   });
@@ -179,7 +203,7 @@ describe("queries", () => {
     expect(facets.trash).toBe(1);
     expect(facets.favorites).toBe(1);
     expect(facets.kinds.image).toBe(3);
-    expect(facets.origins).toEqual({ generated: 3, edited: 0 });
+    expect(facets.origins).toEqual({ generated: 3, edited: 0, uploaded: 0 });
     expect(facets.models.find((m) => m.modelId === "nano-banana")?.count).toBe(3);
     expect(facets.tags).toEqual([
       { tag: "cover", count: 1 },

@@ -105,7 +105,7 @@ const facets = (projects: AssetFacets["projects"]): AssetFacets => ({
   trash: 0,
   missing: 0,
   kinds: { image: 0, video: 3, audio: 0, "3d": 0 },
-  origins: { generated: 3, edited: 0 },
+  origins: { generated: 3, edited: 0, uploaded: 0 },
   models: [],
   tags: [],
   workflows: [],

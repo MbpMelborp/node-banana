@@ -494,6 +494,12 @@ export function validateRecordMeta(value: unknown, now: number = Date.now()): Re
   };
   const mime = optionalString(value.mime, "mime");
   if (mime) meta.mime = clip(mime, 128);
+  const name = optionalString(value.name, "name");
+  if (name !== undefined) {
+    const problem = assetNameProblem(name);
+    if (problem) throw new LibraryError(problem.replace(/\.$/, ""), 400, "bad_request");
+    if (name.trim()) meta.name = name.trim();
+  }
   const prompt = optionalString(value.prompt, "prompt");
   if (prompt) meta.prompt = prompt;
   if (value.model !== undefined && value.model !== null) {

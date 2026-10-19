@@ -138,6 +138,28 @@ describe("recording into the library", () => {
     expect(audio.asset.durationSec).toBeCloseTo(0.25, 2);
   });
 
+  it("records an upload under the name it came with, the file named by the library, and the same file twice as two records", async () => {
+    const upload = {
+      kind: "video" as const,
+      origin: "uploaded" as const,
+      name: "sunset.mp4",
+      prompt: undefined,
+      model: undefined,
+      producer: { nodeId: "upload", nodeType: "upload", operation: "upload" },
+      workflowId: "uploads",
+      workflowName: "Uploads",
+    };
+    const first = await record(TINY_MP4, upload, "video/mp4");
+    expect(first.asset).toMatchObject({ kind: "video", origin: "uploaded", name: "sunset.mp4", workflowName: "Uploads" });
+    expect(first.asset.filename).toMatch(/^\d{6}_upload_[0-9a-f]{8}\.mp4$/);
+    const sidecar = JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "assets", `${first.asset.id}.json`), "utf8"));
+    expect(sidecar).toMatchObject({ origin: "uploaded", name: "sunset.mp4" });
+
+    const again = await record(TINY_MP4, upload, "video/mp4");
+    expect(again.asset.id).not.toBe(first.asset.id);
+    expect(again).toMatchObject({ reusedFile: true, filename: first.asset.filename, asset: { name: "sunset.mp4" } });
+  });
+
   it("keeps the client's dimensions when the file can't be measured", async () => {
     const result = await record(Buffer.from("v 0 0 0\n"), { kind: "3d", mime: "model/obj", width: 100, height: 50 }, "model/obj");
     expect(result.asset).toMatchObject({ kind: "3d", ext: "obj", width: 100, height: 50 });

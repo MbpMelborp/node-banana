@@ -9,6 +9,7 @@ import {
   formatDateTime,
   formatDuration,
   formatRelativeDate,
+  operationLabel,
   projectLabel,
   revealLabel,
   shortLibraryPath,
@@ -126,5 +127,16 @@ describe("labels", () => {
     expect(
       assetEyebrow({ kind: "video", origin: "edited", createdAt: NOW, producer: { nodeId: "n", nodeType: "videoTrim", operation: "trim" } }),
     ).toBe("Video · Trimmed · 27 Sep 2026");
+    expect(
+      assetEyebrow({ kind: "audio", origin: "uploaded", createdAt: NOW, producer: { nodeId: "upload", nodeType: "upload", operation: "upload" } }),
+    ).toBe("Audio · Uploaded · 27 Sep 2026");
+  });
+
+  it("titles an upload by the name it came with, else by its kind and where it came in", () => {
+    const upload = { prompt: undefined, filename: "143205_upload_ab12cd34.mp4", kind: "video" as const, origin: "uploaded" as const, producer: { nodeId: "upload", nodeType: "upload", operation: "upload" }, workflowName: "Uploads" };
+    expect(assetTitle({ ...upload, name: "sunset.mp4" })).toBe("sunset.mp4");
+    expect(assetTitle(upload)).toBe("Video · Uploads");
+    // The Edit video view's rail names an upload by how it came in
+    expect(operationLabel("upload")).toBe("Upload");
   });
 });

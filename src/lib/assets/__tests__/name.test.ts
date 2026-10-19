@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { ASSET_NAME_MAX, assetName, assetNameProblem, cleanAssetName } from "../name";
+import { ASSET_NAME_MAX, assetName, assetNameProblem, cleanAssetName, oneLineName } from "../name";
 
 describe("assetName", () => {
   it("is the display name when there is one, else the file's name", () => {
@@ -27,6 +27,15 @@ describe("assetNameProblem", () => {
     expect(assetNameProblem("Sun\u2028set")).toBe("name must be one line.");
     expect(assetNameProblem("Sun\u2029set")).toBe("name must be one line.");
     expect(assetNameProblem("Sun\nset", "title")).toBe("title must be one line.");
+  });
+});
+
+describe("oneLineName", () => {
+  it("makes each run of line breaks one space, leaving a one-line value as it is", () => {
+    expect(oneLineName("Day one\r\nfinal.mov")).toBe("Day one final.mov");
+    expect(oneLineName("a b c\rd")).toBe("a b c d");
+    expect(oneLineName(" Sunset.mp4 ")).toBe(" Sunset.mp4 ");
+    expect(assetNameProblem(oneLineName("Sun\n\nset"))).toBeNull();
   });
 });
 

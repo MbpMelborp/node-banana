@@ -10,6 +10,7 @@ import type { AssetRecord } from "./types";
 export const ASSET_NAME_MAX = 120;
 
 const LINE_BREAK = /[\r\n\u2028\u2029]/;
+const LINE_BREAKS = new RegExp(`${LINE_BREAK.source}+`, "g");
 
 /** What a list, a tooltip or an edit's snapshot calls an asset: its display name, else its file's name. */
 export function assetName(asset: Pick<AssetRecord, "name" | "filename">): string {
@@ -25,6 +26,11 @@ export function assetNameProblem(value: string, field = "name"): string | null {
   if (name.length > ASSET_NAME_MAX) return `${field} is longer than ${ASSET_NAME_MAX} characters.`;
   if (LINE_BREAK.test(name)) return `${field} must be one line.`;
   return null;
+}
+
+/** The value on one line: each run of line breaks becomes a space. */
+export function oneLineName(value: string): string {
+  return value.replace(LINE_BREAKS, " ");
 }
 
 /** A stored display name, trimmed, when it is one a rename could have set; else undefined. */

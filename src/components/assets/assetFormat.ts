@@ -128,9 +128,9 @@ export function formatDimensions(width?: number, height?: number): string | null
 
 export const KIND_LABELS: Record<AssetKind, string> = { image: "Image", video: "Video", audio: "Audio", "3d": "3D" };
 export const KIND_PLURALS: Record<AssetKind, string> = { image: "Images", video: "Videos", audio: "Audio", "3d": "3D" };
-export const ORIGIN_LABELS: Record<AssetOrigin, string> = { generated: "Generated", edited: "Edited" };
+export const ORIGIN_LABELS: Record<AssetOrigin, string> = { generated: "Generated", edited: "Edited", uploaded: "Uploaded" };
 
-/** What an edited asset did, in words: "resize" → "Resized". */
+/** What an edited asset did, or how an upload came in, in words: "resize" → "Resized". */
 const OPERATION_LABELS: Record<string, string> = {
   annotate: "Annotated",
   removeBackground: "Background removed",
@@ -142,6 +142,7 @@ const OPERATION_LABELS: Record<string, string> = {
   frameGrab: "Frame grab",
   splitGrid: "Grid split",
   splitToNodes: "Split to nodes",
+  upload: "Upload",
 };
 
 export function operationLabel(operation?: string): string | null {
@@ -191,9 +192,14 @@ export function assetTitle(
   return [made, cell, workflow].filter(Boolean).join(" · ");
 }
 
-/** Eyebrow over the detail title: "Image · Generated · 27 Sep 2026". */
+/** Eyebrow over the detail title: "Image · Generated · 27 Sep 2026", "Video · Uploaded · 20 Oct 2026". */
 export function assetEyebrow(asset: Pick<AssetView, "kind" | "origin" | "createdAt" | "producer">): string {
-  const origin = asset.origin === "edited" ? operationLabel(asset.producer.operation) ?? ORIGIN_LABELS.edited : ORIGIN_LABELS.generated;
+  const origin =
+    asset.origin === "edited"
+      ? operationLabel(asset.producer.operation) ?? ORIGIN_LABELS.edited
+      : asset.origin === "uploaded"
+        ? ORIGIN_LABELS.uploaded
+        : ORIGIN_LABELS.generated;
   const d = new Date(asset.createdAt);
   return [KIND_LABELS[asset.kind], origin, `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`].join(" · ");
 }

@@ -99,6 +99,16 @@ describe("parseRecordRequest", () => {
     expect(request.meta.projectDir).toBeNull();
   });
 
+  it("takes an upload with the display name it is recorded under, trimmed, and drops an empty one", () => {
+    const upload = parseRecordRequest({
+      meta: meta({ kind: "video", origin: "uploaded", name: "  sunset.mp4 ", producer: { nodeId: "upload", nodeType: "upload", operation: "upload" } }),
+      source: { type: "upload" },
+    });
+    expect(upload.meta).toMatchObject({ kind: "video", origin: "uploaded", name: "sunset.mp4" });
+    expect(parseRecordRequest({ meta: meta({ name: "  " }), source: { type: "upload" } }).meta).not.toHaveProperty("name");
+    expect(parseRecordRequest({ meta: meta(), source: { type: "upload" } }).meta).not.toHaveProperty("name");
+  });
+
   it("refuses ids, kinds and sources that do not fit the contract", () => {
     const cases: [unknown, RegExp][] = [
       [null, /must be an object/],
@@ -107,6 +117,9 @@ describe("parseRecordRequest", () => {
       [{ meta: meta({ workflowId: "has space" }), source: { type: "upload" } }, /meta\.workflowId/],
       [{ meta: meta({ kind: "pdf" }), source: { type: "upload" } }, /meta\.kind/],
       [{ meta: meta({ origin: "found" }), source: { type: "upload" } }, /meta\.origin/],
+      [{ meta: meta({ name: 4 }), source: { type: "upload" } }, /meta\.name must be a string/],
+      [{ meta: meta({ name: "x".repeat(121) }), source: { type: "upload" } }, /meta\.name is longer than 120 characters/],
+      [{ meta: meta({ name: "Day one\nfinal.mov" }), source: { type: "upload" } }, /meta\.name must be one line/],
       [{ meta: meta({ createdAt: "today" }), source: { type: "upload" } }, /meta\.createdAt/],
       [{ meta: meta({ producer: { nodeId: "n1" } }), source: { type: "upload" } }, /meta\.producer\.nodeType/],
       [{ meta: meta({ producer: { nodeId: "n1", nodeType: "x", batchIndex: 1.5 } }), source: { type: "upload" } }, /batchIndex/],

@@ -381,7 +381,10 @@ function DetailPanel({ asset }: { asset: AssetView }) {
           <DetailRow label="Created">{formatDateTime(asset.createdAt)}</DetailRow>
           <DetailRow label="Workflow">{workflowLabel(asset.workflow.name ?? asset.workflowName, workflowAt)}</DetailRow>
           <DetailRow label="Project">{asset.workflow.projectPath ? projectLabel(asset.workflow.projectPath) : "Not in a project"}</DetailRow>
-          <DetailRow label="Node">{asset.origin === "edited" && asset.producer.operation ? `${node} · ${operationLabel(asset.producer.operation)}` : node}</DetailRow>
+          {/* No node made an upload; its Workflow row says where it came in */}
+          {asset.origin !== "uploaded" && (
+            <DetailRow label="Node">{asset.origin === "edited" && asset.producer.operation ? `${node} · ${operationLabel(asset.producer.operation)}` : node}</DetailRow>
+          )}
           <DetailRow label="Model">{modelLabel(asset.model)}</DetailRow>
           <DetailRow label="Dimensions">{formatDimensions(asset.width, asset.height)}</DetailRow>
           <DetailRow label="Duration">{asset.durationSec ? formatDuration(asset.durationSec) : null}</DetailRow>

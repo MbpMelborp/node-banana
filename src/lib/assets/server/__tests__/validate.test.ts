@@ -145,6 +145,22 @@ describe("validateRecordMeta", () => {
     expect(validateRecordMeta({ ...valid, createdAt: 5 }, now).createdAt).toBe(now);
   });
 
+  it("takes an upload, and the display name it is recorded under, trimmed; an empty name is none", () => {
+    expect(validateRecordMeta({ ...valid, kind: "video", origin: "uploaded", name: " sunset.mp4 " })).toMatchObject({
+      origin: "uploaded",
+      name: "sunset.mp4",
+    });
+    expect(validateRecordMeta({ ...valid, name: "   " })).not.toHaveProperty("name");
+    expect(validateRecordMeta({ ...valid, name: null })).not.toHaveProperty("name");
+  });
+
+  it("refuses a display name that a rename could not set", () => {
+    expect(() => validateRecordMeta({ ...valid, name: 4 })).toThrow("name must be a string");
+    expect(() => validateRecordMeta({ ...valid, name: "x".repeat(121) })).toThrow("name is longer than 120 characters");
+    expect(() => validateRecordMeta({ ...valid, name: "a\u2028b" })).toThrow("name must be one line");
+    expect(() => validateRecordMeta({ ...valid, origin: "found" })).toThrow("Invalid origin");
+  });
+
   it("keeps a batch tag that holds up and drops one that does not", () => {
     const batch = { id: "batch-1", index: 3, count: 10 };
     expect(validateRecordMeta({ ...valid, batch }).batch).toEqual(batch);

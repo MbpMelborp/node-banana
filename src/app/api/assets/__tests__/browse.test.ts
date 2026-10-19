@@ -88,6 +88,13 @@ describe("POST /api/assets", () => {
     expect(vi.mocked(facade.beginRecord).mock.calls[0][0].meta).toMatchObject({ id: ASSET_ID, runId: RUN_ID });
   });
 
+  it("passes an upload's origin and display name through", async () => {
+    vi.mocked(facade.beginRecord).mockResolvedValue({ ticket: { uploadId: "up_1", expiresAt: 9 } });
+    const response = await record(page("/api/assets", { json: recordBody({ kind: "video", origin: "uploaded", name: "sunset.mp4" }) }));
+    expect(response.status).toBe(200);
+    expect(vi.mocked(facade.beginRecord).mock.calls[0][0].meta).toMatchObject({ kind: "video", origin: "uploaded", name: "sunset.mp4" });
+  });
+
   it("answers the result for a url source", async () => {
     const result = { asset: assetView(), filename: "x.png", legacyId: "x", reusedFile: false };
     vi.mocked(facade.beginRecord).mockResolvedValue({ result });

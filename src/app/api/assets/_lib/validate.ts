@@ -199,6 +199,10 @@ function recordMeta(value: unknown): RecordAssetMeta {
     const v = optionalString(m[key], `meta.${key}`);
     if (v !== undefined) meta[key] = v;
   }
+  if (m.name !== undefined) {
+    const name = displayName(m.name, "meta.name");
+    if (name) meta.name = name;
+  }
   if (m.model !== undefined) meta.model = modelRef(m.model, "meta.model");
   if (m.parameters !== undefined) meta.parameters = object(m.parameters, "meta.parameters");
   if (m.cost !== undefined) {

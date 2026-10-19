@@ -369,6 +369,7 @@ export class Ingestor {
         md5: streamed.md5,
         file: location,
         filename,
+        name: meta.name,
         ...(measured.width && measured.height
           ? { width: measured.width, height: measured.height }
           : meta.width && meta.height

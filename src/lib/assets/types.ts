@@ -43,10 +43,11 @@ export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 export const WORKFLOW_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export type AssetKind = "image" | "video" | "audio" | "3d";
-export type AssetOrigin = "generated" | "edited";
+/** `uploaded`: a file the user added from their computer (the Edit video view's Add media and drop). */
+export type AssetOrigin = "generated" | "edited" | "uploaded";
 
 export const ASSET_KINDS: readonly AssetKind[] = ["image", "video", "audio", "3d"];
-export const ASSET_ORIGINS: readonly AssetOrigin[] = ["generated", "edited"];
+export const ASSET_ORIGINS: readonly AssetOrigin[] = ["generated", "edited", "uploaded"];
 
 /* ------------------------------------------------------------------ */
 /* Records                                                             */
@@ -303,6 +304,8 @@ export interface RecordAssetMeta {
   /** MIME type hint from the client (the server sniffs and may override). */
   mime?: string;
   createdAt: number;
+  /** The display name to record it under (an upload's own file name); the library file gets its own name. */
+  name?: string;
   prompt?: string;
   model?: AssetModelRef;
   parameters?: Record<string, unknown>;
@@ -644,6 +647,8 @@ export interface RecordAssetInput {
    */
   media: string | Blob;
   mime?: string;
+  /** The display name (`AssetRecord.name`). */
+  name?: string;
   prompt?: string;
   model?: AssetModelRef;
   parameters?: Record<string, unknown>;

@@ -138,7 +138,7 @@ const facets: AssetFacets = {
   trash: 0,
   missing: 0,
   kinds: { image: 0, video: 3, audio: 1, "3d": 0 },
-  origins: { generated: 4, edited: 0 },
+  origins: { generated: 4, edited: 0, uploaded: 0 },
   models: [],
   tags: [],
   workflows: [],
