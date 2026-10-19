@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type RefObject,
   type UIEvent,
 } from "react";
 import { cn } from "@/components/nodes/ui/cn";
@@ -154,7 +153,9 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
  * Track | Stacked does, which would move the control row (the toggle in it)
  * from under the pointer: while the pointer is over that row the editor
  * holds the height the timeline had (heldHeight), and it settles once the
- * pointer leaves. The audio section is the same in both layouts: its rows
+ * pointer leaves. Its top edge drags it taller or shorter (chosenHeight,
+ * TimelineResizeHandle): the rows' views grow into the room past their caps,
+ * Stacked's rows first. The audio section is the same in both layouts: its rows
  * scroll inside it by a translate this component owns (audioScroll), shared
  * with their controls. A row's volume-curve toggle expands it upward with
  * the scroll corrected, so the toggle stays under the pointer.
@@ -196,7 +197,8 @@ export function Timeline({
   stacked = false,
   maxHeight = Infinity,
   heldHeight = null,
-  heightRef,
+  chosenHeight = null,
+  onHeight,
 }: {
   spans: readonly ClipSpan[];
   media: ReadonlyMap<string, ClipMediaView>;
@@ -211,8 +213,10 @@ export function Timeline({
   maxHeight?: number;
   /** The height to keep while the pointer is over the control row (what heightRef read as it came in); null otherwise. */
   heldHeight?: number | null;
-  /** Where the timeline writes the height it is drawn at, for the editor's hold. */
-  heightRef?: RefObject<number>;
+  /** The height its top edge was dragged to, a scrollbar's room included; null fits the rows. */
+  chosenHeight?: number | null;
+  /** Told the height the timeline is drawn at as it changes (the editor's hold and its resize handle). */
+  onHeight?: (height: number) => void;
 }) {
   const { axis, axisNow, scroller, scrollerRef, laneWidth, scrollPosition } = zoom;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -271,8 +275,8 @@ export function Timeline({
     return live === spans ? axis : buildTimeAxis(live, axis.pxPerSec, GEOMETRY.origin, GEOMETRY.emptySlot);
   }, [stacked, axis, spans, trim]);
 
-  // The height: what the layout in use needs within the room the editor leaves, whatever is selected; while the
-  // pointer is over the control row, the height it had then. Under the rows it keeps room for a horizontal scrollbar
+  // The height: what the layout in use needs within the room the editor leaves, whatever is selected, or the height
+  // its top edge was dragged to; while the pointer is over the control row, the height it had then. Under the rows it keeps room for a horizontal scrollbar
   // where the system draws one beside the content (none where it is drawn over it), shown or not: zooming in past Fit
   // then changes no height, and moves nothing above
   const audioRowTotal = audioRowCount(audioClips);
@@ -281,13 +285,21 @@ export function Timeline({
   const reserve = Math.max(measured?.bar ?? 0, hBar);
   const room = Math.min(maxHeight, heldHeight ?? Infinity) - reserve;
   const sized = useMemo(
-    () => timelineLayout(spans.length, audioRowTotal, expandedRow, stacked, room),
-    [spans.length, audioRowTotal, expandedRow, stacked, room],
+    () =>
+      timelineLayout(
+        spans.length,
+        audioRowTotal,
+        expandedRow,
+        stacked,
+        room,
+        chosenHeight === null ? null : chosenHeight - reserve,
+      ),
+    [spans.length, audioRowTotal, expandedRow, stacked, room, chosenHeight, reserve],
   );
   const height = Math.max(sized.height + reserve, heldHeight === null ? 0 : Math.min(heldHeight, maxHeight));
   useLayoutEffect(() => {
-    if (heightRef) heightRef.current = height;
-  });
+    onHeight?.(height);
+  }, [onHeight, height]);
   const audioLayout = sized.audio;
   const [audioScrollState, setAudioScroll] = useState(0);
   const audioScroll = clampAudioScroll(audioScrollState, audioLayout);

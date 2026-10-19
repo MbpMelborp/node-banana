@@ -51,6 +51,24 @@ describe("timelineLayout", () => {
     expect(timelineLayout(4, 3, 0, true, 1000)).toEqual(wanted);
   });
 
+  it("takes a chosen height: the rows' views grow past their caps into it, Stacked's first, and give way under it", () => {
+    // Stacked, six clips and three audio rows: 182 + 104 by default, 343 in all
+    const grown = timelineLayout(6, 3, null, true, Infinity, 500);
+    expect(grown.height).toBe(500);
+    // 157 to spare: the rows view takes all six rows (312), the audio view the 27 left
+    expect(grown.videoHeight).toBe(312);
+    expect(grown.audio.viewHeight).toBe(104 + 27);
+    // Track's clips row stays; the audio view shows every row, and the rest stays empty
+    const track = timelineLayout(6, 3, null, false, Infinity, 500);
+    expect(track).toMatchObject({ height: 500, videoHeight: 80 });
+    expect(track.audio).toMatchObject({ viewHeight: 156, maxScroll: 0 });
+    // Under what the rows need they give way as under the cap
+    expect(timelineLayout(4, 3, 0, true, Infinity, 360)).toEqual(timelineLayout(4, 3, 0, true, 360));
+    // Within the cap, and never below 189
+    expect(timelineLayout(6, 3, null, true, 400, 500).height).toBe(400);
+    expect(timelineLayout(6, 3, null, true, Infinity, 50).height).toBe(189);
+  });
+
   it("keeps Track's clips row whole under the cap and gives up audio rows instead", () => {
     const capped = timelineLayout(4, 3, 0, false, 300);
     expect(capped).toMatchObject({ height: 300, videoHeight: 80 });

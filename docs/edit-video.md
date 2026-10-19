@@ -700,6 +700,16 @@ Stacked's rows give way first, down to one and a half, then the audio
 rows, down to one; the stage keeps at least 344 px, its control row
 included (a 240 px video).
 
+**Resizing it.** The timeline's top edge is a handle: drag it up for a
+taller timeline (the stage gives up the room, down to its 344 px) or down
+for a shorter one (down to 189 px). With the handle focused, ↑ and ↓ move
+it 8 px, ⇧↑ and ⇧↓ 64 px. In the extra room Stacked's rows show past three
+and a half, then the audio rows past two; what is left stays empty between
+the video and the audio. Under what the rows need, they give way as in a
+short window. The height chosen stays through a switch of Track | Stacked
+while the editor is open, and a double-click on the edge lets the timeline
+fit its rows again.
+
 ## Several clips
 
 **Selecting.** A click on a clip selects it alone. ⌘-click (Ctrl-click on

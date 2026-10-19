@@ -19,14 +19,22 @@ export interface AudioSectionLayout {
   rowTops: number[];
   rowHeights: number[];
   rowsHeight: number;
-  /** min(rowsHeight, the two-row cap (taller by the expanded row's extra when one is expanded), maxView); at least one row. */
+  /** min(rowsHeight, the rows cap (taller by the expanded row's extra when one is expanded), maxView); at least one row. */
   viewHeight: number;
   sectionHeight: number;
   maxScroll: number;
 }
 
-/** rowCount 0 draws one placeholder row. maxView: what the timeline's height cap leaves for the rows (Infinity when uncapped). */
-export function audioSectionLayout(rowCount: number, expandedRow: number | null, maxView = Infinity): AudioSectionLayout {
+/**
+ * rowCount 0 draws one placeholder row. maxView: what the timeline's height cap leaves for the rows (Infinity when
+ * uncapped). rowsCap: the rows shown before the rest scroll (more when the timeline is dragged taller).
+ */
+export function audioSectionLayout(
+  rowCount: number,
+  expandedRow: number | null,
+  maxView = Infinity,
+  rowsCap = AUDIO_ROWS_CAP,
+): AudioSectionLayout {
   const rows = Math.max(1, Math.floor(Number.isFinite(rowCount) ? rowCount : 0));
   const expanded = expandedRow !== null && expandedRow >= 0 && expandedRow < rows ? expandedRow : null;
   const rowHeights = Array.from({ length: rows }, (_, row) => (row === expanded ? AUDIO_ROW_EXPANDED_PX : AUDIO_ROW_PX));
@@ -36,7 +44,7 @@ export function audioSectionLayout(rowCount: number, expandedRow: number | null,
     rowTops.push(rowsHeight);
     rowsHeight += height;
   }
-  const cap = AUDIO_ROWS_CAP * AUDIO_ROW_PX + (expanded !== null ? AUDIO_ROW_EXPANDED_PX - AUDIO_ROW_PX : 0);
+  const cap = rowsCap * AUDIO_ROW_PX + (expanded !== null ? AUDIO_ROW_EXPANDED_PX - AUDIO_ROW_PX : 0);
   const viewHeight = Math.max(AUDIO_ROW_PX, Math.min(rowsHeight, cap, Number.isNaN(maxView) ? Infinity : maxView));
   return {
     rowTops,
