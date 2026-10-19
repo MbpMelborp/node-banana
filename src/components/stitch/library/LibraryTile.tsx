@@ -82,7 +82,7 @@ export function usePosterRequest(asset: AssetView | null | undefined, needsPoste
 }
 
 /** A chip on a cover: its length at rest, its name on keyboard focus. */
-const COVER_CHIP = "rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none text-neutral-100";
+export const COVER_CHIP = "rounded bg-pane/60 px-1 py-0.5 text-[10px] font-medium leading-none text-neutral-100";
 
 /** A cover's length, in whole seconds, at its bottom right: the one thing drawn on it at rest. */
 export function CoverLength({ seconds }: { seconds: number }) {

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
@@ -50,6 +51,7 @@ import {
 } from "@/components/stitch/editorStyles";
 import {
   BlankCover,
+  COVER_CHIP,
   CoverImage,
   CoverLength,
   LIBRARY_ADD_HINT,
@@ -63,6 +65,7 @@ import { useEditProjectStore, type EditPaneLayout } from "@/store/editProjectSto
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { EditNameField } from "./EditNameField";
 import { Sheet } from "./EditSheets";
+import { addFilesToEdit, useMediaUploads, type PendingMedia } from "./mediaUploads";
 import { showInAssets } from "./renderEdit";
 import { useLibraryDrag, useLibraryDragGhost } from "./useLibraryDrag";
 
@@ -79,6 +82,14 @@ const LIST_COVER_WIDTH = 56;
 const MENU_PX = 140;
 /** Marks the pane's scroller, which a ⋯ menu measures its room in. */
 const MEDIA_SCROLLER = "data-media-scroller";
+/** A sound's cover in a list row: its glyph on the slot ground. */
+const SOUND_COVER = "flex h-8 w-14 shrink-0 items-center justify-center rounded bg-edit-slot";
+const ADDING = "Adding…";
+/**
+ * A file drag over the pane hears dragover every few hundred ms, even holding still: after this long without one it
+ * has gone, also when a row it entered was replaced under it (which hears no dragleave).
+ */
+const FILE_DRAG_GONE_MS = 1_000;
 
 const VIDEO_ITEM = { assetId: "", kind: "video", durationSec: null } as const;
 
@@ -120,6 +131,75 @@ function useVideoAddBlocked(): string | null {
   return useStitchEditorStore((s) => libraryAddBlockedReason(VIDEO_ITEM, s));
 }
 
+/**
+ * Only a drag of files from the computer over the pane itself: a pane item's own drag is pointer events, never one of
+ * these, and the events of a sheet the pane opens reach it too, though the sheet is portalled elsewhere.
+ */
+const isFileDrag = (event: ReactDragEvent) =>
+  event.currentTarget.contains(event.target as Node) && Array.from(event.dataTransfer?.types ?? []).includes("Files");
+
+/** Files dropped on the pane go into the edit it shows. */
+function dropFiles(files: File[]): void {
+  const editId = useStitchEditorStore.getState().editId;
+  if (editId === null || files.length === 0) return;
+  const open = useEditProjectStore.getState().open;
+  addFilesToEdit(files, { editId, editName: open?.id === editId ? open.name : undefined });
+}
+
+/**
+ * The pane as a drop target for files from the computer: whether a file drag is over it, and the handlers. Entering
+ * and leaving its rows fires on the pane too, so it counts them.
+ */
+function useFileDrop() {
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  const gone = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (gone.current !== null) window.clearTimeout(gone.current);
+  }, []);
+
+  const handlers = useMemo(() => {
+    const stop = () => {
+      depth.current = 0;
+      setOver(false);
+      if (gone.current !== null) window.clearTimeout(gone.current);
+      gone.current = null;
+    };
+    const stillOver = () => {
+      if (gone.current !== null) window.clearTimeout(gone.current);
+      gone.current = window.setTimeout(stop, FILE_DRAG_GONE_MS);
+    };
+    return {
+      onDragEnter: (event: ReactDragEvent) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        depth.current += 1;
+        setOver(true);
+        stillOver();
+      },
+      onDragOver: (event: ReactDragEvent) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        stillOver();
+      },
+      onDragLeave: (event: ReactDragEvent) => {
+        if (!isFileDrag(event)) return;
+        depth.current -= 1;
+        if (depth.current <= 0) stop();
+      },
+      onDrop: (event: ReactDragEvent) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        stop();
+        dropFiles(Array.from(event.dataTransfer.files ?? []));
+      },
+    };
+  }, []);
+  return { over, handlers };
+}
+
 /** The pane's open ⋯ menu and rename field, and what an item's add, rename and removal do. */
 interface ItemActions {
   selectedId: string | null;
@@ -152,18 +232,28 @@ interface ItemActions {
  * from the edit, with its clips (asking first when it has any). Add media
  * opens the library picker. An item the library has lost says so and can no
  * longer be placed.
+ *
+ * Video and audio files dropped on the pane from the computer (its empty
+ * state too) are recorded into the library and join the media; each shows
+ * after it as "Adding…" until it is in (`mediaUploads.ts`).
  */
 export function MediaPane() {
   const layout = useEditProjectStore((s) => s.pane.layout);
   const selectedId = useEditProjectStore((s) => s.mediaFocus.id);
   const reveal = useEditProjectStore((s) => s.mediaFocus.reveal);
   const snapshot = useEditProjectStore((s) => s.open?.assets);
+  const editId = useStitchEditorStore((s) => s.editId);
   const media = useStitchEditorStore((s) => s.draft?.media);
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);
   const audioClips = useStitchEditorStore((s) => s.draft?.audioClips);
+  const uploads = useMediaUploads((s) => s.uploads);
   const videoBlocked = useVideoAddBlocked();
   const drag = useLibraryDrag();
+  const fileDrop = useFileDrop();
   const version = useSyncExternalStore(subscribeAssetInfo, getAssetInfoVersion, getAssetInfoVersion);
+
+  // The files dropped on this edit that are not in its media yet, after it in the order they came
+  const pending = useMemo(() => uploads.filter((upload) => upload.editId === editId), [uploads, editId]);
 
   // The sequence's own are appended in case a draft lacks one: every asset a clip uses is the edit's
   const ids = useMemo(
@@ -268,7 +358,16 @@ export function MediaPane() {
   };
 
   return (
-    <aside aria-label="Media" data-edit-chrome className="flex w-[264px] shrink-0 flex-col border-r border-edit-line bg-pane">
+    <aside
+      aria-label="Media"
+      data-edit-chrome
+      {...fileDrop.handlers}
+      className={cn(
+        "relative flex w-[264px] shrink-0 flex-col border-r border-edit-line bg-pane",
+        // edit-line is lost on the pane's ground; this reads as a quiet frame
+        fileDrop.over && "ring-1 ring-inset ring-white/15",
+      )}
+    >
       <div className="flex h-14 shrink-0 items-center gap-0.5 pl-4 pr-2">
         <h2 className="mr-auto text-[13px] font-medium text-neutral-400">Media</h2>
         <div role="group" aria-label="Layout" className="flex shrink-0 items-center gap-0.5">
@@ -309,7 +408,7 @@ export function MediaPane() {
           <Tooltip label="Hide media" placement="bottom" />
         </div>
       </div>
-      {items.length === 0 ? (
+      {items.length === 0 && pending.length === 0 ? (
         // Centred in the pane's upper third
         <div className="grid min-h-0 flex-1 grid-rows-[1fr_2fr]">
           <div className="flex flex-col items-center justify-center gap-2 px-4 text-center">
@@ -327,11 +426,20 @@ export function MediaPane() {
               {items.map((item) => (
                 <MediaRow key={item.id} item={item} variant="list" actions={actions} />
               ))}
+              {pending.map((upload) => (
+                <PendingRow key={upload.key} upload={upload} variant="list" />
+              ))}
             </ul>
           ) : (
-            <MediaGrid items={items} actions={actions} />
+            <MediaGrid items={items} pending={pending} actions={actions} />
           )}
         </div>
+      )}
+      {fileDrop.over && (
+        // Over the pane's foot, inside its frame; the media stays as it is
+        <p className="pointer-events-none absolute inset-x-px bottom-px flex h-11 items-center justify-center bg-pane text-xs text-ink-3">
+          Drop to add
+        </p>
       )}
       {removing && (
         <Sheet
@@ -415,7 +523,7 @@ function useFocusAfterRename(renaming: boolean, itemRef: RefObject<HTMLLIElement
  * The grid: covers two to a row, a sound a whole row, all in the media's order. Each cover's ⋯ menu opens over the
  * column it is in, so it stays inside the pane.
  */
-function MediaGrid({ items, actions }: { items: MediaItem[]; actions: ItemActions }) {
+function MediaGrid({ items, pending, actions }: { items: MediaItem[]; pending: PendingMedia[]; actions: ItemActions }) {
   return (
     <ul className="grid grid-cols-2 gap-2">
       {gridColumns(items).map(({ item, left }) =>
@@ -425,7 +533,63 @@ function MediaGrid({ items, actions }: { items: MediaItem[]; actions: ItemAction
           <MediaCover key={item.id} item={item} left={left} actions={actions} />
         ),
       )}
+      {pending.map((upload) =>
+        upload.kind === "audio" ? (
+          <PendingRow key={upload.key} upload={upload} variant="sound" />
+        ) : (
+          <PendingCover key={upload.key} upload={upload} />
+        ),
+      )}
     </ul>
+  );
+}
+
+/**
+ * A dropped file not in the media yet, as a row: in the list (a blank cover or a sound's glyph, its file's name, "Adding…"
+ * where the length goes) or a sound in the grid. Nothing to press or drag yet.
+ */
+function PendingRow({ upload, variant }: { upload: PendingMedia; variant: "list" | "sound" }) {
+  const list = variant === "list";
+  return (
+    <li
+      data-media-pending={upload.key}
+      aria-busy="true"
+      className={cn(
+        "flex min-w-0 items-center rounded-md",
+        list ? "-mx-2 h-10 gap-2.5 pr-2.5 pl-2" : "col-span-2 h-8 gap-2 bg-edit-field px-2",
+      )}
+    >
+      {!list ? (
+        <Music size={14} strokeWidth={1.5} aria-hidden="true" className="shrink-0 text-ink-3" />
+      ) : upload.kind === "audio" ? (
+        <span aria-hidden="true" className={SOUND_COVER}>
+          <AudioLines size={14} strokeWidth={1.5} className="text-ink-3" />
+        </span>
+      ) : (
+        <span aria-hidden="true" className="h-8 w-14 shrink-0 overflow-hidden rounded">
+          <BlankCover />
+        </span>
+      )}
+      <span className={cn("min-w-0 flex-1 truncate text-neutral-400", list ? "text-[13px] leading-4" : "text-xs")}>{upload.name}</span>
+      <span className={cn("shrink-0 text-ink-3", list ? "text-xs" : "text-[11px]")}>{ADDING}</span>
+    </li>
+  );
+}
+
+/** A dropped video not in the media yet, in the grid: a blank cover with its file's name and "Adding…" on it. */
+function PendingCover({ upload }: { upload: PendingMedia }) {
+  return (
+    <li data-media-pending={upload.key} aria-busy="true" className="relative min-w-0">
+      <div className="relative aspect-video w-full overflow-hidden rounded-md bg-edit-field">
+        <span aria-hidden="true" className="block h-full w-full opacity-40">
+          <BlankCover />
+        </span>
+        <span className="absolute inset-x-1 top-1 flex">
+          <span className={cn(COVER_CHIP, "max-w-full truncate")}>{upload.name}</span>
+        </span>
+        <span className={cn(COVER_CHIP, "absolute bottom-1 right-1 font-normal text-neutral-300")}>{ADDING}</span>
+      </div>
+    </li>
   );
 }
 
@@ -624,7 +788,7 @@ function ListCover({
 
   if (item.kind === "audio") {
     return (
-      <span ref={ref} aria-hidden="true" className={cn("flex h-8 w-14 shrink-0 items-center justify-center rounded bg-edit-slot", item.lost && "opacity-40")}>
+      <span ref={ref} aria-hidden="true" className={cn(SOUND_COVER, item.lost && "opacity-40")}>
         <AudioLines size={14} strokeWidth={1.5} className="text-ink-3" />
       </span>
     );

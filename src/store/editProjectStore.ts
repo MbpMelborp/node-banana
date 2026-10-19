@@ -190,6 +190,15 @@ export async function editWritesIdle(): Promise<void> {
 /** A save is running or queued (the autosave waits for it). */
 export const editSaveInFlight = (): boolean => inflight !== null;
 
+type EditIdListener = (from: string, to: string) => void;
+const editIdListeners = new Set<EditIdListener>();
+
+/** Save as a new edit gave the open edit a new id: what is kept by edit id (files on their way in) follows it. */
+export function onEditIdMoved(listener: EditIdListener): () => void {
+  editIdListeners.add(listener);
+  return () => editIdListeners.delete(listener);
+}
+
 const get = () => useEditProjectStore.getState();
 const set = (patch: Partial<EditProjectState>) => useEditProjectStore.setState(patch);
 
@@ -639,6 +648,7 @@ export const useEditProjectStore = create<EditProjectState>(() => ({
         const parked = get().parked;
         if (parked?.editId === sentId) set({ parked: { ...parked, editId: document.id, initial: sent } });
       }
+      for (const listener of editIdListeners) listener(sentId, document.id);
       set({ open: metaOf(document), save: SAVED });
       writeLast(document.id);
       void get().refreshList();

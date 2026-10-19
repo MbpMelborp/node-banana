@@ -30,6 +30,12 @@ vi.mock("@/lib/assets/client/api", async (importOriginal) => ({
   ...assetsApi,
 }));
 
+const uploadsApi = vi.hoisted(() => ({ recordUpload: vi.fn() }));
+vi.mock("@/lib/assets/client/upload", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/assets/client/upload")>()),
+  ...uploadsApi,
+}));
+
 vi.mock("@/hooks/useStitchVideos", () => ({ checkEncoderSupport: async () => true, stitchVideosAsync: vi.fn() }));
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: toast }) } }));
@@ -73,6 +79,7 @@ import { libraryDrop } from "@/components/stitch/timeline/libraryDrop";
 import { LOOP_AUDIO_NOTE } from "@/components/stitch/sequenceMenu";
 import { EditVideoView } from "../EditVideoView";
 import { NAME_CLICK_WAIT_MS } from "../MediaPane";
+import { __resetMediaUploadsForTests, useMediaUploads } from "../mediaUploads";
 
 const ID = "ed0000000000a1";
 const OTHER = "ed0000000000b2";
@@ -266,6 +273,8 @@ beforeEach(() => {
   );
   edits.revealEditsFolder.mockResolvedValue(undefined);
   useStitchClipboard.getState().setClipboard(null);
+  __resetMediaUploadsForTests();
+  uploadsApi.recordUpload.mockImplementation(() => new Promise(() => {}));
 });
 
 afterEach(() => {
@@ -1287,6 +1296,253 @@ describe("the media pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show media" }));
     expect(screen.getByRole("complementary", { name: "Media" })).toBeInTheDocument();
     expect(storage[LIBRARY_PANE_KEY]).toBe("open");
+  });
+});
+
+describe("dropping files on the media pane", () => {
+  const X = "aupldaaaaaaaa1";
+  const Y = "aupldaaaaaaaa2";
+  const pane = () => screen.getByRole("complementary", { name: "Media" });
+  /** A drag from the Finder, as jsdom can carry one: a plain object for the DataTransfer it lacks. */
+  const fileDrag = (files: File[] = []) => ({ dataTransfer: { types: ["Files"], files, dropEffect: "none" } });
+  const video = (name: string) => new File(["v"], name, { type: "video/mp4" });
+  const pendingRows = () => Array.from(document.querySelectorAll<HTMLElement>("aside [data-media-pending]"));
+  /** An upload's record: the library names its file itself; the dropped file's name is its display name. */
+  const uploaded = (id: string, name: string, overrides: Partial<AssetView> = {}) =>
+    asset(id, { origin: "uploaded", filename: `142233_${id}.mp4`, name, ...overrides });
+  /** Each recordUpload's answer, settled by the test. */
+  function answers() {
+    const calls: { resolve: (asset: AssetView) => void; reject: (error: Error) => void }[] = [];
+    uploadsApi.recordUpload.mockImplementation(() => new Promise((resolve, reject) => calls.push({ resolve, reject })));
+    return calls;
+  }
+
+  it("a file drag over it frames it and says Drop to add, its media still shown; leaving lets go; other drags are left alone", async () => {
+    await renderOpen(withMedia());
+    await placeable(C);
+    const aside = pane();
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    fireEvent.dragEnter(aside, fileDrag());
+    expect(screen.getByText("Drop to add")).toBeInTheDocument();
+    expect(aside).toHaveClass("ring-1", "ring-inset");
+    expect(tileIds()).toEqual([A, B, C, M]);
+    const over = fileDrag();
+    expect(fireEvent.dragOver(tile(C), over)).toBe(false);
+    expect(over.dataTransfer.dropEffect).toBe("copy");
+    // Into a row and out of it is still over the pane
+    fireEvent.dragEnter(tile(C), fileDrag());
+    fireEvent.dragLeave(tile(C), fileDrag());
+    expect(screen.getByText("Drop to add")).toBeInTheDocument();
+    fireEvent.dragLeave(aside, fileDrag());
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    expect(aside).not.toHaveClass("ring-1");
+
+    // Text dragged in is no file: the pane takes no part
+    const text = { dataTransfer: { types: ["text/plain"], files: [], dropEffect: "none" } };
+    fireEvent.dragEnter(aside, text);
+    expect(fireEvent.dragOver(aside, text)).toBe(true);
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    expect(fireEvent.drop(aside, text)).toBe(true);
+    expect(uploadsApi.recordUpload).not.toHaveBeenCalled();
+
+    // A drag that never says it left (a row replaced under it) lets go once dragover stops
+    vi.useFakeTimers();
+    try {
+      fireEvent.dragEnter(tile(C), fileDrag());
+      act(() => vi.advanceTimersByTime(900));
+      fireEvent.dragOver(tile(C), fileDrag());
+      act(() => vi.advanceTimersByTime(900));
+      expect(screen.getByText("Drop to add")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(200));
+      expect(screen.queryByText("Drop to add")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records the videos and sounds dropped at once: one notice for the rest, an Adding… row each, then each joins the media", async () => {
+    await renderOpen(withMedia());
+    await placeable(A, B, C, M);
+    const calls = answers();
+    const first = video("first take.mp4");
+    const second = video("second take.mp4");
+    toast.mockClear();
+    fireEvent.dragEnter(pane(), fileDrag());
+    expect(fireEvent.drop(pane(), fileDrag([first, new File(["t"], "notes.txt", { type: "text/plain" }), second]))).toBe(false);
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith("Only video and audio files can be added.", "info");
+    expect(uploadsApi.recordUpload.mock.calls).toEqual([
+      [first, { editId: ID, editName: "Trip" }],
+      [second, { editId: ID, editName: "Trip" }],
+    ]);
+    // After the media, in the order dropped, with nothing to press, drag or open yet
+    expect(tileIds()).toEqual([A, B, C, M]);
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["first take.mp4Adding…", "second take.mp4Adding…"]);
+    expect(pendingRows()[0].querySelector("button")).toBeNull();
+    // Still there once the pane is hidden and shown again
+    fireEvent.click(screen.getByRole("button", { name: "Hide media" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show media" }));
+    expect(pendingRows()).toHaveLength(2);
+    // In the grid a video is a blank cover saying so
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    expect(pendingRows()[0]).toHaveTextContent(/^first take\.mp4Adding…$/);
+    expect(pendingRows()[0].querySelector(".aspect-video")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+
+    const past = editor().past.length;
+    await act(async () => calls[0].resolve(uploaded(X, "first take.mp4")));
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["second take.mp4Adding…"]);
+    expect(tileIds()).toEqual([A, B, C, M, X]);
+    await act(async () => calls[1].resolve(uploaded(Y, "second take.mp4")));
+    expect(pendingRows()).toEqual([]);
+    expect(editor().draft!.media).toEqual([A, B, C, M, X, Y]);
+    expect(tileIds()).toEqual([A, B, C, M, X, Y]);
+    expect(tile(X)).toHaveTextContent(/^first take\.mp40:05$/);
+    expect(tile(Y)).toHaveAccessibleName("Add second take.mp4, 0:05.0, at the playhead");
+    // The last one in is selected; each was one undo step, and nothing went on the timeline
+    expect(tile(Y).closest("li")).toHaveAttribute("data-selected");
+    expect(editor().past.length).toBe(past + 2);
+    expect(timelineIds()).toEqual([A, B]);
+    act(() => editor().undo());
+    expect(tileIds()).toEqual([A, B, C, M, X]);
+  });
+
+  it("a file that can't be added says why, with its name, and its row goes; with the library off too", async () => {
+    applyLibraryStatus(status(false));
+    await renderOpen(withMedia());
+    const calls = answers();
+    fireEvent.drop(pane(), fileDrag([video("sunset copy.mp4")]));
+    expect(pendingRows()).toHaveLength(1);
+    await act(async () => calls[0].reject(new Error("The asset library is off.")));
+    expect(toast).toHaveBeenCalledWith("Couldn't add “sunset copy.mp4”", "error", false, "The asset library is off.");
+    expect(pendingRows()).toEqual([]);
+    expect(editor().draft!.media).toEqual([A, B, C, M]);
+  });
+
+  it("files join in the order they were dropped, whichever is recorded first", async () => {
+    await renderOpen(withMedia());
+    await placeable(A);
+    const calls = answers();
+    fireEvent.drop(pane(), fileDrag([video("big.mov"), video("small.mp4")]));
+    const past = editor().past.length;
+    await act(async () => calls[1].resolve(uploaded(Y, "small.mp4")));
+    // small.mp4 waits its turn behind big.mov
+    expect(tileIds()).toEqual([A, B, C, M]);
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["big.movAdding…", "small.mp4Adding…"]);
+    await act(async () => calls[0].resolve(uploaded(X, "big.mov")));
+    expect(pendingRows()).toEqual([]);
+    expect(tileIds()).toEqual([A, B, C, M, X, Y]);
+    expect(editor().past.length).toBe(past + 1);
+    expect(tile(Y).closest("li")).toHaveAttribute("data-selected");
+  });
+
+  it("a file on its way shows only in the edit it was dropped on, there again when that edit is", async () => {
+    const other = doc({ id: OTHER, name: "Launch cut" });
+    await renderOpen(withMedia());
+    const calls = answers();
+    edits.fetchEdit.mockImplementation(async (id: string) => (id === OTHER ? other : withMedia()));
+    fireEvent.drop(pane(), fileDrag([video("late.mp4")]));
+    expect(pendingRows()).toHaveLength(1);
+
+    await act(async () => project().openEditById(OTHER));
+    await waitFor(() => expect(editor().editId).toBe(OTHER));
+    expect(tileIds()).toEqual([A, B]);
+    expect(pendingRows()).toEqual([]);
+
+    await act(async () => project().openEditById(ID));
+    await waitFor(() => expect(editor().editId).toBe(ID));
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["late.mp4Adding…"]);
+    await act(async () => calls[0].resolve(uploaded(X, "late.mp4")));
+    expect(tileIds()).toEqual([A, B, C, M, X]);
+  });
+
+  it("a file on its way follows its edit when that is saved as a new edit", async () => {
+    const NEW = "ed0000000000c3";
+    await renderOpen(withMedia());
+    const calls = answers();
+    fireEvent.drop(pane(), fileDrag([video("late.mp4")]));
+    act(() => setLoopCount(2));
+    edits.saveEdit.mockRejectedValueOnce(new EditApiError("gone", 404, "not_found"));
+    await act(async () => void (await project().saveNow("manual")));
+    edits.createEdit.mockResolvedValueOnce(withMedia({ id: NEW, updatedAt: 4000 }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as a new edit" }));
+    await waitFor(() => expect(editor().editId).toBe(NEW));
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["late.mp4Adding…"]);
+    await act(async () => calls[0].resolve(uploaded(X, "late.mp4")));
+    expect(pendingRows()).toEqual([]);
+    expect(editor().draft!.media).toEqual([A, B, C, M, X]);
+  });
+
+  it("a sheet the pane opens takes no file drop, though it is the pane's", async () => {
+    await renderOpen(withMedia());
+    await placeable(A);
+    fireEvent.click(screen.getByRole("button", { name: "More for sunset.mp4" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "sunset.mp4" })).getByRole("menuitem", { name: "Remove from edit…" }));
+    const sheet = await screen.findByRole("dialog", { name: "Remove from edit?" });
+    fireEvent.dragEnter(sheet, fileDrag());
+    expect(fireEvent.dragOver(sheet, fileDrag())).toBe(true);
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    expect(fireEvent.drop(sheet, fileDrag([video("stray.mp4")]))).toBe(true);
+    expect(uploadsApi.recordUpload).not.toHaveBeenCalled();
+  });
+
+  it("a file whose bytes the edit holds already adds nothing, and shows the one there", async () => {
+    await renderOpen(withMedia());
+    await placeable(A);
+    const calls = answers();
+    const past = editor().past.length;
+    fireEvent.drop(pane(), fileDrag([video("sunset.mp4")]));
+    await act(async () => calls[0].resolve(uploaded(X, "sunset.mp4", { sha256: LIBRARY[A].sha256 })));
+    expect(pendingRows()).toEqual([]);
+    expect(editor().draft!.media).toEqual([A, B, C, M]);
+    expect(editor().past.length).toBe(past);
+    expect(tile(A).closest("li")).toHaveAttribute("data-selected");
+  });
+
+  it("the empty pane takes a drop too", async () => {
+    await renderOpen(doc({ sequence: { ...doc().sequence, timeline: [] } }));
+    const calls = answers();
+    const empty = screen.getByText("No media yet");
+    fireEvent.dragEnter(empty, fileDrag());
+    expect(screen.getByText("Drop to add")).toBeInTheDocument();
+    expect(fireEvent.dragOver(empty, fileDrag())).toBe(false);
+    fireEvent.drop(empty, fileDrag([new File(["a"], "voice.m4a", { type: "audio/mp4" })]));
+    expect(screen.queryByText("No media yet")).toBeNull();
+    expect(screen.queryByText("Drop to add")).toBeNull();
+    expect(pendingRows().map((row) => row.textContent)).toEqual(["voice.m4aAdding…"]);
+    // A sound's glyph for a cover, never a video's blank one; in the grid a whole row, no cover
+    expect(pendingRows()[0].querySelector(".bg-edit-slot")).not.toBeNull();
+    expect(pendingRows()[0].querySelector(".bg-edit-field")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    expect(pendingRows()[0]).toHaveClass("col-span-2");
+    expect(pendingRows()[0]).toHaveTextContent(/^voice\.m4aAdding…$/);
+    expect(pendingRows()[0].querySelector(".aspect-video")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    const voice = { kind: "audio" as const, mime: "audio/mp4", ext: "m4a", durationSec: 12, width: undefined, height: undefined };
+    await act(async () => calls[0].resolve(uploaded(X, "voice.m4a", voice)));
+    expect(tileIds()).toEqual([X]);
+    expect(tile(X)).toHaveTextContent(/^voice\.m4a0:12$/);
+  });
+
+  it("a file recorded after the edit was left joins its media when the edit shows again", async () => {
+    const view = await renderOpen(withMedia());
+    const calls = answers();
+    fireEvent.drop(pane(), fileDrag([video("late.mp4")]));
+    // Leaving the view parks the edit
+    view.unmount();
+    expect(editor().isOpen).toBe(false);
+    await act(async () => calls[0].resolve(uploaded(X, "late.mp4")));
+    expect(useMediaUploads.getState().uploads.map((upload) => upload.asset?.id)).toEqual([X]);
+
+    render(<EditVideoView />);
+    await screen.findByRole("button", { name: "Edit menu" });
+    await waitFor(() => expect(tileIds()).toEqual([A, B, C, M, X]));
+    expect(useMediaUploads.getState().uploads).toEqual([]);
+    expect(tile(X).closest("li")).toHaveAttribute("data-selected");
+    // An unsaved change of the edit's, one undo step
+    act(() => editor().undo());
+    expect(tileIds()).toEqual([A, B, C, M]);
   });
 });
 

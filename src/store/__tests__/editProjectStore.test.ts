@@ -18,6 +18,7 @@ import { useSaveRequestStore } from "@/store/saveRequestStore";
 import { editAutoSaveState } from "@/store/utils/editAutoSave";
 import { openStitchEditor } from "@/components/stitch/openStitchEditor";
 import { addMediaItems, mediaUseCount, removeMediaItem } from "@/components/stitch/editorActions";
+import { __resetMediaUploadsForTests, useMediaUploads, type PendingMedia } from "@/components/edit/mediaUploads";
 import { EditApiError } from "@/lib/edits/client";
 import { editAssetIds } from "@/lib/edits/document";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
@@ -144,6 +145,7 @@ beforeEach(() => {
   localStorage.clear();
   __resetEditProjectForTests();
   __resetAssetInfoForTests();
+  __resetMediaUploadsForTests();
   editor().close();
   useAssetStore.setState({ appView: "edit" });
   useWorkflowStore.setState({ autoSaveEnabled: true });
@@ -406,9 +408,11 @@ describe("conflicts", () => {
 });
 
 describe("an edit that is gone", () => {
-  it("stops autosave; Save as a new edit moves the session to the new edit, history kept", async () => {
+  it("stops autosave; Save as a new edit moves the session to the new edit, history kept, and the files on their way in", async () => {
     await openDoc();
     edit();
+    const upload = (key: string, editId: string): PendingMedia => ({ key, name: `${key}.mp4`, kind: "video", editId, asset: null });
+    useMediaUploads.setState({ uploads: [upload("dropped", ID), upload("elsewhere", "ed0000000000c3")] });
     api.saveEdit.mockRejectedValueOnce(new EditApiError("Not found", 404, "not_found"));
     expect(await store().saveNow("auto")).toBe("gone");
     expect(store().save.state).toBe("gone");
@@ -424,6 +428,10 @@ describe("an edit that is gone", () => {
     expect(store().open).toMatchObject({ id: OTHER, baseUpdatedAt: 9000 });
     expect(store().save.state).toBe("saved");
     expect(localStorage.getItem(LAST_EDIT_KEY)).toBe(OTHER);
+    expect(useMediaUploads.getState().uploads.map((u) => [u.key, u.editId])).toEqual([
+      ["dropped", OTHER],
+      ["elsewhere", "ed0000000000c3"],
+    ]);
   });
 
   it("stays gone, still offering Save as a new edit, when that save fails", async () => {
