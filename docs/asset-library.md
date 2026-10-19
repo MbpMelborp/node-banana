@@ -8,8 +8,9 @@ assets to it without moving any files.
 
 The library root is the **Node Banana folder**. It holds the projects saved
 by name (`<root>/<Project>/`), `Generations/` for workflows that have no
-project yet, and the hidden `.nodebanana/`. `Generations` is never a
-project's name.
+project yet, `Edits/` for the Edit video view's edit files
+(`<name>.nbedit`, see [edit-video.md](edit-video.md)), and the hidden
+`.nodebanana/`. Neither `Generations` nor `Edits` is ever a project's name.
 
 ## Where files go
 
@@ -42,6 +43,7 @@ to the old project-only save.
 ```
 <root>/
   Generations/YYYY-MM-DD/HHMMSS_<prompt>_<sha8>.<ext>   assets of workflows with no project
+  Edits/<name>.nbedit                                  edit projects (no media: asset ids only)
   .nodebanana/                                         hidden metadata
     library.json                                       marker
     assets/<assetId>.json                              one sidecar per asset
@@ -81,7 +83,10 @@ to `/api/save-generation` for project workflows otherwise.
   generate3d and comfyApp (every media output). Edited assets come from
   removeBackground, imageResize, gifEncoder, videoStitch, videoTrim,
   easeCurve, videoFrameGrab, splitGrid cells, the annotation editor (Done
-  with at least one shape), and canvas split-to-nodes. An edited output
+  with at least one shape), canvas split-to-nodes, Frame to canvas (an
+  image, producer `imageInput`, operation `frameGrab`) and renders from
+  the Edit video view (producer `nodeType: "editProject"`; the edit's id
+  and name stand in for the workflow, with no workflow snapshot). An edited output
   identical to the previous one is not recorded again.
 - A run that is one of a batch ("Run 10×") carries `batch` (`id`, `index`,
   `count`) in its run context, and every asset it records keeps it in its
@@ -204,7 +209,7 @@ is a project, holds one or is a loose workflow file.
 
 **The projects move** (job type `projects`, `projectMove.ts`) moves each
 outermost folder in turn to `<root>/<name>`, numbered past a taken name
-(case-insensitively, `Generations` reserved). It copies without following
+(case-insensitively, `Generations` and `Edits` reserved). It copies without following
 links, checks every file's size, copies again what changed meanwhile, then
 points the library at the copy — records of its files (`relocateExternal`,
 under each record's lock), workflow rows, `media/*.ref` snapshot references
@@ -245,10 +250,11 @@ whether the plain name was taken.
 Settings → Storage → Change… offers two choices:
 
 - **Move my library there.** This is a background job. It copies
-  `Generations/` and `.nodebanana/`, verifies each file's size and hash,
+  `Generations/`, the edit files in `Edits/` and `.nodebanana/`, verifies each file's size and hash,
   switches the root, then deletes only the copied files from the old folder.
   Projects stay where they are. Writes pause while the move runs, in this
-  server and in any other one using the same library.
+  server and in any other one using the same library. A folder that already
+  holds a library, or edit files in its `Edits/`, is refused.
 - **Use that folder.** This switches to the new folder; the old library stays
   on disk.
 

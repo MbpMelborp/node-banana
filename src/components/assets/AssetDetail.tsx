@@ -265,9 +265,9 @@ function DetailPanel({ asset }: { asset: AssetView }) {
   const [showParameters, setShowParameters] = useState(false);
   const platform = resolvePlatform(library);
   const actions = workflowActions(asset);
-  const primary = actions[0]!;
+  const primary = actions[0];
   const secondary = actions[1];
-  const primaryBlocked = openWorkflowBlockedReason(asset, primary.mode);
+  const primaryBlocked = primary ? openWorkflowBlockedReason(asset, primary.mode) : null;
   const secondaryBlocked = secondary ? openWorkflowBlockedReason(asset, secondary.mode) : null;
   const one = selectionOf([asset.id]);
   const parameters = Object.entries(asset.parameters ?? {});
@@ -300,7 +300,7 @@ function DetailPanel({ asset }: { asset: AssetView }) {
           </div>
         )}
 
-        {view !== "trash" && (
+        {view !== "trash" && primary && (
           <div className="mt-4 flex flex-col gap-1.5">
             <DialogButton variant="primary" size="md" disabled={!!primaryBlocked} onClick={() => void openWorkflowFor(asset, primary.mode)}>
               {primary.label}

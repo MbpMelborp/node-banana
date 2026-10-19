@@ -42,8 +42,9 @@ const RUNNABLE_TYPES = new Set([
   'llmGenerate',
   'removeBackground',
   'comfyApp',
+  'videoStitch',
 ]);
-const EXPANDABLE_TYPES = new Set(['prompt', 'promptConstructor', 'splitGrid', 'annotation']);
+const EXPANDABLE_TYPES = new Set(['prompt', 'promptConstructor', 'splitGrid', 'annotation', 'videoStitch']);
 
 interface FloatingNodeHeaderProps {
   id: string;

@@ -414,13 +414,80 @@ export interface VideoStitchClip {
   handleId: string;              // Which input handle (video-0, video-1, etc.)
 }
 
+/** Where a Stitch timeline clip's video comes from: an input socket's edge, or a library asset. */
+export type StitchClipSource =
+  | { kind: "edge"; edgeId: string }
+  | { kind: "asset"; assetId: string };
+
+/** One clip of the Edit Video sequence. See docs/edit-video.md. */
+export interface StitchTimelineClip {
+  id: string;                 // Stable within the node; generated once
+  source: StitchClipSource;
+  inSec: number;              // Trim start, source seconds, default 0
+  outSec: number | null;      // Trim end, source seconds; null = the source's end
+  muted: boolean;             // The clip's own sound
+  volume: number;             // 0..1 linear gain on the clip's own sound, default 1
+  startSec?: number;          // Stacked: where the trimmed clip starts on the timeline, seconds (0–600). Absent = laid out
+                              // from Overlap. Track ignores it.
+}
+
 /**
- * Video Stitch node - concatenates multiple videos into a single output
+ * A point on a volume curve, gain 0..1 (1 = 0 dB). t: sequence seconds (one loop) for audioCurve, the clip's source
+ * seconds on an audio clip.
+ */
+export interface VolumePoint {
+  t: number;
+  gain: number;
+}
+
+/** Where an audio clip's sound comes from: the node's `audio` socket, or a library asset. */
+export type StitchAudioSource = { kind: "music" } | { kind: "asset"; assetId: string };
+
+/** One clip on an audio row of the Edit Video sequence. See docs/edit-video.md. */
+export interface StitchAudioClip {
+  id: string;                 // Stable within the node; "audio:music" for the music read from a node without audioClips
+  source: StitchAudioSource;
+  row: number;                // 0-based audio row; stored with no empty row (the editor's draft may hold some)
+  startSec: number;           // Where its In plays on the timeline, 0–600 s
+  inSec: number;              // Trim start, source seconds
+  outSec: number | null;      // Trim end, source seconds; null = the source's end
+  muted: boolean;
+  curve: VolumePoint[];       // t in the clip's source seconds; empty = flat at 0 dB
+}
+
+/** How a Stitch sequence is laid out. See docs/edit-video.md. */
+export interface StitchSequenceLayout {
+  /**
+   * "track": one row, clips end to end. "stacked": one row per clip, placed anywhere in time; a clip never placed starts
+   * Overlap before the clip above ends.
+   */
+  mode: "track" | "stacked";
+  /** Stacked: how far a clip overlaps the one above when lined up (0–10 s, 0.1 steps); also where new clips go. Kept while mode is "track". */
+  overlapSec: number;
+  /**
+   * Stacked: the higher row is in front; where clips overlap, it fades in or out over the rows below and the sound
+   * crossfades. Off: the higher row covers, every clip is heard.
+   */
+  crossfade: boolean;
+}
+
+/**
+ * Edit Video node (videoStitch) - joins videos on a timeline into a single output
  */
 export interface VideoStitchNodeData extends BaseNodeData {
   clips: VideoStitchClip[];       // Ordered clip sequence for filmstrip
-  clipOrder: string[];            // Edge IDs in user-defined order (drag reorder)
-  outputVideo: string | null;     // Stitched video blob URL or data URL
+  clipOrder: string[];            // Edge ids in sequence order; with a timeline, kept equal to edgeIdsInOrder(timeline) for older readers
+  /** The sequence. Absent = the editor never wrote this node (a "legacy" node); read it with readStitchDraft. */
+  timeline?: StitchTimelineClip[];
+  /** Music volume curve over one loop; empty or absent = flat at 0 dB. Read only while audioClips is absent. */
+  audioCurve?: VolumePoint[];
+  /** The music track is muted (the clips' own sound still plays). Read only while audioClips is absent. */
+  audioMuted?: boolean;
+  /** Audio clips. Absent = the audio is the connected music alone, read from audioCurve and audioMuted. */
+  audioClips?: StitchAudioClip[];
+  /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
+  sequenceLayout?: StitchSequenceLayout;
+  outputVideo: string | null;     // Rendered video blob URL or data URL
   loopCount: 1 | 2 | 3;          // How many times to repeat the clip sequence (1 = no loop)
   status: NodeStatus;
   error: string | null;

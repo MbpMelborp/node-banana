@@ -136,7 +136,7 @@ const OPERATION_LABELS: Record<string, string> = {
   removeBackground: "Background removed",
   resize: "Resized",
   gif: "GIF",
-  stitch: "Stitched",
+  stitch: "Video edit",
   trim: "Trimmed",
   easeCurve: "Ease curve",
   frameGrab: "Frame grab",

@@ -196,6 +196,26 @@ describe("AssetsView", () => {
     expect(item).toHaveTextContent("Available when the run finishes");
   });
 
+  it("offers no Open workflow for a render of an edit, in the menu or the detail", async () => {
+    const render = asset("a1", {
+      kind: "video",
+      origin: "edited",
+      producer: { nodeId: "e1", nodeType: "editProject", nodeTitle: "Trip", operation: "stitch" },
+      workflowId: "e1",
+      workflow: { id: "e1", name: "Trip", projectPath: null },
+    });
+    await renderView([render]);
+    fireEvent.contextMenu(tile("a1"), { clientX: 10, clientY: 10 });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /Show in Finder/ })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /Open workflow|Open project/ })).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.click(tile("a1"));
+    const panel = screen.getByRole("complementary", { name: "Asset details" });
+    expect(within(panel).queryByRole("button", { name: /Open workflow|Open project/ })).toBeNull();
+  });
+
   it("shows the bulk bar for a selection, and bulk Trash sends that selection", async () => {
     await renderView();
     fireEvent.click(tile("a3"), { metaKey: true });
@@ -783,6 +803,19 @@ describe("AssetsView", () => {
     expect(useAssetStore.getState().appView).toBe("assets");
     fireEvent.keyDown(window, { key: "c" });
     expect(useAssetStore.getState().appView).toBe("chat");
+  });
+
+  it("goes over to Edit video on a bare E, but not with Shift, on repeat or while typing", async () => {
+    await renderView();
+    fireEvent.keyDown(window, { key: "E", shiftKey: true });
+    fireEvent.keyDown(window, { key: "e", repeat: true });
+    const search = screen.getByRole("textbox", { name: "Search assets" });
+    search.focus();
+    fireEvent.keyDown(search, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("assets");
+    search.blur();
+    fireEvent.keyDown(window, { key: "e" });
+    expect(useAssetStore.getState().appView).toBe("edit");
   });
 
   it("leaves A and C to the search field being typed in", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { LibraryBig, MessagesSquare, Plus, X } from "lucide-react";
+import { Film, LibraryBig, MessagesSquare, Plus, X } from "lucide-react";
 import { useEffect, useId, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useOnViewportChange, useReactFlow } from "@xyflow/react";
 import { useAgentPresence } from "@/components/agent/AgentSession";
@@ -17,7 +17,7 @@ const SHOWN_TAB_SHAPE =
 /** The shown tab: canvas-coloured, so it reads as part of the canvas. */
 const SHOWN_TAB_CLASS = `${SHOWN_TAB_SHAPE} bg-canvas-bg`;
 
-/** A shown view entry (the chat, Assets): the colour of the view's left rail it sits over. */
+/** A shown view entry (the chat, Assets, Edit video): the colour of the view's left rail it sits over. */
 const SHOWN_VIEW_CLASS = `${SHOWN_TAB_SHAPE} bg-pane`;
 
 /**
@@ -28,8 +28,8 @@ const SHOWN_VIEW_CLASS = `${SHOWN_TAB_SHAPE} bg-pane`;
  * in flight, because the store holds only the live workflow's execution state.
  * Each tab also remembers its pan and zoom.
  *
- * The chat and Assets entries lead the strip, each an icon until its view
- * is shown, when it takes its label. They are toggle buttons, not tabs (each
+ * The chat, Assets and Edit video entries lead the strip, each an icon until
+ * its view is shown, when it takes its label. They are toggle buttons, not tabs (each
  * is a view over every workflow, not one of them), and take the shown-tab
  * look while their view is up. That look is styling only: which workflow
  * tab is live, and what the busy state blocks, never changes with it. Any
@@ -127,6 +127,13 @@ export function WorkflowTabs() {
         icon={<LibraryBig size={14} strokeWidth={1.75} />}
         shown={appView === "assets"}
         onToggle={() => toggleAppView("assets")}
+      />
+      <ViewToggle
+        label="Edit video"
+        shortcut="E"
+        icon={<Film size={14} strokeWidth={1.75} />}
+        shown={appView === "edit"}
+        onToggle={() => toggleAppView("edit")}
       />
       {summaries.map((tab, index) => {
         const name = tab.name ?? "Untitled";
