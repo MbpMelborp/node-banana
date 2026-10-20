@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NodeExecutionContext } from "../types";
-import type { ComfyAppNodeData, WorkflowNode, WorkflowNodeData } from "@/types";
+import type { ComfyAppNodeData, WorkflowEdge, WorkflowNode, WorkflowNodeData } from "@/types";
 import type { RecordAssetInput, RecordAssetResult, RecordedAssetHandle } from "@/lib/assets/types";
 import { executeNanoBanana } from "../nanoBananaExecutor";
 import { executeGenerateVideo } from "../generateVideoExecutor";
@@ -999,6 +999,49 @@ describe("comfyApp", () => {
       ]);
       expect(data.selectedRunHistoryIndex).toBe(0);
       expect(data.status).toBe("complete");
+    });
+
+    it("hands each item's result to the Output Gallery it feeds, by the handle the edge leaves", async () => {
+      vi.useFakeTimers();
+      const gallery = { id: "gallery-1", type: "outputGallery", position: { x: 0, y: 0 }, data: { images: [], videos: [] } } as unknown as WorkflowNode;
+      const { ctx } = batchRun({
+        recordAsset: makeRecorder().recordAsset,
+        getEdges: () => [
+          { id: "e1", source: "comfy-1", sourceHandle: "9", target: "gallery-1", targetHandle: "image" },
+          { id: "e2", source: "comfy-1", sourceHandle: "12", target: "gallery-1", targetHandle: "video" },
+        ] as WorkflowEdge[],
+        getNodes: () => [gallery],
+      });
+      let jobs = 0;
+      mockFetch.mockImplementation(async (url: string, init: { body: string }) => {
+        if (url === "/api/comfy/run") return okJson({ success: true, polling: true, jobId: `job-${++jobs}`, status: "queued" });
+        const { jobId } = JSON.parse(init.body);
+        return okJson({
+          success: true,
+          polling: false,
+          status: "success",
+          outputs: [
+            { handleId: "9", type: "image", value: `data:image/png;base64,${jobId}` },
+            { handleId: "12", type: "video", value: `data:video/mp4;base64,${jobId}` },
+            { handleId: "15", type: "text", value: "a caption" },
+          ],
+        });
+      });
+
+      const run = runBatchIfApplicable(ctx);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await run;
+
+      expect((ctx.appendOutputGalleryImage as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+        ["gallery-1", "data:image/png;base64,job-1"],
+        ["gallery-1", "data:image/png;base64,job-2"],
+        ["gallery-1", "data:image/png;base64,job-3"],
+      ]);
+      expect((ctx.appendOutputGalleryVideo as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1])).toEqual([
+        "data:video/mp4;base64,job-1",
+        "data:video/mp4;base64,job-2",
+        "data:video/mp4;base64,job-3",
+      ]);
     });
 
     const finished = (value: string) =>

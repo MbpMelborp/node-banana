@@ -176,6 +176,10 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
     addToGlobalHistory,
     generationsPath,
     trackSaveGeneration,
+    getEdges,
+    getNodes,
+    appendOutputGalleryImage,
+    appendOutputGalleryVideo,
   } = ctx;
 
   const freshNode = getFreshNode(node.id);
@@ -354,6 +358,19 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         runStatus: null,
         jobId: null,
       });
+
+      // Each result also goes to the Output Gallery nodes it feeds, by the
+      // handle the edge leaves, so a batch collects every item and not just
+      // the last (as the image and video nodes do). The gallery de-dupes.
+      const nodes = getNodes();
+      for (const edge of getEdges()) {
+        if (edge.source !== node.id) continue;
+        if (nodes.find((n) => n.id === edge.target)?.type !== "outputGallery") continue;
+        const output = outputs.find((o) => o.handleId === edge.sourceHandle);
+        if (!output?.value) continue;
+        if (output.type === "image") appendOutputGalleryImage(edge.target, output.value);
+        else if (output.type === "video") appendOutputGalleryVideo(edge.target, output.value);
+      }
 
       // Every media output is a generation like any other, so each goes to the
       // asset library under its own handle.
