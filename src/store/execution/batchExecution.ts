@@ -13,8 +13,10 @@ import { executeNanoBanana } from "./nanoBananaExecutor";
 import { executeGenerateVideo } from "./generateVideoExecutor";
 import { executeGenerateAudio } from "./generateAudioExecutor";
 import { executeLlmGenerate } from "./llmGenerateExecutor";
+import { executeGenerate3D } from "./generate3dExecutor";
+import { executeComfyApp } from "./comfyAppExecutor";
 
-const BATCH_NODE_TYPES = new Set(["nanoBanana", "generateVideo", "generateAudio", "llmGenerate"]);
+const BATCH_NODE_TYPES = new Set(["nanoBanana", "generateVideo", "generateAudio", "generate3d", "llmGenerate", "comfyApp"]);
 
 /**
  * Attempts to run batch execution for a node.
@@ -90,8 +92,14 @@ export async function runBatchIfApplicable(
       case "generateAudio":
         await executeGenerateAudio(batchCtx, options);
         break;
+      case "generate3d":
+        await executeGenerate3D(batchCtx, options);
+        break;
       case "llmGenerate":
         await executeLlmGenerate(batchCtx, options);
+        break;
+      case "comfyApp":
+        await executeComfyApp(batchCtx);
         break;
     }
 
