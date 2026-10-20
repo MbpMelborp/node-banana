@@ -39,7 +39,10 @@ interface FakeMedia {
   /** Moves a playing element on by `ms` of the frames' time, and lands a seek whose time has come. */
   advance(ms: number, now: number): void;
   requestVideoFrameCallback: (callback: VideoFrameRequestCallback) => number;
-  /** Shows a frame of `mediaTime`: what requestVideoFrameCallback reports (only when called, so a test decides). */
+  /**
+   * Shows a frame of `mediaTime`, sent to the screen now (the last frame's time): what requestVideoFrameCallback
+   * reports, only when called, so a test decides.
+   */
   present(mediaTime: number): void;
 }
 
@@ -153,7 +156,9 @@ function fakeMedia({
   media.present = (mediaTime) => {
     const callbacks = frameCallbacks;
     frameCallbacks = [];
-    for (const callback of callbacks) callback(0, { mediaTime } as VideoFrameCallbackMetadata);
+    for (const callback of callbacks) {
+      callback(lastNow, { mediaTime, presentationTime: lastNow } as VideoFrameCallbackMetadata);
+    }
   };
   made.push(media);
   return media;
@@ -597,9 +602,9 @@ describe("useSequencePlayback", () => {
     expect(first.paused).toBe(true);
     flushFrame(1000);
     expect(second.play).toHaveBeenCalledTimes(1);
-    // Where the clock will be when it moves: its start latency on, which the start taught (0.025 s: these stand-ins
-    // move at once)
-    expect(second.currentTime).toBeCloseTo(1.025, 9);
+    // Where the clock will be when it moves: its start latency on, which the first start taught (the least, 0.01 s:
+    // these stand-ins move at once)
+    expect(second.currentTime).toBeCloseTo(1.01, 9);
     expect(editor().playing).toBe(true);
 
     // And it plays on with the clock
@@ -756,6 +761,30 @@ describe("useSequencePlayback", () => {
     flushFrame((now += 16));
     expect(b.currentTime).toBeGreaterThan(shownAt);
     expect(b.writes).toBe(1);
+  });
+
+  it("learns a start's latency from the frames it shows, up to a slower one at once", () => {
+    const opts = options(undefined, null);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // Its file has sound: an element of it moves a quarter of a second after play()
+    const first = Object.assign(fakeMedia({ startMs: 250 }), { src: "blob:a" });
+    act(() => result.current.registerVideo("c1", asVideo(first)));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    while (livePlayhead() < 1) {
+      flushFrame((now += 16));
+      if (!first.paused) act(() => first.present(first.currentTime));
+    }
+    // Another element of the file takes over: started where the clock will be when it moves, by that start
+    const second = Object.assign(fakeMedia({ startMs: 250 }), { src: "blob:a" });
+    act(() => {
+      result.current.registerVideo("c1", null);
+      result.current.registerVideo("c1", asVideo(second));
+    });
+    flushFrame((now += 16));
+    expect(second.play).toHaveBeenCalledTimes(1);
+    expect(second.currentTime - livePlayhead()).toBeGreaterThan(0.23);
+    expect(second.currentTime - livePlayhead()).toBeLessThan(0.27);
   });
 
   it("starts a trimmed clip's pre-roll from where it waits, never moved back for its margin", () => {
@@ -1231,7 +1260,8 @@ describe("useSequencePlayback", () => {
       onLoaded();
       flushFrame(1000);
       expect(a.play).toHaveBeenCalledTimes(2);
-      expect(a.currentTime).toBeCloseTo(2.025, 9);
+      // Its start latency on, as its first start taught (the least: these stand-ins move at once)
+      expect(a.currentTime).toBeCloseTo(2.01, 9);
       expect(editor().playing).toBe(true);
       flushFrame(1500);
       expect(livePlayhead()).toBeCloseTo(2.5, 9);
@@ -1305,14 +1335,15 @@ describe("useSequencePlayback", () => {
         flushFrame(2000);
         expect(livePlayhead()).toBeCloseTo(3.5, 9);
         expect(el("B").play).not.toHaveBeenCalled();
-        // Started its start latency ahead, from its In
-        flushFrame(2480);
+        // Started its start latency and margin ahead, from its In
+        flushFrame(2440);
         expect(editor().playing).toBe(true);
         expect(el("B").play).toHaveBeenCalledTimes(1);
         expect(el("B").currentTime).toBe(0);
         flushFrame(3500);
         expect(livePlayhead()).toBeCloseTo(5, 9);
-        expect(Math.abs(el("B").currentTime - 1)).toBeLessThan(0.05);
+        // Early by its first-guess latency and margin at most: these stand-ins move at once
+        expect(Math.abs(el("B").currentTime - 1)).toBeLessThan(0.09);
         expect(el("B").writes).toBe(0);
       });
 
