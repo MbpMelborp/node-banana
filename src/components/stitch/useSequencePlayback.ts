@@ -105,8 +105,12 @@ const PREROLL = 0.5;
  * is never seen, one held a frame long is.
  */
 const START_MARGIN = 0.02;
-/** A clip coming into view whose element last showed a frame further than this behind its target holds the cut. */
+/**
+ * A clip coming into view whose element last showed a frame further than this behind its target holds the cut, at
+ * most STALE_HOLD_MAX: short, in case a browser shows no frames of a hidden element.
+ */
 const STALE_FRAME = 0.1;
+const STALE_HOLD_MAX = 0.1;
 /** Clips starting this soon after the next one are prepared with it. */
 const PREPARE_WINDOW = 0.5;
 /** How long the picture holds on what it showed for a clip coming into view that has no frame to show yet. */
@@ -518,18 +522,19 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     // late start, or its last frame out an older one): the picture stays on what it showed (the elements' opacities
     // and the canvas as they are), what left it still, until the clip has a frame
     const incoming = (el: HTMLVideoElement) => !((shown.get(el) ?? 0) > 0);
-    let hold = false;
+    let wait: "seek" | "frame" | null = null;
     for (const [el, layer] of live) {
       if (!(layer.opacity > 0) || !incoming(el)) continue;
       const target = sourceTimeAt(layer.span, at);
       const short = el.currentTime < layer.span.clip.inSec - SEEK_TOLERANCE;
       const last = presented.current.get(el);
-      const stale = last !== undefined && !el.paused && last < target - STALE_FRAME;
-      if (!presentable(el) || short || stale) hold = true;
+      if (!presentable(el) || short) wait = "seek";
+      else if (last !== undefined && !el.paused && last < target - STALE_FRAME) wait ??= "frame";
     }
+    let hold = wait !== null;
     if (hold) {
       holdingSince ??= at;
-      if (at - holdingSince > HOLD_MAX) hold = false;
+      if (at - holdingSince > (wait === "seek" ? HOLD_MAX : STALE_HOLD_MAX)) hold = false;
     } else {
       holdingSince = null;
     }

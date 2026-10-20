@@ -31,6 +31,9 @@ interface FakeMedia {
   removeEventListener: ReturnType<typeof vi.fn>;
   /** Moves a playing element on by `ms` of the frames' time, and lands a seek whose time has come. */
   advance(ms: number, now: number): void;
+  requestVideoFrameCallback: (callback: VideoFrameRequestCallback) => number;
+  /** Shows a frame of `mediaTime`: what requestVideoFrameCallback reports (only when called, so a test decides). */
+  present(mediaTime: number): void;
 }
 
 /** Every stand-in made since the test began, advanced by flushFrame. */
@@ -104,6 +107,16 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
         media.paused = true;
       }
     },
+  };
+  let frameCallbacks: VideoFrameRequestCallback[] = [];
+  media.requestVideoFrameCallback = (callback) => {
+    frameCallbacks.push(callback);
+    return frameCallbacks.length;
+  };
+  media.present = (mediaTime) => {
+    const callbacks = frameCallbacks;
+    frameCallbacks = [];
+    for (const callback of callbacks) callback(0, { mediaTime } as VideoFrameCallbackMetadata);
   };
   made.push(media);
   return media;
@@ -589,6 +602,161 @@ describe("useSequencePlayback", () => {
     expect(b.muted).toBe(false);
   });
 
+  it("hands a cut over prepared: the next clip moving before it and never seeked, the previous paused after, the music untouched", () => {
+    const opts: SequencePlaybackOptions = { ...twoSourceOptions(), audio: { clips: [audioClip()] } };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // Seeks take 40 ms, as a real element's do; "a" plays the first 5 s of a longer file, so only the cut stops it
+    const a = fakeMedia({ duration: 10, seekMs: 40 });
+    const b = fakeMedia({ duration: 5, seekMs: 40 });
+    const music = fakeMedia({ duration: 30, seekMs: 40 });
+    let bAskedAt: number | null = null;
+    b.play.mockImplementation(() => {
+      bAskedAt ??= livePlayhead();
+      b.paused = false;
+      return Promise.resolve();
+    });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlayhead(4));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    const musicWrites = () => music.writes;
+    let atStart: number | null = null;
+    // Up to the cut: a frame every 16 ms
+    while (livePlayhead() < 5) {
+      flushFrame(now);
+      if (atStart === null && !music.paused) atStart = musicWrites();
+      now += 16;
+    }
+    // b was already at its In: never seeked, and asked to play before the cut
+    expect(b.writes).toBe(0);
+    expect(bAskedAt).not.toBeNull();
+    expect(bAskedAt!).toBeLessThan(5);
+    // The cut: shown and heard at once, moving; a hidden and silent, still playing until the next frame
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+    expect(b.paused).toBe(false);
+    expect(b.currentTime).toBeGreaterThan(0);
+    expect(a.style.opacity).toBe("0");
+    expect(a.muted).toBe(true);
+    expect(a.paused).toBe(false);
+    flushFrame(now);
+    expect(a.paused).toBe(true);
+    expect(a.pause).toHaveBeenCalledTimes(1);
+    // The music was seeked once, to start, and never across the cut
+    for (let k = 0; k < 10; k++) flushFrame((now += 16));
+    expect(atStart).toBe(1);
+    expect(music.writes).toBe(1);
+    expect(music.paused).toBe(false);
+  });
+
+  it("holds a cut on the outgoing picture until the incoming element has shown a frame of where it is", () => {
+    // One source cut in two at 2.5 s, in Track
+    const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
+    const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 0),
+      total: 5,
+      srcFor: () => "blob:a",
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(1.5));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    // Prepared at its pre-roll point, and that frame shown (as a browser does after a seek)
+    expect(b.currentTime).toBeCloseTo(2, 9);
+    act(() => b.present(2));
+    // It plays on towards its In, but the browser shows no newer frame of it: past the cut, the picture stays on
+    // "a", still
+    let now = 100;
+    while (livePlayhead() < 2.55) flushFrame((now += 16));
+    expect(b.paused).toBe(false);
+    expect(b.currentTime).toBeGreaterThan(2.5);
+    expect(a.style.opacity).toBe("1");
+    expect(a.paused).toBe(true);
+    expect(b.style.opacity).toBe("0");
+    expect(b.muted).toBe(true);
+    // A frame of where it is: the cut goes through
+    act(() => b.present(b.currentTime));
+    flushFrame((now += 16));
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+    expect(a.style.opacity).toBe("0");
+  });
+
+  it("gives up holding for a fresher frame after a tenth of a second", () => {
+    const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
+    const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 0),
+      total: 5,
+      srcFor: () => "blob:a",
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(1.5));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    act(() => b.present(2));
+    let now = 100;
+    // A browser that shows no frame of the hidden element: the cut waits a tenth of a second, then goes through
+    while (livePlayhead() < 2.55) flushFrame((now += 16));
+    expect(b.style.opacity).toBe("0");
+    while (livePlayhead() < 2.65) flushFrame((now += 16));
+    expect(b.style.opacity).toBe("1");
+    expect(a.style.opacity).toBe("0");
+  });
+
+  it("loads ahead only the clips shown, playing and coming up", () => {
+    const clip = (id: string, edgeId: string) => createClip({ kind: "edge", edgeId }, { id });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans(
+        [clip("c1", "e1"), clip("c2", "e2"), clip("c3", "e3")],
+        new Map<SourceKey, number>([
+          ["edge:e1", 5],
+          ["edge:e2", 5],
+          ["edge:e3", 5],
+        ]),
+        0,
+      ),
+      total: 15,
+      srcFor: (clipId) => `blob:${clipId}`,
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const media = [fakeMedia({ duration: 5 }), fakeMedia({ duration: 5 }), fakeMedia({ duration: 5 })];
+    const preload = () => media.map((m) => (m as unknown as { preload?: string }).preload ?? "metadata");
+    act(() => media.forEach((m, i) => result.current.registerVideo(`c${i + 1}`, asVideo(m))));
+    act(() => editor().setPlayhead(1));
+    expect(preload()).toEqual(["auto", "metadata", "metadata"]);
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    // Playing c1: c2 is next
+    expect(preload()).toEqual(["auto", "auto", "metadata"]);
+  });
+
   it("stops when the element playing now refuses to play", async () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
@@ -767,6 +935,27 @@ describe("useSequencePlayback", () => {
       expect(canvas.style.opacity).toBe("0");
       expect(a.style.opacity).toBe("1");
       expect(b.style.opacity).toBe("0.5");
+    });
+
+    it("nudges a layer that falls behind by its rate, never seeking it", () => {
+      const { a, b } = mount(stackedOptions());
+      act(() => editor().setPlayhead(4.2));
+      act(() => editor().setPlaying(true));
+      flushFrame(0);
+      flushFrame(100);
+      const writes = b.writes;
+      // b stands still for a tenth of a second: 0.1 s behind, played 2 % faster
+      b.frozen = true;
+      flushFrame(200);
+      b.frozen = false;
+      flushFrame(216);
+      expect(b.playbackRate).toBe(1.02);
+      expect(b.writes).toBe(writes);
+      // Caught up: its rate is 1 again
+      for (let now = 232; now <= 6000 && b.playbackRate !== 1; now += 16) flushFrame(now);
+      expect(b.playbackRate).toBe(1);
+      expect(b.writes).toBe(writes);
+      expect(a.writes).toBe(1);
     });
 
     it("keeps the earlier clip in front with Crossfade off, both heard in full", () => {
