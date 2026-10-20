@@ -52,9 +52,8 @@ export function ScrubRow({ videoRef, src, className, leading, trailing }: ScrubR
   const bound = useRef<{ video: HTMLVideoElement; src: string | null | undefined; unbind: () => void } | null>(null);
 
   // A card can mount another <video> while the ref object stays the same
-  // (Generate Video keys its element on the carousel entry, which a run
-  // renames), so look at what the ref holds after every render and move the
-  // listeners when the element or its source changes.
+  // (a new key on the element), so look at what the ref holds after every
+  // render and move the listeners when the element or its source changes.
   useEffect(() => {
     const video = videoRef.current;
     if (video === bound.current?.video && src === bound.current.src) return;

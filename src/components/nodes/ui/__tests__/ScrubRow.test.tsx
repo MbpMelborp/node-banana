@@ -112,7 +112,7 @@ describe("ScrubRow", () => {
     expect(v.play).toHaveBeenCalledTimes(1);
   });
 
-  // A card can mount another <video> for the same URL (Generate Video keys
+  // A card can mount another <video> for the same URL (Generate Video keyed
   // its element on the carousel entry, which a run renames): the ref object
   // stays, what it holds changes.
   describe("a video remounted under the same source", () => {
