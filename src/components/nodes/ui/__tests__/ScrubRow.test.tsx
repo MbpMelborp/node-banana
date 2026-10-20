@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ScrubRow, VOLUME_HOVER_DELAY_MS, formatTime } from "../ScrubRow";
@@ -176,5 +177,16 @@ describe("ScrubRow", () => {
       expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
       expect(screen.getByText("0:02 / 0:05")).toBeInTheDocument();
     });
+  });
+
+  it("still listens after StrictMode runs its effects twice", () => {
+    const v = playableVideo();
+    render(
+      <StrictMode>
+        <ScrubRow videoRef={{ current: v }} src="blob:a" />
+      </StrictMode>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 });
