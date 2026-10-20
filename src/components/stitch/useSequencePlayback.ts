@@ -16,10 +16,10 @@ import type { VolumePoint } from "@/types";
  * over like any other). The clip's mute and volume are applied to the
  * elements (element volume rather than Web Audio, so a source served without
  * CORS still sounds), a silent one at SILENT rather than muted. Each audio
- * clip has its own hidden <audio>, playing
- * inside its span from its In at its curve's gain and paused outside. Every
- * playing element is kept on the clock by its rate, seeked only when far off
- * (createStepKeeper). The encode is the truth. The preview plays one loop.
+ * clip has its own hidden <audio>, playing inside its span from its In at its
+ * curve's gain and paused outside. Every playing element is kept on the clock
+ * by its rate, seeked only when far off (createStepKeeper). The encode is the
+ * truth. The preview plays one loop.
  *
  * Paused, the clips under the playhead are shown at the frame under it.
  * Playing, the sequence clock moves the playhead: it runs on the frames'
