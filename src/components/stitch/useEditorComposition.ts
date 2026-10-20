@@ -92,24 +92,17 @@ export function useEditorComposition(
     return srcs;
   }, [byClip, audioByClip]);
   const playable = usePlayableUrls(rawSources);
-  // Track: one element per source. Stacked: one per clip, in timeline order, since two pieces of one source can
-  // show at once
+  // One element per clip, in timeline order: two pieces of one source play at their own times (at once in Stacked,
+  // one after the other at a cut in Track, where the next is prepared before the cut)
   const videoLayers = useMemo(() => {
     const layers: PreviewLayerSource[] = [];
-    if (stacked) {
-      for (const clip of timeline) {
-        const src = byClip.get(clip.id)?.src;
-        const url = src ? playable.get(src) : undefined;
-        if (url) layers.push({ key: clip.id, src: url });
-      }
-      return layers;
-    }
-    for (const view of byClip.values()) {
-      const url = view.src ? playable.get(view.src) : undefined;
-      if (url && !layers.some((layer) => layer.src === url)) layers.push({ key: url, src: url });
+    for (const clip of timeline) {
+      const src = byClip.get(clip.id)?.src;
+      const url = src ? playable.get(src) : undefined;
+      if (url) layers.push({ key: clip.id, src: url });
     }
     return layers;
-  }, [stacked, timeline, byClip, playable]);
+  }, [timeline, byClip, playable]);
   // One element per audio clip: two pieces of one file play at their own times
   const audioUrl = useCallback(
     (clipId: string) => {
@@ -151,7 +144,7 @@ export function useEditorComposition(
     [audioClips, audioUrl],
   );
   const stack = useMemo(() => (stacked ? { crossfade, placed } : null), [stacked, crossfade, placed]);
-  const { registerVideo, registerAudio, activeSrc } = useSequencePlayback({
+  const { registerVideo, registerAudio } = useSequencePlayback({
     spans,
     total,
     srcFor,
@@ -160,9 +153,9 @@ export function useEditorComposition(
     stack,
   });
 
-  // Any change of Track/Stacked (the toggle, ⌘Z, ⇧⌘Z) swaps every preview element: stop before the next frame
-  // ticks against the ones leaving. After the playback hook, whose own layout effect hands it the new layout
-  // first: the pause re-seeks the paused frame, and must do it the new layout's way.
+  // Any change of Track/Stacked (the toggle, ⌘Z, ⇧⌘Z) moves every clip in time: stop before the next frame plays
+  // the old layout's times. After the playback hook, whose own layout effect hands it the new layout first: the
+  // pause re-seeks the paused frame, and must do it the new layout's way.
   const shownStacked = useRef(stacked);
   useLayoutEffect(() => {
     if (shownStacked.current === stacked) return;
@@ -189,7 +182,6 @@ export function useEditorComposition(
     srcFor,
     registerVideo,
     registerAudio,
-    activeSrc,
     zoom,
     maxTimeline,
   };

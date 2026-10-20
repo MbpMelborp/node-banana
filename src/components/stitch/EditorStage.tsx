@@ -2,7 +2,6 @@
 
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Film } from "lucide-react";
-import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 
 /** Room kept at the frame's sides, and above the frame and below its control row. */
@@ -32,9 +31,9 @@ export function stageLayout(
   return { frame, row: Math.min(width, Math.max(frame.width, CONTROLS_MIN_PX)) };
 }
 
-/** A preview element: one per source in Track, one per clip in Stacked. */
+/** A preview element: one per clip. */
 export interface PreviewLayerSource {
-  /** What the playback registers it by: the URL in Track, the clip id in Stacked. */
+  /** What the playback registers it by: the clip's id. */
   key: string;
   src: string;
 }
@@ -54,53 +53,37 @@ function PreviewAudio({
 }
 
 /**
- * One <video>, with a ref callback that keeps its identity while its key does. Track shows the active one by class;
- * Stacked leaves it hidden by class and the playback writes its inline opacity.
+ * One <video>, with a ref callback that keeps its identity while its key does. Hidden by class until the playback
+ * writes its inline opacity (and its sound): a cut is never a render.
  */
 function PreviewVideo({
   layerKey,
   src,
-  active,
-  stacked,
   registerVideo,
 }: {
   layerKey: string;
   src: string;
-  active: boolean;
-  stacked: boolean;
   registerVideo: (key: string, el: HTMLVideoElement | null) => void;
 }) {
   const ref = useCallback((el: HTMLVideoElement | null) => registerVideo(layerKey, el), [registerVideo, layerKey]);
   return (
-    <video
-      ref={ref}
-      src={src}
-      preload="auto"
-      playsInline
-      className={cn(
-        "absolute inset-0 h-full w-full object-contain",
-        stacked ? "opacity-0" : active ? "opacity-100" : "opacity-0",
-      )}
-    />
+    <video ref={ref} src={src} preload="auto" playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
   );
 }
 
 /**
  * The stage: the sequence on black in an 8px-rounded frame, contain-fitted to
  * the output's aspect and centred on the pane with its control row (the
- * children) under it at its width. In Track one <video> per source is
- * mounted and the one under the playhead is shown; in Stacked one per clip,
- * in row order, and the playback works their opacities out in that order
- * (each clip's share of the picture does not depend on which one paints
- * last). useSequencePlayback drives them, and each audio clip's hidden
- * <audio>. An editor with no clips shows an empty frame that says why.
+ * children) under it at its width. One <video> per clip is mounted, in row
+ * order, and the playback works their opacities out in that order (each
+ * clip's share of the picture does not depend on which one paints last).
+ * useSequencePlayback drives them, and each audio clip's hidden <audio>. An
+ * editor with no clips shows an empty frame that says why.
  */
 export function EditorStage({
   empty,
   aspect,
   layers,
-  stacked,
-  activeSrc,
   registerVideo,
   audioLayers,
   registerAudio,
@@ -109,10 +92,8 @@ export function EditorStage({
   empty: boolean;
   /** width / height of the output; 16:9 when no clip has a size yet. */
   aspect: number;
-  /** Track: one per distinct playable URL. Stacked: one per clip with a playable URL, in timeline order. */
+  /** One per clip with a playable URL, in timeline order. */
   layers: ReadonlyArray<PreviewLayerSource>;
-  stacked: boolean;
-  activeSrc: string | null;
   registerVideo: (key: string, el: HTMLVideoElement | null) => void;
   /** One per audio clip with a playable URL, keyed by the clip's id. */
   audioLayers: ReadonlyArray<PreviewLayerSource>;
@@ -165,14 +146,7 @@ export function EditorStage({
         ) : (
           <div data-testid="stitch-preview" className="relative shrink-0 overflow-hidden rounded-lg bg-black" style={frameStyle}>
             {layers.map((layer) => (
-              <PreviewVideo
-                key={layer.key}
-                layerKey={layer.key}
-                src={layer.src}
-                active={layer.src === activeSrc}
-                stacked={stacked}
-                registerVideo={registerVideo}
-              />
+              <PreviewVideo key={layer.key} layerKey={layer.key} src={layer.src} registerVideo={registerVideo} />
             ))}
           </div>
         )}

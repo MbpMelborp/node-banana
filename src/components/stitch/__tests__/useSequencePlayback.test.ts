@@ -228,7 +228,7 @@ describe("useSequencePlayback", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlayhead(2));
     act(() => editor().setPlaying(true));
     expect(video.play).toHaveBeenCalledTimes(1);
@@ -247,7 +247,7 @@ describe("useSequencePlayback", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia({ seekMs: 400 });
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlayhead(3));
     act(() => editor().setPlaying(true));
     // Playing from 3 needs a seek that takes 400 ms: the clock does not wait for it
@@ -266,7 +266,7 @@ describe("useSequencePlayback", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlayhead(9.5));
     act(() => editor().setPlaying(true));
     flushFrame(0);
@@ -282,7 +282,7 @@ describe("useSequencePlayback", () => {
     const video = fakeMedia();
     const music = fakeMedia({ duration: 3 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
@@ -309,7 +309,7 @@ describe("useSequencePlayback", () => {
     const music = fakeMedia({ duration: 30 });
     music.play.mockImplementation(() => Promise.reject(new Error("NotAllowedError")));
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
@@ -329,7 +329,7 @@ describe("useSequencePlayback", () => {
     const video = fakeMedia();
     const music = fakeMedia({ duration: 30 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
@@ -360,7 +360,7 @@ describe("useSequencePlayback", () => {
     const video = fakeMedia();
     const tone = fakeMedia({ duration: 10 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
@@ -382,7 +382,7 @@ describe("useSequencePlayback", () => {
     const video = fakeMedia();
     const tone = fakeMedia({ duration: 10 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
@@ -394,26 +394,23 @@ describe("useSequencePlayback", () => {
   });
 
   it("hands playback to a <video> remounted under the playhead", () => {
-    let opts = options("data:video/mp4;base64,AAAA");
-    const { result, rerender } = renderHook(() => useSequencePlayback(opts));
+    const opts = options();
+    const { result } = renderHook(() => useSequencePlayback(opts));
     const first = fakeMedia();
-    act(() => result.current.registerVideo("data:video/mp4;base64,AAAA", asVideo(first)));
+    act(() => result.current.registerVideo("c1", asVideo(first)));
     act(() => editor().setPlaying(true));
     flushFrame(0);
     flushFrame(1000);
     expect(editor().playhead).toBe(1);
 
-    // The object URL arrives: React swaps the element (the old one is paused as it leaves the page)
+    // React swaps the clip's element: the old one is paused as it leaves, the new one picks up where the clock is
     const second = fakeMedia();
-    opts = options("blob:a");
     act(() => {
-      result.current.registerVideo("data:video/mp4;base64,AAAA", null);
-      result.current.registerVideo("blob:a", asVideo(second));
-      first.paused = true;
+      result.current.registerVideo("c1", null);
+      result.current.registerVideo("c1", asVideo(second));
     });
-    rerender();
+    expect(first.paused).toBe(true);
     flushFrame(1000);
-    expect(result.current.activeSrc).toBe("blob:a");
     expect(second.play).toHaveBeenCalledTimes(1);
     expect(second.currentTime).toBe(1);
     expect(editor().playing).toBe(true);
@@ -430,13 +427,15 @@ describe("useSequencePlayback", () => {
     const a = pendingPlayMedia();
     const b = pendingPlayMedia();
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(a));
-      result.current.registerVideo("blob:b", asVideo(b));
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
     });
     act(() => editor().setPlaying(true));
-    // Moved from outside into the second source's clip: "a" is paused before its play() resolved
+    // Moved from outside into the second source's clip: "a" is hidden at once and paused the next frame, before its
+    // play() resolved
     act(() => editor().setPlayhead(6));
     flushFrame(0);
+    flushFrame(16);
     await act(async () => {
       await Promise.resolve();
     });
@@ -451,8 +450,8 @@ describe("useSequencePlayback", () => {
     const a = pendingPlayMedia();
     const b = pendingPlayMedia();
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(a));
-      result.current.registerVideo("blob:b", asVideo(b));
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
     });
     act(() => editor().setPlayhead(4.98));
     act(() => editor().setPlaying(true));
@@ -471,7 +470,7 @@ describe("useSequencePlayback", () => {
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
     video.play.mockImplementation(() => Promise.reject(new DOMException("No autoplay", "NotAllowedError")));
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlaying(true));
     await act(async () => {
       await Promise.resolve();
@@ -483,7 +482,7 @@ describe("useSequencePlayback", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     const onSeeked = video.addEventListener.mock.calls.find(([type]) => type === "seeked")![1] as (e: Event) => void;
 
     // Paused, Go to end while a seek is still running: the target waits for 'seeked'
@@ -543,20 +542,28 @@ describe("useSequencePlayback", () => {
       expect(b.currentTime).toBe(2);
     });
 
-    it("plays into an overlap without pausing the earlier clip or seeking the later one twice", () => {
+    it("starts the later clip hidden just before an overlap, without pausing the earlier one or seeking", () => {
       const { a, b } = mount(stackedOptions());
       act(() => editor().setPlayhead(3));
       act(() => editor().setPlaying(true));
       expect(a.play).toHaveBeenCalledTimes(1);
       flushFrame(0);
-      // Within half a second of its start, the later clip is seeked to its In
+      // The later clip is next: it waits at its In (already there, so never seeked)
       flushFrame(600);
-      expect(b.writes).toBe(1);
-      expect(b.play).not.toHaveBeenCalled();
-      // Its start: the pre-seek has landed, so it only plays
-      flushFrame(1050);
+      expect(b.paused).toBe(true);
+      // Its start latency before its start (learned from the earlier clip's start: these stand-ins move at once): it
+      // plays, hidden and muted
+      flushFrame(970);
       expect(b.play).toHaveBeenCalledTimes(1);
-      expect(b.writes).toBe(1);
+      expect(b.style.opacity).toBe("0");
+      expect(b.muted).toBe(true);
+      // Its start: shown and heard, moving and in step
+      flushFrame(1050);
+      expect(Number(b.style.opacity)).toBeCloseTo(0.05, 9);
+      expect(b.muted).toBe(false);
+      expect(b.currentTime).toBeCloseTo(0.08, 9);
+      expect(b.play).toHaveBeenCalledTimes(1);
+      expect(b.writes).toBe(0);
       expect(a.pause).not.toHaveBeenCalled();
       expect(editor().playhead).toBeCloseTo(4.05, 9);
     });
@@ -608,7 +615,7 @@ describe("useSequencePlayback", () => {
       expect(b.style.opacity).toBe("0");
     });
 
-    it("plays a cut between two pieces of one video from the next piece's pre-seek", () => {
+    it("plays a cut between two pieces of one video from the next piece's pre-roll", () => {
       const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
       const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
       const opts: SequencePlaybackOptions = {
@@ -624,13 +631,27 @@ describe("useSequencePlayback", () => {
       act(() => editor().setPlayhead(2.2));
       act(() => editor().setPlaying(true));
       flushFrame(0);
-      expect(b.currentTime).toBe(2.5);
+      // Waiting at its pre-roll point, 0.15 s before its In
+      expect(b.currentTime).toBeCloseTo(2.35, 9);
       expect(b.writes).toBe(1);
-      flushFrame(300);
-      expect(editor().playhead).toBeCloseTo(2.5, 9);
+      expect(b.paused).toBe(true);
+      // Started a pre-roll and a start latency before the cut, from there
+      flushFrame(110);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.writes).toBe(1);
+      expect(b.style.opacity).toBe("0");
+      // The cut: shown at its In, the earlier piece hidden and silent at once and paused a frame later
+      flushFrame(300);
+      expect(editor().playhead).toBeCloseTo(2.5, 9);
+      expect(b.style.opacity).toBe("1");
+      expect(b.currentTime).toBeCloseTo(2.54, 9);
+      expect(a.style.opacity).toBe("0");
+      expect(a.muted).toBe(true);
+      expect(a.paused).toBe(false);
+      flushFrame(316);
       expect(a.paused).toBe(true);
+      expect(b.writes).toBe(1);
+      expect(b.play).toHaveBeenCalledTimes(1);
     });
 
     it("seeks a clip back to the playhead when its URL changes and the new file's metadata loads", () => {

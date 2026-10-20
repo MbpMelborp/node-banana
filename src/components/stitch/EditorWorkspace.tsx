@@ -45,8 +45,6 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
           empty={empty}
           aspect={composition.aspect}
           layers={composition.videoLayers}
-          stacked={stacked}
-          activeSrc={composition.activeSrc}
           registerVideo={composition.registerVideo}
           audioLayers={composition.audioLayers}
           registerAudio={composition.registerAudio}

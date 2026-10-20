@@ -13,9 +13,7 @@ function renderStage(empty = false, aspect = 16 / 9) {
     <EditorStage
       empty={empty}
       aspect={aspect}
-      layers={empty ? [] : [{ key: "blob:a", src: "blob:a" }]}
-      stacked={false}
-      activeSrc="blob:a"
+      layers={empty ? [] : [{ key: "c1", src: "blob:a" }]}
       registerVideo={noop}
       audioLayers={[]}
       registerAudio={noop}
