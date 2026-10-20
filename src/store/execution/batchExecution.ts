@@ -60,17 +60,19 @@ export async function runBatchIfApplicable(
       batchTotal: totalItems,
     });
 
-    // Wrap context so getConnectedInputs returns current batch item as text,
-    // and so each item's asset says which item of the batch it was
+    // Wrap context so getConnectedInputs returns current batch item as text
+    // and in the slot the batch feeds, and so each item's asset says which
+    // item of the batch it was
     const { recordAsset } = executionCtx;
     const batchCtx: NodeExecutionContext = {
       ...executionCtx,
       getConnectedInputs: (nodeId: string) => {
-        const inputs = executionCtx.getConnectedInputs(nodeId);
+        const { textItemsInput, ...inputs } = executionCtx.getConnectedInputs(nodeId);
         return {
           ...inputs,
           text: items[i],
           textItems: [],
+          ...(textItemsInput ? { dynamicInputs: { ...inputs.dynamicInputs, [textItemsInput]: items[i] } } : {}),
         };
       },
       ...(recordAsset

@@ -600,6 +600,29 @@ describe("generateVideo", () => {
     expect(entry.id).toBe("waves_1a2b");
     expect(entry).not.toHaveProperty("assetId");
   });
+
+  it("in a batch, sends each item in the slot the batch feeds, beside the other slots", async () => {
+    const { ctx } = makeCtx(videoNode(), { recordAsset: makeRecorder().recordAsset });
+    (ctx.getConnectedInputs as ReturnType<typeof vi.fn>).mockReturnValue({
+      images: [],
+      videos: [],
+      audio: [],
+      model3d: null,
+      text: "one",
+      textItems: ["one", "two"],
+      textItemsInput: "prompt",
+      dynamicInputs: { prompt: "one", negative_prompt: "blurry" },
+      easeCurve: null,
+    });
+    mockFetch.mockResolvedValue(okJson({ success: true, video: "data:video/mp4;base64,v" }));
+
+    await expect(runBatchIfApplicable(ctx)).resolves.toBe(true);
+
+    expect(mockFetch.mock.calls.map((c) => JSON.parse(c[1].body)).map((body) => [body.prompt, body.dynamicInputs])).toEqual([
+      ["one", { prompt: "one", negative_prompt: "blurry" }],
+      ["two", { prompt: "two", negative_prompt: "blurry" }],
+    ]);
+  });
 });
 
 describe("generateAudio", () => {
