@@ -580,10 +580,11 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
       }
       rolling.add(el);
       if (!el.paused) continue;
-      // Late (the clock came from a move just before the start, or a test start ran long): from where it must be to
-      // reach its In in time
+      // From where it waits, START_MARGIN early as planned (never moved back for that: a seek into a file decodes from
+      // its keyframe, which delays the start); late (the clock came from a move just before the start, or a test start
+      // ran long), moved on to where it must be to reach its In in time
       const point = Math.max(0, span.clip.inSec - (span.start - at) + startLatency);
-      if (Math.abs(el.currentTime - point) > SEEK_TOLERANCE) {
+      if (point - el.currentTime > SEEK_TOLERANCE || el.currentTime - point > START_MARGIN + SEEK_TOLERANCE) {
         pendingSeeks.current.delete(el);
         el.currentTime = point;
       }

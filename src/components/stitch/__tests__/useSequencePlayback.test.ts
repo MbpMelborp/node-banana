@@ -758,6 +758,40 @@ describe("useSequencePlayback", () => {
     expect(b.writes).toBe(1);
   });
 
+  it("starts a trimmed clip's pre-roll from where it waits, never moved back for its margin", () => {
+    // One source cut in two at 2.5 s, in Track: the second piece waits half a second before its In
+    const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
+    const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 0),
+      total: 5,
+      srcFor: () => "blob:a",
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5, startMs: 250 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(0.5));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    let started = 0;
+    // A frame every 4 ms, so the start lands within a hair of when it is due
+    while (b.style.opacity !== "1") {
+      flushFrame((now += 4));
+      if (b.play.mock.calls.length === 2 && started === 0) started = b.writes;
+    }
+    // Its seeks: to the pre-roll point, and back there after its test start; none at its start
+    expect(started).toBe(2);
+    expect(b.writes).toBe(2);
+    expect(b.currentTime).toBeGreaterThan(2.5);
+    expect(b.currentTime).toBeLessThan(2.56);
+  });
+
   it("holds a cut on the outgoing picture until the incoming element has shown a frame of where it is", () => {
     // One source cut in two at 2.5 s, in Track
     const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
