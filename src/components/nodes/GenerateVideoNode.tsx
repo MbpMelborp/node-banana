@@ -290,7 +290,6 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
         <>
           <video
             ref={videoAutoplayRef}
-            key={nodeData.videoHistory?.[nodeData.selectedVideoHistoryIndex || 0]?.id}
             src={videoBlobUrl ?? undefined}
             loop
             muted
