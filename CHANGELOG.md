@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The video editor's preview plays smoothly** — Play in the Edit video view and in a node's editor now goes across cuts, split clips and crossfades without a held frame, and the audio rows and the clips' own sound stay in step with the picture instead of jumping. The preview runs on its own clock, readies the next clip before its cut, and keeps sound in step by its speed rather than by seeking.
 - **A video card's Play button shows Pause while it plays** — On the Generate Video card after a run, pressing Play played the video but the button stayed on Play and the playhead and time stood still. The player under every video card now follows the card's video, and a run's video no longer reloads when it is saved.
+- **Array batches run ComfyUI app nodes once per item** — With Batch on, an Array connected to a ComfyUI app node's text input runs the app once per item, each in the input it is connected to, and the node's history and a connected Output Gallery show one result per item; before, the app ran once with the first item. Generate 3D nodes batch the same way.
 
 ## [2.2.0] - 2026-10-19
 
