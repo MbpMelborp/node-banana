@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { subscribeLivePlayhead, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { buildTimeAxis, fitPxPerSec, MAX_PX_PER_SEC, MIN_PX_PER_SEC, type TimeAxis } from "@/lib/stitch/timeAxis";
 import { draftSpans } from "@/lib/stitch/draft";
 import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
@@ -165,14 +165,14 @@ export function useTimelineZoom(spans: readonly ClipSpan[], stacked = false): Ti
     scrollPosition.set(el.scrollLeft);
   }, [axis, scrollPosition]);
 
-  // While the preview plays, the playhead stays in view
+  // While the preview plays, the playhead stays in view: followed as it is drawn, every frame
   useEffect(
     () =>
-      useStitchEditorStore.subscribe((s) => {
+      subscribeLivePlayhead((playhead) => {
         const el = scroller.current;
-        if (!s.playing || !el) return;
+        if (!useStitchEditorStore.getState().playing || !el) return;
         const current = latestAxis.current;
-        const x = current.timeToX(Math.min(s.playhead, current.total));
+        const x = current.timeToX(Math.min(playhead, current.total));
         const viewX = x - el.scrollLeft;
         if (viewX > el.clientWidth * FOLLOW_AT || viewX < 0) {
           el.scrollLeft = Math.max(0, x - el.clientWidth * (1 - FOLLOW_AT));

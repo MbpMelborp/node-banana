@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { PLAYHEAD_WRITE_SEC, setLivePlayhead, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { gainAt } from "@/lib/stitch/curve";
 import {
   layersAt,
@@ -371,6 +371,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
   // This frame's timestamp in seconds; null before the first frame
   let wall: number | null = null;
   let written = from;
+  // Where the clock was at the last frame
+  let clockAt = from;
   let frame = 0;
   // The element the picture is on (the first live layer's): only its refusal to play stops the preview
   let front: HTMLVideoElement | null = null;
@@ -619,11 +621,27 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     const at = from + Math.max(0, now - anchor) / 1000;
     const { total } = latest.current;
     if (at >= total) return stop(total);
-    written = at;
-    s.setPlayhead(at);
+    // Drawn every frame; the store's playhead, which the rest of the editor renders on, only every
+    // PLAYHEAD_WRITE_SEC (and exactly at a pause, a key or a press: flush)
+    clockAt = at;
+    setLivePlayhead(at);
+    if (Math.abs(at - written) >= PLAYHEAD_WRITE_SEC) {
+      written = at;
+      s.setPlayhead(at);
+    }
     applyLayers(at);
     sound.apply(at, wall);
     frame = requestAnimationFrame(tick);
+  };
+
+  /**
+   * A key or a press while playing (before what it does reads the playhead): the store's playhead is written where
+   * the clock is, so a split, a paste or a move made now lands on the frame shown.
+   */
+  const flush = () => {
+    if (priming || written === clockAt) return;
+    written = clockAt;
+    useStitchEditorStore.getState().setPlayhead(clockAt);
   };
 
   // Started at once, inside the press that asked for it; the clock sets off once the clip in front moves
@@ -636,10 +654,14 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     };
   }
   frame = requestAnimationFrame(tick);
+  window.addEventListener("keydown", flush, true);
+  window.addEventListener("pointerdown", flush, true);
 
   return () => {
     alive = false;
     cancelAnimationFrame(frame);
+    window.removeEventListener("keydown", flush, true);
+    window.removeEventListener("pointerdown", flush, true);
     pauseAll();
   };
 }

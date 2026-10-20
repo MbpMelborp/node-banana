@@ -1,9 +1,9 @@
 "use client";
 
-import { useId, useRef, useState, type MouseEvent } from "react";
+import { useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { ImagePlus, LoaderCircle } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
 import { shownAt } from "@/lib/stitch/framePlan";
 import { isPlaced, type ClipSpan } from "@/lib/stitch/timeline";
 import { CONTROL_BUTTON } from "./editorStyles";
@@ -37,6 +37,22 @@ export function frameButtonState(input: FrameButtonInput): { enabled: boolean; b
 }
 
 /**
+ * Whether no clip shows at the playhead (a gap, or no draft), worked out again only when the playhead or the draft
+ * moves: the store calls it on every change.
+ */
+function gapSelector(spans: readonly ClipSpan[]): (s: StitchEditorState) => boolean {
+  let last: { draft: unknown; playhead: number; gap: boolean } | null = null;
+  return (s) => {
+    if (last && last.draft === s.draft && last.playhead === s.playhead) return last.gap;
+    const layout = s.draft?.sequenceLayout;
+    const stack = layout?.mode === "stacked" ? { crossfade: layout.crossfade, placed: isPlaced(s.draft!.timeline) } : null;
+    const gap = !layout || shownAt(spans, s.playhead, stack).size === 0;
+    last = { draft: s.draft, playhead: s.playhead, gap };
+    return gap;
+  };
+}
+
+/**
  * Frame to canvas, an icon button in the control row under the video: the same button whatever is selected. Click or
  * Enter; Space plays, as everywhere in the editor. While the preview plays the press pauses it and takes the frame
  * where it stopped. Why it is off (or that it is busy) follows its name in its hover label, and is its accessible
@@ -58,12 +74,8 @@ export function FrameToCanvasButton({
   const reasonId = useId();
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);
   // Re-renders only when the playhead crosses into or out of a gap
-  const gap = useStitchEditorStore((s) => {
-    const layout = s.draft?.sequenceLayout;
-    if (!layout) return true;
-    const stack = layout.mode === "stacked" ? { crossfade: layout.crossfade, placed: isPlaced(s.draft!.timeline) } : null;
-    return shownAt(spans, s.playhead, stack).size === 0;
-  });
+  const gapAt = useMemo(() => gapSelector(spans), [spans]);
+  const gap = useStitchEditorStore(gapAt);
   const [busy, setBusy] = useState(false);
   const running = useRef(false);
 

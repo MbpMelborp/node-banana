@@ -211,19 +211,42 @@ export function canSplitAtPlayhead(s: StitchEditorState): boolean {
   return splitClipAt(s.draft.timeline, s.durations, s.playhead, () => "probe", opts) !== null;
 }
 
+/**
+ * A selector of the draft, its durations, the selection and the playhead, worked out again only when one of them
+ * changes: a store calls every selector on every change of anything (the playhead while playing among them), and
+ * these lay the sequence out.
+ */
+function onPlayhead<T>(select: (s: StitchEditorState) => T): (s: StitchEditorState) => T {
+  let last: { draft: unknown; durations: unknown; selection: unknown; playhead: number; value: T } | null = null;
+  return (s) => {
+    if (
+      last &&
+      last.draft === s.draft &&
+      last.durations === s.durations &&
+      last.selection === s.selection &&
+      last.playhead === s.playhead
+    ) {
+      return last.value;
+    }
+    const value = select(s);
+    last = { draft: s.draft, durations: s.durations, selection: s.selection, playhead: s.playhead, value };
+    return value;
+  };
+}
+
 /** The rail's Split: S would split, and the clip it would cut is the one the rail shows. */
-export function canSplitSelectedAtPlayhead(s: StitchEditorState): boolean {
+export const canSplitSelectedAtPlayhead = onPlayhead((s: StitchEditorState): boolean => {
   const clipId = selectedClipId(s);
   if (!s.draft || !clipId) return false;
   if (selectIsMulti(s)) return canSplitGroup(s);
   return topSpanAt(draftSpans(s.draft, s.durations), s.playhead, clipId)?.clip.id === clipId && canSplitAtPlayhead(s);
-}
+});
 
 /**
  * Why Split is off, when the reason is not obvious: two clips play under the playhead in a lined-up stack, whose
  * split would re-sequence it. A placed stack splits there too (the pieces stay one run, so nothing changes).
  */
-export function splitBlockedReason(s: StitchEditorState): string | null {
+export const splitBlockedReason = onPlayhead((s: StitchEditorState): string | null => {
   if (!s.draft) return null;
   const overlap =
     stackedOf(s) && !placedOf(s) && inOverlap(draftSpans(s.draft, s.durations), s.playhead)
@@ -231,7 +254,7 @@ export function splitBlockedReason(s: StitchEditorState): string | null {
       : null;
   if (selectIsMulti(s)) return overlap ?? (selectedUnderPlayhead(s) ? null : "No selected clip is under the playhead");
   return overlap;
-}
+});
 
 /**
  * S: splits the clip under the playhead and selects its right piece. With several selected, every selected clip under

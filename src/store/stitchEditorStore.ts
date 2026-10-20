@@ -98,7 +98,11 @@ export interface StitchEditorState {
    * gone: a Save moves `initial`, and an edge it picked up was never in the draft, so it must not count as removed.
    */
   edgeIdsAtOpen: readonly string[];
-  /** Sequence seconds. */
+  /**
+   * Sequence seconds. While the preview plays it trails the frame loop's clock by up to PLAYHEAD_WRITE_SEC (written
+   * that often, so what re-renders on it does not do so every frame) and is exact at a pause, a key or a pointer
+   * press; the playhead drawn every frame is livePlayhead().
+   */
   playhead: number;
   playing: boolean;
   /** Kept across opens. */
@@ -325,6 +329,33 @@ const sameAudioRows = (a: StitchDraft, b: StitchDraft) =>
 /** The audio clip's curve, or undefined for a clip that is not there. */
 const curveOf = (draft: StitchDraft, clipId: string) => draft.audioClips.find((c) => c.id === clipId)?.curve;
 
+/** While the preview plays, the store's playhead is written at most this often (seconds). */
+export const PLAYHEAD_WRITE_SEC = 0.1;
+
+/** The playhead as drawn this frame, and who draws it. */
+const live = { playhead: 0, listeners: new Set<(t: number) => void>() };
+
+/**
+ * The playhead as drawn this frame: the store's playhead, or ahead of it while the preview plays (the frame loop
+ * moves it every frame, the store's only every PLAYHEAD_WRITE_SEC). The timecode and the timeline's playhead draw
+ * from it through subscribeLivePlayhead, writing the DOM, never through a render.
+ */
+export function livePlayhead(): number {
+  return live.playhead;
+}
+
+/** The frame loop's write, every frame while playing. */
+export function setLivePlayhead(t: number): void {
+  if (t === live.playhead) return;
+  live.playhead = t;
+  for (const listener of live.listeners) listener(t);
+}
+
+export function subscribeLivePlayhead(listener: (t: number) => void): () => void {
+  live.listeners.add(listener);
+  return () => live.listeners.delete(listener);
+}
+
 export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = create<StitchEditorState>(
   (set, get) => ({
     ...closedSession(),
@@ -440,7 +471,8 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     setAudioDurations: (audioDurations) => set({ audioDurations }),
     setAudioExpandedRow: (audioExpandedRow) => set({ audioExpandedRow }),
     setPlayhead: (t) => set({ playhead: Number.isFinite(t) ? Math.max(0, t) : 0 }),
-    setPlaying: (playing) => set({ playing }),
+    // A pause lands the playhead where the frame loop's clock is, in the same change, so what follows the pause sees it
+    setPlaying: (playing) => set(playing || !get().playing ? { playing } : { playing, playhead: live.playhead }),
     setSnap: (on) => set({ snap: on }),
     setSoundOn: (on) => set({ soundOn: on }),
     setZoom: (pxPerSec) => set({ pxPerSec }),
@@ -466,6 +498,11 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     },
   }),
 );
+
+// Every change of the store's playhead (a move, a pause, an open) is the drawn one too
+useStitchEditorStore.subscribe((s, prev) => {
+  if (s.playhead !== prev.playhead) setLivePlayhead(s.playhead);
+});
 
 export const selectIsDirty = (s: StitchEditorState): boolean =>
   s.initial !== null && s.draft !== null && !sameDraft(s.initial, s.draft);
