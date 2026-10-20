@@ -6,8 +6,9 @@ import { clipSpans, createClip, layoutSpans, spansEnd, type SourceKey } from "@/
 import { useSequencePlayback, type AudioPlaybackClip, type SequencePlaybackOptions } from "../useSequencePlayback";
 
 // The preview engine against stand-in media elements and a hand-driven frame loop. A playing stand-in advances with
-// the frames' timestamps, as a real element runs on its own; a seek can take time (seekMs) before it lands; its sound
-// turned on while it plays silent counts a switch (soundSwitches).
+// the frames' timestamps, as a real element runs on its own; a seek can take time (seekMs) before it lands, and a start
+// (startMs: an element with sound waits for the sound output) before it moves; its sound turned on while it plays
+// silent counts a switch (soundSwitches).
 
 interface FakeMedia {
   currentTime: number;
@@ -45,8 +46,15 @@ interface FakeMedia {
 /** Every stand-in made since the test began, advanced by flushFrame. */
 let made: FakeMedia[] = [];
 
-function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; seekMs?: number } = {}): FakeMedia {
+function fakeMedia({
+  duration = Number.NaN,
+  seekMs = 0,
+  startMs = 0,
+}: { duration?: number; seekMs?: number; startMs?: number } = {}): FakeMedia {
   let time = 0;
+  // Still until then after a play()
+  let startsAt: number | null = null;
+  let starting = false;
   let muted = false;
   let volume = 1;
   let landsAt: number | null = null;
@@ -97,6 +105,7 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
     soundSwitches: 0,
     frozen: false,
     play: vi.fn(() => {
+      if (media.paused) starting = startMs > 0;
       media.paused = false;
       return Promise.resolve();
     }),
@@ -121,6 +130,13 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
         return;
       }
       if (media.paused || media.frozen || ms <= 0) return;
+      if (starting) {
+        startsAt ??= now - ms + startMs;
+        if (now < startsAt) return;
+        ms = now - startsAt;
+        starting = false;
+        startsAt = null;
+      }
       time += (ms / 1000) * media.playbackRate;
       if (Number.isFinite(media.duration) && time >= media.duration) {
         time = media.duration;
@@ -665,7 +681,7 @@ describe("useSequencePlayback", () => {
     expect(b.muted).toBe(false);
   });
 
-  it("hands a cut over prepared: the next clip moving before it and never seeked, the previous paused after, the music untouched", () => {
+  it("hands a cut over prepared: the next clip timed, then moving before it, the previous paused after, the music untouched", () => {
     const opts: SequencePlaybackOptions = { ...twoSourceOptions(), audio: { clips: [audioClip()] } };
     const { result } = renderHook(() => useSequencePlayback(opts));
     // Seeks take 40 ms, as a real element's do; "a" plays the first 5 s of a longer file, so only the cut stops it
@@ -694,8 +710,10 @@ describe("useSequencePlayback", () => {
       if (atStart === null && !music.paused) atStart = musicWrites();
       now += 16;
     }
-    // b was already at its In: never seeked, and asked to play before the cut
-    expect(b.writes).toBe(0);
+    // b was test-started at its In and put back there (its one seek, long before the cut), then asked to play before
+    // the cut
+    expect(b.writes).toBe(1);
+    expect(b.play).toHaveBeenCalledTimes(2);
     expect(bAskedAt).not.toBeNull();
     expect(bAskedAt!).toBeLessThan(5);
     // The cut: shown and heard at once, moving; a hidden and silent, still playing until the next frame
@@ -714,6 +732,30 @@ describe("useSequencePlayback", () => {
     expect(atStart).toBe(1);
     expect(music.writes).toBe(1);
     expect(music.paused).toBe(false);
+  });
+
+  it("times a slow-starting clip by a test start, so a cut into its first frame shows it moving", () => {
+    const opts = twoSourceOptions();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // "b" has sound: every start waits a quarter of a second for the sound output
+    const a = fakeMedia({ duration: 10 });
+    const b = fakeMedia({ duration: 5, startMs: 250 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(3.5));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    while (b.style.opacity !== "1") flushFrame((now += 16));
+    // Shown at the cut already moving from its first frame, a frame's margin early at most, never still
+    expect(livePlayhead()).toBeGreaterThanOrEqual(5);
+    expect(b.currentTime).toBeGreaterThan(0.005);
+    expect(b.currentTime).toBeLessThan(0.06);
+    const shownAt = b.currentTime;
+    flushFrame((now += 16));
+    expect(b.currentTime).toBeGreaterThan(shownAt);
+    expect(b.writes).toBe(1);
   });
 
   it("holds a cut on the outgoing picture until the incoming element has shown a frame of where it is", () => {
@@ -934,18 +976,24 @@ describe("useSequencePlayback", () => {
       expect(b.currentTime).toBe(2);
     });
 
-    it("starts the later clip hidden just before an overlap, without pausing the earlier one or seeking", () => {
+    it("starts the later clip hidden just before an overlap, timed by a test start, without pausing the earlier one", () => {
       const { a, b } = mount(stackedOptions());
       act(() => editor().setPlayhead(3));
       act(() => editor().setPlaying(true));
       expect(a.play).toHaveBeenCalledTimes(1);
+      // The later clip is next: test-started from its In, hidden and silent, to time its start
       flushFrame(0);
-      // The later clip is next: it waits at its In (already there, so never seeked)
+      expect(b.play).toHaveBeenCalledTimes(1);
+      expect(b.style.opacity).toBe("0");
+      expectSilent(b);
+      // Once it moves, put back at its In to wait
       flushFrame(600);
       expect(b.paused).toBe(true);
-      // Its start latency before its start: it plays, hidden and silent
+      expect(b.currentTime).toBe(0);
+      expect(b.writes).toBe(1);
+      // Its own start latency before its start: it plays, hidden and silent
       flushFrame(980);
-      expect(b.play).toHaveBeenCalledTimes(1);
+      expect(b.play).toHaveBeenCalledTimes(2);
       expect(b.style.opacity).toBe("0");
       expectSilent(b);
       // Its start: shown and heard, moving and in step
@@ -953,8 +1001,8 @@ describe("useSequencePlayback", () => {
       expect(Number(b.style.opacity)).toBeCloseTo(0.05, 9);
       expect(b.muted).toBe(false);
       expect(b.currentTime).toBeCloseTo(0.07, 9);
-      expect(b.play).toHaveBeenCalledTimes(1);
-      expect(b.writes).toBe(0);
+      expect(b.play).toHaveBeenCalledTimes(2);
+      expect(b.writes).toBe(1);
       expect(a.pause).not.toHaveBeenCalled();
       expect(livePlayhead()).toBeCloseTo(4.05, 9);
     });
@@ -1098,15 +1146,16 @@ describe("useSequencePlayback", () => {
       act(() => editor().setPlaying(true));
       flushFrame(0);
       flushFrame(100);
-      // Waiting at its pre-roll point, half a second before its In
+      // Test-started at its pre-roll point, half a second before its In, and put back there to wait
       expect(livePlayhead()).toBeCloseTo(1.5, 9);
       expect(b.currentTime).toBeCloseTo(2, 9);
-      expect(b.writes).toBe(1);
-      expect(b.paused).toBe(true);
-      // Started the pre-roll and a start latency before the cut, from there
-      flushFrame(580);
       expect(b.play).toHaveBeenCalledTimes(1);
-      expect(b.writes).toBe(1);
+      expect(b.writes).toBe(2);
+      expect(b.paused).toBe(true);
+      // Started the pre-roll and its start latency before the cut, from there
+      flushFrame(580);
+      expect(b.play).toHaveBeenCalledTimes(2);
+      expect(b.writes).toBe(2);
       expect(b.style.opacity).toBe("0");
       expectSilent(b);
       // The cut: shown at its In, the earlier piece hidden and silent at once and paused a frame later
@@ -1119,8 +1168,8 @@ describe("useSequencePlayback", () => {
       expect(a.paused).toBe(false);
       flushFrame(1116);
       expect(a.paused).toBe(true);
-      expect(b.writes).toBe(1);
-      expect(b.play).toHaveBeenCalledTimes(1);
+      expect(b.writes).toBe(2);
+      expect(b.play).toHaveBeenCalledTimes(2);
     });
 
     it("seeks a clip back to the playhead when its URL changes and the new file's metadata loads", () => {
