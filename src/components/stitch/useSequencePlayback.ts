@@ -287,6 +287,14 @@ interface PlaybackRefs {
 const presentable = (el: HTMLVideoElement) => !el.seeking && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
 
 /**
+ * An element about to play (or shown paused) loads ahead; the stage mounts the rest at preload="metadata", so an edit
+ * of many clips (a video split twenty times) does not load every file once per clip as it opens.
+ */
+const loadAhead = (el: HTMLVideoElement) => {
+  if (el.preload !== "auto") el.preload = "auto";
+};
+
+/**
  * Draws a blend onto the canvas as the stage would composite the elements: black, then each clip in row order at its
  * opacity, letterboxed (object-contain) into the canvas's box.
  */
@@ -452,6 +460,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
       if (!(span.length > 0) || span.start <= at || span.start > next.start + PREPARE_WINDOW) continue;
       const el = elementOf(span);
       if (!el || live.has(el) || refused.has(el)) continue;
+      loadAhead(el);
       const preroll = Math.min(PREROLL, span.clip.inSec);
       // Asked to play now, it moves startLatency later and must reach its In at the clip's start
       const startLatency = keeper.startLatency();
@@ -526,6 +535,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     }
 
     for (const [el, layer] of live) {
+      loadAhead(el);
       follow(el, sourceTimeAt(layer.span, at));
       setSound(el, (hold && incoming(el)) || layer.span.clip.muted || !soundOn, clamp01(layer.span.clip.volume * layer.gain));
     }
@@ -721,6 +731,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
       const el = videos.current.get(layer.span.clip.id);
       if (!el) continue;
       shown.add(el);
+      loadAhead(el);
       seek(el, sourceTimeAt(layer.span, s.playhead));
       el.style.opacity = String(layer.opacity);
     }

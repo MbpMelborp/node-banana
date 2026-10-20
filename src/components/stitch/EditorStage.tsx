@@ -54,7 +54,8 @@ function PreviewAudio({
 
 /**
  * One <video>, with a ref callback that keeps its identity while its key does. Hidden by class until the playback
- * writes its inline opacity (and its sound): a cut is never a render.
+ * writes its inline opacity (and its sound): a cut is never a render. Only its metadata loads until the playback
+ * needs it (it sets preload to auto for the clips shown, playing and coming up).
  */
 function PreviewVideo({
   layerKey,
@@ -67,7 +68,13 @@ function PreviewVideo({
 }) {
   const ref = useCallback((el: HTMLVideoElement | null) => registerVideo(layerKey, el), [registerVideo, layerKey]);
   return (
-    <video ref={ref} src={src} preload="auto" playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
+    <video
+      ref={ref}
+      src={src}
+      preload="metadata"
+      playsInline
+      className="absolute inset-0 h-full w-full object-contain opacity-0"
+    />
   );
 }
 
