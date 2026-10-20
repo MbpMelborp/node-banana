@@ -834,7 +834,13 @@ describe("comfyApp", () => {
       producer: { nodeId: "comfy-1", nodeType: "comfyApp" },
     });
     expect(mockFetch.mock.calls.some((c) => c[0] === "/api/save-generation")).toBe(false);
-    expect(ctx.addToGlobalHistory).toHaveBeenCalledOnce();
+    // The image and the video are both listed in recent generations; the video with its recording
+    const listed = vi.mocked(ctx.addToGlobalHistory).mock.calls;
+    expect(listed.map(([item, recording]) => [item.kind ?? "image", item.image, recording?.assetId])).toEqual([
+      ["image", "data:image/png;base64,big", undefined],
+      ["video", "data:video/mp4;base64,clip", "a000000000002"],
+    ]);
+    expect(listed[1][0]).toMatchObject({ prompt: "Upscaler (steps=20)", model: "Upscaler" });
   });
 
   it("runs with the seeds the node shows, then moves each on by its mode", async () => {

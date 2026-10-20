@@ -5,7 +5,7 @@
  * Used by both executeWorkflow and regenerateNode.
  */
 
-import type { GenerateResponse, GenerateVideoNodeData, SelectedModel } from "@/types";
+import type { AspectRatio, GenerateResponse, GenerateVideoNodeData, SelectedModel } from "@/types";
 import { buildGenerateHeaders } from "@/store/utils/buildApiHeaders";
 import { GenerationStillRunningError } from "./pollTaskCompletion";
 import { pendingTaskFrom, waitForPendingTask } from "./pendingTask";
@@ -200,6 +200,7 @@ export function finishGenerateVideo(ctx: NodeExecutionContext, result: GenerateR
     getEdges,
     getNodes,
     addIncurredCost,
+    addToGlobalHistory,
     generationsPath,
     trackSaveGeneration,
     appendOutputGalleryVideo,
@@ -254,6 +255,19 @@ export function finishGenerateVideo(ctx: NodeExecutionContext, result: GenerateR
     error: null,
     ...(generationsPath || recorded ? { videoHistory: updatedHistory, selectedVideoHistoryIndex: 0 } : {}),
   });
+
+  // The recent-generations list, beside the images (a still is listed as one)
+  addToGlobalHistory(
+    {
+      kind: videoData ? "video" : "image",
+      image: outputContent,
+      timestamp,
+      prompt: resolvedPrompt(text, dynamicInputs) ?? "",
+      aspectRatio: (parameterFraming(parameters).aspectRatio ?? "16:9") as AspectRatio,
+      model: modelToUse.displayName || modelToUse.modelId,
+    },
+    recorded
+  );
 
   // Push this result to downstream outputGallery nodes so a batch run
   // collects every item, not just the final one (mirrors the image path).
