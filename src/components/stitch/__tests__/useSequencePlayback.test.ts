@@ -6,7 +6,8 @@ import { clipSpans, createClip, layoutSpans, spansEnd, type SourceKey } from "@/
 import { useSequencePlayback, type AudioPlaybackClip, type SequencePlaybackOptions } from "../useSequencePlayback";
 
 // The preview engine against stand-in media elements and a hand-driven frame loop. A playing stand-in advances with
-// the frames' timestamps, as a real element runs on its own; a seek can take time (seekMs) before it lands.
+// the frames' timestamps, as a real element runs on its own; a seek can take time (seekMs) before it lands; its sound
+// turned on while it plays silent counts a switch (soundSwitches).
 
 interface FakeMedia {
   currentTime: number;
@@ -23,6 +24,11 @@ interface FakeMedia {
   style: { opacity: string };
   /** currentTime writes. */
   writes: number;
+  /**
+   * Times its sound was turned on while it played silent (unmuted, or raised from 0): a browser moves such an element's
+   * sound to the speakers then, and its picture stops while it does.
+   */
+  soundSwitches: number;
   /** Stands still while playing (a stall, as on a buffer underrun). */
   frozen: boolean;
   play: ReturnType<typeof vi.fn>;
@@ -41,6 +47,8 @@ let made: FakeMedia[] = [];
 
 function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; seekMs?: number } = {}): FakeMedia {
   let time = 0;
+  let muted = false;
+  let volume = 1;
   let landsAt: number | null = null;
   let target = 0;
   const listeners = new Map<string, Set<(event: Event) => void>>();
@@ -65,8 +73,20 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
     paused: true,
     ended: false,
     seeking: false,
-    muted: false,
-    volume: 1,
+    get muted() {
+      return muted;
+    },
+    set muted(value: boolean) {
+      if (!value && muted && volume > 0 && !media.paused) media.soundSwitches++;
+      muted = value;
+    },
+    get volume() {
+      return volume;
+    },
+    set volume(value: number) {
+      if (value > 0 && volume === 0 && !muted && !media.paused) media.soundSwitches++;
+      volume = value;
+    },
     playbackRate: 1,
     readyState: 4,
     duration,
@@ -74,6 +94,7 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
     videoHeight: 720,
     style: { opacity: "" },
     writes: 0,
+    soundSwitches: 0,
     frozen: false,
     play: vi.fn(() => {
       media.paused = false;
@@ -162,6 +183,12 @@ function twoSourceOptions(): SequencePlaybackOptions {
 }
 
 const asVideo = (m: FakeMedia) => m as unknown as HTMLVideoElement;
+/** Silent the preview's way: playing out at an inaudible volume, never muted (a browser stalls one it unmutes). */
+const expectSilent = (m: FakeMedia) => {
+  expect(m.muted).toBe(false);
+  expect(m.volume).toBeGreaterThan(0);
+  expect(m.volume).toBeLessThan(1e-4);
+};
 const asAudio = (m: FakeMedia) => m as unknown as HTMLAudioElement;
 
 let frames: FrameRequestCallback[] = [];
@@ -517,7 +544,7 @@ describe("useSequencePlayback", () => {
     expect(tone.writes).toBe(1);
   });
 
-  it("pauses a clip past its Out and a muted clip stays muted", () => {
+  it("pauses a clip past its Out and a muted clip stays silent", () => {
     const opts = options("blob:a", null, [audioClip({ id: "aclip_1", src: "tone.m4a", startSec: 0, inSec: 0, outSec: 2, muted: true })]);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
@@ -529,7 +556,7 @@ describe("useSequencePlayback", () => {
     act(() => editor().setPlaying(true));
     flushFrame(0);
     flushFrame(100);
-    expect(tone.muted).toBe(true);
+    expectSilent(tone);
     expect(tone.play).toHaveBeenCalledTimes(1);
     flushFrame(2500);
     expect(tone.paused).toBe(true);
@@ -677,7 +704,7 @@ describe("useSequencePlayback", () => {
     expect(b.paused).toBe(false);
     expect(b.currentTime).toBeGreaterThan(0);
     expect(a.style.opacity).toBe("0");
-    expect(a.muted).toBe(true);
+    expectSilent(a);
     expect(a.paused).toBe(false);
     flushFrame(now);
     expect(a.paused).toBe(true);
@@ -723,13 +750,50 @@ describe("useSequencePlayback", () => {
     expect(a.style.opacity).toBe("1");
     expect(a.paused).toBe(true);
     expect(b.style.opacity).toBe("0");
-    expect(b.muted).toBe(true);
+    expectSilent(b);
     // A frame of where it is: the cut goes through
     act(() => b.present(b.currentTime));
     flushFrame((now += 16));
     expect(b.style.opacity).toBe("1");
     expect(b.muted).toBe(false);
     expect(a.style.opacity).toBe("0");
+  });
+
+  it("never turns a playing element's sound on from silent: not at a cut, a fade from 0 or the sound toggle", () => {
+    const fade = audioClip({ curve: [{ t: 0, gain: 0 }, { t: 6, gain: 1 }] });
+    let opts: SequencePlaybackOptions = { ...twoSourceOptions(), audio: { clips: [fade] } };
+    const { result, rerender } = renderHook((o: SequencePlaybackOptions) => useSequencePlayback(o), { initialProps: opts });
+    const a = fakeMedia({ duration: 10 });
+    const b = fakeMedia({ duration: 5 });
+    const music = fakeMedia({ duration: 30 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlayhead(4));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    // Through the cut at 5 s, the music rising from silence
+    while (livePlayhead() < 5.5) {
+      flushFrame(now);
+      act(() => b.present(b.currentTime));
+      now += 16;
+    }
+    expect(b.style.opacity).toBe("1");
+    expect(b.volume).toBe(1);
+    // Sound off and on again while playing
+    opts = { ...opts, soundOn: false };
+    rerender(opts);
+    flushFrame((now += 16));
+    expectSilent(b);
+    expectSilent(music);
+    opts = { ...opts, soundOn: true };
+    rerender(opts);
+    flushFrame((now += 16));
+    expect(b.volume).toBe(1);
+    expect(music.volume).toBeGreaterThan(0.5);
+    expect(a.soundSwitches + b.soundSwitches + music.soundSwitches).toBe(0);
   });
 
   it("gives up holding for a fresher frame after a tenth of a second", () => {
@@ -879,11 +943,11 @@ describe("useSequencePlayback", () => {
       // The later clip is next: it waits at its In (already there, so never seeked)
       flushFrame(600);
       expect(b.paused).toBe(true);
-      // Its start latency before its start: it plays, hidden and muted
+      // Its start latency before its start: it plays, hidden and silent
       flushFrame(980);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.style.opacity).toBe("0");
-      expect(b.muted).toBe(true);
+      expectSilent(b);
       // Its start: shown and heard, moving and in step
       flushFrame(1050);
       expect(Number(b.style.opacity)).toBeCloseTo(0.05, 9);
@@ -906,6 +970,15 @@ describe("useSequencePlayback", () => {
       expect(b.volume).toBeCloseTo(Math.sin(angle), 9);
       expect(a.style.opacity).toBe("1");
       expect(b.style.opacity).toBe("0.25");
+    });
+
+    it("blends in a clip with sound from silent, never from muted or 0", () => {
+      const { a, b } = mount(stackedOptions(true));
+      act(() => editor().setPlayhead(3.5));
+      act(() => editor().setPlaying(true));
+      for (let now = 0; now <= 1600; now += 16) flushFrame(now);
+      expect(b.volume).toBe(1);
+      expect(a.soundSwitches + b.soundSwitches).toBe(0);
     });
 
     it("plays the later clip on through the earlier one's Out, with no seek", () => {
@@ -1035,14 +1108,14 @@ describe("useSequencePlayback", () => {
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.writes).toBe(1);
       expect(b.style.opacity).toBe("0");
-      expect(b.muted).toBe(true);
+      expectSilent(b);
       // The cut: shown at its In, the earlier piece hidden and silent at once and paused a frame later
       flushFrame(1100);
       expect(livePlayhead()).toBeCloseTo(2.5, 9);
       expect(b.style.opacity).toBe("1");
       expect(b.currentTime).toBeCloseTo(2.52, 9);
       expect(a.style.opacity).toBe("0");
-      expect(a.muted).toBe(true);
+      expectSilent(a);
       expect(a.paused).toBe(false);
       flushFrame(1116);
       expect(a.paused).toBe(true);

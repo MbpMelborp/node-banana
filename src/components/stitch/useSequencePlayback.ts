@@ -15,7 +15,8 @@ import type { VolumePoint } from "@/types";
  * pieces of one source can play at once, and a cut between them is a hand-
  * over like any other). The clip's mute and volume are applied to the
  * elements (element volume rather than Web Audio, so a source served without
- * CORS still sounds). Each audio clip has its own hidden <audio>, playing
+ * CORS still sounds), a silent one at SILENT rather than muted. Each audio
+ * clip has its own hidden <audio>, playing
  * inside its span from its In at its curve's gain and paused outside. Every
  * playing element is kept on the clock by its rate, seeked only when far off
  * (createStepKeeper). The encode is the truth. The preview plays one loop.
@@ -27,7 +28,7 @@ import type { VolumePoint } from "@/types";
  * stack is a time when no clip is live: the stage is black and the audio
  * clips play on.
  *
- * What is shown and heard is written to the elements (inline opacity, muted,
+ * What is shown and heard is written to the elements (inline opacity,
  * volume), never through React: the hook renders only with its options.
  * While playing, clips that blend are drawn on the stage's canvas instead.
  * Track shows the clip under the playhead. Stacked takes opacity and volume
@@ -64,6 +65,13 @@ export interface SequencePlaybackOptions {
 /** A paused element this far from its target is seeked. */
 const SEEK_TOLERANCE = 0.02;
 /**
+ * The volume a playing element is silenced at, never muted: unmuting a playing element (or raising it from 0) has
+ * Chrome move its sound from a silent output to the speakers, and its picture stops on the frame it shows while that
+ * happens (measured: 166-625 ms; from this to 1, no stop). A cut reveals a clip that played hidden and silent, so it is
+ * already playing out loud, too quietly to hear (−100 dB).
+ */
+const SILENT = 1e-5;
+/**
  * Seconds before a cut within which a clip whose element has reached its Out hands over at once (a frame early beats
  * a frame of its trimmed part).
  */
@@ -97,7 +105,7 @@ const PRIME_MAX = 0.5;
 /** An audio clip starting within this of the clock is put at its In, so it starts without a seek. */
 const AUDIO_PREPARE = 1;
 /**
- * A prepared clip plays, hidden and muted, from up to this far before its In (what its source has before it), so its
+ * A prepared clip plays, hidden and silent, from up to this far before its In (what its source has before it), so its
  * decoder is running by its start. A start in the middle of a file can take a quarter of a second to show a frame
  * (measured: a source with one keyframe, another element playing it too), so this is generous.
  */
@@ -250,8 +258,11 @@ function createAudioDriver(
         const target = clip.inSec + (at - clip.startSec);
         const length = track.duration;
         const end = Math.min(clip.outSec ?? Infinity, Number.isFinite(length) ? length : Infinity);
-        track.muted = clip.muted || !soundOn;
-        track.volume = clamp01(gainAt(clip.curve, Math.max(clip.inSec, target)));
+        // Silenced, never muted, as the videos are (SILENT): unmuted, a playing track's sound would stop a moment
+        if (track.muted) track.muted = false;
+        const volume =
+          clip.muted || !soundOn ? SILENT : Math.max(SILENT, clamp01(gainAt(clip.curve, Math.max(clip.inSec, target))));
+        if (track.volume !== volume) track.volume = volume;
         if (clip.startSec - at > lead || target >= end) {
           if (!track.paused) track.pause();
           asked.delete(track);
@@ -340,9 +351,9 @@ function drawBlend(
  * - each clip live at the clock is shown at its opacity with its sound, its element started (seeked only when its
  *   preparation has not landed) or, playing, kept on the clock (createStepKeeper);
  * - the clips starting next are prepared as soon as they are next: paused at their pre-roll point (PREROLL before
- *   their In, as far as the source allows), then played, hidden and muted, so they reach their In as the clock
+ *   their In, as far as the source allows), then played, hidden and silent, so they reach their In as the clock
  *   reaches their start, already moving;
- * - every other element is hidden and muted at once and paused a frame later, after what replaces it is shown.
+ * - every other element is hidden and silenced at once and paused a frame later, after what replaces it is shown.
  *
  * Shown and heard are written here, never through React, so a cut is one style change. Where clips blend (a
  * crossfade, a placed stack's shares) they are drawn together on the stage's canvas and the elements hidden under
@@ -421,9 +432,11 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     const value = String(opacity);
     if (el.style.opacity !== value) el.style.opacity = value;
   };
-  const setSound = (el: HTMLVideoElement, muted: boolean, volume: number) => {
-    if (el.muted !== muted) el.muted = muted;
-    if (el.volume !== volume) el.volume = volume;
+  /** Silent is SILENT, never muted (see there); audible is never below it either. */
+  const setSound = (el: HTMLVideoElement, silent: boolean, volume: number) => {
+    const value = silent ? SILENT : Math.max(SILENT, volume);
+    if (el.muted) el.muted = false;
+    if (el.volume !== value) el.volume = value;
   };
   const contextOf = (cv: HTMLCanvasElement) => {
     if (blendContext === undefined) blendContext = cv.getContext("2d");
@@ -497,6 +510,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
         pendingSeeks.current.delete(el);
         el.currentTime = point;
       }
+      // Started silent, so the cut only turns it up
+      setSound(el, true, 0);
       play(el);
     }
     return rolling;
@@ -558,8 +573,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     }
 
     for (const [el, layer] of live) {
-      const muted = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
-      setSound(el, muted, clamp01(layer.span.clip.volume * layer.gain));
+      const silent = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
+      setSound(el, silent, clamp01(layer.span.clip.volume * layer.gain));
     }
     const next = new Set<HTMLVideoElement>();
     for (const el of videos.current.values()) {
