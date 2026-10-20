@@ -46,6 +46,7 @@ const mockGetViewport = vi.fn(() => ({ x: 0, y: 0, zoom: 1 }));
 const mockZoomIn = vi.fn();
 const mockZoomOut = vi.fn();
 const mockSetViewport = vi.fn();
+const mockSetNodes = vi.fn();
 
 vi.mock("@xyflow/react", async () => {
   const actual = await vi.importActual<typeof import("@xyflow/react")>("@xyflow/react");
@@ -65,6 +66,7 @@ vi.mock("@xyflow/react", async () => {
       zoomIn: mockZoomIn,
       zoomOut: mockZoomOut,
       setViewport: mockSetViewport,
+      setNodes: mockSetNodes,
     }),
   };
 });
@@ -938,6 +940,55 @@ describe("WorkflowCanvas", () => {
       });
 
       expect(mockAddNode).toHaveBeenCalledWith("prompt", expect.any(Object));
+    });
+
+    // A recent-generations tile carries its kind; a video makes a Video Input node at the drop point
+    const historyDrag = (kind: "image" | "video", image: string) => {
+      const payload = JSON.stringify({ kind, image, prompt: "", timestamp: 1 });
+      return {
+        types: ["application/history-image", ...(kind === "video" ? ["application/history-video"] : [])],
+        items: [],
+        files: [],
+        dropEffect: "",
+        effectAllowed: "",
+        getData: vi.fn((type: string) => (type === "application/history-image" ? payload : "")),
+      };
+    };
+
+    it("says a dragged history video makes a video node", () => {
+      render(
+        <TestWrapper>
+          <WorkflowCanvas />
+        </TestWrapper>
+      );
+      const canvas = document.querySelector(".bg-canvas-bg") as HTMLElement;
+      fireEvent.dragOver(canvas, { dataTransfer: historyDrag("video", "https://cdn.example/clip.mp4") });
+      expect(screen.getByText("Drop video to create node")).toBeInTheDocument();
+      fireEvent.dragOver(canvas, { dataTransfer: historyDrag("image", "data:image/png;base64,x") });
+      expect(screen.getByText("Drop image to create node")).toBeInTheDocument();
+    });
+
+    it("makes a Video Input node where a history video is dropped, and an Image Input node for an image", () => {
+      render(
+        <TestWrapper>
+          <WorkflowCanvas />
+        </TestWrapper>
+      );
+      const canvas = document.querySelector(".bg-canvas-bg") as HTMLElement;
+      // jsdom's drop events carry no coordinates: the drop point is whatever the flow position comes to
+      mockScreenToFlowPosition.mockReturnValueOnce({ x: 500, y: 300 });
+      fireEvent.drop(canvas, { dataTransfer: historyDrag("video", "https://cdn.example/clip.mp4") });
+      expect(mockAddNode).toHaveBeenCalledWith("videoInput", { x: 500, y: 300 }, {
+        video: "https://cdn.example/clip.mp4",
+        filename: expect.stringMatching(/^history-\d+\.mp4$/),
+      });
+
+      mockScreenToFlowPosition.mockReturnValueOnce({ x: 40, y: 60 });
+      fireEvent.drop(canvas, { dataTransfer: historyDrag("image", "data:image/png;base64,x") });
+      expect(mockAddNode).toHaveBeenCalledWith("imageInput", { x: 40, y: 60 }, {
+        image: "data:image/png;base64,x",
+        filename: expect.stringMatching(/^history-\d+\.png$/),
+      });
     });
   });
 
