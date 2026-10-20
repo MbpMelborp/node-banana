@@ -763,6 +763,59 @@ describe("useSequencePlayback", () => {
     expect(b.writes).toBe(1);
   });
 
+  describe.each([
+    ["Track", null],
+    ["Stacked", { crossfade: false }],
+  ] as const)("a cut into a slow-starting clip's first frame, in %s", (_layout, stack) => {
+    it.each([24, 60])("shows it moving at %i fps, never a frame behind, and holds nothing past the cut", (fps) => {
+      const first = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1" });
+      const second = createClip({ kind: "edge", edgeId: "e2" }, { id: "c2" });
+      const opts: SequencePlaybackOptions = {
+        spans: clipSpans(
+          [first, second],
+          new Map<SourceKey, number>([
+            ["edge:e1", 5],
+            ["edge:e2", 5],
+          ]),
+          0,
+        ),
+        total: 10,
+        srcFor: (clipId) => (clipId === "c1" ? "blob:a" : "blob:b"),
+        audio: { clips: [] },
+        soundOn: true,
+        stack,
+      };
+      const { result } = renderHook(() => useSequencePlayback(opts));
+      const a = Object.assign(fakeMedia({ duration: 10 }), { src: "blob:a" });
+      // Its decoder and sound output start with it: still for a quarter of a second after each play()
+      const b = Object.assign(fakeMedia({ duration: 5, startMs: 250 }), { src: "blob:b" });
+      act(() => {
+        result.current.registerVideo("c1", asVideo(a));
+        result.current.registerVideo("c2", asVideo(b));
+      });
+      act(() => editor().setPlayhead(3.5));
+      act(() => editor().setPlaying(true));
+      // The frame of its file each element shows: the one its time is in, at the clip's rate
+      const frameOf = (m: FakeMedia) => Math.floor(m.currentTime * fps + 1e-6) / fps;
+      let now = 0;
+      while (b.style.opacity !== "1") {
+        flushFrame((now += 1000 / 60));
+        for (const m of [a, b]) if (!m.paused) act(() => m.present(frameOf(m)));
+      }
+      // At the cut, or a hair early as "a" reached its Out: never a refresh after it
+      expect(livePlayhead()).toBeGreaterThan(4.97);
+      expect(livePlayhead()).toBeLessThan(5 + 1 / 60 + 1e-6);
+      // Its frame the clock's or a little on, never a frame behind; and moving
+      const target = Math.max(0, livePlayhead() - 5);
+      expect(frameOf(b)).toBeGreaterThanOrEqual(target - 1 / fps - 1e-6);
+      expect(b.currentTime - target).toBeLessThan(0.05);
+      const shown = b.currentTime;
+      flushFrame((now += 1000 / 60));
+      expect(b.currentTime).toBeGreaterThan(shown);
+      expect(b.soundSwitches).toBe(0);
+    });
+  });
+
   it("learns a start's latency from the frames it shows, up to a slower one at once", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
