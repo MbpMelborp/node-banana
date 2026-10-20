@@ -102,12 +102,8 @@ export async function runBatchIfApplicable(
         await executeComfyApp(batchCtx);
         break;
     }
-
-    if (i < totalItems - 1) {
-      executionCtx.updateNodeData(node.id, {
-        status: "loading",
-      } as Partial<WorkflowNodeData>);
-    }
+    // The next item sets "loading" itself, after checking for a Stop, so a
+    // Stop between items leaves this item's result showing
   }
 
   return true;

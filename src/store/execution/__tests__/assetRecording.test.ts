@@ -1000,6 +1000,84 @@ describe("comfyApp", () => {
       expect(data.selectedRunHistoryIndex).toBe(0);
       expect(data.status).toBe("complete");
     });
+
+    const finished = (value: string) =>
+      okJson({ success: true, polling: false, status: "success", outputs: [{ handleId: "9", type: "image", value }] });
+    const cancels = () =>
+      mockFetch.mock.calls
+        .filter((c) => c[0] === "/api/comfy/poll")
+        .map((c) => JSON.parse(c[1].body))
+        .filter((body) => body.cancel)
+        .map((body) => body.jobId);
+
+    it("stops at a failed item and leaves the node in error with its message", async () => {
+      vi.useFakeTimers();
+      const { ctx, nodes } = batchRun({ recordAsset: makeRecorder().recordAsset });
+      let jobs = 0;
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url !== "/api/comfy/run") return finished("data:image/png;base64,x");
+        jobs += 1;
+        return jobs === 2
+          ? { ok: false, status: 400, text: async () => JSON.stringify({ success: false, error: "Prompt outputs failed validation" }) }
+          : okJson({ success: true, polling: true, jobId: `job-${jobs}`, status: "queued" });
+      });
+
+      const failed = expect(runBatchIfApplicable(ctx)).rejects.toThrow("Prompt outputs failed validation");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failed;
+
+      expect(runBodies()).toHaveLength(2);
+      const data = nodes.get("comfy-1")!.data as ComfyAppNodeData;
+      expect(data).toMatchObject({ status: "error", error: "Prompt outputs failed validation" });
+      expect(data.runHistory).toHaveLength(1);
+    });
+
+    it("on Stop, cancels the running item's job and runs no more", async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const { ctx, nodes } = batchRun({ recordAsset: makeRecorder().recordAsset, signal: controller.signal });
+      let jobs = 0;
+      mockFetch.mockImplementation(async (url: string, init: { body: string }) => {
+        if (url === "/api/comfy/run") return okJson({ success: true, polling: true, jobId: `job-${++jobs}`, status: "queued" });
+        const body = JSON.parse(init.body);
+        if (body.cancel) return okJson({ success: true });
+        // The first item finishes; the second is still rendering
+        return body.jobId === "job-1" ? finished("data:image/png;base64,x") : okJson({ success: true, polling: true, status: "running" });
+      });
+
+      const stopped = expect(runBatchIfApplicable(ctx)).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await stopped;
+
+      expect(runBodies()).toHaveLength(2);
+      expect(cancels()).toEqual(["job-2"]);
+      const data = nodes.get("comfy-1")!.data as ComfyAppNodeData;
+      expect(data.status).toBe("idle");
+      expect(data.runHistory).toHaveLength(1);
+    });
+
+    it("on a Stop between items, keeps the finished item and runs no more", async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const { ctx, nodes } = batchRun({ recordAsset: makeRecorder().recordAsset, signal: controller.signal });
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url === "/api/comfy/run") return okJson({ success: true, polling: true, jobId: "job-1", status: "queued" });
+        // Stop lands as the first item's result comes back
+        controller.abort();
+        return finished("data:image/png;base64,x");
+      });
+
+      const stopped = expect(runBatchIfApplicable(ctx)).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stopped;
+
+      expect(runBodies()).toHaveLength(1);
+      const data = nodes.get("comfy-1")!.data as ComfyAppNodeData;
+      expect(data.status).toBe("complete");
+      expect(data.runHistory).toHaveLength(1);
+    });
   });
 
   function comfyRun(recordAsset: NodeExecutionContext["recordAsset"]) {
