@@ -288,6 +288,8 @@ interface PlaybackRefs {
   latest: RefObject<SequencePlaybackOptions>;
   /** The media time of the frame each element last presented, where the browser says (requestVideoFrameCallback). */
   presented: RefObject<WeakMap<HTMLVideoElement, number>>;
+  /** Where the loop puts its flush (see the hook's key and press listeners); null while paused. */
+  flush: RefObject<(() => void) | null>;
 }
 
 /** An element that can show a frame of where it is. */
@@ -349,7 +351,7 @@ function drawBlend(
  * the frame it last showed is an older one (STALE_FRAME), at most STALE_HOLD_MAX. At the sequence's end the preview
  * stops there. Returns the loop's cleanup.
  */
-function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: PlaybackRefs): () => void {
+function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flush: flushRef }: PlaybackRefs): () => void {
   let alive = true;
   const store = useStitchEditorStore.getState();
   const sound = createAudioDriver(audios, latest);
@@ -382,8 +384,9 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
   let primeFrom: number | null = null;
   // The frame its start had landed by
   let primeLanded: number | null = null;
-  // The elements put at their target for this priming (each once: they play on from there)
+  // The elements put at their target for this priming (each once: they play on from there), and the ones it started
   let primed = new WeakSet<HTMLVideoElement>();
+  let primeStarted = new WeakSet<HTMLVideoElement>();
   // This frame's timestamp in seconds; null before the first frame
   let wall: number | null = null;
   let written = from;
@@ -441,7 +444,10 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
         pendingSeeks.current.delete(el);
         if (Math.abs(el.currentTime - target) > LANDED) el.currentTime = target;
       }
-      if (el.paused && !refused.has(el)) play(el);
+      if (el.paused && !refused.has(el)) {
+        primeStarted.add(el);
+        play(el);
+      }
       return;
     }
     if (el.paused) {
@@ -467,7 +473,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     for (const span of spans) {
       if (!(span.length > 0) || span.start <= at || span.start > next.start + PREPARE_WINDOW) continue;
       const el = elementOf(span);
-      if (!el || live.has(el) || refused.has(el)) continue;
+      // Still on screen, held there while a cut waits (after a move back): prepared once it has gone
+      if (!el || live.has(el) || refused.has(el) || (shown.get(el) ?? 0) > 0) continue;
       loadAhead(el);
       const preroll = Math.min(PREROLL, span.clip.inSec);
       // Asked to play now, it moves startLatency later and must reach its In at the clip's start
@@ -516,11 +523,18 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
       const el = elementOf(layer.span);
       if (el) live.set(el, layer);
     }
-    const first = live.entries().next().value;
+    // The front: the clip most in view (the first in row order on a tie), not one hidden under a higher row
+    let first: [HTMLVideoElement, PreviewLayer] | null = null;
+    for (const entry of live) if (!first || entry[1].opacity > first[1].opacity) first = entry;
     front = first?.[0] ?? null;
     frontSpan = first?.[1].span ?? null;
     const rolling = prepare(at, live);
     if (wall !== null) keeper.learn(wall);
+    // Started or kept in step first: a seek asked for now is one the hold below must wait for
+    for (const [el, layer] of live) {
+      loadAhead(el);
+      follow(el, sourceTimeAt(layer.span, at));
+    }
 
     // A clip coming into view whose element cannot show a frame of it yet (still seeking, short of its In after a
     // late start, or its last frame out an older one): the picture stays on what it showed (the elements' opacities
@@ -544,8 +558,6 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     }
 
     for (const [el, layer] of live) {
-      loadAhead(el);
-      follow(el, sourceTimeAt(layer.span, at));
       const muted = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
       setSound(el, muted, clamp01(layer.span.clip.volume * layer.gain));
     }
@@ -608,8 +620,11 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     const moved = el && primeFrom !== null ? el.currentTime - primeFrom : 0;
     if (el && !el.ended && moved < PRIME_MOVED && now - primeSince < PRIME_MAX * 1000) return true;
     priming = false;
-    // How long it took from its start to moving teaches the latency the next clips are started ahead by
-    if (el && primeLanded !== null && moved >= PRIME_MOVED) keeper.learnStart((now - primeLanded) / 1000 - moved);
+    // How long it took from its start to moving teaches the latency the next clips are started ahead by (only when
+    // this wait started it: one already playing, moved within its clip, says nothing about a start)
+    if (el && primeStarted.has(el) && primeLanded !== null && moved >= PRIME_MOVED) {
+      keeper.learnStart((now - primeLanded) / 1000 - moved);
+    }
     // From where the picture is, never back
     if (el && frontSpan && primeFrom !== null) {
       from = Math.max(from, frontSpan.start + (el.currentTime - frontSpan.clip.inSec));
@@ -632,6 +647,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
       primeFrom = null;
       primeLanded = null;
       primed = new WeakSet();
+      primeStarted = new WeakSet();
       refused = new WeakSet();
       holdingSince = null;
       sound.pause();
@@ -676,14 +692,12 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     };
   }
   frame = requestAnimationFrame(tick);
-  window.addEventListener("keydown", flush, true);
-  window.addEventListener("pointerdown", flush, true);
+  flushRef.current = flush;
 
   return () => {
     alive = false;
     cancelAnimationFrame(frame);
-    window.removeEventListener("keydown", flush, true);
-    window.removeEventListener("pointerdown", flush, true);
+    if (flushRef.current === flush) flushRef.current = null;
     pauseAll();
   };
 }
@@ -701,6 +715,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   const audios = useRef(new Map<string, HTMLAudioElement>());
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const presented = useRef(new WeakMap<HTMLVideoElement, number>());
+  const flush = useRef<(() => void) | null>(null);
   // Each element's frame callback, to stop when it leaves
   const frameWatches = useRef(new WeakMap<HTMLVideoElement, number>());
   // A seek asked for while the element is still seeking: only the latest target is kept
@@ -813,10 +828,23 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
     seekPaused();
   }, [stacked, crossfade, placed, opts.srcFor, seekPaused]);
 
+  // A key or a press while playing lands the store's playhead where the clock is first. Listened for from the
+  // start, before the editor's keys (its key hook comes after the composition this hook is part of, whose zoom it
+  // takes): that hook stops every key it handles from reaching a listener added later
+  useEffect(() => {
+    const onInput = () => flush.current?.();
+    window.addEventListener("keydown", onInput, true);
+    window.addEventListener("pointerdown", onInput, true);
+    return () => {
+      window.removeEventListener("keydown", onInput, true);
+      window.removeEventListener("pointerdown", onInput, true);
+    };
+  }, []);
+
   // Playing: the frame loop
   useEffect(() => {
     if (!playing) return;
-    return runLoop({ videos, audios, canvas, pendingSeeks, latest, presented });
+    return runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flush });
   }, [playing]);
 
   // Pause everything when the editor goes away

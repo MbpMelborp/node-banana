@@ -385,7 +385,9 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
       const s = get();
       if (!s.isOpen || s.editId === null) return null;
       s.cancelGesture?.();
-      const parked = parkedSessionOf(get());
+      // Left while playing: parked where the picture was, not where the store's playhead last caught up
+      const now = get();
+      const parked = parkedSessionOf(now.playing ? { ...now, playhead: live.playhead } : now);
       set(closedSession());
       return parked;
     },

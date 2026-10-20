@@ -269,6 +269,9 @@ describe("useSequencePlayback", () => {
   it("draws the playhead every frame but writes the store's at most every PLAYHEAD_WRITE_SEC, exactly at a pause or a key", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
+    // The editor's key hook, set up after this one, stops every key it handles from going further
+    const editorKeys = (e: KeyboardEvent) => e.stopImmediatePropagation();
+    window.addEventListener("keydown", editorKeys, true);
     const video = fakeMedia();
     act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlaying(true));
@@ -293,6 +296,39 @@ describe("useSequencePlayback", () => {
     act(() => editor().setPlaying(false));
     expect(editor().playhead).toBeCloseTo(1.108, 9);
     unsubscribe();
+    window.removeEventListener("keydown", editorKeys, true);
+  });
+
+  it("holds the picture after a move back while playing, never preparing the clip still on screen", () => {
+    const opts = twoSourceOptions();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // The first clip's element takes 300 ms to seek back
+    const a = fakeMedia({ duration: 5, seekMs: 300 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(6));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    expect(b.style.opacity).toBe("1");
+    const writes = b.writes;
+    // Back to 2 s: "a" seeks; meanwhile the picture stays on "b", still, and "b" (the next clip, from 0) waits
+    act(() => editor().setPlayhead(2));
+    flushFrame(116);
+    flushFrame(232);
+    expect(a.seeking).toBe(true);
+    expect(b.style.opacity).toBe("1");
+    expect(b.paused).toBe(true);
+    expect(b.writes).toBe(writes);
+    expect(a.style.opacity).toBe("0");
+    // Landed and moving: "a" shows, and only now is "b" put at its In for later
+    for (let now = 248; now <= 600; now += 16) flushFrame(now);
+    expect(a.style.opacity).toBe("1");
+    expect(b.style.opacity).toBe("0");
+    expect(b.currentTime).toBe(0);
   });
 
   it("keeps the playhead moving while the clip's element stalls, and catches it up with one seek", () => {
