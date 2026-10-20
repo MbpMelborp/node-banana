@@ -469,6 +469,31 @@ describe("useSequencePlayback", () => {
     expect(editor().playing).toBe(true);
   });
 
+  it("cuts on the clock, or a hair early when the outgoing element has reached its Out", () => {
+    const opts = twoSourceOptions();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(4.9));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    // 20 ms before the cut, in step: the first clip still shows
+    flushFrame(80);
+    expect(a.style.opacity).toBe("1");
+    expect(b.style.opacity).toBe("0");
+    // Its element is at its Out already (ahead of the clock): the next clip shows rather than a frame past it
+    a.currentTime = 5;
+    flushFrame(90);
+    expect(editor().playhead).toBeCloseTo(4.99, 9);
+    expect(a.style.opacity).toBe("0");
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+  });
+
   it("stops when the element playing now refuses to play", async () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));

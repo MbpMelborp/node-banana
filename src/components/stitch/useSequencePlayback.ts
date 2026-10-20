@@ -63,7 +63,10 @@ export interface SequencePlaybackOptions {
 const SEEK_TOLERANCE = 0.02;
 /** An audio clip is re-synced when it drifts this far from the playhead. */
 const AUDIO_DRIFT = 0.25;
-/** Seconds before a cut at which the next clip is shown (a frame early beats a frame of a clip's trimmed part). */
+/**
+ * Seconds before a cut within which a clip whose element has reached its Out hands over at once (a frame early beats
+ * a frame of its trimmed part).
+ */
 const END_SLACK = 0.03;
 /** A paused element this close to its target (its preparation landed) is played without another seek. */
 const LANDED = 0.08;
@@ -81,6 +84,11 @@ const HOLD_MAX = 0.5;
 /** Seconds from play() to an element moving: the first guess, and the bounds of what the elements' starts teach. */
 const START_LATENCY = 0.05;
 const START_LATENCY_RANGE = [0.01, 0.25] as const;
+/**
+ * How far an element must have moved before its start teaches the latency: a starting element reports a few
+ * milliseconds at once, then stands still until its first frames are out.
+ */
+const START_MOVED = 0.08;
 
 /** The earlier of two spans by start time, the higher row on a tie. */
 const startsFirst = (a: ClipSpan, b: ClipSpan) => a.start - b.start || a.index - b.index;
@@ -107,18 +115,6 @@ function layersFor(
   return stack.placed ? placedLayersAt(spans, t, stack.crossfade) : layersAt(spans, t, stack.crossfade);
 }
 
-/** layersFor, but within END_SLACK of a cut (a live clip's Out where another starts) the layers after it. */
-function shownLayers(
-  spans: readonly ClipSpan[],
-  t: number,
-  stack: { crossfade: boolean; placed?: boolean } | null | undefined,
-): PreviewLayer[] {
-  const layers = layersFor(spans, t, stack);
-  const ahead = t + END_SLACK;
-  const ending = layers.some((layer) => layer.span.end > t && layer.span.end <= ahead);
-  const starting = ending && spans.some((span) => span.length > 0 && span.start > t && span.start <= ahead);
-  return starting ? layersFor(spans, ahead, stack) : layers;
-}
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
@@ -286,7 +282,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest }: PlaybackRefs)
         continue;
       }
       const moved = el.currentTime - start.source;
-      if (moved <= 0.001) continue;
+      if (moved < START_MOVED) continue;
       starting.delete(el);
       const sample = at - start.at - moved;
       const [min, max] = START_LATENCY_RANGE;
@@ -363,8 +359,21 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest }: PlaybackRefs)
   /** The elements at `at`: the live clips shown and in step, the next ones prepared, the rest hidden then paused. */
   const applyLayers = (at: number) => {
     const { spans, soundOn, stack } = latest.current;
+    let layers = layersFor(spans, at, stack);
+    // A clip whose element reached its Out just ahead of the clock hands over to the one cut to after it now
+    const done = layers.find(({ span }) => {
+      const el = elementOf(span);
+      return (
+        el !== null &&
+        span.end > at &&
+        span.end - at <= END_SLACK &&
+        el.currentTime >= span.clip.inSec + span.length - 1e-3 &&
+        spans.some((other) => other.length > 0 && other.start > at && other.start <= span.end + 1e-9)
+      );
+    });
+    if (done) layers = layersFor(spans, done.span.end, stack);
     const live = new Map<HTMLVideoElement, PreviewLayer>();
-    for (const layer of shownLayers(spans, at, stack)) {
+    for (const layer of layers) {
       const el = elementOf(layer.span);
       if (el) live.set(el, layer);
     }
