@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ScrubRow, VOLUME_HOVER_DELAY_MS, formatTime } from "../ScrubRow";
 import { useVideoSoundStore } from "@/store/videoSoundStore";
 import { VIDEO_PIN_EVENT } from "@/hooks/useVideoAutoplay";
+import { playableVideo } from "@/test/playableVideo";
 
 function video(paused = false) {
   return {
@@ -17,39 +18,6 @@ function video(paused = false) {
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
   } as unknown as HTMLVideoElement;
-}
-
-/** A video element that plays, keeps time and ends the way a browser's does. */
-function playableVideo({ paused = true, currentTime = 0, duration = 8 } = {}) {
-  const el = document.createElement("video");
-  const state = { paused, currentTime };
-  Object.defineProperties(el, {
-    paused: { get: () => state.paused },
-    duration: { get: () => duration },
-    readyState: { get: () => 1 },
-    currentTime: {
-      get: () => state.currentTime,
-      set: (t: number) => {
-        state.currentTime = t;
-        el.dispatchEvent(new Event("timeupdate"));
-      },
-    },
-  });
-  el.play = vi.fn(() => {
-    state.paused = false;
-    el.dispatchEvent(new Event("play"));
-    return Promise.resolve();
-  });
-  el.pause = vi.fn(() => {
-    state.paused = true;
-    el.dispatchEvent(new Event("pause"));
-  });
-  const end = () => {
-    state.paused = true;
-    el.dispatchEvent(new Event("pause"));
-    el.dispatchEvent(new Event("ended"));
-  };
-  return Object.assign(el, { end });
 }
 
 describe("ScrubRow", () => {

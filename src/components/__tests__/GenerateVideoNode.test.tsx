@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { GenerateVideoNode } from "@/components/nodes/GenerateVideoNode";
 import { ReactFlowProvider } from "@xyflow/react";
 import { GenerateVideoNodeData, ProviderSettings } from "@/types";
+import { makePlayable } from "@/test/playableVideo";
 
 // Mock deduplicatedFetch to pass through to global fetch (avoids caching issues in tests)
 vi.mock("@/utils/deduplicatedFetch", () => ({
@@ -501,6 +502,45 @@ describe("GenerateVideoNode", () => {
       );
 
       expect(screen.getByText("2 / 3")).toBeInTheDocument();
+    });
+  });
+
+  describe("After a run", () => {
+    const entry = { timestamp: 1, prompt: "a fox", model: "kling-video/v1" };
+    const card = (outputVideo: string, id: string) => (
+      <TestWrapper>
+        <GenerateVideoNode
+          {...createNodeProps({ outputVideo, videoHistory: [{ id, ...entry }], selectedVideoHistoryIndex: 0 })}
+        />
+      </TestWrapper>
+    );
+
+    // A project's recording renames the run's carousel entry to its file's
+    // name once the file is written. The video and its URL stay.
+    it("keeps the video playing in its player when the entry is renamed", () => {
+      const { container, rerender } = render(card("https://cdn.example.com/run.mp4", "1700000000000"));
+      const video = makePlayable(container.querySelector("video")!);
+      fireEvent.click(screen.getByRole("button", { name: "Play" }));
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+
+      rerender(card("https://cdn.example.com/run.mp4", "gen_ab12cd"));
+      expect(container.querySelector("video")).toBe(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      act(() => {
+        video.dispatchEvent(new Event("loadedmetadata"));
+        video.currentTime = 3;
+      });
+      expect(screen.getByText("0:03 / 0:08")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    });
+
+    it("shows the next run's video on the same element", () => {
+      const { container, rerender } = render(card("https://cdn.example.com/run.mp4", "gen_ab12cd"));
+      const video = container.querySelector("video");
+      rerender(card("https://cdn.example.com/next.mp4", "1700000000001"));
+      expect(container.querySelector("video")).toBe(video);
+      expect(video).toHaveAttribute("src", "https://cdn.example.com/next.mp4");
     });
   });
 
