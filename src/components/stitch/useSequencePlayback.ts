@@ -15,10 +15,11 @@ import type { VolumePoint } from "@/types";
  * pieces of one source can play at once, and a cut between them is a hand-
  * over like any other). The clip's mute and volume are applied to the
  * elements (element volume rather than Web Audio, so a source served without
- * CORS still sounds). Each audio clip has its own hidden <audio>, playing
- * inside its span from its In at its curve's gain and paused outside. Every
- * playing element is kept on the clock by its rate, seeked only when far off
- * (createStepKeeper). The encode is the truth. The preview plays one loop.
+ * CORS still sounds), a silent one at SILENT rather than muted. Each audio
+ * clip has its own hidden <audio>, playing inside its span from its In at its
+ * curve's gain and paused outside. Every playing element is kept on the clock
+ * by its rate, seeked only when far off (createStepKeeper). The encode is the
+ * truth. The preview plays one loop.
  *
  * Paused, the clips under the playhead are shown at the frame under it.
  * Playing, the sequence clock moves the playhead: it runs on the frames'
@@ -27,7 +28,7 @@ import type { VolumePoint } from "@/types";
  * stack is a time when no clip is live: the stage is black and the audio
  * clips play on.
  *
- * What is shown and heard is written to the elements (inline opacity, muted,
+ * What is shown and heard is written to the elements (inline opacity,
  * volume), never through React: the hook renders only with its options.
  * While playing, clips that blend are drawn on the stage's canvas instead.
  * Track shows the clip under the playhead. Stacked takes opacity and volume
@@ -64,6 +65,13 @@ export interface SequencePlaybackOptions {
 /** A paused element this far from its target is seeked. */
 const SEEK_TOLERANCE = 0.02;
 /**
+ * The volume a playing element is silenced at, never muted: unmuting a playing element (or raising it from 0) has
+ * Chrome move its sound from a silent output to the speakers, and its picture stops on the frame it shows while that
+ * happens (measured: 166-625 ms; from this to 1, no stop). A cut reveals a clip that played hidden and silent, so it is
+ * already playing out loud, too quietly to hear (−100 dB).
+ */
+const SILENT = 1e-5;
+/**
  * Seconds before a cut within which a clip whose element has reached its Out hands over at once (a frame early beats
  * a frame of its trimmed part).
  */
@@ -97,16 +105,26 @@ const PRIME_MAX = 0.5;
 /** An audio clip starting within this of the clock is put at its In, so it starts without a seek. */
 const AUDIO_PREPARE = 1;
 /**
- * A prepared clip plays, hidden and muted, from up to this far before its In (what its source has before it), so its
+ * A prepared clip plays, hidden and silent, from up to this far before its In (what its source has before it), so its
  * decoder is running by its start. A start in the middle of a file can take a quarter of a second to show a frame
  * (measured: a source with one keyframe, another element playing it too), so this is generous.
  */
 const PREROLL = 0.5;
 /**
+ * Each element starts at its own pace: one whose file has sound waits for the computer's sound output to open, on
+ * every start (about a quarter of a second, measured), one without moves in about 40 ms. So a clip coming up is
+ * test-started once, when its pre-roll is due within PROBE_LEAD (and at least PROBE_MIN away, time to put it back):
+ * played hidden and silent from its pre-roll point until it moves (PROBE_MAX at most), which times its start, then put
+ * back there. A clip from its file's first frame has no pre-roll to make up for a wrong guess.
+ */
+const PROBE_LEAD = 1.2;
+const PROBE_MIN = 0.5;
+const PROBE_MAX = 0.6;
+/**
  * A prepared clip is started this much earlier than its start latency says: a clip's first frame shown a little short
  * is never seen, one held a frame long is.
  */
-const START_MARGIN = 0.02;
+const START_MARGIN = 0.03;
 /**
  * A clip coming into view whose element last showed a frame further than this behind its target holds the cut, at
  * most STALE_HOLD_MAX: short, in case a browser shows no frames of a hidden element.
@@ -117,9 +135,12 @@ const STALE_HOLD_MAX = 0.1;
 const PREPARE_WINDOW = 0.5;
 /** How long the picture holds on what it showed for a clip coming into view that has no frame to show yet. */
 const HOLD_MAX = 0.5;
-/** Seconds from play() to an element moving: the first guess, and the bounds of what the elements' starts teach. */
+/**
+ * Seconds from play() to an element moving: the first guess, and the bounds of what the elements' starts teach (a slow
+ * sound output, a Bluetooth one, can take longer than the quarter of a second measured here).
+ */
 const START_LATENCY = 0.05;
-const START_LATENCY_RANGE = [0.01, 0.25] as const;
+const START_LATENCY_RANGE = [0.01, 0.6] as const;
 /**
  * How far an element must have moved before its start teaches the latency: a starting element reports a few
  * milliseconds at once, then stands still until its first frames are out.
@@ -156,6 +177,15 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value
 const clamp = (value: number, [min, max]: readonly [number, number]) => Math.min(max, Math.max(min, value));
 
 /**
+ * A start latency learnt leaning early: up to a longer sample at once, down to a shorter one slowly. A clip started a
+ * little early shows its first frame a little short, which is never seen; one started late holds a frame, which is.
+ */
+const leanEarly = (latency: number | undefined, sample: number) => {
+  const value = clamp(sample, START_LATENCY_RANGE);
+  return latency === undefined || value > latency ? value : latency * 0.75 + value * 0.25;
+};
+
+/**
  * Keeps playing elements on the clock, video and audio alike (each kind its own keeper). Within `inStep` an element
  * is left alone. Past it, up to SEEK_DRIFT, its playbackRate is nudged (NUDGE, NUDGE_FAR past FAR) until it is back
  * within SETTLED, so its sound never jumps. Only past SEEK_DRIFT is it seeked, to where the clock will be when the
@@ -178,9 +208,9 @@ function createStepKeeper(inStep: number) {
     started(el: HTMLMediaElement, wall: number | null) {
       if (wall !== null) starting.set(el, { wall, source: el.currentTime });
     },
-    /** A start timed elsewhere (the clock's wait for the front clip): `sample` seconds from play() to moving. */
+    /** A start timed elsewhere (by the frames a video showed): `sample` seconds from play() to moving. */
     learnStart(sample: number) {
-      startLatency = clamp(startLatency * 0.5 + sample * 0.5, START_LATENCY_RANGE);
+      startLatency = leanEarly(startLatency, sample);
     },
     keep(el: HTMLMediaElement, target: number, wall: number) {
       if (el.paused || el.seeking) return;
@@ -250,8 +280,11 @@ function createAudioDriver(
         const target = clip.inSec + (at - clip.startSec);
         const length = track.duration;
         const end = Math.min(clip.outSec ?? Infinity, Number.isFinite(length) ? length : Infinity);
-        track.muted = clip.muted || !soundOn;
-        track.volume = clamp01(gainAt(clip.curve, Math.max(clip.inSec, target)));
+        // Silenced, never muted, as the videos are (SILENT): unmuted, a playing track's sound would stop a moment
+        if (track.muted) track.muted = false;
+        const volume =
+          clip.muted || !soundOn ? SILENT : Math.max(SILENT, clamp01(gainAt(clip.curve, Math.max(clip.inSec, target))));
+        if (track.volume !== volume) track.volume = volume;
         if (clip.startSec - at > lead || target >= end) {
           if (!track.paused) track.pause();
           asked.delete(track);
@@ -286,10 +319,19 @@ interface PlaybackRefs {
   canvas: RefObject<HTMLCanvasElement | null>;
   pendingSeeks: RefObject<WeakMap<HTMLVideoElement, number>>;
   latest: RefObject<SequencePlaybackOptions>;
-  /** The media time of the frame each element last presented, where the browser says (requestVideoFrameCallback). */
-  presented: RefObject<WeakMap<HTMLVideoElement, number>>;
+  /**
+   * The frame each element last presented, where the browser says (requestVideoFrameCallback): its media time, and
+   * when it went to the screen (seconds, the frames' clock).
+   */
+  presented: RefObject<WeakMap<HTMLVideoElement, PresentedFrame>>;
   /** Where the loop puts its flush (see the hook's key and press listeners); null while paused. */
   flush: RefObject<(() => void) | null>;
+}
+
+/** A frame an element presented: its media time, and when it went to the screen (seconds). */
+interface PresentedFrame {
+  media: number;
+  at: number;
 }
 
 /** An element that can show a frame of where it is. */
@@ -340,9 +382,9 @@ function drawBlend(
  * - each clip live at the clock is shown at its opacity with its sound, its element started (seeked only when its
  *   preparation has not landed) or, playing, kept on the clock (createStepKeeper);
  * - the clips starting next are prepared as soon as they are next: paused at their pre-roll point (PREROLL before
- *   their In, as far as the source allows), then played, hidden and muted, so they reach their In as the clock
+ *   their In, as far as the source allows), then played, hidden and silent, so they reach their In as the clock
  *   reaches their start, already moving;
- * - every other element is hidden and muted at once and paused a frame later, after what replaces it is shown.
+ * - every other element is hidden and silenced at once and paused a frame later, after what replaces it is shown.
  *
  * Shown and heard are written here, never through React, so a cut is one style change. Where clips blend (a
  * crossfade, a placed stack's shares) they are drawn together on the stage's canvas and the elements hidden under
@@ -382,11 +424,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
   // The front element, and its time once its start had landed, to see it move from
   let primeEl: HTMLVideoElement | null = null;
   let primeFrom: number | null = null;
-  // The frame its start had landed by
-  let primeLanded: number | null = null;
-  // The elements put at their target for this priming (each once: they play on from there), and the ones it started
+  // The elements put at their target for this priming (each once: they play on from there)
   let primed = new WeakSet<HTMLVideoElement>();
-  let primeStarted = new WeakSet<HTMLVideoElement>();
   // This frame's timestamp in seconds; null before the first frame
   let wall: number | null = null;
   let written = from;
@@ -398,6 +437,13 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
   let frontSpan: ClipSpan | null = null;
   // Elements whose play() was refused: not asked again every frame
   let refused = new WeakSet<HTMLVideoElement>();
+  // Each element's start latency where one of its starts was timed, and its file's (the last of its elements timed)
+  const latencies = new WeakMap<HTMLVideoElement, number>();
+  const fileLatencies = new Map<string, number>();
+  // Starts being timed (learnStarts): when each was asked (null: in the press, before the first frame) and from where
+  const timing = new Map<HTMLVideoElement, { since: number | null; from: number }>();
+  // Elements test-started (PROBE_LEAD): while it runs, when it was asked and from where; then "done"
+  const probes = new WeakMap<HTMLVideoElement, { since: number; from: number } | "done">();
   // Hidden last frame and still playing: paused now
   let leaving = new Set<HTMLVideoElement>();
   // Clock time a cut began waiting for its incoming element to have a frame
@@ -406,9 +452,13 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
   let shown = new Map<HTMLVideoElement, number>();
   // The canvas's 2D context, once asked for; null where there is none (the elements blend themselves)
   let blendContext: CanvasRenderingContext2D | null | undefined;
-  /** play(), where a refusal by the front element stops the preview (an AbortError is a pause, not a refusal). */
-  const play = (el: HTMLVideoElement) => {
-    keeper.started(el, wall);
+  /**
+   * play(), where a refusal by the front element stops the preview (an AbortError is a pause, not a refusal). A start
+   * that `teaches` (from where the element was, not just seeked: a seek's own time would count) is timed by the frames
+   * it shows (learnStarts).
+   */
+  const play = (el: HTMLVideoElement, teaches: boolean) => {
+    if (teaches) timing.set(el, { since: wall, from: el.currentTime });
     el.play().catch((error: unknown) => {
       if (!alive) return;
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -421,9 +471,11 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     const value = String(opacity);
     if (el.style.opacity !== value) el.style.opacity = value;
   };
-  const setSound = (el: HTMLVideoElement, muted: boolean, volume: number) => {
-    if (el.muted !== muted) el.muted = muted;
-    if (el.volume !== volume) el.volume = volume;
+  /** Silent is SILENT, never muted (see there); audible is never below it either. */
+  const setSound = (el: HTMLVideoElement, silent: boolean, volume: number) => {
+    const value = silent ? SILENT : Math.max(SILENT, volume);
+    if (el.muted) el.muted = false;
+    if (el.volume !== value) el.volume = value;
   };
   const contextOf = (cv: HTMLCanvasElement) => {
     if (blendContext === undefined) blendContext = cv.getContext("2d");
@@ -438,32 +490,92 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     // At its file's end the element holds its last frame until the clock leaves the clip
     if (el.ended && Math.abs(el.currentTime - target) <= SEEK_DRIFT) return;
     if (priming) {
+      let seeked = false;
       if (!primed.has(el)) {
         primed.add(el);
         // A paused seek still in flight would pull the element back when it lands
         pendingSeeks.current.delete(el);
-        if (Math.abs(el.currentTime - target) > LANDED) el.currentTime = target;
+        seeked = Math.abs(el.currentTime - target) > LANDED;
+        if (seeked) el.currentTime = target;
       }
-      if (el.paused && !refused.has(el)) {
-        primeStarted.add(el);
-        play(el);
-      }
+      if (el.paused && !refused.has(el)) play(el, !seeked && !el.seeking);
       return;
     }
     if (el.paused) {
       if (refused.has(el)) return;
       pendingSeeks.current.delete(el);
-      const point = target + keeper.startLatency();
-      if (Math.abs(el.currentTime - point) > LANDED) el.currentTime = point;
-      play(el);
+      const point = target + latencyOf(el);
+      const seeked = Math.abs(el.currentTime - point) > LANDED;
+      if (seeked) el.currentTime = point;
+      play(el, !seeked && !el.seeking);
     } else if (wall !== null) {
       keeper.keep(el, target, wall);
     }
   };
 
+  /** The start latency to plan `el`'s start by: its own, else its file's, else the one the starts have taught. */
+  const latencyOf = (el: HTMLVideoElement) => latencies.get(el) ?? fileLatencies.get(el.src) ?? keeper.startLatency();
+
   /**
-   * The clips starting next (and any within PREPARE_WINDOW of them): paused at their pre-roll point until it is time,
-   * then playing towards their In. Returns the elements playing ahead of their start.
+   * How long `el`, asked to play at `since` from `from`, took to move: by the first frame it showed past `from` where
+   * the browser says, else by its time once it has moved START_MOVED. null until then.
+   */
+  const timeStart = (el: HTMLVideoElement, since: number, from: number) => {
+    const frame = presented.current.get(el);
+    if (frame && frame.at > since && frame.media > from + 1e-3) return frame.at - since - (frame.media - from);
+    const moved = el.currentTime - from;
+    return wall !== null && !el.seeking && moved >= START_MOVED ? wall - since - moved : null;
+  };
+
+  /** A start of `el` that took `latency`: its own, its file's and the shared latency learn from it (leanEarly). */
+  const remember = (el: HTMLVideoElement, latency: number) => {
+    latencies.set(el, leanEarly(latencies.get(el), latency));
+    fileLatencies.set(el.src, leanEarly(fileLatencies.get(el.src), latency));
+    keeper.learnStart(latency);
+  };
+
+  /**
+   * The starts being timed, each once it has shown a frame past where it began (or never will: paused, or long). One
+   * asked in the press is timed from the first frame, a frame short at most.
+   */
+  const learnStarts = () => {
+    if (wall === null) return;
+    for (const [el, start] of timing) {
+      start.since ??= wall;
+      const latency = el.paused ? null : timeStart(el, start.since, start.from);
+      if (latency !== null) remember(el, latency);
+      else if (!el.paused && wall - start.since < START_LATENCY_RANGE[1] + 0.5) continue;
+      timing.delete(el);
+    }
+  };
+
+  /**
+   * A clip coming up, `left` seconds before its pre-roll is due, test-started once (PROBE_LEAD) from its pre-roll
+   * point, hidden and silent, to time its start. Returns whether it is running now; once it is not, the caller puts it
+   * back at its pre-roll point.
+   */
+  const probe = (el: HTMLVideoElement, point: number, left: number) => {
+    const state = probes.get(el);
+    if (state === "done" || wall === null) return false;
+    if (!state) {
+      if (latencies.has(el) || refused.has(el) || left > PROBE_LEAD || left < PROBE_MIN) return false;
+      // From its pre-roll point, once its seek there has landed (the caller puts it there)
+      if (el.seeking || Math.abs(el.currentTime - point) > SEEK_TOLERANCE) return false;
+      setSound(el, true, 0);
+      play(el, false);
+      probes.set(el, { since: wall, from: el.currentTime });
+      return true;
+    }
+    const latency = el.paused ? null : timeStart(el, state.since, state.from);
+    if (latency === null && !el.paused && wall - state.since < PROBE_MAX) return true;
+    if (latency !== null) remember(el, latency);
+    probes.set(el, "done");
+    return false;
+  };
+
+  /**
+   * The clips starting next (and any within PREPARE_WINDOW of them): test-started (probe), then paused at their
+   * pre-roll point until it is time, then playing towards their In. Returns the elements playing ahead of their start.
    */
   const prepare = (at: number, live: ReadonlyMap<HTMLVideoElement, unknown>) => {
     const rolling = new Set<HTMLVideoElement>();
@@ -478,11 +590,15 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
       loadAhead(el);
       const preroll = Math.min(PREROLL, span.clip.inSec);
       // Asked to play now, it moves startLatency later and must reach its In at the clip's start
-      const startLatency = keeper.startLatency();
+      const startLatency = latencyOf(el);
       const startAt = span.start - preroll - startLatency - START_MARGIN;
       if (at < startAt) {
-        if (!el.paused) el.pause();
         const point = span.clip.inSec - preroll;
+        if (probe(el, point, startAt - at)) {
+          rolling.add(el);
+          continue;
+        }
+        if (!el.paused) el.pause();
         if (!el.seeking && Math.abs(el.currentTime - point) > SEEK_TOLERANCE) {
           pendingSeeks.current.delete(el);
           el.currentTime = point;
@@ -491,13 +607,18 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
       }
       rolling.add(el);
       if (!el.paused) continue;
-      // Late (the clock came from a move just before the start): from where it must be to reach its In in time
+      // From where it waits, START_MARGIN early as planned (never moved back for that: a seek into a file decodes from
+      // its keyframe, which delays the start); late (the clock came from a move just before the start, or a test start
+      // ran long), moved on to where it must be to reach its In in time
       const point = Math.max(0, span.clip.inSec - (span.start - at) + startLatency);
-      if (Math.abs(el.currentTime - point) > SEEK_TOLERANCE) {
+      const seeked = point - el.currentTime > SEEK_TOLERANCE || el.currentTime - point > START_MARGIN + SEEK_TOLERANCE;
+      if (seeked) {
         pendingSeeks.current.delete(el);
         el.currentTime = point;
       }
-      play(el);
+      // Started silent, so the cut only turns it up
+      setSound(el, true, 0);
+      play(el, !seeked && !el.seeking);
     }
     return rolling;
   };
@@ -530,6 +651,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     frontSpan = first?.[1].span ?? null;
     const rolling = prepare(at, live);
     if (wall !== null) keeper.learn(wall);
+    learnStarts();
     // Started or kept in step first: a seek asked for now is one the hold below must wait for
     for (const [el, layer] of live) {
       loadAhead(el);
@@ -545,7 +667,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
       if (!(layer.opacity > 0) || !incoming(el)) continue;
       const target = sourceTimeAt(layer.span, at);
       const short = el.currentTime < layer.span.clip.inSec - SEEK_TOLERANCE;
-      const last = presented.current.get(el);
+      const last = presented.current.get(el)?.media;
       if (!presentable(el) || short) wait = "seek";
       else if (last !== undefined && !el.paused && last < target - STALE_FRAME) wait ??= "frame";
     }
@@ -558,8 +680,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     }
 
     for (const [el, layer] of live) {
-      const muted = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
-      setSound(el, muted, clamp01(layer.span.clip.volume * layer.gain));
+      const silent = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
+      setSound(el, silent, clamp01(layer.span.clip.volume * layer.gain));
     }
     const next = new Set<HTMLVideoElement>();
     for (const el of videos.current.values()) {
@@ -611,20 +733,11 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
     if (el !== primeEl) {
       primeEl = el;
       primeFrom = null;
-      primeLanded = null;
     }
-    if (el && primeFrom === null && !el.paused && !el.seeking) {
-      primeFrom = el.currentTime;
-      primeLanded = now;
-    }
+    if (el && primeFrom === null && !el.paused && !el.seeking) primeFrom = el.currentTime;
     const moved = el && primeFrom !== null ? el.currentTime - primeFrom : 0;
     if (el && !el.ended && moved < PRIME_MOVED && now - primeSince < PRIME_MAX * 1000) return true;
     priming = false;
-    // How long it took from its start to moving teaches the latency the next clips are started ahead by (only when
-    // this wait started it: one already playing, moved within its clip, says nothing about a start)
-    if (el && primeStarted.has(el) && primeLanded !== null && moved >= PRIME_MOVED) {
-      keeper.learnStart((now - primeLanded) / 1000 - moved);
-    }
     // From where the picture is, never back
     if (el && frontSpan && primeFrom !== null) {
       from = Math.max(from, frontSpan.start + (el.currentTime - frontSpan.clip.inSec));
@@ -645,9 +758,7 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented, flus
       primeSince = null;
       primeEl = null;
       primeFrom = null;
-      primeLanded = null;
       primed = new WeakSet();
-      primeStarted = new WeakSet();
       refused = new WeakSet();
       holdingSince = null;
       sound.pause();
@@ -714,7 +825,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   // Keyed by audio clip id
   const audios = useRef(new Map<string, HTMLAudioElement>());
   const canvas = useRef<HTMLCanvasElement | null>(null);
-  const presented = useRef(new WeakMap<HTMLVideoElement, number>());
+  const presented = useRef(new WeakMap<HTMLVideoElement, PresentedFrame>());
   const flush = useRef<(() => void) | null>(null);
   // Each element's frame callback, to stop when it leaves
   const frameWatches = useRef(new WeakMap<HTMLVideoElement, number>());
@@ -785,8 +896,8 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
         el.addEventListener("loadedmetadata", onLoadedMetadata);
         videos.current.set(clipId, el);
         if (typeof el.requestVideoFrameCallback === "function") {
-          const onFrame: VideoFrameRequestCallback = (_now, frame) => {
-            presented.current.set(el, frame.mediaTime);
+          const onFrame: VideoFrameRequestCallback = (now, frame) => {
+            presented.current.set(el, { media: frame.mediaTime, at: (frame.presentationTime ?? now) / 1000 });
             frameWatches.current.set(el, el.requestVideoFrameCallback(onFrame));
           };
           frameWatches.current.set(el, el.requestVideoFrameCallback(onFrame));

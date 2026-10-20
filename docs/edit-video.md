@@ -567,10 +567,18 @@ nothing to fade into. A gap at the start plays at the start of every loop.
 Stacked, and a clock of its own. Play sets the clock off once the clip
 under the playhead is moving; from then on the playhead moves on time
 whatever a clip does, and a clip that falls behind is caught up while the
-playhead goes on. The next clip is made ready before its turn: put at its
-In (or half a second before it, when its file has that much), then started
-hidden and silent just ahead of its start, so a cut shows its first frame
-on time. Two pieces of one video are two clips like any others. In a
+playhead goes on. The next clip is made ready before its turn. It is
+test-started once, hidden and silent, to time how long it takes to move: a
+file with sound waits for the computer's sound output every time it starts
+(about a quarter of a second), one without moves in a few hundredths. Then
+it waits at its In (or half a second before it, when its file has that
+much) and is started that long, and a frame more, ahead of its start, so a
+cut shows it already moving; every start teaches its file's time again. A
+clip that should be silent (hidden, muted, the sound off, a fade at 0)
+plays at an inaudible volume rather than muted: a browser that unmutes a
+playing video stops its picture for a fifth of a second or more while it
+moves the sound to the speakers. Two pieces of one video are two clips like
+any others. In a
 lined-up stack's overlap both play: with Crossfade on the later clip is
 drawn over the earlier one at the dissolve's opacity, with it off it is
 hidden; their volumes follow the crossfade. While playing, clips that blend
@@ -1404,10 +1412,15 @@ snaps its start only.
   applied to the elements once a frame; it plays one loop. A video served
   without CORS shows no filmstrip frames (it still plays, and still blends
   on the canvas). The encode is the truth.
-- At a cut the clip before stays on screen, still, while the next one has no
-  frame of its own to show: a tenth of a second at most while its first
-  frame is decoded, half a second at most while it is still seeking (after
-  a move just before the cut).
+- A cut shows the next clip from the frame the clock is on or the one
+  after: it is started a frame early, so its first frame can be skipped,
+  never held. The clip before stays on screen, still, only while the next
+  one has no frame of its own to show: after a move just before the cut, or
+  when it comes up too soon after the clip before to be test-started and
+  nothing of its file has started yet (a tenth of a second at most while a
+  fresh frame is decoded, half a second at most while it is still seeking).
+  Either clip can run up to a frame off the clock, so a clip's last frame
+  can stay a frame longer than in the encode.
 - The preview has one `<video>` per clip. Only the clips under the playhead
   and the ones coming up load ahead; the others load their metadata until
   they are needed. Where clips overlap they all play at once, hidden ones
