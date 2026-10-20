@@ -881,7 +881,40 @@ describe("comfyApp", () => {
       producer: { nodeId: "comfy-1", nodeType: "comfyApp" },
     });
     expect(mockFetch.mock.calls.some((c) => c[0] === "/api/save-generation")).toBe(false);
+    // The image and the video are both listed in recent generations; the video with its recording
+    const listed = vi.mocked(ctx.addToGlobalHistory).mock.calls;
+    expect(listed.map(([item, recording]) => [item.kind ?? "image", item.image, recording?.assetId])).toEqual([
+      ["image", "data:image/png;base64,big", undefined],
+      ["video", "data:video/mp4;base64,clip", "a000000000002"],
+    ]);
+    expect(listed[1][0]).toMatchObject({ prompt: "Upscaler (steps=20)", model: "Upscaler" });
+  });
+
+  it("lists an app whose only output is a video in recent generations", async () => {
+    vi.useFakeTimers();
+    const { recordAsset } = makeRecorder();
+    const node = { id: "comfy-1", type: "comfyApp", position: { x: 0, y: 0 }, data: { app, paramValues: {}, status: "idle" } } as unknown as WorkflowNode;
+    const { ctx } = makeCtx(node, { recordAsset });
+    mockFetch.mockImplementation(async (url: string) =>
+      url === "/api/comfy/run"
+        ? okJson({ success: true, polling: true, jobId: "job-1", status: "queued" })
+        : okJson({
+            success: true,
+            polling: false,
+            status: "success",
+            outputs: [{ handleId: "12", type: "video", value: "data:video/mp4;base64,clip" }],
+          })
+    );
+
+    const run = executeComfyApp(ctx);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
     expect(ctx.addToGlobalHistory).toHaveBeenCalledOnce();
+    expect(ctx.addToGlobalHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "video", image: "data:video/mp4;base64,clip", model: "Upscaler" }),
+      expect.objectContaining({ assetId: "a000000000001" })
+    );
   });
 
   it("runs with the seeds the node shows, then moves each on by its mode", async () => {

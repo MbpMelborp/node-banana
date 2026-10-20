@@ -109,6 +109,7 @@ import {
 } from "./utils/executionUtils";
 import { getConnectedInputsPure, validateWorkflowPure, nodeReadinessPure, type ConnectedInputs, type NodeReadiness } from "./utils/connectedInputs";
 import { isMissingInputError } from "./execution/missingInput";
+import { followHistoryVideo } from "./execution/assetRecording";
 import { USER_STOP_REASON } from "./execution/pendingTask";
 import {
   buildCellInstances,
@@ -473,7 +474,11 @@ export interface WorkflowStore {
 
   // Global Image History
   globalImageHistory: ImageHistoryItem[];
-  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => void;
+  /**
+   * `recording`: the output's recording in the asset library. The entry takes
+   * its asset id, and a video its length and poster once the library has them.
+   */
+  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">, recording?: RecordedAssetHandle | null) => void;
   clearGlobalHistory: () => void;
 
   // Auto-save state
@@ -2402,7 +2407,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     signal,
     providerSettings: get().providerSettings,
     addIncurredCost: (cost: number) => { if (isCurrent()) get().addIncurredCost(cost); },
-    addToGlobalHistory: (item) => { if (isCurrent()) get().addToGlobalHistory(item); },
+    addToGlobalHistory: (item, recording) => { if (isCurrent()) get().addToGlobalHistory(item, recording); },
     batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
@@ -3875,11 +3880,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     syncUndoFlags(set);
   },
 
-  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => {
+  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">, recording?: RecordedAssetHandle | null) => {
     const batch = batchTag(get().batch);
     const newItem: ImageHistoryItem = {
       ...item,
       ...(batch && !item.batch ? { batch } : {}),
+      ...(recording ? { assetId: recording.assetId } : {}),
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
 
@@ -3890,10 +3896,25 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       ),
     }));
     pushGenerationToast({
+      kind: newItem.kind,
       image: newItem.image,
       model: newItem.model,
       aspectRatio: newItem.aspectRatio,
     });
+    // A video's tile shows the library's poster once there is one, instead of decoding the video
+    if (recording && newItem.kind === "video") {
+      followHistoryVideo(recording, (fields) =>
+        set((state) =>
+          state.globalImageHistory.some((entry) => entry.id === newItem.id)
+            ? {
+                globalImageHistory: state.globalImageHistory.map((entry) =>
+                  entry.id === newItem.id ? { ...entry, ...fields } : entry
+                ),
+              }
+            : state
+        )
+      );
+    }
   },
 
   clearGlobalHistory: () => {

@@ -29,7 +29,7 @@ import type { AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/l
  * - `signal`: AbortSignal for cancellable fetch calls (only present in executeWorkflow).
  * - `providerSettings`: API key settings for providers.
  * - `addIncurredCost`: Tracks cost for billing.
- * - `addToGlobalHistory`: Adds image to the global generation history.
+ * - `addToGlobalHistory`: Adds an image or video to the recent-generations list, with its recording if it has one.
  * - `generationsPath`: Path for auto-saving generations (null if not configured).
  * - `saveDirectoryPath`: Path for output node file saving (null if not configured).
  * - `trackSaveGeneration`: Registers a save-generation promise in pendingImageSyncs so auto-save waits.
@@ -48,7 +48,7 @@ export interface NodeExecutionContext {
   signal?: AbortSignal;
   providerSettings: ProviderSettings;
   addIncurredCost: (cost: number) => void;
-  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => void;
+  addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">, recording?: RecordedAssetHandle | null) => void;
   /** Set during a batch ("Run 10×"): which run this is. Goes on the node's carousel entries. */
   batch?: RunBatchTag;
   generationsPath: string | null;

@@ -383,6 +383,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
       const imageId = `${timestamp}`;
       const recordings = new Map<string, RecordedAssetHandle>();
       let imageRecording: RecordedAssetHandle | null = null;
+      let videoRecording: RecordedAssetHandle | null = null;
       for (const output of outputs) {
         if (output.type === "text" || !output.value) continue;
         const recorded = recordOutput(ctx, {
@@ -397,6 +398,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         if (!recorded) continue;
         recordings.set(output.handleId, recorded);
         if (!imageRecording && output.value === resolved.outputImage) imageRecording = recorded;
+        if (!videoRecording && output.value === resolved.outputVideo) videoRecording = recorded;
       }
 
       // The run joins the node's carousel, like an image or video generation:
@@ -465,6 +467,20 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
               : saveToFolder()
           );
         }
+      }
+      // Its video is listed too, beside the images
+      if (resolved.outputVideo) {
+        addToGlobalHistory(
+          {
+            kind: "video",
+            image: resolved.outputVideo,
+            timestamp,
+            prompt,
+            aspectRatio: "16:9",
+            model: app.name,
+          },
+          videoRecording
+        );
       }
       return;
     }
