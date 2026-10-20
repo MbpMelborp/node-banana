@@ -18,6 +18,39 @@ function video(paused = false) {
   } as unknown as HTMLVideoElement;
 }
 
+/** A video element that plays, keeps time and ends the way a browser's does. */
+function playableVideo({ paused = true, currentTime = 0, duration = 8 } = {}) {
+  const el = document.createElement("video");
+  const state = { paused, currentTime };
+  Object.defineProperties(el, {
+    paused: { get: () => state.paused },
+    duration: { get: () => duration },
+    readyState: { get: () => 1 },
+    currentTime: {
+      get: () => state.currentTime,
+      set: (t: number) => {
+        state.currentTime = t;
+        el.dispatchEvent(new Event("timeupdate"));
+      },
+    },
+  });
+  el.play = vi.fn(() => {
+    state.paused = false;
+    el.dispatchEvent(new Event("play"));
+    return Promise.resolve();
+  });
+  el.pause = vi.fn(() => {
+    state.paused = true;
+    el.dispatchEvent(new Event("pause"));
+  });
+  const end = () => {
+    state.paused = true;
+    el.dispatchEvent(new Event("pause"));
+    el.dispatchEvent(new Event("ended"));
+  };
+  return Object.assign(el, { end });
+}
+
 describe("ScrubRow", () => {
   it("formats times", () => {
     expect(formatTime(0)).toBe("0:00");
@@ -108,5 +141,40 @@ describe("ScrubRow", () => {
     render(<ScrubRow videoRef={{ current: v }} src="blob:a" />);
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
     expect(v.play).toHaveBeenCalledTimes(1);
+  });
+
+  // A card can mount another <video> for the same URL (Generate Video keys
+  // its element on the carousel entry, which a run renames): the ref object
+  // stays, what it holds changes.
+  describe("a video remounted under the same source", () => {
+    it("shows Pause and moves the playhead while it plays, and Play once it ends", () => {
+      const first = playableVideo();
+      const ref = { current: first as HTMLVideoElement | null };
+      const { rerender } = render(<ScrubRow videoRef={ref} src="blob:a" />);
+      const next = playableVideo();
+      ref.current = next;
+      rerender(<ScrubRow videoRef={ref} src="blob:a" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Play" }));
+      expect(next.play).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      act(() => { next.currentTime = 3; });
+      expect(screen.getByText("0:03 / 0:08")).toBeInTheDocument();
+      act(() => next.end());
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+
+      // The element it replaced no longer moves the row.
+      act(() => { first.currentTime = 6; });
+      expect(screen.getByText("0:03 / 0:08")).toBeInTheDocument();
+    });
+
+    it("reads the new element as it is", () => {
+      const ref = { current: playableVideo() as HTMLVideoElement | null };
+      const { rerender } = render(<ScrubRow videoRef={ref} src="blob:a" />);
+      ref.current = playableVideo({ paused: false, currentTime: 2, duration: 5 });
+      rerender(<ScrubRow videoRef={ref} src="blob:a" />);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      expect(screen.getByText("0:02 / 0:05")).toBeInTheDocument();
+    });
   });
 });
