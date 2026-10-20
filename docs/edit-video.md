@@ -563,15 +563,23 @@ in a lined-up stack that is the clips' lengths less the overlaps. Each
 restart of the loop is a cut, in picture and sound: the last clip has
 nothing to fade into. A gap at the start plays at the start of every loop.
 
-**The preview.** In Stacked the stage has one `<video>` per clip. In a
+**The preview.** The stage has one `<video>` per clip, in Track as in
+Stacked, and a clock of its own. Play sets the clock off once the clip
+under the playhead is moving; from then on the playhead moves on time
+whatever a clip does, and a clip that falls behind is caught up while the
+playhead goes on. The next clip is made ready before its turn: put at its
+In (or half a second before it, when its file has that much), then started
+hidden and silent just ahead of its start, so a cut shows its first frame
+on time. Two pieces of one video are two clips like any others. In a
 lined-up stack's overlap both play: with Crossfade on the later clip is
 drawn over the earlier one at the dissolve's opacity, with it off it is
-hidden; their volumes follow the crossfade. A placed stack shows each clip
-at the opacity that gives it its share of the picture and its sound at its
-share of the sound, and the stage is black in a gap while the music plays
-on. A hidden clip keeps playing unseen, so it is in step when it shows. The
-clip that started first among those playing keeps the time; at its Out the
-next one does, and across a gap the playhead runs on the frame clock.
+hidden; their volumes follow the crossfade. While playing, clips that blend
+are drawn together on a canvas over the stage, since a browser plays two
+videos blended over each other at half its frame rate or worse; paused,
+the videos blend themselves. A placed stack shows each clip at the opacity
+that gives it its share of the picture and its sound at its share of the
+sound, and the stage is black in a gap while the music plays on. A hidden
+clip keeps playing unseen, so it is in step when it shows.
 
 **On the card.** The summary's length runs to the end of the clip that
 ends last. In a lined-up stack, when some join really overlaps, an item
@@ -1392,16 +1400,28 @@ snaps its start only.
   moves off centre rather than the buttons overlapping.
 - A project made by name before Edit video existed and called "Edits"
   shares its folder with the edit files; both keep working.
-- **The preview is an approximation.** It switches between one `<video>` per
-  source, so a join can freeze briefly; clip volume and the curve are applied
-  to the elements once a frame; it plays one loop. A video served without
-  CORS shows no filmstrip frames. The encode is the truth.
-- In Stacked the preview has one `<video>` per clip, so every clip loads.
-  Where clips overlap they all play at once, hidden ones too, and can drift
-  apart by up to 0.15 s before they are seeked back together. In a gap the
-  playhead runs on the frame clock.
-- The preview plays one `<audio>` per audio clip, set once a frame; it can
-  drift up to 0.25 s before it is seeked back.
+- **The preview is an approximation.** Clip volume and the curve are
+  applied to the elements once a frame; it plays one loop. A video served
+  without CORS shows no filmstrip frames (it still plays, and still blends
+  on the canvas). The encode is the truth.
+- At a cut the clip before stays on screen, still, while the next one has no
+  frame of its own to show: a tenth of a second at most while its first
+  frame is decoded, half a second at most while it is still seeking (after
+  a move just before the cut).
+- The preview has one `<video>` per clip. Only the clips under the playhead
+  and the ones coming up load ahead; the others load their metadata until
+  they are needed. Where clips overlap they all play at once, hidden ones
+  too.
+- Every `<video>` and each audio clip's `<audio>` follow the clock. Within
+  a frame (a video) or 0.03 s (an audio clip) one is left alone; up to
+  0.25 s off it plays 2 % faster or slower (5 % past 0.12 s) until it is
+  back within 0.01 s, so its sound never jumps; only past 0.25 s is it
+  moved, at most once a second. After Play or a move the playhead waits up
+  to half a second for the clip under it to start, and the audio clips
+  start with it.
+- While the preview plays, the timecode and the playhead are drawn every
+  frame; the rest of the editor reads the playhead ten times a second, and
+  exactly when you pause or press a key or the mouse.
 - Each audio file is decoded whole while a render runs: about 115 MB for 5
   minutes of 48 kHz stereo. For the waveforms the editor decodes at most two
   files at a time and keeps only their peaks.

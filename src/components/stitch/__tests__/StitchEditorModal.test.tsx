@@ -1003,7 +1003,7 @@ describe("StitchEditorModal", () => {
       expect(split()).not.toHaveAttribute("title");
     });
 
-    it("leaves Track's elements to their classes after switching back from Stacked while playing", () => {
+    it("shows Track's clip under the playhead after switching back from Stacked while playing", () => {
       seed();
       openEditor();
       stack();
@@ -1012,8 +1012,7 @@ describe("StitchEditorModal", () => {
       expect(editor().playing).toBe(false);
       const videos = [...screen.getByTestId("stitch-preview").querySelectorAll("video")];
       expect(videos).toHaveLength(2);
-      expect(videos.map((v) => v.style.opacity)).toEqual(["", ""]);
-      expect(videos.filter((v) => v.classList.contains("opacity-100"))).toHaveLength(1);
+      expect(videos.map((v) => v.style.opacity)).toEqual(["1", "0"]);
     });
 
     // As a mouse does it: the toggle keeps focus where it was on mousedown, then the click switches

@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The Edit video view's pane is the edit's media** — The pane beside the timeline holds the videos and sounds that belong to the open edit, not the whole library: a new edit shows only Add media. Show them as a list (the default) or a grid, click one to add it at the playhead or drag it onto the timeline, and take one out of the edit from its ⋯ menu (its clips go with it after a question, and one undo brings both back).
 
+### Fixed
+
+- **The video editor's preview plays smoothly** — Play in the Edit video view and in a node's editor now goes across cuts, split clips and crossfades without a held frame, and the audio rows and the clips' own sound stay in step with the picture instead of jumping. The preview runs on its own clock, readies the next clip before its cut, and keeps sound in step by its speed rather than by seeking.
+
 ## [2.2.0] - 2026-10-19
 
 The Video Stitch node becomes Edit Video, with a full-screen editor on a

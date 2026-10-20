@@ -1,10 +1,10 @@
 "use client";
 
-import type { MouseEvent, ReactNode } from "react";
+import { memo, useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { Blend, Magnet, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { livePlayhead, subscribeLivePlayhead, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { MAX_PX_PER_SEC, MIN_PX_PER_SEC } from "@/lib/stitch/timeAxis";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
@@ -95,6 +95,27 @@ function ControlButton({
 }
 
 /**
+ * Where the playhead is, as drawn this frame: its text is written as the live playhead moves, never through a render
+ * of the row.
+ */
+function PlayheadTime({ total }: { total: number }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const show = (t: number) => {
+      const text = formatTimecode(Math.min(t, total));
+      if (ref.current && ref.current.textContent !== text) ref.current.textContent = text;
+    };
+    show(livePlayhead());
+    return subscribeLivePlayhead(show);
+  }, [total]);
+  return (
+    <span ref={ref} className="text-neutral-100" data-testid="stitch-playhead">
+      {formatTimecode(Math.min(livePlayhead(), total))}
+    </span>
+  );
+}
+
+/**
  * The control row under the video, as wide as the video (EditorStage sizes
  * it): the time at the left (where the playhead is, then the length); Go to
  * start, Play and Go to end in the middle; at the right Frame to canvas, Mute
@@ -104,7 +125,7 @@ function ControlButton({
  * drops Fit, then − and +; their keys (− = and ⇧Z), ⌘ wheel and pinch still
  * zoom. Inert while the editor has no clips.
  */
-export function EditorTransport({
+export const EditorTransport = memo(function EditorTransport({
   total,
   empty,
   zoom,
@@ -121,7 +142,6 @@ export function EditorTransport({
   frameSize: { width: number; height: number } | null;
 }) {
   const playing = useStitchEditorStore((s) => s.playing);
-  const playhead = useStitchEditorStore((s) => s.playhead);
   const snap = useStitchEditorStore((s) => s.snap);
   const soundOn = useStitchEditorStore((s) => s.soundOn);
   const setSnap = useStitchEditorStore((s) => s.setSnap);
@@ -134,9 +154,7 @@ export function EditorTransport({
     <div className={cn("@container w-full", empty && "pointer-events-none opacity-50")} inert={empty}>
       <div data-testid="stitch-controls" className="grid h-12 grid-cols-[1fr_auto_1fr] items-center gap-x-3">
         <div className="min-w-0 truncate whitespace-nowrap text-[13px] tabular-nums">
-          <span className="text-neutral-100" data-testid="stitch-playhead">
-            {formatTimecode(Math.min(playhead, total))}
-          </span>
+          <PlayheadTime total={total} />
           {/* A row narrower than its controls (a small window) keeps the playhead's time and drops the length */}
           <span className="text-ink-3 @max-[500px]:hidden">{` / ${formatTimecode(total)}`}</span>
         </div>
@@ -219,4 +237,4 @@ export function EditorTransport({
       </div>
     </div>
   );
-}
+});

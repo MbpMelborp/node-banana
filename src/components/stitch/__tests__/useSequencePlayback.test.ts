@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { livePlayhead, PLAYHEAD_WRITE_SEC, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { gainAt } from "@/lib/stitch/curve";
 import { clipSpans, createClip, layoutSpans, spansEnd, type SourceKey } from "@/lib/stitch/timeline";
 import { useSequencePlayback, type AudioPlaybackClip, type SequencePlaybackOptions } from "../useSequencePlayback";
 
-// The preview engine against stand-in media elements and a hand-driven frame loop.
+// The preview engine against stand-in media elements and a hand-driven frame loop. A playing stand-in advances with
+// the frames' timestamps, as a real element runs on its own; a seek can take time (seekMs) before it lands.
 
 interface FakeMedia {
   currentTime: number;
@@ -14,22 +15,66 @@ interface FakeMedia {
   seeking: boolean;
   muted: boolean;
   volume: number;
+  playbackRate: number;
+  readyState: number;
   duration: number;
+  videoWidth: number;
+  videoHeight: number;
+  style: { opacity: string };
+  /** currentTime writes. */
+  writes: number;
+  /** Stands still while playing (a stall, as on a buffer underrun). */
+  frozen: boolean;
   play: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
+  /** Moves a playing element on by `ms` of the frames' time, and lands a seek whose time has come. */
+  advance(ms: number, now: number): void;
+  requestVideoFrameCallback: (callback: VideoFrameRequestCallback) => number;
+  /** Shows a frame of `mediaTime`: what requestVideoFrameCallback reports (only when called, so a test decides). */
+  present(mediaTime: number): void;
 }
 
-function fakeMedia(duration = Number.NaN): FakeMedia {
+/** Every stand-in made since the test began, advanced by flushFrame. */
+let made: FakeMedia[] = [];
+
+function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; seekMs?: number } = {}): FakeMedia {
+  let time = 0;
+  let landsAt: number | null = null;
+  let target = 0;
+  const listeners = new Map<string, Set<(event: Event) => void>>();
+  const emit = (type: string) => {
+    for (const listener of listeners.get(type) ?? []) listener({ currentTarget: media } as unknown as Event);
+  };
   const media: FakeMedia = {
-    currentTime: 0,
+    get currentTime() {
+      return time;
+    },
+    set currentTime(value: number) {
+      media.writes++;
+      media.ended = false;
+      time = value;
+      if (seekMs <= 0) return;
+      // Reports the new time at once, as a real element does, but stands still until the seek lands seekMs after the
+      // next frame
+      media.seeking = true;
+      target = value;
+      landsAt = null;
+    },
     paused: true,
     ended: false,
     seeking: false,
     muted: false,
     volume: 1,
+    playbackRate: 1,
+    readyState: 4,
     duration,
+    videoWidth: 1280,
+    videoHeight: 720,
+    style: { opacity: "" },
+    writes: 0,
+    frozen: false,
     play: vi.fn(() => {
       media.paused = false;
       return Promise.resolve();
@@ -37,9 +82,43 @@ function fakeMedia(duration = Number.NaN): FakeMedia {
     pause: vi.fn(() => {
       media.paused = true;
     }),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
+    addEventListener: vi.fn((type: string, listener: (event: Event) => void) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    }),
+    removeEventListener: vi.fn((type: string, listener: (event: Event) => void) => {
+      listeners.get(type)?.delete(listener);
+    }),
+    advance(ms: number, now: number) {
+      if (media.seeking) {
+        landsAt ??= now + seekMs;
+        if (now < landsAt) return;
+        media.seeking = false;
+        landsAt = null;
+        time = target;
+        emit("seeked");
+        return;
+      }
+      if (media.paused || media.frozen || ms <= 0) return;
+      time += (ms / 1000) * media.playbackRate;
+      if (Number.isFinite(media.duration) && time >= media.duration) {
+        time = media.duration;
+        media.ended = true;
+        media.paused = true;
+      }
+    },
   };
+  let frameCallbacks: VideoFrameRequestCallback[] = [];
+  media.requestVideoFrameCallback = (callback) => {
+    frameCallbacks.push(callback);
+    return frameCallbacks.length;
+  };
+  media.present = (mediaTime) => {
+    const callbacks = frameCallbacks;
+    frameCallbacks = [];
+    for (const callback of callbacks) callback(0, { mediaTime } as VideoFrameCallbackMetadata);
+  };
+  made.push(media);
   return media;
 }
 
@@ -86,8 +165,13 @@ const asVideo = (m: FakeMedia) => m as unknown as HTMLVideoElement;
 const asAudio = (m: FakeMedia) => m as unknown as HTMLAudioElement;
 
 let frames: FrameRequestCallback[] = [];
-const flushFrame = (now = 0) =>
+let lastNow = 0;
+/** One animation frame at `now` ms: the playing stand-ins move on by the time since the last, then the loop runs. */
+const flushFrame = (now: number) =>
   act(() => {
+    const elapsed = now - lastNow;
+    lastNow = now;
+    for (const media of made) media.advance(elapsed, now);
     const queue = frames;
     frames = [];
     for (const cb of queue) cb(now);
@@ -122,6 +206,8 @@ function options(url = "blob:a", music: string | null = "music.mp3", clips?: Aud
 
 beforeEach(() => {
   frames = [];
+  made = [];
+  lastNow = 0;
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
     frames.push(cb);
     return frames.length;
@@ -158,51 +244,209 @@ describe("useSequencePlayback", () => {
     expect(renders).toBe(before);
   });
 
+  it("moves the playhead on the frames' time, from where Play left it", () => {
+    const opts = options(undefined, null);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    act(() => result.current.registerVideo("c1", asVideo(video)));
+    act(() => editor().setPlayhead(2));
+    act(() => editor().setPlaying(true));
+    expect(video.play).toHaveBeenCalledTimes(1);
+    expect(video.currentTime).toBe(2);
+    flushFrame(0);
+    expect(livePlayhead()).toBe(2);
+    // Set off once the clip moves, from where it is
+    flushFrame(500);
+    expect(livePlayhead()).toBeCloseTo(2.5, 9);
+    flushFrame(1000);
+    expect(livePlayhead()).toBeCloseTo(3, 9);
+    // Paused: the clock stops
+    act(() => editor().setPlaying(false));
+    flushFrame(3000);
+    expect(livePlayhead()).toBeCloseTo(3, 9);
+  });
+
+  it("draws the playhead every frame but writes the store's at most every PLAYHEAD_WRITE_SEC, exactly at a pause or a key", () => {
+    const opts = options(undefined, null);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // The editor's key hook, set up after this one, stops every key it handles from going further
+    const editorKeys = (e: KeyboardEvent) => e.stopImmediatePropagation();
+    window.addEventListener("keydown", editorKeys, true);
+    const video = fakeMedia();
+    act(() => result.current.registerVideo("c1", asVideo(video)));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    let writes = 0;
+    const unsubscribe = useStitchEditorStore.subscribe((s, prev) => {
+      if (s.playhead !== prev.playhead) writes++;
+    });
+    for (let now = 116; now <= 1092; now += 16) flushFrame(now);
+    // 62 frames over a second: the store's playhead every 7th (a 16 ms frame past 0.1 s)
+    expect(livePlayhead()).toBeCloseTo(1.092, 9);
+    expect(writes).toBeLessThanOrEqual(Math.ceil(1 / PLAYHEAD_WRITE_SEC));
+    expect(writes).toBeGreaterThanOrEqual(8);
+    // A key while playing: written where the clock is, before what the key does reads it
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }));
+    });
+    expect(editor().playhead).toBeCloseTo(1.092, 9);
+    flushFrame(1108);
+    // A pause: exactly where the clock was
+    act(() => editor().setPlaying(false));
+    expect(editor().playhead).toBeCloseTo(1.108, 9);
+    unsubscribe();
+    window.removeEventListener("keydown", editorKeys, true);
+  });
+
+  it("holds the picture after a move back while playing, never preparing the clip still on screen", () => {
+    const opts = twoSourceOptions();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // The first clip's element takes 300 ms to seek back
+    const a = fakeMedia({ duration: 5, seekMs: 300 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(6));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    expect(b.style.opacity).toBe("1");
+    const writes = b.writes;
+    // Back to 2 s: "a" seeks; meanwhile the picture stays on "b", still, and "b" (the next clip, from 0) waits
+    act(() => editor().setPlayhead(2));
+    flushFrame(116);
+    flushFrame(232);
+    expect(a.seeking).toBe(true);
+    expect(b.style.opacity).toBe("1");
+    expect(b.paused).toBe(true);
+    expect(b.writes).toBe(writes);
+    expect(a.style.opacity).toBe("0");
+    // Landed and moving: "a" shows, and only now is "b" put at its In for later
+    for (let now = 248; now <= 600; now += 16) flushFrame(now);
+    expect(a.style.opacity).toBe("1");
+    expect(b.style.opacity).toBe("0");
+    expect(b.currentTime).toBe(0);
+  });
+
+  it("keeps the playhead moving while the clip's element stalls, and catches it up with one seek", () => {
+    const opts = options(undefined, null);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    act(() => result.current.registerVideo("c1", asVideo(video)));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(1000);
+    expect(livePlayhead()).toBe(1);
+    // The element stands still: the clock does not
+    video.frozen = true;
+    flushFrame(1200);
+    expect(livePlayhead()).toBeCloseTo(1.2, 9);
+    // 0.2 s behind: played faster, not seeked
+    expect(video.playbackRate).toBe(1.05);
+    expect(video.writes).toBe(0);
+    // Past 0.25 s: seeked once, to where the clock will be when the seek lands
+    flushFrame(1500);
+    expect(livePlayhead()).toBeCloseTo(1.5, 9);
+    expect(video.writes).toBe(1);
+    expect(video.currentTime).toBeCloseTo(1.6, 9);
+    expect(video.playbackRate).toBe(1);
+    // Still stuck: no seek after seek, only the rate, until a second's cooldown
+    flushFrame(1700);
+    flushFrame(1900);
+    expect(video.writes).toBe(1);
+  });
+
+  it("waits for the clip in front to move before the clock and the music set off", () => {
+    const opts = options();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia({ seekMs: 300 });
+    const music = fakeMedia({ duration: 30 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(video));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlayhead(2));
+    act(() => editor().setPlaying(true));
+    // The paused seek to 2 is still running: nothing moves, the music waits
+    flushFrame(0);
+    flushFrame(200);
+    expect(video.seeking).toBe(true);
+    expect(livePlayhead()).toBe(2);
+    expect(music.play).not.toHaveBeenCalled();
+    // Landed, then moving: the clock sets off from where the picture is, the music with it
+    flushFrame(400);
+    expect(livePlayhead()).toBe(2);
+    flushFrame(450);
+    expect(livePlayhead()).toBeCloseTo(2.05, 9);
+    expect(music.play).toHaveBeenCalledTimes(1);
+    expect(music.currentTime).toBeCloseTo(2.1, 9);
+  });
+
+  it("stops at the sequence's end", () => {
+    const opts = options(undefined, null);
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia();
+    act(() => result.current.registerVideo("c1", asVideo(video)));
+    act(() => editor().setPlayhead(9.5));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(600);
+    expect(editor().playing).toBe(false);
+    expect(livePlayhead()).toBe(10);
+    expect(video.paused).toBe(true);
+  });
+
   it("starts the music again after a jump back from past its end", () => {
     const opts = options();
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    const music = fakeMedia(3);
+    const music = fakeMedia({ duration: 3 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
     expect(music.play).toHaveBeenCalledTimes(1);
 
     // Play on past the music's 3 s: it stops
-    video.currentTime = 5;
-    flushFrame();
-    expect(editor().playhead).toBe(5);
+    flushFrame(5000);
+    expect(livePlayhead()).toBe(5);
     expect(music.paused).toBe(true);
 
-    // Go to start while playing: the music comes back from there
+    // Go to start while playing: the music comes back from there once the picture moves again
     act(() => editor().setPlayhead(0));
-    flushFrame();
+    flushFrame(5100);
+    expect(video.currentTime).toBe(0);
+    flushFrame(5200);
+    expect(livePlayhead()).toBeCloseTo(0.1, 9);
     expect(music.play).toHaveBeenCalledTimes(2);
     expect(music.paused).toBe(false);
-    expect(music.currentTime).toBe(0);
+    expect(music.currentTime).toBeCloseTo(0.15, 9);
   });
 
   it("asks a music element whose play() was refused only once, not every frame", () => {
     const opts = options();
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    const music = fakeMedia(30);
+    const music = fakeMedia({ duration: 30 });
     music.play.mockImplementation(() => Promise.reject(new Error("NotAllowedError")));
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
-    video.currentTime = 1;
-    flushFrame();
-    video.currentTime = 2;
-    flushFrame();
+    flushFrame(0);
+    flushFrame(1000);
+    flushFrame(2000);
     expect(music.play).toHaveBeenCalledTimes(1);
   });
 
-  it("drives the music read from a legacy node as the single music element did: its time and its curve's gain", () => {
+  it("drives the music read from a legacy node on the clock, at its curve's gain", () => {
     const curve = [
       { t: 0, gain: 0 },
       { t: 4, gain: 1 },
@@ -210,31 +454,38 @@ describe("useSequencePlayback", () => {
     const opts = options("blob:a", "music.mp3", [audioClip({ curve })]);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    const music = fakeMedia(30);
+    const music = fakeMedia({ duration: 30 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    // Started where the clock will be when it moves (its start latency on)
     expect(music.play).toHaveBeenCalledTimes(1);
-    expect(music.currentTime).toBe(0);
-    for (const t of [1, 2, 3.5]) {
-      video.currentTime = t;
-      // Drifted past 0.25 s: sought back to the playhead
-      music.currentTime = t + 0.5;
-      flushFrame();
-      // The gain at the playhead, on the curve's own clock: sequence seconds for an untouched music clip
-      expect(music.volume).toBeCloseTo(gainAt(curve, t), 6);
-      expect(music.currentTime).toBeCloseTo(t, 6);
-      // Under 0.25 s: left alone
-      music.currentTime = t + 0.1;
-      flushFrame();
-      expect(music.currentTime).toBeCloseTo(t + 0.1, 6);
-    }
+    expect(music.currentTime).toBeCloseTo(0.15, 9);
+    // The gain at the playhead, on the curve's own clock: sequence seconds for an untouched music clip
+    flushFrame(1000);
+    expect(music.volume).toBeCloseTo(gainAt(curve, 1), 6);
+    // These stand-ins move at once, so it is 0.05 s ahead: slowed, never seeked
+    expect(music.currentTime).toBeCloseTo(1.05, 9);
+    expect(music.playbackRate).toBe(0.98);
+    flushFrame(2000);
+    flushFrame(3000);
+    flushFrame(3500);
+    // Back within 10 ms: its rate is 1 again
+    expect(Math.abs(music.currentTime - 3.5)).toBeLessThan(0.01);
+    expect(music.playbackRate).toBe(1);
+    expect(music.writes).toBe(1);
+    // A drift past 0.25 s is seeked, to where the clock will be when it lands
+    music.currentTime = 4.1;
+    flushFrame(3500);
+    expect(music.currentTime).toBeCloseTo(3.6, 9);
     expect(music.play).toHaveBeenCalledTimes(1);
   });
 
-  it("plays a clip that starts at 2 s only from 2 s, from its In, at its curve's gain there", () => {
+  it("starts a clip that begins at 2 s just ahead of 2 s, from its In, at its curve's gain there", () => {
     const curve = [
       { t: 1, gain: 0.25 },
       { t: 3, gain: 1 },
@@ -242,76 +493,76 @@ describe("useSequencePlayback", () => {
     const opts = options("blob:a", null, [audioClip({ id: "aclip_1", src: "tone.m4a", startSec: 2, inSec: 1, curve })]);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    const tone = fakeMedia(10);
+    const tone = fakeMedia({ duration: 10 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
-    expect(tone.play).not.toHaveBeenCalled();
-    video.currentTime = 1.5;
-    flushFrame();
+    flushFrame(0);
+    flushFrame(100);
+    // Coming up: put at its In ahead, paused
+    flushFrame(1500);
     expect(tone.paused).toBe(true);
     expect(tone.play).not.toHaveBeenCalled();
-    // Inside its span: its In plus the time since its start
-    video.currentTime = 2.5;
-    flushFrame();
+    expect(tone.currentTime).toBe(1);
+    expect(tone.writes).toBe(1);
+    // Its start latency before its start: played from there, so it is moving as the clock reaches it
+    flushFrame(1960);
     expect(tone.play).toHaveBeenCalledTimes(1);
-    expect(tone.currentTime).toBeCloseTo(1.5, 6);
+    // Inside its span: its In plus the time since its start, at the gain there, never seeked again
+    flushFrame(2500);
+    expect(tone.currentTime).toBeCloseTo(1.54, 9);
     expect(tone.volume).toBeCloseTo(gainAt(curve, 1.5), 6);
-    // A drift past 0.25 s is seeked back
-    tone.currentTime = 2.5;
-    video.currentTime = 3;
-    flushFrame();
-    expect(tone.currentTime).toBeCloseTo(2, 6);
+    expect(tone.writes).toBe(1);
   });
 
   it("pauses a clip past its Out and a muted clip stays muted", () => {
     const opts = options("blob:a", null, [audioClip({ id: "aclip_1", src: "tone.m4a", startSec: 0, inSec: 0, outSec: 2, muted: true })]);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    const tone = fakeMedia(10);
+    const tone = fakeMedia({ duration: 10 });
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(video));
+      result.current.registerVideo("c1", asVideo(video));
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
     expect(tone.muted).toBe(true);
     expect(tone.play).toHaveBeenCalledTimes(1);
-    video.currentTime = 2.5;
-    flushFrame();
+    flushFrame(2500);
     expect(tone.paused).toBe(true);
   });
 
   it("hands playback to a <video> remounted under the playhead", () => {
-    let opts = options("data:video/mp4;base64,AAAA");
-    const { result, rerender } = renderHook(() => useSequencePlayback(opts));
+    const opts = options();
+    const { result } = renderHook(() => useSequencePlayback(opts));
     const first = fakeMedia();
-    act(() => result.current.registerVideo("data:video/mp4;base64,AAAA", asVideo(first)));
+    act(() => result.current.registerVideo("c1", asVideo(first)));
     act(() => editor().setPlaying(true));
-    first.currentTime = 1;
-    flushFrame();
-    expect(editor().playhead).toBe(1);
+    flushFrame(0);
+    flushFrame(1000);
+    expect(livePlayhead()).toBe(1);
 
-    // The object URL arrives: React swaps the element (the old one is paused as it leaves the page)
+    // React swaps the clip's element: the old one is paused as it leaves, the new one picks up where the clock is
     const second = fakeMedia();
-    opts = options("blob:a");
     act(() => {
-      result.current.registerVideo("data:video/mp4;base64,AAAA", null);
-      result.current.registerVideo("blob:a", asVideo(second));
-      first.paused = true;
+      result.current.registerVideo("c1", null);
+      result.current.registerVideo("c1", asVideo(second));
     });
-    rerender();
-    flushFrame();
-    expect(result.current.activeSrc).toBe("blob:a");
+    expect(first.paused).toBe(true);
+    flushFrame(1000);
     expect(second.play).toHaveBeenCalledTimes(1);
-    expect(second.currentTime).toBe(1);
+    // Where the clock will be when it moves: its start latency on, which the start taught (0.025 s: these stand-ins
+    // move at once)
+    expect(second.currentTime).toBeCloseTo(1.025, 9);
     expect(editor().playing).toBe(true);
 
-    // And the loop follows the new element
-    second.currentTime = 2;
-    flushFrame();
-    expect(editor().playhead).toBe(2);
+    // And it plays on with the clock
+    flushFrame(2000);
+    expect(livePlayhead()).toBe(2);
+    expect(Math.abs(second.currentTime - 2)).toBeLessThan(0.06);
   });
 
   it("keeps playing when a move to another source aborts the previous element's pending play()", async () => {
@@ -320,13 +571,15 @@ describe("useSequencePlayback", () => {
     const a = pendingPlayMedia();
     const b = pendingPlayMedia();
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(a));
-      result.current.registerVideo("blob:b", asVideo(b));
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
     });
     act(() => editor().setPlaying(true));
-    // Moved from outside into the second source's clip: "a" is paused before its play() resolved
+    // Moved from outside into the second source's clip: "a" is hidden at once and paused the next frame, before its
+    // play() resolved
     act(() => editor().setPlayhead(6));
-    flushFrame();
+    flushFrame(0);
+    flushFrame(16);
     await act(async () => {
       await Promise.resolve();
     });
@@ -335,24 +588,209 @@ describe("useSequencePlayback", () => {
     expect(editor().playing).toBe(true);
   });
 
-  it("keeps playing when play starts in a clip's last frame and advances before play() resolved", async () => {
+  it("keeps playing when play starts in a clip's last frame and moves on before play() resolved", async () => {
     const opts = twoSourceOptions();
     const { result } = renderHook(() => useSequencePlayback(opts));
     const a = pendingPlayMedia();
     const b = pendingPlayMedia();
     act(() => {
-      result.current.registerVideo("blob:a", asVideo(a));
-      result.current.registerVideo("blob:b", asVideo(b));
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
     });
     act(() => editor().setPlayhead(4.98));
     act(() => editor().setPlaying(true));
-    flushFrame();
+    flushFrame(0);
+    // "a" reaches its Out while the clock waits for it: "b" is in front now, and the clock waits for it instead
+    flushFrame(60);
+    expect(livePlayhead()).toBe(4.98);
+    flushFrame(120);
     await act(async () => {
       await Promise.resolve();
     });
-    expect(editor().playhead).toBe(5);
+    // Set off from where "b" is
+    expect(livePlayhead()).toBeCloseTo(5.06, 9);
     expect(b.play).toHaveBeenCalledTimes(1);
     expect(editor().playing).toBe(true);
+  });
+
+  it("cuts on the clock, or a hair early when the outgoing element has reached its Out", () => {
+    const opts = twoSourceOptions();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(4.9));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    // 20 ms before the cut, in step: the first clip still shows
+    flushFrame(80);
+    expect(a.style.opacity).toBe("1");
+    expect(b.style.opacity).toBe("0");
+    // Its element is at its Out already (ahead of the clock): the next clip shows rather than a frame past it
+    a.currentTime = 5;
+    flushFrame(90);
+    expect(livePlayhead()).toBeCloseTo(4.99, 9);
+    expect(a.style.opacity).toBe("0");
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+  });
+
+  it("hands a cut over prepared: the next clip moving before it and never seeked, the previous paused after, the music untouched", () => {
+    const opts: SequencePlaybackOptions = { ...twoSourceOptions(), audio: { clips: [audioClip()] } };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    // Seeks take 40 ms, as a real element's do; "a" plays the first 5 s of a longer file, so only the cut stops it
+    const a = fakeMedia({ duration: 10, seekMs: 40 });
+    const b = fakeMedia({ duration: 5, seekMs: 40 });
+    const music = fakeMedia({ duration: 30, seekMs: 40 });
+    let bAskedAt: number | null = null;
+    b.play.mockImplementation(() => {
+      bAskedAt ??= livePlayhead();
+      b.paused = false;
+      return Promise.resolve();
+    });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlayhead(4));
+    act(() => editor().setPlaying(true));
+    let now = 0;
+    const musicWrites = () => music.writes;
+    let atStart: number | null = null;
+    // Up to the cut: a frame every 16 ms
+    while (livePlayhead() < 5) {
+      flushFrame(now);
+      if (atStart === null && !music.paused) atStart = musicWrites();
+      now += 16;
+    }
+    // b was already at its In: never seeked, and asked to play before the cut
+    expect(b.writes).toBe(0);
+    expect(bAskedAt).not.toBeNull();
+    expect(bAskedAt!).toBeLessThan(5);
+    // The cut: shown and heard at once, moving; a hidden and silent, still playing until the next frame
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+    expect(b.paused).toBe(false);
+    expect(b.currentTime).toBeGreaterThan(0);
+    expect(a.style.opacity).toBe("0");
+    expect(a.muted).toBe(true);
+    expect(a.paused).toBe(false);
+    flushFrame(now);
+    expect(a.paused).toBe(true);
+    expect(a.pause).toHaveBeenCalledTimes(1);
+    // The music was seeked once, to start, and never across the cut
+    for (let k = 0; k < 10; k++) flushFrame((now += 16));
+    expect(atStart).toBe(1);
+    expect(music.writes).toBe(1);
+    expect(music.paused).toBe(false);
+  });
+
+  it("holds a cut on the outgoing picture until the incoming element has shown a frame of where it is", () => {
+    // One source cut in two at 2.5 s, in Track
+    const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
+    const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 0),
+      total: 5,
+      srcFor: () => "blob:a",
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(1.5));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    // Prepared at its pre-roll point, and that frame shown (as a browser does after a seek)
+    expect(b.currentTime).toBeCloseTo(2, 9);
+    act(() => b.present(2));
+    // It plays on towards its In, but the browser shows no newer frame of it: past the cut, the picture stays on
+    // "a", still
+    let now = 100;
+    while (livePlayhead() < 2.55) flushFrame((now += 16));
+    expect(b.paused).toBe(false);
+    expect(b.currentTime).toBeGreaterThan(2.5);
+    expect(a.style.opacity).toBe("1");
+    expect(a.paused).toBe(true);
+    expect(b.style.opacity).toBe("0");
+    expect(b.muted).toBe(true);
+    // A frame of where it is: the cut goes through
+    act(() => b.present(b.currentTime));
+    flushFrame((now += 16));
+    expect(b.style.opacity).toBe("1");
+    expect(b.muted).toBe(false);
+    expect(a.style.opacity).toBe("0");
+  });
+
+  it("gives up holding for a fresher frame after a tenth of a second", () => {
+    const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
+    const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans([left, right], new Map<SourceKey, number>([["edge:e1", 5]]), 0),
+      total: 5,
+      srcFor: () => "blob:a",
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const a = fakeMedia({ duration: 5 });
+    const b = fakeMedia({ duration: 5 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(a));
+      result.current.registerVideo("c2", asVideo(b));
+    });
+    act(() => editor().setPlayhead(1.5));
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    act(() => b.present(2));
+    let now = 100;
+    // A browser that shows no frame of the hidden element: the cut waits a tenth of a second, then goes through
+    while (livePlayhead() < 2.55) flushFrame((now += 16));
+    expect(b.style.opacity).toBe("0");
+    while (livePlayhead() < 2.65) flushFrame((now += 16));
+    expect(b.style.opacity).toBe("1");
+    expect(a.style.opacity).toBe("0");
+  });
+
+  it("loads ahead only the clips shown, playing and coming up", () => {
+    const clip = (id: string, edgeId: string) => createClip({ kind: "edge", edgeId }, { id });
+    const opts: SequencePlaybackOptions = {
+      spans: clipSpans(
+        [clip("c1", "e1"), clip("c2", "e2"), clip("c3", "e3")],
+        new Map<SourceKey, number>([
+          ["edge:e1", 5],
+          ["edge:e2", 5],
+          ["edge:e3", 5],
+        ]),
+        0,
+      ),
+      total: 15,
+      srcFor: (clipId) => `blob:${clipId}`,
+      audio: { clips: [] },
+      soundOn: true,
+    };
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const media = [fakeMedia({ duration: 5 }), fakeMedia({ duration: 5 }), fakeMedia({ duration: 5 })];
+    const preload = () => media.map((m) => (m as unknown as { preload?: string }).preload ?? "metadata");
+    act(() => media.forEach((m, i) => result.current.registerVideo(`c${i + 1}`, asVideo(m))));
+    act(() => editor().setPlayhead(1));
+    expect(preload()).toEqual(["auto", "metadata", "metadata"]);
+    act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
+    // Playing c1: c2 is next
+    expect(preload()).toEqual(["auto", "auto", "metadata"]);
   });
 
   it("stops when the element playing now refuses to play", async () => {
@@ -360,7 +798,7 @@ describe("useSequencePlayback", () => {
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
     video.play.mockImplementation(() => Promise.reject(new DOMException("No autoplay", "NotAllowedError")));
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     act(() => editor().setPlaying(true));
     await act(async () => {
       await Promise.resolve();
@@ -372,7 +810,7 @@ describe("useSequencePlayback", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
     const video = fakeMedia();
-    act(() => result.current.registerVideo("blob:a", asVideo(video)));
+    act(() => result.current.registerVideo("c1", asVideo(video)));
     const onSeeked = video.addEventListener.mock.calls.find(([type]) => type === "seeked")![1] as (e: Event) => void;
 
     // Paused, Go to end while a seek is still running: the target waits for 'seeked'
@@ -387,20 +825,6 @@ describe("useSequencePlayback", () => {
   });
 
   describe("Stacked", () => {
-    /** A fake element that also has a style and counts its currentTime writes. */
-    function layerMedia() {
-      const media = Object.assign(fakeMedia(), { style: { opacity: "" }, writes: 0 });
-      let time = 0;
-      Object.defineProperty(media, "currentTime", {
-        get: () => time,
-        set: (value: number) => {
-          time = value;
-          media.writes++;
-        },
-      });
-      return media;
-    }
-
     /** c1 then c2, 5 s each from sources "a" and "b", overlapping by 1 s: c1 0–5, c2 4–9. */
     function stackedOptions(crossfade = true, volume = 1): SequencePlaybackOptions {
       const first = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", volume });
@@ -421,8 +845,8 @@ describe("useSequencePlayback", () => {
 
     function mount(opts: SequencePlaybackOptions) {
       const hook = renderHook(() => useSequencePlayback(opts));
-      const a = layerMedia();
-      const b = layerMedia();
+      const a = fakeMedia({ duration: 5 });
+      const b = fakeMedia({ duration: 5 });
       act(() => {
         hook.result.current.registerVideo("c1", asVideo(a));
         hook.result.current.registerVideo("c2", asVideo(b));
@@ -446,31 +870,37 @@ describe("useSequencePlayback", () => {
       expect(b.currentTime).toBe(2);
     });
 
-    it("plays into an overlap without pausing the earlier clip or seeking the later one twice", () => {
+    it("starts the later clip hidden just before an overlap, without pausing the earlier one or seeking", () => {
       const { a, b } = mount(stackedOptions());
       act(() => editor().setPlayhead(3));
       act(() => editor().setPlaying(true));
       expect(a.play).toHaveBeenCalledTimes(1);
-      // Within half a second of the join, the later clip is seeked to its In
-      a.currentTime = 3.6;
-      flushFrame();
-      expect(b.writes).toBe(1);
-      expect(b.play).not.toHaveBeenCalled();
-      // Its start: the pre-seek has landed, so it only plays
-      a.currentTime = 4.05;
-      flushFrame();
+      flushFrame(0);
+      // The later clip is next: it waits at its In (already there, so never seeked)
+      flushFrame(600);
+      expect(b.paused).toBe(true);
+      // Its start latency before its start: it plays, hidden and muted
+      flushFrame(980);
       expect(b.play).toHaveBeenCalledTimes(1);
-      expect(b.writes).toBe(1);
+      expect(b.style.opacity).toBe("0");
+      expect(b.muted).toBe(true);
+      // Its start: shown and heard, moving and in step
+      flushFrame(1050);
+      expect(Number(b.style.opacity)).toBeCloseTo(0.05, 9);
+      expect(b.muted).toBe(false);
+      expect(b.currentTime).toBeCloseTo(0.07, 9);
+      expect(b.play).toHaveBeenCalledTimes(1);
+      expect(b.writes).toBe(0);
       expect(a.pause).not.toHaveBeenCalled();
-      expect(editor().playhead).toBeCloseTo(4.05, 9);
+      expect(livePlayhead()).toBeCloseTo(4.05, 9);
     });
 
     it("ramps the two volumes on equal power, times each clip's own volume", () => {
       const { a, b } = mount(stackedOptions(true, 0.8));
       act(() => editor().setPlayhead(3.9));
       act(() => editor().setPlaying(true));
-      a.currentTime = 4.25;
-      flushFrame();
+      flushFrame(0);
+      flushFrame(350);
       const angle = (0.25 * Math.PI) / 2;
       expect(a.volume).toBeCloseTo(0.8 * Math.cos(angle), 9);
       expect(b.volume).toBeCloseTo(Math.sin(angle), 9);
@@ -478,29 +908,90 @@ describe("useSequencePlayback", () => {
       expect(b.style.opacity).toBe("0.25");
     });
 
-    it("hands the clock to the later clip at the earlier one's Out, with no seek", () => {
+    it("plays the later clip on through the earlier one's Out, with no seek", () => {
       const { a, b } = mount(stackedOptions());
       act(() => editor().setPlayhead(3.9));
       act(() => editor().setPlaying(true));
-      a.currentTime = 4.5;
-      flushFrame();
+      flushFrame(0);
+      flushFrame(600);
       expect(b.paused).toBe(false);
       const writes = b.writes;
-      // The earlier clip reaches its Out; the later one has played on to 0.97
-      b.currentTime = 0.97;
-      b.writes = writes;
-      a.currentTime = 4.98;
-      flushFrame();
+      // The earlier clip reaches its Out: it is paused and hidden, the later one plays on as it is
+      flushFrame(1100);
       expect(b.writes).toBe(writes);
-      // Never back past the earlier clip's Out
-      expect(editor().playhead).toBe(5);
+      expect(livePlayhead()).toBeCloseTo(5, 9);
       expect(a.paused).toBe(true);
       expect(a.style.opacity).toBe("0");
-      // The later clip is the clock now
-      b.currentTime = 2;
-      flushFrame();
-      expect(editor().playhead).toBe(6);
+      flushFrame(2100);
+      expect(livePlayhead()).toBeCloseTo(6, 9);
+      expect(Math.abs(b.currentTime - 2)).toBeLessThan(0.05);
+      expect(b.writes).toBe(writes);
       expect(editor().playing).toBe(true);
+    });
+
+    it("draws an overlap's blend on the canvas while playing, the elements hidden under it", () => {
+      const { a, b, result } = mount(stackedOptions());
+      const draws: Array<[unknown, number]> = [];
+      const ctx = {
+        globalAlpha: 1,
+        fillStyle: "",
+        fillRect: vi.fn(),
+        drawImage: vi.fn((el: unknown) => draws.push([el, ctx.globalAlpha])),
+      };
+      const canvas = { style: { opacity: "" }, width: 0, height: 0, clientWidth: 640, clientHeight: 360, getContext: vi.fn(() => ctx) };
+      act(() => result.current.registerCanvas(canvas as unknown as HTMLCanvasElement));
+      act(() => editor().setPlayhead(3.9));
+      act(() => editor().setPlaying(true));
+      flushFrame(0);
+      // One clip: it shows itself
+      expect(canvas.style.opacity).toBe("0");
+      expect(a.style.opacity).toBe("1");
+      // The overlap: both drawn in row order at their shares, letterboxed into the canvas, on black
+      flushFrame(350);
+      expect(canvas.style.opacity).toBe("1");
+      expect(a.style.opacity).toBe("0");
+      expect(b.style.opacity).toBe("0");
+      expect(canvas.width).toBe(640);
+      expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 640, 360);
+      expect(draws).toEqual([
+        [a, 1],
+        [b, 0.25],
+      ]);
+      expect(ctx.drawImage).toHaveBeenLastCalledWith(b, 0, 0, 640, 360);
+      // Both still heard, at their shares
+      expect(a.muted).toBe(false);
+      expect(b.muted).toBe(false);
+      // Past the overlap: the later clip shows itself again
+      flushFrame(1200);
+      expect(canvas.style.opacity).toBe("0");
+      expect(b.style.opacity).toBe("1");
+      // Paused in an overlap the elements blend themselves
+      act(() => editor().setPlaying(false));
+      act(() => editor().setPlayhead(4.5));
+      expect(canvas.style.opacity).toBe("0");
+      expect(a.style.opacity).toBe("1");
+      expect(b.style.opacity).toBe("0.5");
+    });
+
+    it("nudges a layer that falls behind by its rate, never seeking it", () => {
+      const { a, b } = mount(stackedOptions());
+      act(() => editor().setPlayhead(4.2));
+      act(() => editor().setPlaying(true));
+      flushFrame(0);
+      flushFrame(100);
+      const writes = b.writes;
+      // b stands still for a tenth of a second: 0.1 s behind, played 2 % faster
+      b.frozen = true;
+      flushFrame(200);
+      b.frozen = false;
+      flushFrame(216);
+      expect(b.playbackRate).toBe(1.02);
+      expect(b.writes).toBe(writes);
+      // Caught up: its rate is 1 again
+      for (let now = 232; now <= 6000 && b.playbackRate !== 1; now += 16) flushFrame(now);
+      expect(b.playbackRate).toBe(1);
+      expect(b.writes).toBe(writes);
+      expect(a.writes).toBe(1);
     });
 
     it("keeps the earlier clip in front with Crossfade off, both heard in full", () => {
@@ -509,15 +1000,15 @@ describe("useSequencePlayback", () => {
       expect(a.style.opacity).toBe("1");
       expect(b.style.opacity).toBe("0");
       act(() => editor().setPlaying(true));
-      a.currentTime = 4.6;
-      flushFrame();
+      flushFrame(0);
+      flushFrame(100);
       expect(b.paused).toBe(false);
       expect(a.volume).toBe(1);
       expect(b.volume).toBe(1);
       expect(b.style.opacity).toBe("0");
     });
 
-    it("plays a cut between two pieces of one video from the next piece's pre-seek", () => {
+    it("plays a cut between two pieces of one video from the next piece's pre-roll", () => {
       const left = createClip({ kind: "edge", edgeId: "e1" }, { id: "c1", outSec: 2.5 });
       const right = createClip({ kind: "edge", edgeId: "e1" }, { id: "c2", inSec: 2.5 });
       const opts: SequencePlaybackOptions = {
@@ -530,18 +1021,33 @@ describe("useSequencePlayback", () => {
       };
       expect(opts.spans[1].start).toBe(2.5);
       const { a, b } = mount(opts);
-      act(() => editor().setPlayhead(2.2));
+      act(() => editor().setPlayhead(1.4));
       act(() => editor().setPlaying(true));
-      a.currentTime = 2.2;
-      flushFrame();
-      expect(b.currentTime).toBe(2.5);
+      flushFrame(0);
+      flushFrame(100);
+      // Waiting at its pre-roll point, half a second before its In
+      expect(livePlayhead()).toBeCloseTo(1.5, 9);
+      expect(b.currentTime).toBeCloseTo(2, 9);
       expect(b.writes).toBe(1);
-      a.currentTime = 2.48;
-      flushFrame();
-      expect(editor().playhead).toBe(2.5);
+      expect(b.paused).toBe(true);
+      // Started the pre-roll and a start latency before the cut, from there
+      flushFrame(580);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.writes).toBe(1);
+      expect(b.style.opacity).toBe("0");
+      expect(b.muted).toBe(true);
+      // The cut: shown at its In, the earlier piece hidden and silent at once and paused a frame later
+      flushFrame(1100);
+      expect(livePlayhead()).toBeCloseTo(2.5, 9);
+      expect(b.style.opacity).toBe("1");
+      expect(b.currentTime).toBeCloseTo(2.52, 9);
+      expect(a.style.opacity).toBe("0");
+      expect(a.muted).toBe(true);
+      expect(a.paused).toBe(false);
+      flushFrame(1116);
       expect(a.paused).toBe(true);
+      expect(b.writes).toBe(1);
+      expect(b.play).toHaveBeenCalledTimes(1);
     });
 
     it("seeks a clip back to the playhead when its URL changes and the new file's metadata loads", () => {
@@ -555,25 +1061,24 @@ describe("useSequencePlayback", () => {
       expect(a.currentTime).toBe(2);
     });
 
-    it("restarts the clock where it was when its URL changes while playing", () => {
+    it("picks a clip up where the clock is when its URL changes while playing", () => {
       const { a } = mount(stackedOptions());
       act(() => editor().setPlayhead(1));
       act(() => editor().setPlaying(true));
-      a.currentTime = 2;
-      flushFrame();
-      expect(editor().playhead).toBe(2);
+      flushFrame(0);
+      flushFrame(1000);
+      expect(livePlayhead()).toBe(2);
       // The load pauses the element and sends it back to 0, keeping it
       const onLoaded = a.addEventListener.mock.calls.find(([type]) => type === "loadedmetadata")![1] as () => void;
       a.paused = true;
       a.currentTime = 0;
       onLoaded();
-      flushFrame();
+      flushFrame(1000);
       expect(a.play).toHaveBeenCalledTimes(2);
-      expect(a.currentTime).toBe(2);
+      expect(a.currentTime).toBeCloseTo(2.025, 9);
       expect(editor().playing).toBe(true);
-      a.currentTime = 2.5;
-      flushFrame();
-      expect(editor().playhead).toBe(2.5);
+      flushFrame(1500);
+      expect(livePlayhead()).toBeCloseTo(2.5, 9);
     });
 
     describe("placed", () => {
@@ -594,7 +1099,7 @@ describe("useSequencePlayback", () => {
 
       function mountRows(opts: SequencePlaybackOptions) {
         const hook = renderHook(() => useSequencePlayback(opts));
-        const media = new Map(opts.spans.map((span) => [span.clip.id, layerMedia()]));
+        const media = new Map(opts.spans.map((span) => [span.clip.id, fakeMedia({ duration: span.length })]));
         act(() => {
           for (const [id, m] of media) hook.result.current.registerVideo(id, asVideo(m));
         });
@@ -602,8 +1107,7 @@ describe("useSequencePlayback", () => {
         return { ...hook, media, el: (id: string) => media.get(id)! };
       }
 
-      const opacities = (media: Map<string, ReturnType<typeof layerMedia>>) =>
-        [...media.values()].map((m) => Number(m.style.opacity));
+      const opacities = (media: Map<string, FakeMedia>) => [...media.values()].map((m) => Number(m.style.opacity));
 
       // placed-three: A [0,5), B [2,7), C [3.5,9.5), top to bottom
       const placedThree = () =>
@@ -626,8 +1130,8 @@ describe("useSequencePlayback", () => {
         expect(opacities(media)).toEqual([0, 0]);
       });
 
-      it("plays through a gap on the frame clock and starts the next clip at its start without stopping", () => {
-        const { el } = mountRows(
+      it("plays through a gap on the clock and starts the next clip at its start without stopping", () => {
+        const { el, media } = mountRows(
           placedOptions([
             ["A", 2, 0],
             ["B", 3, 4],
@@ -635,23 +1139,25 @@ describe("useSequencePlayback", () => {
         );
         act(() => editor().setPlayhead(1.5));
         act(() => editor().setPlaying(true));
-        // A reaches its Out: nothing plays until B, so the frame clock takes over there
-        el("A").currentTime = 1.99;
-        flushFrame(1000);
-        expect(editor().playhead).toBe(2);
+        flushFrame(0);
+        // A reaches its Out: nothing plays until B, and the clock goes on
+        flushFrame(500);
+        expect(livePlayhead()).toBe(2);
         expect(editor().playing).toBe(true);
-        flushFrame(1000);
-        flushFrame(2500);
-        expect(editor().playhead).toBeCloseTo(3.5, 9);
+        flushFrame(516);
+        expect(opacities(media)).toEqual([0, 0]);
+        flushFrame(2000);
+        expect(livePlayhead()).toBeCloseTo(3.5, 9);
         expect(el("B").play).not.toHaveBeenCalled();
-        flushFrame(3100);
+        // Started its start latency ahead, from its In
+        flushFrame(2480);
         expect(editor().playing).toBe(true);
         expect(el("B").play).toHaveBeenCalledTimes(1);
-        expect(el("B").currentTime).toBeCloseTo(0.1, 9);
-        // B is the clock now
-        el("B").currentTime = 1;
-        flushFrame(3200);
-        expect(editor().playhead).toBe(5);
+        expect(el("B").currentTime).toBe(0);
+        flushFrame(3500);
+        expect(livePlayhead()).toBeCloseTo(5, 9);
+        expect(Math.abs(el("B").currentTime - 1)).toBeLessThan(0.05);
+        expect(el("B").writes).toBe(0);
       });
 
       it("holds the frame across a gap under a slot, paused and playing, as the encode does", () => {
@@ -665,16 +1171,18 @@ describe("useSequencePlayback", () => {
         expect(opacities(media)).toEqual([1, 0]);
         act(() => editor().setPlayhead(4.9));
         act(() => editor().setPlaying(true));
-        // A reaches its Out: C starts 0.01 s later, so it takes over there with no frame of black
-        el("A").currentTime = 4.99;
         flushFrame(1000);
+        // The clock reaches C's start: it plays with no frame of black before it
+        flushFrame(1105);
+        expect(opacities(media)).toEqual([1, 0]);
+        flushFrame(1110);
         expect(editor().playing).toBe(true);
-        expect(editor().playhead).toBeCloseTo(5.01, 9);
+        expect(livePlayhead()).toBeCloseTo(5.01, 9);
         expect(opacities(media)).toEqual([0, 1]);
         expect(el("C").play).toHaveBeenCalledTimes(1);
       });
 
-      it("starts from a gap on the frame clock", () => {
+      it("starts from a gap on the clock", () => {
         const { el } = mountRows(
           placedOptions([
             ["A", 2, 0],
@@ -686,11 +1194,11 @@ describe("useSequencePlayback", () => {
         expect(editor().playing).toBe(true);
         flushFrame(0);
         flushFrame(500);
-        expect(editor().playhead).toBeCloseTo(3.5, 9);
+        expect(livePlayhead()).toBeCloseTo(3.5, 9);
         expect(el("A").play).not.toHaveBeenCalled();
       });
 
-      it("plays and pauses a clip inside the one below while the one below stays the clock", () => {
+      it("plays and pauses a clip inside the one below, which plays on", () => {
         // B on the higher row, wholly inside A
         const { el } = mountRows(
           placedOptions([
@@ -701,15 +1209,14 @@ describe("useSequencePlayback", () => {
         act(() => editor().setPlayhead(2));
         act(() => editor().setPlaying(true));
         expect(el("A").play).toHaveBeenCalledTimes(1);
-        el("A").currentTime = 3.5;
-        flushFrame();
+        flushFrame(0);
+        flushFrame(1500);
         expect(el("B").paused).toBe(false);
-        expect(editor().playhead).toBe(3.5);
-        el("A").currentTime = 5.5;
-        flushFrame();
+        expect(livePlayhead()).toBe(3.5);
+        flushFrame(3500);
         expect(el("B").paused).toBe(true);
         expect(el("A").pause).not.toHaveBeenCalled();
-        expect(editor().playhead).toBe(5.5);
+        expect(livePlayhead()).toBe(5.5);
       });
 
       it("gives three layers their opacities in row order, the DOM's", () => {
@@ -727,38 +1234,15 @@ describe("useSequencePlayback", () => {
         expect(c4).toBe(0);
       });
 
-      it("keeps a hidden clip's element playing, at opacity 0", () => {
+      it("keeps a hidden clip's element playing, at opacity 0, in step", () => {
         const { el } = mountRows(placedThree());
         act(() => editor().setPlayhead(3.9));
         act(() => editor().setPlaying(true));
-        el("A").currentTime = 4;
-        flushFrame();
+        flushFrame(0);
+        flushFrame(100);
         expect(el("C").paused).toBe(false);
         expect(el("C").style.opacity).toBe("0");
-        // Started in step when playback began at 3.9, and still within the drift it allows
-        expect(el("C").currentTime).toBeCloseTo(0.4, 9);
-      });
-
-      it("hands the clock to the clip that started first, not to the higher row", () => {
-        // C on the top row starts after B: at A's Out, B (started at 2.5) is the clock
-        const { el } = mountRows(
-          placedOptions([
-            ["C", 5, 3.5],
-            ["B", 6.5, 2.5],
-            ["A", 4, 0],
-          ]),
-        );
-        act(() => editor().setPlayhead(3.9));
-        act(() => editor().setPlaying(true));
-        el("A").currentTime = 3.99;
-        el("B").currentTime = 1.49;
-        el("C").currentTime = 0.49;
-        flushFrame();
-        expect(editor().playhead).toBeCloseTo(4, 9);
-        el("B").currentTime = 3;
-        el("C").currentTime = 0.6;
-        flushFrame();
-        expect(editor().playhead).toBeCloseTo(5.5, 9);
+        expect(el("C").currentTime).toBeCloseTo(0.5, 9);
       });
     });
   });
