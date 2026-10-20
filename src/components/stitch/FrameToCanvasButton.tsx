@@ -45,7 +45,8 @@ function gapSelector(spans: readonly ClipSpan[]): (s: StitchEditorState) => bool
   return (s) => {
     if (last && last.draft === s.draft && last.playhead === s.playhead) return last.gap;
     const layout = s.draft?.sequenceLayout;
-    const stack = layout?.mode === "stacked" ? { crossfade: layout.crossfade, placed: isPlaced(s.draft!.timeline) } : null;
+    const stack =
+      layout?.mode === "stacked" ? { crossfade: layout.crossfade, placed: isPlaced(s.draft!.timeline) } : null;
     const gap = !layout || shownAt(spans, s.playhead, stack).size === 0;
     last = { draft: s.draft, playhead: s.playhead, gap };
     return gap;

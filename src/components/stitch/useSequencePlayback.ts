@@ -16,8 +16,9 @@ import type { VolumePoint } from "@/types";
  * over like any other). The clip's mute and volume are applied to the
  * elements (element volume rather than Web Audio, so a source served without
  * CORS still sounds). Each audio clip has its own hidden <audio>, playing
- * inside its span from its In at its curve's gain, re-synced when it drifts
- * and paused outside. The encode is the truth. The preview plays one loop.
+ * inside its span from its In at its curve's gain and paused outside. Every
+ * playing element is kept on the clock by its rate, seeked only when far off
+ * (createStepKeeper). The encode is the truth. The preview plays one loop.
  *
  * Paused, the clips under the playhead are shown at the frame under it.
  * Playing, the sequence clock moves the playhead: it runs on the frames'
@@ -28,6 +29,7 @@ import type { VolumePoint } from "@/types";
  *
  * What is shown and heard is written to the elements (inline opacity, muted,
  * volume), never through React: the hook renders only with its options.
+ * While playing, clips that blend are drawn on the stage's canvas instead.
  * Track shows the clip under the playhead. Stacked takes opacity and volume
  * from layersAt; a placed stack (`stack.placed`) from the envelope instead
  * (placedLayersAt), for any number of clips at once; a clip hidden under a
@@ -149,7 +151,6 @@ function layersFor(
   return stack.placed ? placedLayersAt(spans, t, stack.crossfade) : layersAt(spans, t, stack.crossfade);
 }
 
-
 const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 
 const clamp = (value: number, [min, max]: readonly [number, number]) => Math.min(max, Math.max(min, value));
@@ -193,7 +194,9 @@ function createStepKeeper(inStep: number) {
         return;
       }
       if (off <= SETTLED) setRate(el, 1);
-      else if (off > inStep || el.playbackRate !== 1) setRate(el, 1 - Math.sign(drift) * (off > FAR ? NUDGE_FAR : NUDGE));
+      else if (off > inStep || el.playbackRate !== 1) {
+        setRate(el, 1 - Math.sign(drift) * (off > FAR ? NUDGE_FAR : NUDGE));
+      }
     },
     learn(wall: number) {
       for (const [el, asked] of seeks) {
@@ -218,9 +221,9 @@ function createStepKeeper(inStep: number) {
 /**
  * The audio clips under a playing preview: each element's mute and its curve's gain at its own source time. A clip
  * coming up is put at its In ahead (AUDIO_PREPARE) and started its start latency before its start, so it is moving as
- * the clock reaches it; from the middle (a start, a move) it is started where the clock will be when it moves. Playing, its keeper keeps it on the
- * clock; outside its span (or past its Out or its file's end) it is paused. reset() asks each to play again (a jump);
- * pause() stops them where they are (the clock waiting for the picture).
+ * the clock reaches it; from the middle (a start, a move) it is started where the clock will be when it moves.
+ * Playing, its keeper keeps it on the clock; outside its span (or past its Out or its file's end) it is paused.
+ * reset() asks each to play again (a jump); pause() stops them where they are (the clock waiting for the picture).
  */
 function createAudioDriver(
   audios: RefObject<Map<string, HTMLAudioElement>>,
@@ -342,8 +345,9 @@ function drawBlend(
  * Shown and heard are written here, never through React, so a cut is one style change. Where clips blend (a
  * crossfade, a placed stack's shares) they are drawn together on the stage's canvas and the elements hidden under
  * it: a browser composites two playing videos blended at half its frame rate or worse. A clip coming into view whose
- * element has no frame to show yet (still seeking) leaves the picture on what it showed, at most HOLD_MAX. At the
- * sequence's end the preview stops there. Returns the loop's cleanup.
+ * element has no frame of it to show yet leaves the picture on what it showed: while it seeks, at most HOLD_MAX; while
+ * the frame it last showed is an older one (STALE_FRAME), at most STALE_HOLD_MAX. At the sequence's end the preview
+ * stops there. Returns the loop's cleanup.
  */
 function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: PlaybackRefs): () => void {
   let alive = true;
@@ -542,7 +546,8 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     for (const [el, layer] of live) {
       loadAhead(el);
       follow(el, sourceTimeAt(layer.span, at));
-      setSound(el, (hold && incoming(el)) || layer.span.clip.muted || !soundOn, clamp01(layer.span.clip.volume * layer.gain));
+      const muted = (hold && incoming(el)) || layer.span.clip.muted || !soundOn;
+      setSound(el, muted, clamp01(layer.span.clip.volume * layer.gain));
     }
     const next = new Set<HTMLVideoElement>();
     for (const el of videos.current.values()) {
@@ -606,7 +611,9 @@ function runLoop({ videos, audios, canvas, pendingSeeks, latest, presented }: Pl
     // How long it took from its start to moving teaches the latency the next clips are started ahead by
     if (el && primeLanded !== null && moved >= PRIME_MOVED) keeper.learnStart((now - primeLanded) / 1000 - moved);
     // From where the picture is, never back
-    if (el && frontSpan && primeFrom !== null) from = Math.max(from, frontSpan.start + (el.currentTime - frontSpan.clip.inSec));
+    if (el && frontSpan && primeFrom !== null) {
+      from = Math.max(from, frontSpan.start + (el.currentTime - frontSpan.clip.inSec));
+    }
     anchor = now;
     return false;
   };
