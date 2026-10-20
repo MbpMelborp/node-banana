@@ -23,6 +23,8 @@ interface FakeMedia {
   style: { opacity: string };
   /** currentTime writes. */
   writes: number;
+  /** Stands still while playing (a stall, as on a buffer underrun). */
+  frozen: boolean;
   play: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
@@ -69,6 +71,7 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
     videoHeight: 720,
     style: { opacity: "" },
     writes: 0,
+    frozen: false,
     play: vi.fn(() => {
       media.paused = false;
       return Promise.resolve();
@@ -93,7 +96,7 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
         emit("seeked");
         return;
       }
-      if (media.paused || ms <= 0) return;
+      if (media.paused || media.frozen || ms <= 0) return;
       time += (ms / 1000) * media.playbackRate;
       if (Number.isFinite(media.duration) && time >= media.duration) {
         time = media.duration;
@@ -237,33 +240,71 @@ describe("useSequencePlayback", () => {
     act(() => editor().setPlaying(true));
     expect(video.play).toHaveBeenCalledTimes(1);
     expect(video.currentTime).toBe(2);
-    flushFrame(1000);
+    flushFrame(0);
     expect(editor().playhead).toBe(2);
-    flushFrame(1500);
+    // Set off once the clip moves, from where it is
+    flushFrame(500);
     expect(editor().playhead).toBeCloseTo(2.5, 9);
-    // Paused: the clock stops; Play again carries on from there
+    flushFrame(1000);
+    expect(editor().playhead).toBeCloseTo(3, 9);
+    // Paused: the clock stops
     act(() => editor().setPlaying(false));
     flushFrame(3000);
-    expect(editor().playhead).toBeCloseTo(2.5, 9);
+    expect(editor().playhead).toBeCloseTo(3, 9);
   });
 
-  it("keeps the playhead moving while the clip's element is stalled on a seek", () => {
+  it("keeps the playhead moving while the clip's element stalls, and catches it up with one seek", () => {
     const opts = options(undefined, null);
     const { result } = renderHook(() => useSequencePlayback(opts));
-    const video = fakeMedia({ seekMs: 400 });
+    const video = fakeMedia();
     act(() => result.current.registerVideo("c1", asVideo(video)));
-    act(() => editor().setPlayhead(3));
     act(() => editor().setPlaying(true));
-    // Playing from 3 needs a seek that takes 400 ms: the clock does not wait for it
-    expect(video.seeking).toBe(true);
+    flushFrame(0);
+    flushFrame(1000);
+    expect(editor().playhead).toBe(1);
+    // The element stands still: the clock does not
+    video.frozen = true;
+    flushFrame(1200);
+    expect(editor().playhead).toBeCloseTo(1.2, 9);
+    // 0.2 s behind: played faster, not seeked
+    expect(video.playbackRate).toBe(1.05);
+    expect(video.writes).toBe(0);
+    // Past 0.25 s: seeked once, to where the clock will be when the seek lands
+    flushFrame(1500);
+    expect(editor().playhead).toBeCloseTo(1.5, 9);
+    expect(video.writes).toBe(1);
+    expect(video.currentTime).toBeCloseTo(1.6, 9);
+    expect(video.playbackRate).toBe(1);
+    // Still stuck: no seek after seek, only the rate, until a second's cooldown
+    flushFrame(1700);
+    flushFrame(1900);
+    expect(video.writes).toBe(1);
+  });
+
+  it("waits for the clip in front to move before the clock and the music set off", () => {
+    const opts = options();
+    const { result } = renderHook(() => useSequencePlayback(opts));
+    const video = fakeMedia({ seekMs: 300 });
+    const music = fakeMedia({ duration: 30 });
+    act(() => {
+      result.current.registerVideo("c1", asVideo(video));
+      result.current.registerAudio("audio:music", asAudio(music));
+    });
+    act(() => editor().setPlayhead(2));
+    act(() => editor().setPlaying(true));
+    // The paused seek to 2 is still running: nothing moves, the music waits
     flushFrame(0);
     flushFrame(200);
     expect(video.seeking).toBe(true);
-    expect(editor().playhead).toBeCloseTo(3.2, 9);
-    // Nor is the element asked again while its seek is in flight
-    expect(video.writes).toBe(1);
-    flushFrame(500);
-    expect(editor().playhead).toBeCloseTo(3.5, 9);
+    expect(editor().playhead).toBe(2);
+    expect(music.play).not.toHaveBeenCalled();
+    // Landed, then moving: the clock sets off from where the picture is, the music with it
+    flushFrame(400);
+    expect(editor().playhead).toBe(2);
+    flushFrame(450);
+    expect(editor().playhead).toBeCloseTo(2.05, 9);
+    expect(music.play).toHaveBeenCalledTimes(1);
+    expect(music.currentTime).toBeCloseTo(2.1, 9);
   });
 
   it("stops at the sequence's end", () => {
@@ -290,20 +331,24 @@ describe("useSequencePlayback", () => {
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
     expect(music.play).toHaveBeenCalledTimes(1);
 
     // Play on past the music's 3 s: it stops
-    flushFrame(0);
     flushFrame(5000);
     expect(editor().playhead).toBe(5);
     expect(music.paused).toBe(true);
 
-    // Go to start while playing: the music comes back from there
+    // Go to start while playing: the music comes back from there once the picture moves again
     act(() => editor().setPlayhead(0));
     flushFrame(5100);
+    expect(video.currentTime).toBe(0);
+    flushFrame(5200);
+    expect(editor().playhead).toBeCloseTo(0.1, 9);
     expect(music.play).toHaveBeenCalledTimes(2);
     expect(music.paused).toBe(false);
-    expect(music.currentTime).toBe(0);
+    expect(music.currentTime).toBeCloseTo(0.15, 9);
   });
 
   it("asks a music element whose play() was refused only once, not every frame", () => {
@@ -323,7 +368,7 @@ describe("useSequencePlayback", () => {
     expect(music.play).toHaveBeenCalledTimes(1);
   });
 
-  it("drives the music read from a legacy node as the single music element did: its time and its curve's gain", () => {
+  it("drives the music read from a legacy node on the clock, at its curve's gain", () => {
     const curve = [
       { t: 0, gain: 0 },
       { t: 4, gain: 1 },
@@ -337,24 +382,32 @@ describe("useSequencePlayback", () => {
       result.current.registerAudio("audio:music", asAudio(music));
     });
     act(() => editor().setPlaying(true));
-    expect(music.play).toHaveBeenCalledTimes(1);
-    expect(music.currentTime).toBe(0);
     flushFrame(0);
-    for (const t of [1, 2, 3.5]) {
-      flushFrame(t * 1000);
-      // In step with the clock, and the gain at the playhead on the curve's own clock: sequence seconds for an
-      // untouched music clip
-      expect(music.currentTime).toBeCloseTo(t, 6);
-      expect(music.volume).toBeCloseTo(gainAt(curve, t), 6);
-    }
-    // Drifted past 0.25 s: sought back to the clock
-    music.currentTime = 4;
+    flushFrame(100);
+    // Started where the clock will be when it moves (its start latency on)
+    expect(music.play).toHaveBeenCalledTimes(1);
+    expect(music.currentTime).toBeCloseTo(0.15, 9);
+    // The gain at the playhead, on the curve's own clock: sequence seconds for an untouched music clip
+    flushFrame(1000);
+    expect(music.volume).toBeCloseTo(gainAt(curve, 1), 6);
+    // These stand-ins move at once, so it is 0.05 s ahead: slowed, never seeked
+    expect(music.currentTime).toBeCloseTo(1.05, 9);
+    expect(music.playbackRate).toBe(0.98);
+    flushFrame(2000);
+    flushFrame(3000);
     flushFrame(3500);
-    expect(music.currentTime).toBeCloseTo(3.5, 6);
+    // Back within 10 ms: its rate is 1 again
+    expect(Math.abs(music.currentTime - 3.5)).toBeLessThan(0.01);
+    expect(music.playbackRate).toBe(1);
+    expect(music.writes).toBe(1);
+    // A drift past 0.25 s is seeked, to where the clock will be when it lands
+    music.currentTime = 4.1;
+    flushFrame(3500);
+    expect(music.currentTime).toBeCloseTo(3.6, 9);
     expect(music.play).toHaveBeenCalledTimes(1);
   });
 
-  it("plays a clip that starts at 2 s only from 2 s, from its In, at its curve's gain there", () => {
+  it("starts a clip that begins at 2 s just ahead of 2 s, from its In, at its curve's gain there", () => {
     const curve = [
       { t: 1, gain: 0.25 },
       { t: 3, gain: 1 },
@@ -368,16 +421,22 @@ describe("useSequencePlayback", () => {
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
-    expect(tone.play).not.toHaveBeenCalled();
     flushFrame(0);
+    flushFrame(100);
+    // Coming up: put at its In ahead, paused
     flushFrame(1500);
     expect(tone.paused).toBe(true);
     expect(tone.play).not.toHaveBeenCalled();
-    // Inside its span: its In plus the time since its start
-    flushFrame(2500);
+    expect(tone.currentTime).toBe(1);
+    expect(tone.writes).toBe(1);
+    // Its start latency before its start: played from there, so it is moving as the clock reaches it
+    flushFrame(1960);
     expect(tone.play).toHaveBeenCalledTimes(1);
-    expect(tone.currentTime).toBeCloseTo(1.5, 6);
+    // Inside its span: its In plus the time since its start, at the gain there, never seeked again
+    flushFrame(2500);
+    expect(tone.currentTime).toBeCloseTo(1.54, 9);
     expect(tone.volume).toBeCloseTo(gainAt(curve, 1.5), 6);
+    expect(tone.writes).toBe(1);
   });
 
   it("pauses a clip past its Out and a muted clip stays muted", () => {
@@ -390,9 +449,10 @@ describe("useSequencePlayback", () => {
       result.current.registerAudio("aclip_1", asAudio(tone));
     });
     act(() => editor().setPlaying(true));
+    flushFrame(0);
+    flushFrame(100);
     expect(tone.muted).toBe(true);
     expect(tone.play).toHaveBeenCalledTimes(1);
-    flushFrame(0);
     flushFrame(2500);
     expect(tone.paused).toBe(true);
   });
@@ -416,13 +476,15 @@ describe("useSequencePlayback", () => {
     expect(first.paused).toBe(true);
     flushFrame(1000);
     expect(second.play).toHaveBeenCalledTimes(1);
-    expect(second.currentTime).toBe(1);
+    // Where the clock will be when it moves: its start latency on, which the start taught (0.025 s: these stand-ins
+    // move at once)
+    expect(second.currentTime).toBeCloseTo(1.025, 9);
     expect(editor().playing).toBe(true);
 
     // And it plays on with the clock
     flushFrame(2000);
     expect(editor().playhead).toBe(2);
-    expect(second.currentTime).toBe(2);
+    expect(Math.abs(second.currentTime - 2)).toBeLessThan(0.06);
   });
 
   it("keeps playing when a move to another source aborts the previous element's pending play()", async () => {
@@ -460,11 +522,15 @@ describe("useSequencePlayback", () => {
     act(() => editor().setPlayhead(4.98));
     act(() => editor().setPlaying(true));
     flushFrame(0);
-    flushFrame(30);
+    // "a" reaches its Out while the clock waits for it: "b" is in front now, and the clock waits for it instead
+    flushFrame(60);
+    expect(editor().playhead).toBe(4.98);
+    flushFrame(120);
     await act(async () => {
       await Promise.resolve();
     });
-    expect(editor().playhead).toBeCloseTo(5.01, 9);
+    // Set off from where "b" is
+    expect(editor().playhead).toBeCloseTo(5.06, 9);
     expect(b.play).toHaveBeenCalledTimes(1);
     expect(editor().playing).toBe(true);
   });
@@ -580,9 +646,8 @@ describe("useSequencePlayback", () => {
       // The later clip is next: it waits at its In (already there, so never seeked)
       flushFrame(600);
       expect(b.paused).toBe(true);
-      // Its start latency before its start (learned from the earlier clip's start: these stand-ins move at once): it
-      // plays, hidden and muted
-      flushFrame(970);
+      // Its start latency before its start: it plays, hidden and muted
+      flushFrame(980);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.style.opacity).toBe("0");
       expect(b.muted).toBe(true);
@@ -590,7 +655,7 @@ describe("useSequencePlayback", () => {
       flushFrame(1050);
       expect(Number(b.style.opacity)).toBeCloseTo(0.05, 9);
       expect(b.muted).toBe(false);
-      expect(b.currentTime).toBeCloseTo(0.08, 9);
+      expect(b.currentTime).toBeCloseTo(0.07, 9);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.writes).toBe(0);
       expect(a.pause).not.toHaveBeenCalled();
@@ -626,7 +691,8 @@ describe("useSequencePlayback", () => {
       expect(a.style.opacity).toBe("0");
       flushFrame(2100);
       expect(editor().playhead).toBeCloseTo(6, 9);
-      expect(b.currentTime).toBeCloseTo(2, 9);
+      expect(Math.abs(b.currentTime - 2)).toBeLessThan(0.05);
+      expect(b.writes).toBe(writes);
       expect(editor().playing).toBe(true);
     });
 
@@ -701,27 +767,30 @@ describe("useSequencePlayback", () => {
       };
       expect(opts.spans[1].start).toBe(2.5);
       const { a, b } = mount(opts);
-      act(() => editor().setPlayhead(2.2));
+      act(() => editor().setPlayhead(1.4));
       act(() => editor().setPlaying(true));
       flushFrame(0);
-      // Waiting at its pre-roll point, 0.15 s before its In
-      expect(b.currentTime).toBeCloseTo(2.35, 9);
+      flushFrame(100);
+      // Waiting at its pre-roll point, half a second before its In
+      expect(editor().playhead).toBeCloseTo(1.5, 9);
+      expect(b.currentTime).toBeCloseTo(2, 9);
       expect(b.writes).toBe(1);
       expect(b.paused).toBe(true);
-      // Started a pre-roll and a start latency before the cut, from there
-      flushFrame(110);
+      // Started the pre-roll and a start latency before the cut, from there
+      flushFrame(580);
       expect(b.play).toHaveBeenCalledTimes(1);
       expect(b.writes).toBe(1);
       expect(b.style.opacity).toBe("0");
+      expect(b.muted).toBe(true);
       // The cut: shown at its In, the earlier piece hidden and silent at once and paused a frame later
-      flushFrame(300);
+      flushFrame(1100);
       expect(editor().playhead).toBeCloseTo(2.5, 9);
       expect(b.style.opacity).toBe("1");
-      expect(b.currentTime).toBeCloseTo(2.54, 9);
+      expect(b.currentTime).toBeCloseTo(2.52, 9);
       expect(a.style.opacity).toBe("0");
       expect(a.muted).toBe(true);
       expect(a.paused).toBe(false);
-      flushFrame(316);
+      flushFrame(1116);
       expect(a.paused).toBe(true);
       expect(b.writes).toBe(1);
       expect(b.play).toHaveBeenCalledTimes(1);
@@ -752,7 +821,7 @@ describe("useSequencePlayback", () => {
       onLoaded();
       flushFrame(1000);
       expect(a.play).toHaveBeenCalledTimes(2);
-      expect(a.currentTime).toBe(2);
+      expect(a.currentTime).toBeCloseTo(2.025, 9);
       expect(editor().playing).toBe(true);
       flushFrame(1500);
       expect(editor().playhead).toBeCloseTo(2.5, 9);
@@ -816,22 +885,25 @@ describe("useSequencePlayback", () => {
         );
         act(() => editor().setPlayhead(1.5));
         act(() => editor().setPlaying(true));
-        flushFrame(1000);
+        flushFrame(0);
         // A reaches its Out: nothing plays until B, and the clock goes on
-        flushFrame(1500);
+        flushFrame(500);
         expect(editor().playhead).toBe(2);
         expect(editor().playing).toBe(true);
+        flushFrame(516);
         expect(opacities(media)).toEqual([0, 0]);
-        flushFrame(3000);
+        flushFrame(2000);
         expect(editor().playhead).toBeCloseTo(3.5, 9);
         expect(el("B").play).not.toHaveBeenCalled();
-        flushFrame(3600);
+        // Started its start latency ahead, from its In
+        flushFrame(2480);
         expect(editor().playing).toBe(true);
         expect(el("B").play).toHaveBeenCalledTimes(1);
-        expect(el("B").currentTime).toBeCloseTo(0.1, 9);
-        flushFrame(4500);
+        expect(el("B").currentTime).toBe(0);
+        flushFrame(3500);
         expect(editor().playhead).toBeCloseTo(5, 9);
-        expect(el("B").currentTime).toBeCloseTo(1, 9);
+        expect(Math.abs(el("B").currentTime - 1)).toBeLessThan(0.05);
+        expect(el("B").writes).toBe(0);
       });
 
       it("holds the frame across a gap under a slot, paused and playing, as the encode does", () => {
