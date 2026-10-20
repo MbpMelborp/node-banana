@@ -80,11 +80,11 @@ export function GenerationToastCard({ toast: item }: { toast: GenerationToastIte
     <div
       role="status"
       draggable
-      // The card drags natively as a history image; keep sonner's swipe gesture
+      // The card drags natively as a history item; keep sonner's swipe gesture
       // from claiming the pointer first.
       onPointerDown={(e) => e.stopPropagation()}
       onDragStart={(e) => {
-        setHistoryDragData(e, { image: item.image, prompt: "", timestamp: item.shownAt });
+        setHistoryDragData(e, { kind: item.kind, image: item.image, prompt: "", timestamp: item.shownAt });
         dismiss();
       }}
       className={`${CHROME_SURFACE} relative flex cursor-grab items-center gap-2.5 overflow-hidden rounded-xl p-1.5 active:cursor-grabbing`}

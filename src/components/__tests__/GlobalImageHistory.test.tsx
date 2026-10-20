@@ -231,7 +231,7 @@ describe("GlobalImageHistory", () => {
 
       render(<GlobalImageHistory />, { wrapper });
 
-      const button = screen.getByTitle("1 image in history");
+      const button = screen.getByTitle("1 item in history");
       expect(button).toBeInTheDocument();
     });
 
@@ -243,7 +243,7 @@ describe("GlobalImageHistory", () => {
 
       render(<GlobalImageHistory />, { wrapper });
 
-      const button = screen.getByTitle("2 images in history");
+      const button = screen.getByTitle("2 items in history");
       expect(button).toBeInTheDocument();
     });
   });
