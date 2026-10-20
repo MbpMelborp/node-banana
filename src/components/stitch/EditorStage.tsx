@@ -77,14 +77,16 @@ function PreviewVideo({
  * children) under it at its width. One <video> per clip is mounted, in row
  * order, and the playback works their opacities out in that order (each
  * clip's share of the picture does not depend on which one paints last).
- * useSequencePlayback drives them, and each audio clip's hidden <audio>. An
- * editor with no clips shows an empty frame that says why.
+ * Over them a canvas, where the playback draws clips that blend while
+ * playing. useSequencePlayback drives them, and each audio clip's hidden
+ * <audio>. An editor with no clips shows an empty frame that says why.
  */
 export function EditorStage({
   empty,
   aspect,
   layers,
   registerVideo,
+  registerCanvas,
   audioLayers,
   registerAudio,
   children,
@@ -95,6 +97,7 @@ export function EditorStage({
   /** One per clip with a playable URL, in timeline order. */
   layers: ReadonlyArray<PreviewLayerSource>;
   registerVideo: (key: string, el: HTMLVideoElement | null) => void;
+  registerCanvas: (el: HTMLCanvasElement | null) => void;
   /** One per audio clip with a playable URL, keyed by the clip's id. */
   audioLayers: ReadonlyArray<PreviewLayerSource>;
   registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
@@ -148,6 +151,11 @@ export function EditorStage({
             {layers.map((layer) => (
               <PreviewVideo key={layer.key} layerKey={layer.key} src={layer.src} registerVideo={registerVideo} />
             ))}
+            <canvas
+              ref={registerCanvas}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+            />
           </div>
         )}
         <div className="mt-2 w-full">{children}</div>

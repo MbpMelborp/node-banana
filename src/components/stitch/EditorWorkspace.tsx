@@ -46,6 +46,7 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
           aspect={composition.aspect}
           layers={composition.videoLayers}
           registerVideo={composition.registerVideo}
+          registerCanvas={composition.registerCanvas}
           audioLayers={composition.audioLayers}
           registerAudio={composition.registerAudio}
         >

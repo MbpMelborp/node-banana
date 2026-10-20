@@ -144,7 +144,7 @@ export function useEditorComposition(
     [audioClips, audioUrl],
   );
   const stack = useMemo(() => (stacked ? { crossfade, placed } : null), [stacked, crossfade, placed]);
-  const { registerVideo, registerAudio } = useSequencePlayback({
+  const { registerVideo, registerAudio, registerCanvas } = useSequencePlayback({
     spans,
     total,
     srcFor,
@@ -182,6 +182,7 @@ export function useEditorComposition(
     srcFor,
     registerVideo,
     registerAudio,
+    registerCanvas,
     zoom,
     maxTimeline,
   };

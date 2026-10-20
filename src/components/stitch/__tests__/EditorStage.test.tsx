@@ -15,6 +15,7 @@ function renderStage(empty = false, aspect = 16 / 9) {
       aspect={aspect}
       layers={empty ? [] : [{ key: "c1", src: "blob:a" }]}
       registerVideo={noop}
+      registerCanvas={noop}
       audioLayers={[]}
       registerAudio={noop}
     >

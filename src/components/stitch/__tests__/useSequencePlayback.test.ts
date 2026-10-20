@@ -18,6 +18,8 @@ interface FakeMedia {
   playbackRate: number;
   readyState: number;
   duration: number;
+  videoWidth: number;
+  videoHeight: number;
   style: { opacity: string };
   /** currentTime writes. */
   writes: number;
@@ -63,6 +65,8 @@ function fakeMedia({ duration = Number.NaN, seekMs = 0 }: { duration?: number; s
     playbackRate: 1,
     readyState: 4,
     duration,
+    videoWidth: 1280,
+    videoHeight: 720,
     style: { opacity: "" },
     writes: 0,
     play: vi.fn(() => {
@@ -599,6 +603,50 @@ describe("useSequencePlayback", () => {
       expect(editor().playhead).toBeCloseTo(6, 9);
       expect(b.currentTime).toBeCloseTo(2, 9);
       expect(editor().playing).toBe(true);
+    });
+
+    it("draws an overlap's blend on the canvas while playing, the elements hidden under it", () => {
+      const { a, b, result } = mount(stackedOptions());
+      const draws: Array<[unknown, number]> = [];
+      const ctx = {
+        globalAlpha: 1,
+        fillStyle: "",
+        fillRect: vi.fn(),
+        drawImage: vi.fn((el: unknown) => draws.push([el, ctx.globalAlpha])),
+      };
+      const canvas = { style: { opacity: "" }, width: 0, height: 0, clientWidth: 640, clientHeight: 360, getContext: vi.fn(() => ctx) };
+      act(() => result.current.registerCanvas(canvas as unknown as HTMLCanvasElement));
+      act(() => editor().setPlayhead(3.9));
+      act(() => editor().setPlaying(true));
+      flushFrame(0);
+      // One clip: it shows itself
+      expect(canvas.style.opacity).toBe("0");
+      expect(a.style.opacity).toBe("1");
+      // The overlap: both drawn in row order at their shares, letterboxed into the canvas, on black
+      flushFrame(350);
+      expect(canvas.style.opacity).toBe("1");
+      expect(a.style.opacity).toBe("0");
+      expect(b.style.opacity).toBe("0");
+      expect(canvas.width).toBe(640);
+      expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 640, 360);
+      expect(draws).toEqual([
+        [a, 1],
+        [b, 0.25],
+      ]);
+      expect(ctx.drawImage).toHaveBeenLastCalledWith(b, 0, 0, 640, 360);
+      // Both still heard, at their shares
+      expect(a.muted).toBe(false);
+      expect(b.muted).toBe(false);
+      // Past the overlap: the later clip shows itself again
+      flushFrame(1200);
+      expect(canvas.style.opacity).toBe("0");
+      expect(b.style.opacity).toBe("1");
+      // Paused in an overlap the elements blend themselves
+      act(() => editor().setPlaying(false));
+      act(() => editor().setPlayhead(4.5));
+      expect(canvas.style.opacity).toBe("0");
+      expect(a.style.opacity).toBe("1");
+      expect(b.style.opacity).toBe("0.5");
     });
 
     it("keeps the earlier clip in front with Crossfade off, both heard in full", () => {

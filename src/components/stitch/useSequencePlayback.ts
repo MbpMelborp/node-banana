@@ -166,16 +166,48 @@ function createAudioDriver(
   };
 }
 
-/** What the frame loop shares with the hook: the registered elements, the options as last rendered, and the seek queue. */
+/**
+ * What the frame loop shares with the hook: the registered elements, the stage's blend canvas, the options as last
+ * rendered, and the seek queue.
+ */
 interface PlaybackRefs {
   videos: RefObject<Map<string, HTMLVideoElement>>;
   audios: RefObject<Map<string, HTMLAudioElement>>;
+  canvas: RefObject<HTMLCanvasElement | null>;
   pendingSeeks: RefObject<WeakMap<HTMLVideoElement, number>>;
   latest: RefObject<SequencePlaybackOptions>;
 }
 
 /** An element that can show a frame of where it is. */
 const presentable = (el: HTMLVideoElement) => !el.seeking && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+
+/**
+ * Draws a blend onto the canvas as the stage would composite the elements: black, then each clip in row order at its
+ * opacity, letterboxed (object-contain) into the canvas's box.
+ */
+function drawBlend(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  layers: ReadonlyArray<{ el: HTMLVideoElement; opacity: number }>,
+) {
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.round(canvas.clientWidth * ratio);
+  const height = Math.round(canvas.clientHeight * ratio);
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  for (const { el, opacity } of layers) {
+    const { videoWidth, videoHeight } = el;
+    if (!videoWidth || !videoHeight || el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) continue;
+    const scale = Math.min(width / videoWidth, height / videoHeight);
+    const w = videoWidth * scale;
+    const h = videoHeight * scale;
+    ctx.globalAlpha = opacity;
+    ctx.drawImage(el, (width - w) / 2, (height - h) / 2, w, h);
+  }
+}
 
 /**
  * Playing. The clock: the playhead is where Play (or a move while playing) left it plus the frames' time since, so a
@@ -188,11 +220,13 @@ const presentable = (el: HTMLVideoElement) => !el.seeking && el.readyState >= HT
  *   reaches their start, already moving;
  * - every other element is hidden and muted at once and paused a frame later, after what replaces it is shown.
  *
- * Shown and heard are written here, never through React, so a cut is one style change. A clip coming into view whose
+ * Shown and heard are written here, never through React, so a cut is one style change. Where clips blend (a
+ * crossfade, a placed stack's shares) they are drawn together on the stage's canvas and the elements hidden under
+ * it: a browser composites two playing videos blended at half its frame rate or worse. A clip coming into view whose
  * element has no frame to show yet (still seeking) leaves the picture on what it showed, at most HOLD_MAX. At the
  * sequence's end the preview stops there. Returns the loop's cleanup.
  */
-function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => void {
+function runLoop({ videos, audios, canvas, pendingSeeks, latest }: PlaybackRefs): () => void {
   let alive = true;
   const store = useStitchEditorStore.getState();
   const sound = createAudioDriver(audios, latest);
@@ -225,6 +259,10 @@ function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => 
   let leaving = new Set<HTMLVideoElement>();
   // Clock time a cut began waiting for its incoming element to have a frame
   let holdingSince: number | null = null;
+  // Each live clip's element and the opacity it was given last frame (on the canvas or itself)
+  let shown = new Map<HTMLVideoElement, number>();
+  // The canvas's 2D context, once asked for; null where there is none (the elements blend themselves)
+  let blendContext: CanvasRenderingContext2D | null | undefined;
   // play() to moving, learned from each start: where and when it was asked
   let startLatency = START_LATENCY;
   const starting = new Map<HTMLVideoElement, { at: number; source: number }>();
@@ -256,11 +294,17 @@ function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => 
     }
   };
 
-  const write = (el: HTMLVideoElement, opacity: number, muted: boolean, volume: number) => {
+  const setOpacity = (el: HTMLElement, opacity: number) => {
     const value = String(opacity);
     if (el.style.opacity !== value) el.style.opacity = value;
+  };
+  const setSound = (el: HTMLVideoElement, muted: boolean, volume: number) => {
     if (el.muted !== muted) el.muted = muted;
     if (el.volume !== volume) el.volume = volume;
+  };
+  const contextOf = (cv: HTMLCanvasElement) => {
+    if (blendContext === undefined) blendContext = cv.getContext("2d");
+    return blendContext;
   };
 
   /** Keeps a live clip's element at `target` source seconds. */
@@ -328,10 +372,12 @@ function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => 
     const rolling = prepare(at, live);
     learn(at);
 
-    // A clip coming into view whose element cannot show a frame yet: the picture stays on what it showed
+    // A clip coming into view whose element cannot show a frame yet: the picture stays on what it showed (the
+    // elements' opacities and the canvas as they are), what left it still, until the clip has a frame
+    const incoming = (el: HTMLVideoElement) => !((shown.get(el) ?? 0) > 0);
     let hold = false;
     for (const [el, layer] of live) {
-      if (layer.opacity > 0 && el.style.opacity === "0" && !presentable(el)) hold = true;
+      if (layer.opacity > 0 && incoming(el) && !presentable(el)) hold = true;
     }
     if (hold) {
       holdingSince ??= at;
@@ -342,27 +388,43 @@ function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => 
 
     for (const [el, layer] of live) {
       follow(el, sourceTimeAt(layer.span, at), at);
-      const incoming = hold && el.style.opacity === "0";
-      write(el, incoming ? 0 : layer.opacity, incoming || layer.span.clip.muted || !soundOn, clamp01(layer.span.clip.volume * layer.gain));
+      setSound(el, (hold && incoming(el)) || layer.span.clip.muted || !soundOn, clamp01(layer.span.clip.volume * layer.gain));
     }
     const next = new Set<HTMLVideoElement>();
     for (const el of videos.current.values()) {
       if (live.has(el)) continue;
       if (rolling.has(el)) {
-        write(el, 0, true, el.volume);
+        setOpacity(el, 0);
+        setSound(el, true, el.volume);
         continue;
       }
-      // Holding: what was shown stays, still, until the incoming clip has a frame
-      if (hold && el.style.opacity !== "0") {
+      if (hold && (shown.get(el) ?? 0) > 0) {
         if (!el.paused) el.pause();
         continue;
       }
-      write(el, 0, true, el.volume);
+      setOpacity(el, 0);
+      setSound(el, true, el.volume);
       if (el.paused) continue;
       if (leaving.has(el)) el.pause();
       else next.add(el);
     }
     leaving = next;
+    if (hold) return;
+
+    // In row order, the stage's: what paints later is on top
+    const order = [...live].sort(([, a], [, b]) => a.span.index - b.span.index);
+    const visible = order.filter(([, layer]) => layer.opacity > 0);
+    const cv = canvas.current;
+    const ctx = cv && visible.length > 1 && visible.some(([, layer]) => layer.opacity < 1) ? contextOf(cv) : null;
+    if (cv && ctx) {
+      drawBlend(cv, ctx, visible.map(([el, layer]) => ({ el, opacity: layer.opacity })));
+      setOpacity(cv, 1);
+      for (const [el] of order) setOpacity(el, 0);
+    } else {
+      if (cv) setOpacity(cv, 0);
+      for (const [el, layer] of order) setOpacity(el, layer.opacity);
+    }
+    shown = new Map(order.map(([el, layer]) => [el, layer.opacity]));
   };
 
   const step = (at: number) => {
@@ -413,12 +475,15 @@ function runLoop({ videos, audios, pendingSeeks, latest }: PlaybackRefs): () => 
 export function useSequencePlayback(opts: SequencePlaybackOptions): {
   registerVideo: (clipId: string, el: HTMLVideoElement | null) => void;
   registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
+  /** The stage's canvas, over its elements, that a blend is drawn on while playing. */
+  registerCanvas: (el: HTMLCanvasElement | null) => void;
 } {
   const playing = useStitchEditorStore((s) => s.playing);
   // Keyed by clip id
   const videos = useRef(new Map<string, HTMLVideoElement>());
   // Keyed by audio clip id
   const audios = useRef(new Map<string, HTMLAudioElement>());
+  const canvas = useRef<HTMLCanvasElement | null>(null);
   // A seek asked for while the element is still seeking: only the latest target is kept
   const pendingSeeks = useRef(new WeakMap<HTMLVideoElement, number>());
   const latest = useRef(opts);
@@ -463,6 +528,8 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
       el.style.opacity = String(layer.opacity);
     }
     for (const el of videos.current.values()) if (!shown.has(el)) el.style.opacity = "0";
+    // Paused elements blend themselves at no cost: the canvas is only for playing
+    if (canvas.current) canvas.current.style.opacity = "0";
   }, [seek]);
 
   // An element keeps its identity when its URL changes (a data: to blob: swap), which sends it back to 0
@@ -486,6 +553,10 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
     },
     [onSeeked, onLoadedMetadata],
   );
+
+  const registerCanvas = useCallback((el: HTMLCanvasElement | null) => {
+    canvas.current = el;
+  }, []);
 
   const registerAudio = useCallback((clipId: string, el: HTMLAudioElement | null) => {
     const previous = audios.current.get(clipId);
@@ -516,7 +587,7 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
   // Playing: the frame loop
   useEffect(() => {
     if (!playing) return;
-    return runLoop({ videos, audios, pendingSeeks, latest });
+    return runLoop({ videos, audios, canvas, pendingSeeks, latest });
   }, [playing]);
 
   // Pause everything when the editor goes away
@@ -529,5 +600,8 @@ export function useSequencePlayback(opts: SequencePlaybackOptions): {
     };
   }, []);
 
-  return useMemo(() => ({ registerVideo, registerAudio }), [registerVideo, registerAudio]);
+  return useMemo(
+    () => ({ registerVideo, registerAudio, registerCanvas }),
+    [registerVideo, registerAudio, registerCanvas],
+  );
 }
