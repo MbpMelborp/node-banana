@@ -158,18 +158,26 @@ export interface RunBatchTag {
 }
 
 /**
- * Image history item for tracking generated images
+ * An entry of the recent-generations list: a generated image or video
  */
 export interface ImageHistoryItem {
   generation?: ImageGenerationMetadata;
   id: string;
-  image: string; // Base64 data URL
+  /** Absent in entries from before videos were listed: an image. */
+  kind?: "image" | "video";
+  image: string; // Data URL or URL of the media; a video's is playable, as in the node's carousel
   timestamp: number; // For display & sorting
   prompt: string; // The prompt used
   aspectRatio: AspectRatio;
   /** A Gemini model, or a free-form producer name (e.g. a ComfyUI app). */
   model: ModelType | string;
   batch?: RunBatchTag;
+  /** The asset library's id for this output, when it was recorded. */
+  assetId?: string;
+  /** A video's length, once the library has measured it. */
+  durationSec?: number;
+  /** A video's poster frame (a library thumbnail URL), once the library has one. */
+  poster?: string;
 }
 
 /**
