@@ -122,10 +122,13 @@ import { ModelSearchDialog } from "./modals/ModelSearchDialog";
 import { LLMFallbackPopover } from "./nodes/LLMFallbackPopover";
 import { browseRegistry } from "@/utils/browseRegistry";
 import { createPanActivityTracker, useWheelPanZoom } from "@/hooks/useWheelPanZoom";
+import { useAddMediaNode } from "@/hooks/useAddMediaNode";
 import { selectCanvasOverview, setCanvasPanningClass } from "@/utils/canvasPerformance";
 import { SplitGridTemplateModal } from "./splitgrid/SplitGridTemplateModal";
 import { createPortal } from "react-dom";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { openEditorForExpand } from "@/components/stitch/openStitchEditor";
 import { useAssetStore } from "@/store/assetStore";
 import { TutorialOverlay } from "./onboarding/TutorialOverlay";
 import { useFTUXStore } from "@/store/ftuxStore";
@@ -484,6 +487,7 @@ export function WorkflowCanvas() {
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
   const openAnnotationModal = useAnnotationStore((state) => state.openModal);
   const { screenToFlowPosition, getViewport, setCenter, setViewport, getNodes } = useReactFlow();
+  const addMediaNode = useAddMediaNode();
   const isCanvasOverview = useStore(selectCanvasOverview);
   // Low detail when zoomed out: nodes read it from lowDetail.ts, fed from
   // this one subscription; React Flow then mounts only what is in view
@@ -496,7 +500,7 @@ export function WorkflowCanvas() {
   const nodeHasFocus = useAnyNodeHasFocus(lowDetail);
   const { show: showToast } = useToast();
   const [isDragOver, setIsDragOver] = useState(false);
-  const [dropType, setDropType] = useState<"image" | "audio" | "workflow" | "node" | null>(null);
+  const [dropType, setDropType] = useState<"image" | "video" | "audio" | "workflow" | "node" | null>(null);
   const [connectionDrop, setConnectionDrop] = useState<ConnectionDropState | null>(null);
   // Searchable "add node" menu shown on double-clicking the empty canvas.
   const [nodeSearchMenu, setNodeSearchMenu] = useState<
@@ -783,6 +787,7 @@ export function WorkflowCanvas() {
 
   // Stable callback for expanding a node from its header
   const handleExpandNode = useCallback((nodeId: string, nodeType: string) => {
+    if (openEditorForExpand(nodeId, nodeType)) return;
     if (nodeType === 'annotation') {
       const node = getNodeById(nodeId);
       if (!node) return;
@@ -1955,17 +1960,18 @@ export function WorkflowCanvas() {
       return;
     }
 
-    // A (bare) shows the Assets view and C the chat; Shift+letters add nodes.
+    // A (bare) shows the Assets view, C the chat and E Edit video; Shift+letters add nodes.
     // Not while a dialog, the annotation editor or the tutorial is up over the
     // canvas, nor while a menu or dropdown is open: it would stay mounted (and
     // keep its document key listener, e.g. Enter adding a node) under the view.
     const lowerKey = event.key.toLowerCase();
-    const view = lowerKey === "a" ? "assets" : lowerKey === "c" ? "chat" : null;
+    const view = lowerKey === "a" ? "assets" : lowerKey === "c" ? "chat" : lowerKey === "e" ? "edit" : null;
     if (
       view &&
       !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
       !useWorkflowStore.getState().isModalOpen &&
       !useAnnotationStore.getState().isModalOpen &&
+      !useStitchEditorStore.getState().isOpen &&
       !useFTUXStore.getState().tutorialActive &&
       !connectionDrop &&
       !nodeSearchMenu &&
@@ -2387,11 +2393,11 @@ export function WorkflowCanvas() {
       return;
     }
 
-    // Check if dragging a history image
+    // Check if dragging a history image or video
     const hasHistoryImage = Array.from(event.dataTransfer.types).includes("application/history-image");
     if (hasHistoryImage) {
       setIsDragOver(true);
-      setDropType("image");
+      setDropType(Array.from(event.dataTransfer.types).includes("application/history-video") ? "video" : "image");
       return;
     }
 
@@ -2443,29 +2449,18 @@ export function WorkflowCanvas() {
         return;
       }
 
-      // Check for history image drop
+      // Check for history image or video drop
       const historyImageData = event.dataTransfer.getData("application/history-image");
       if (historyImageData) {
         try {
-          const { image, prompt } = JSON.parse(historyImageData);
-          const position = screenToFlowPosition({
-            x: event.clientX,
-            y: event.clientY,
+          const { image, kind } = JSON.parse(historyImageData);
+          const video = kind === "video";
+          addMediaNode({
+            kind: video ? "video" : "image",
+            src: image,
+            filename: `history-${Date.now()}.${video ? "mp4" : "png"}`,
+            position: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
           });
-
-          // Create ImageInput node with the history image
-          const nodeId = addNode("imageInput", position);
-
-          // Get image dimensions and update node
-          const img = new Image();
-          img.onload = () => {
-            updateNodeData(nodeId, {
-              image: image,
-              filename: `history-${Date.now()}.png`,
-              dimensions: { width: img.width, height: img.height },
-            });
-          };
-          img.src = image;
           return;
         } catch (err) {
           console.error("Failed to parse history image data:", err);
@@ -2580,7 +2575,7 @@ export function WorkflowCanvas() {
         reader.readAsDataURL(file);
       });
     },
-    [screenToFlowPosition, addNode, updateNodeData, loadWorkflow]
+    [screenToFlowPosition, addNode, addMediaNode, updateNodeData, loadWorkflow]
   );
 
   return (
@@ -2604,6 +2599,8 @@ export function WorkflowCanvas() {
                 ? "Drop to create node"
                 : dropType === "audio"
                 ? "Drop audio to create node"
+                : dropType === "video"
+                ? "Drop video to create node"
                 : "Drop image to create node"}
             </p>
           </div>

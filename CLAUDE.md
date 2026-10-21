@@ -51,6 +51,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 | Grid splitting utility | `src/utils/gridSplitter.ts` |
 | Asset library (always-on saving, Assets view) | `src/lib/assets/`, `src/components/assets/`, `docs/asset-library.md` |
 | Full-screen media viewer (stage, dock-scaled filmstrip, details rail; the recent-generations drop-down and the output gallery node both mount it with their own actions) | `src/components/MediaViewer.tsx`, `src/hooks/useAddMediaNode.ts` |
+| Edit video view and edit projects (`Edits/*.nbedit`) | `src/components/edit/`, `src/store/editProjectStore.ts`, `src/lib/edits/`, `docs/edit-video.md` |
 
 ### State Management
 
@@ -59,7 +60,7 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
-- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`)
+- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`); an open edit in the Edit video view follows the same setting (`src/store/utils/editAutoSave.ts`)
 
 ### Execution Flow
 
@@ -158,7 +159,7 @@ Returns `{ images: string[], text: string | null }`.
 ## Keyboard Shortcuts
 
 - `Cmd/Ctrl + Enter` - Run workflow (as many times as the Run menu's Runs count)
-- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`)
+- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`), except while the Edit video view shows, where both save the open edit (`handleDesktopSave` in `src/store/editProjectStore.ts`)
 - `Cmd/Ctrl + C/V` - Copy/paste nodes
 - `Shift + P` - Add prompt node at center
 - `Shift + I` - Add image input node
@@ -175,6 +176,7 @@ Returns `{ images: string[], text: string | null }`.
 - `G` - Arrange selected nodes in grid
 - `C` - Show or hide the full-page agent chat (bare C, outside a text field)
 - `A` - Show or hide the Assets view (bare A; Shift+letters add nodes). In Assets: arrows, Enter, Space, `Cmd/Ctrl + A`, Delete (Trash), `Cmd/Ctrl + Z` (undo the last asset action), `F` (fullscreen detail), Esc
+- `E` - Show or hide the Edit video view (bare E). In it: the editor's keys, `Cmd/Ctrl + S` saves the edit
 - `?` - Show keyboard shortcuts
 
 ## Adding New Node Types
@@ -535,7 +537,8 @@ root is the "Node Banana folder": it defaults to `~/Documents/Node Banana`
 (Windows: `Documents\Node Banana`, or `%USERPROFILE%\Node Banana` when
 Documents syncs to OneDrive; Linux: `XDG_DOCUMENTS_DIR`) and holds projects
 saved by name (`<root>/<Project>/`), `Generations/` for unsaved workflows
-and the hidden `.nodebanana/` metadata. Project workflows still write into
+and the hidden `.nodebanana/` metadata. Edit projects live in `<root>/Edits/`
+and move with the library. Project workflows still write into
 `<project>/generations/` and are indexed in place. See
 `docs/asset-library.md` for the layout, recording, snapshots, deletion and
 projects.
@@ -598,6 +601,10 @@ All routes in `src/app/api/`:
 | `/api/assets/media`, `/runs/[id]`, `/workflows/[id]` | default | Snapshot media, run snapshots, workflow classification |
 | `/api/assets/library`, `/jobs/[id]`, `/import`, `/import/scan`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export), finding the projects under a folder to import |
 | `/api/assets/projects` (`/report`, `/bring-in`, `/offer`, `/folder-name`) | default | Known projects and the "live elsewhere" offer, the page load's project report, bringing projects in (use, move, leave), a new project's folder name |
+| `/api/edits` | default | List the edit projects (never writes); create one (also duplicate, save as new, and make a Finder copy a separate edit). Behind the asset library's guard, as are the three below |
+| `/api/edits/[id]` | default | Read, save (with an `updatedAt` check: 409 with the stored edit, 404 when gone), rename or add a render (PATCH), delete to the Trash |
+| `/api/edits/[id]/reveal` | default | Show the edit's file in Finder/Explorer |
+| `/api/edits/folder/reveal` | default | Open the Edits folder (made if missing) |
 
 ## localStorage Keys
 
@@ -621,6 +628,9 @@ All routes in `src/app/api/`:
 - `node-banana-assets-first-run-shown` - The one-time "Saved to …" hint after the first recorded asset has been shown
 - `node-banana-models-cache` - The browse dialog's model list, one entry per set of configured providers
 - `node-banana-models-notices-dismissed` - Provider failure notices the user closed in the browse dialog (by provider, the error text); cleared by Refresh catalog
+- `node-banana-edit-last` - The edit the Edit video view opens on E
+- `node-banana-edit-library-pane` - The Edit video view's media pane shown or hidden (absent means shown; named for the library pane it replaced)
+- `node-banana-edit-pane-layout` - The media pane's layout, `list` or `grid` (absent means list)
 
 The asset library's location and index live on disk, not in localStorage
 (the desktop and web origins do not share it): `~/.node-banana/library.json`

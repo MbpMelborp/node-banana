@@ -316,6 +316,44 @@ describe("WorkflowTabs", () => {
     });
   });
 
+  describe("Edit video entry", () => {
+    beforeEach(() => useAssetStore.setState({ appView: "canvas" }));
+    afterEach(() => useAssetStore.setState({ appView: "canvas" }));
+
+    const edit = () => screen.getByRole("button", { name: "Edit video" });
+
+    it("follows Assets, before the workflow tabs, as a toggle button titled with its key", () => {
+      render(<WorkflowTabs />);
+      expect(edit()).toHaveAttribute("aria-pressed", "false");
+      expect(edit()).not.toHaveAttribute("role", "tab");
+      expect(edit()).toHaveAttribute("title", "Edit video (E)");
+      expect(edit()).not.toHaveTextContent("Edit video");
+      expect(screen.getByRole("button", { name: "Assets" }).nextElementSibling).toBe(edit());
+      expect(edit().compareDocumentPosition(screen.getAllByRole("tab")[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("shows the view, pressed and labelled, and a second click goes back to the canvas", () => {
+      const { rerender } = render(<WorkflowTabs />);
+      fireEvent.click(edit());
+      expect(useAssetStore.getState().appView).toBe("edit");
+      rerender(<WorkflowTabs />);
+      expect(edit()).toHaveAttribute("aria-pressed", "true");
+      expect(edit()).toHaveTextContent("Edit video");
+      expect(edit()).toHaveAttribute("title", "Back to the canvas (E)");
+      expect(edit().className).toContain("bg-pane");
+      expect(screen.getByRole("button", { name: "Assets" })).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(edit());
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    });
+
+    it("goes back to the canvas from a workflow tab", () => {
+      useAssetStore.setState({ appView: "edit" });
+      render(<WorkflowTabs />);
+      fireEvent.click(screen.getByText("Product shots"));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    });
+  });
+
   describe("Chat entry", () => {
     beforeEach(() => useAssetStore.setState({ appView: "canvas" }));
     afterEach(() => {
