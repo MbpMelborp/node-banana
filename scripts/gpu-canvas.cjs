@@ -479,6 +479,11 @@ async function main() {
           if (w.id !== id || w.signature !== signature) Object.assign(w, { id, signature, since: performance.now() });
           return images.every(img => img.complete) && performance.now() - w.since >= 300;
         }, id, { message: `${id}'s live images to settle`, timeout: 5000 }).catch(() => log(`  ${id}: live images still changing after 5 s`));
+        // A live video plays; its painted picture is the first frame.
+        await page.evaluate(id => Promise.all([...document.querySelectorAll(`.react-flow__node[data-id="${CSS.escape(id)}"] video`)]
+          .filter(video => !video.closest('[data-gpu-canvas-sheet]'))
+          .map(video => new Promise(resolve => { video.pause(); if (video.currentTime === 0) return resolve(); video.addEventListener('seeked', resolve, { once: true }); video.currentTime = 0; setTimeout(resolve, 2000); }))), id);
+        await delay(150);
         const live = await grab(box);
         const type = await page.evaluate(id => window.__gpuCanvas.nodeRect(id).type, id);
         const compared = await compare(painted, live, path.join(shots, 'fidelity', type));
