@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, type Mock }
 import { checkEncoderSupport, stitchVideosAsync } from "../useStitchVideos";
 import type { StitchAudioClip } from "@/types";
 import { splitAudioClipAt } from "@/lib/stitch/audioClips";
-import type { StitchAudioClipInput } from "@/lib/stitch/engineTypes";
+import type { StitchAudioClipInput, StitchOverlayInput } from "@/lib/stitch/engineTypes";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 
 /** The mixer as it is, with its two format choices watched. */
 const mix = vi.hoisted(() => ({ chooseMasterFormat: vi.fn(), chooseLayerMasterFormat: vi.fn() }));
@@ -232,6 +233,12 @@ vi.mock("mediabunny", () => {
 vi.mock("@/lib/stitch/crossfadeFrames", () => ({
   encodeDissolve: (...args: unknown[]) => mockEncodeDissolve(...args),
   createFrameBlender: (...args: unknown[]) => mockCreateFrameBlender(...(args as [])),
+}));
+
+/** The overlay pass, mocked: jsdom has no canvas. Each test that renders overlays gives it a recording writer. */
+const mockCreateOverlayWriter = vi.fn();
+vi.mock("@/lib/stitch/overlayFrames", () => ({
+  createOverlayWriter: (...args: unknown[]) => mockCreateOverlayWriter(...args),
 }));
 
 vi.mock("@/lib/video-encoding", () => ({
@@ -1488,6 +1495,177 @@ describe("useStitchVideos", () => {
           const warnings = warn.mock.calls.filter((call) => String(call[0]).includes("blend at once"));
           expect(warnings).toEqual([["[VideoStitch] 5 clips blend at once; this takes about 250 MB at 1080p"]]);
           expect(composites.some((f) => f.layers.length === 5)).toBe(true);
+        });
+      });
+
+      describe("overlays", () => {
+        interface Writer {
+          job: { add: (sample: unknown) => Promise<void> } & Record<string, unknown>;
+          written: unknown[];
+          write: Mock;
+          flush: Mock;
+          close: Mock;
+        }
+        /** Each overlay writer made: its job, every frame written through it (handed on as it is), its flush and close. */
+        const writers: Writer[] = [];
+        const overlay = (init: Parameters<typeof createTextOverlay>[0] = {}): StitchOverlayInput => ({
+          ...createTextOverlay({ id: "o", startSec: 1, endSec: 3, ...init }),
+          fontList: '"Space Grotesk", sans-serif',
+        });
+        const placedOptions = (overlapSec = 1, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade, placed: true });
+        const stacked = (overlapSec: number, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade });
+        const at = (blob: Blob, name: string, startSec: number) => ({ ...clip(blob, { source: name }), startSec });
+        const videoOf = (blob: Blob) => sources.get(blob)!.video;
+        /** Every frame the encoder took, in order: the time it went in at, the source time it came from, its layers. */
+        const encoded = () =>
+          mockVideoSourceAdd.mock.calls.map((call: unknown[]) => {
+            const sample = call[0] as { timestamp: number; setTimestamp?: Mock; layers?: unknown[] };
+            return {
+              at: sample.setTimestamp?.mock.calls[0]?.[0] ?? sample.timestamp,
+              from: sample.timestamp,
+              layers: sample.layers?.length ?? null,
+            };
+          });
+
+        beforeEach(() => {
+          writers.length = 0;
+          mockCreateOverlayWriter.mockImplementation((job: Writer["job"]) => {
+            const writer: Writer = {
+              job,
+              written: [],
+              write: vi.fn(async (sample: unknown) => {
+                writer.written.push(sample);
+                await job.add(sample);
+              }),
+              flush: vi.fn(async () => undefined),
+              close: vi.fn(),
+            };
+            writers.push(writer);
+            return writer;
+          });
+          mockEncodeDissolve.mockImplementation(
+            async (job: { timestamps: number[] }, _blenderFor: unknown, add: (sample: unknown) => Promise<void>) => {
+              for (const timestamp of job.timestamps) await add({ timestamp, codedWidth: 0, codedHeight: 0 });
+            },
+          );
+          (mockCreateFrameBlender as unknown as Mock).mockImplementation(() => ({
+            blend: vi.fn(),
+            composite: vi.fn(async (layers: unknown[], timestamp: number) => ({ timestamp, layers, close: vi.fn() })),
+            black: vi.fn((timestamp: number) => ({ timestamp, kind: "black", close: vi.fn() })),
+          }));
+        });
+
+        afterEach(() => {
+          mockCreateFrameBlender.mockImplementation(() => ({ blend: vi.fn() }));
+        });
+
+        it("renders as before without overlays: the same frames to the encoder in the same order, and no overlay pass", async () => {
+          for (const options of [{ loopCount: 2 }, stacked(1, true, 2), placedOptions(0, true, 2)]) {
+            const run = async (extra: Record<string, unknown>) => {
+              mockVideoSourceAdd.mockClear();
+              sampleCalls.length = 0;
+              sources.clear();
+              const a = source("a", { duration: 3, frameRate: 24, level: null });
+              const b = source("b", { duration: 3, frameRate: 24, level: null });
+              await stitchVideosAsync([at(a, "a", 0), at(b, "b", 4)], null, undefined, undefined, { ...options, ...extra });
+              return encoded();
+            };
+            const plain = await run({});
+            expect(plain.length).toBeGreaterThan(0);
+            expect(await run({ overlays: [] })).toEqual(plain);
+            // A layer with no wash and no text draws nothing
+            expect(await run({ overlays: [overlay({ text: "", wash: { opacity: 0 } })] })).toEqual(plain);
+          }
+          expect(mockCreateOverlayWriter).not.toHaveBeenCalled();
+        });
+
+        it("hands a Track sequence's own decoded frames to the encoder without overlays: nothing cloned, nothing added", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, level: null });
+          const b = source("b", { duration: 2, frameRate: 24, level: null });
+          await stitchVideosAsync([clip(a), clip(b)], null, undefined, undefined, { loopCount: 2 });
+          const decoded = sampleCalls.flatMap((call) => call.setTimestamp);
+          expect(mockVideoSourceAdd.mock.calls.map((call: unknown[]) => (call[0] as { setTimestamp: Mock }).setTimestamp)).toEqual(decoded);
+          expect(sampleCalls.every((call) => call.clones.length === 0)).toBe(true);
+        });
+
+        it("sends every frame of a Track sequence through the overlay writer, and flushes it before the encoder closes", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          const b = source("b", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          const overlays = [overlay()];
+          await stitchVideosAsync([clip(a), clip(b)], null, undefined, undefined, { loopCount: 2, overlays });
+          expect(writers).toHaveLength(1);
+          const [writer] = writers;
+          expect(writer.job).toMatchObject({ overlays, loopLength: 4, loopCount: 2, layout: { width: 1280, height: 720 }, rotation: 0 });
+          expect(writer.written).toHaveLength(sampleCalls.reduce((n, call) => n + call.setTimestamp.length, 0));
+          expect(writer.written).toEqual(mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0]));
+          expect(writer.flush).toHaveBeenCalledTimes(1);
+          expect(writer.flush.mock.invocationCallOrder[0]).toBeGreaterThan(writer.write.mock.invocationCallOrder.at(-1)!);
+          expect(writer.flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+          expect(writer.close).toHaveBeenCalledTimes(1);
+        });
+
+        it("lays the overlays out in a rotated file's display size, to be turned into its coded pixels", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          Object.assign(videoOf(a), { rotation: 90 });
+          await stitchVideosAsync([clip(a)], null, undefined, undefined, { overlays: [overlay()] });
+          expect(writers[0].job).toMatchObject({ layout: { width: 720, height: 1280 }, rotation: 90 });
+        });
+
+        it("sends a lined-up stack's solo frames and its dissolve's through the writer", async () => {
+          const a = source("a", { duration: 5, frameRate: 24, level: null });
+          const b = source("b", { duration: 5, frameRate: 24, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, { ...stacked(1), overlays: [overlay()] });
+          expect(mockEncodeDissolve).toHaveBeenCalledTimes(1);
+          const sent = mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0]);
+          expect(sent.some((sample) => (sample as { codedWidth?: number }).codedWidth === 0)).toBe(true);
+          expect(writers[0].written).toEqual(sent);
+          expect(writers[0].flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+        });
+
+        it("sends a placed stack's black, solo and blended frames through the writer", async () => {
+          const a = source("a", { duration: 3, frameRate: 24, level: null });
+          const b = source("b", { duration: 3, frameRate: 24, level: null });
+          const c = source("c", { duration: 1, frameRate: 24, level: null });
+          // B blends over A on [2, 3); black on [5, 6)
+          await stitchVideosAsync([at(a, "a", 0), at(b, "b", 2), at(c, "c", 6)], null, undefined, undefined, {
+            ...placedOptions(0),
+            overlays: [overlay()],
+          });
+          const sent = mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0] as { kind?: string; layers?: unknown[] });
+          expect(sent.some((sample) => sample.kind === "black")).toBe(true);
+          expect(sent.some((sample) => sample.layers?.length === 2)).toBe(true);
+          expect(writers[0].written).toEqual(sent);
+          expect(writers[0].job).toMatchObject({ loopLength: 7, loopCount: 1 });
+          expect(writers[0].flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+          expect(writers[0].close).toHaveBeenCalledTimes(1);
+        });
+
+        it("closes the writer, without flushing it, when the encode stops or fails", async () => {
+          const controller = new AbortController();
+          const a = source("a", { duration: 2, frameRate: 24, level: null });
+          mockCreateOverlayWriter.mockImplementationOnce((job: Writer["job"]) => {
+            const writer: Writer = {
+              job,
+              written: [],
+              write: vi.fn(async () => controller.abort()),
+              flush: vi.fn(async () => undefined),
+              close: vi.fn(),
+            };
+            writers.push(writer);
+            return writer;
+          });
+          await expect(
+            stitchVideosAsync([clip(a)], null, undefined, controller.signal, { overlays: [overlay()] }),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(writers[0].flush).not.toHaveBeenCalled();
+          expect(writers[0].close).toHaveBeenCalledTimes(1);
+
+          const b = source("b", { duration: 2, frameRate: 24, level: null });
+          Object.assign(videoOf(b), { failAt: 1 });
+          await expect(stitchVideosAsync([clip(b)], null, undefined, undefined, { overlays: [overlay()] })).rejects.toThrow("decoder broke");
+          expect(writers[1].flush).not.toHaveBeenCalled();
+          expect(writers[1].close).toHaveBeenCalledTimes(1);
+          expect(mockOutputCancel).toHaveBeenCalledTimes(2);
         });
       });
     });

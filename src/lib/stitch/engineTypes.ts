@@ -1,5 +1,6 @@
-import type { VolumePoint } from "@/types";
+import type { StitchOverlay, VolumePoint } from "@/types";
 import { sortCurve } from "./curve";
+import { clampOverlay } from "./overlays";
 import { MAX_START_SEC } from "./placement";
 import { MAX_OVERLAP_SEC } from "./stack";
 
@@ -52,6 +53,9 @@ export interface StitchAudioClipInput {
   curve: VolumePoint[];
 }
 
+/** One overlay as the engine draws it: the layer, and the CSS family list its font resolved to (loaded before the run). */
+export type StitchOverlayInput = StitchOverlay & { fontList: string };
+
 export interface StitchOptions {
   /** How many times the sequence plays; an integer >= 1, default 1. */
   loopCount?: number;
@@ -70,6 +74,11 @@ export interface StitchOptions {
    * passes it only when the node's audio is not legacy-shaped (stitchInputs).
    */
   audioClips?: StitchAudioClipInput[];
+  /**
+   * Burned into the picture in each loop, drawn by overlayDraw.ts as the preview draws them. Absent, empty, or none
+   * that draws anything: every frame reaches the encoder exactly as before.
+   */
+  overlays?: StitchOverlayInput[];
 }
 
 export function isMusicInput(audio: StitchAudioData | StitchMusicInput): audio is StitchMusicInput {
@@ -167,5 +176,20 @@ export function normalizeAudioClips(options: StitchOptions | undefined): StitchA
         curve: sortCurve(clip.curve),
       },
     ];
+  });
+}
+
+/**
+ * The overlays to draw: each text layer through clampOverlay, with its family list ("sans-serif" when it has none);
+ * a layer with no wash and no text draws nothing and is dropped. [] when absent.
+ */
+export function normalizeOverlays(options: StitchOptions | undefined): StitchOverlayInput[] {
+  const overlays = options?.overlays;
+  if (!Array.isArray(overlays)) return [];
+  return overlays.flatMap((o) => {
+    if (o?.kind !== "text" || typeof o.text !== "string" || typeof o.font?.family !== "string" || !o.wash) return [];
+    const overlay = clampOverlay(o);
+    if (overlay.wash.opacity <= 0 && !overlay.text.trim()) return [];
+    return [{ ...overlay, fontList: typeof o.fontList === "string" && o.fontList.trim() ? o.fontList : "sans-serif" }];
   });
 }

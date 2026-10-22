@@ -9,8 +9,11 @@ import {
   selectIsDirty,
   selectIsMulti,
   audioSelectionOf,
+  overlaySelectionOf,
+  pruneSelection,
   selectedAudioIds,
   selectedClipIds,
+  selectedOverlayIds,
   useStitchEditorStore,
 } from "@/store/stitchEditorStore";
 import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
@@ -25,6 +28,7 @@ import {
 } from "@/lib/stitch/timeline";
 import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
 import { createAudioClip, legacyMusicClip, setAudioClipCurve, type AudioSourceKey } from "@/lib/stitch/audioClips";
+import { createTextOverlay, moveOverlays, updateOverlay } from "@/lib/stitch/overlays";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
   addLibraryClips,
@@ -221,6 +225,90 @@ describe("stitchEditorStore", () => {
     expect(s.pickerOpen).toBe(false);
     openOn();
     expect(store().musicEdgeIdAtOpen).toBeNull();
+  });
+
+  it("pushes a step for an overlay change and none for an equal copy, and the change makes the editor dirty", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    openOn(makeDraft({ overlays: [o1] }));
+    store().apply((d) => ({ ...d, overlays: [{ ...o1 }] }));
+    store().apply((d) => ({ ...d, overlays: updateOverlay(d.overlays!, "o1", { size: 0.08 }) }));
+    expect(store().past).toHaveLength(0);
+    store().apply((d) => ({ ...d, overlays: updateOverlay(d.overlays!, "o1", { text: "Hello" }) }));
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+    store().undo();
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("reads a draft with no overlays and one with an empty list as the same", () => {
+    openOn();
+    store().apply((d) => ({ ...d, overlays: [] }));
+    expect(store().past).toHaveLength(0);
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("drops overlays an undo takes away from the selection, the first left leading", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    const o3 = createTextOverlay({ id: "o3", row: 2 });
+    openOn(makeDraft({ overlays: [o1] }));
+    store().apply((d) => ({ ...d, overlays: [o1, o2, o3] }));
+    store().select(overlaySelectionOf({ clipId: "o3", clipIds: ["o1", "o2", "o3"], anchorId: "o2" }));
+    store().undo();
+    expect(store().selection).toEqual({ kind: "overlay", clipId: "o1" });
+    store().select(overlaySelectionOf({ clipId: "o1" }));
+    const before = store().selection;
+    store().redo();
+    // Nothing went: the same selection object
+    expect(store().selection).toBe(before);
+    store().select(overlaySelectionOf({ clipId: "o2" }));
+    store().undo();
+    expect(store().selection).toBeNull();
+  });
+
+  it("prunes an overlay selection against a draft without overlays to none", () => {
+    expect(pruneSelection(overlaySelectionOf({ clipId: "o1" }), makeDraft())).toBeNull();
+    const selection = overlaySelectionOf({ clipId: "o1" });
+    expect(pruneSelection(selection, makeDraft({ overlays: [createTextOverlay({ id: "o1" })] }))).toBe(selection);
+  });
+
+  it("takes a move that empties an overlay row as an edit, though the draft still reads as unchanged", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    openOn(makeDraft({ overlays: [o1, o2] }));
+    store().apply((d) => ({ ...d, overlays: moveOverlays(d.overlays!, ["o2"], 0, 1).overlays }));
+    expect(store().past).toHaveLength(1);
+    expect(store().draft!.overlays![1].row).toBe(2);
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("takes a move onto a row with room as a change to save, though the overlay order stays the same", () => {
+    const a = createTextOverlay({ id: "a", endSec: 1 });
+    const b = createTextOverlay({ id: "b", row: 1, startSec: 2, endSec: 3 });
+    const c = createTextOverlay({ id: "c", row: 2, endSec: 1 });
+    openOn(makeDraft({ overlays: [a, b, c] }));
+    store().apply((d) => ({ ...d, overlays: moveOverlays(d.overlays!, ["b"], 0, -1).overlays }));
+    expect(store().draft!.overlays!.map((o) => [o.id, o.row])).toEqual([
+      ["a", 0],
+      ["b", 0],
+      ["c", 2],
+    ]);
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+  });
+
+  it("selectedOverlayIds gives the overlay selection's ids in overlay order, and nothing for another kind", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    openOn(makeDraft({ overlays: [o1, o2] }));
+    store().select(overlaySelectionOf({ clipId: "o2", clipIds: ["o2", "o1", "gone"] }));
+    expect(selectedOverlayIds(store())).toEqual(["o1", "o2"]);
+    expect(selectedClipIds(store())).toEqual([]);
+    expect(selectedAudioIds(store())).toEqual([]);
+    store().select({ kind: "clip", clipId: "a" });
+    expect(selectedOverlayIds(store())).toEqual([]);
+    store().select(audioSelectionOf({ clipId: "o1" }));
+    expect(selectedOverlayIds(store())).toEqual([]);
   });
 
   it("selectedAudioIds gives the audio selection's ids in audio order, and nothing for a clip selection", () => {

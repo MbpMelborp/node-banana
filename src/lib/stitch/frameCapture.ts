@@ -1,8 +1,11 @@
 import { ALL_FORMATS, BlobSource, Input, UrlSource, VideoSampleSink } from "mediabunny";
 import type { InputVideoTrack, VideoSample } from "mediabunny";
+import type { StitchOverlay } from "@/types";
 import { openClipReader, type ClipReader, type ClipReaderWindow } from "./clipReader";
 import { probeClip } from "./clipProbe";
 import type { StitchOptions } from "./engineTypes";
+import { ensureOverlayFonts, overlayFontList } from "./fonts";
+import { drawOverlays, overlayLayoutSize, type OverlayFontList } from "./overlayDraw";
 import {
   chooseFrameSlot,
   EMPTY_FACTS,
@@ -12,12 +15,14 @@ import {
   type FramePlan,
   type FrameSourceFacts,
 } from "./framePlan";
+import { overlayOpacitiesAt } from "./overlays";
 import { domOpacities, LAYER_WARNING } from "./placement";
 import type { SourceKey } from "./timeline";
 
 /**
  * Frame to canvas, in the page: the frame planned for the playhead (framePlan.ts), decoded from the clips' files
- * with the engine's own readers, composited as Render's canvas path composites it, and encoded as PNG.
+ * with the engine's own readers, composited as Render's canvas path composites it, the overlays drawn over it as
+ * the render draws them on that frame's slot, and encoded as PNG.
  */
 
 type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -48,6 +53,9 @@ export interface FrameCaptureDeps {
   canvas(size: { width: number; height: number }): { ctx: Context2D; toBlob(): Promise<Blob> };
   reader(track: InputVideoTrack, range: { from: number; to: number }, window: ClipReaderWindow, inSec: number): ClipReader;
   sampleAt(track: InputVideoTrack, time: number): Promise<VideoSample | null>;
+  /** Loads the overlays' fonts; the family lists they are drawn in. */
+  fonts(overlays: readonly StitchOverlay[]): Promise<OverlayFontList>;
+  drawOverlays: typeof drawOverlays;
 }
 
 export interface FrameCaptureJob {
@@ -61,6 +69,8 @@ export interface FrameCaptureJob {
   /** 1-based, as the rail's "Clip N". */
   clipNumberOf(clipId: string): number;
   size: { width: number; height: number };
+  /** Drawn over the frame; absent or empty, none. */
+  overlays?: readonly StitchOverlay[];
   signal?: AbortSignal;
 }
 
@@ -147,6 +157,8 @@ const DEFAULT_DEPS: FrameCaptureDeps = {
   canvas: defaultCanvas,
   reader: openClipReader,
   sampleAt: (track, time) => new VideoSampleSink(track).getSample(time),
+  fonts: async (overlays) => overlayFontList(await ensureOverlayFonts(overlays)),
+  drawOverlays,
 };
 
 const isTimeout = (reason: unknown) =>
@@ -319,6 +331,8 @@ export async function captureSequenceFrame(job: FrameCaptureJob, deps: Partial<F
     const opacities = domOpacities(weights);
 
     const { width, height } = job.size;
+    const overlays = job.overlays ?? [];
+    const fontList = overlays.length > 0 ? await untilStopped(d.fonts(overlays)) : null;
     let blob: Blob;
     try {
       const { ctx, toBlob } = d.canvas({ width, height });
@@ -331,6 +345,10 @@ export async function captureSequenceFrame(job: FrameCaptureJob, deps: Partial<F
         sample.drawWithFit(ctx, { fit: "cover" });
       });
       ctx.globalAlpha = 1;
+      if (fontList) {
+        const target = { layout: overlayLayoutSize(width, height), canvas: { width, height }, rotation: 0 as const };
+        d.drawOverlays(ctx, target, overlayOpacitiesAt(overlays, plan.slot), overlays, fontList);
+      }
       blob = await untilStopped(toBlob());
     } catch (error) {
       if (signal?.aborted) throw signal.reason;

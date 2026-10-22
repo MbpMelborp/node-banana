@@ -1,9 +1,10 @@
 /**
  * The editor's clip selection: one lead clip, and any others selected with
- * it. A selection holds video clips or audio clips, never both; the
- * functions here work on either, given its order (the timeline's for video,
- * row then start then id for audio). They return a video selection; the
- * audio one takes the same ids. Pure: ids and an order, no store.
+ * it. A selection holds one kind at a time (video clips, audio clips or
+ * overlays); the functions here work on any, given its order (the
+ * timeline's for video, row then start then id for audio and overlays).
+ * They return a video selection; the audio and overlay selections take the
+ * same ids. Pure: ids and an order, no store.
  */
 
 /** The ids a selection holds, whatever kind of clip it selects. */

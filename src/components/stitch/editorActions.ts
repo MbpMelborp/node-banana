@@ -93,6 +93,7 @@ import type {
 } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { liveFitZoom } from "./liveFitZoom";
+import { removeOverlaySelection } from "./overlayActions";
 
 /**
  * What the editor's keys, rail and transport do to its store. Each reads the
@@ -103,7 +104,7 @@ import { liveFitZoom } from "./liveFitZoom";
 const editor = () => useStitchEditorStore.getState();
 
 /** One loop of the sequence, in seconds. */
-function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number {
+export function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number {
   return s.draft ? draftDuration(s.draft, s.durations) : 0;
 }
 
@@ -329,12 +330,14 @@ export function removeClipsById(ids: readonly string[]): string[] {
 
 /**
  * ⌫: the selected clip, or the selected curve point. The neighbour takes the clip's selection. A lined-up stack
- * closes up; a placed one is pinned first, so nothing else moves. With several selected, all of them.
+ * closes up; a placed one is pinned first, so nothing else moves. With several selected, all of them. Audio clips
+ * and text layers selected are removed as theirs.
  */
 export function removeSelection(): void {
   const s = editor();
   if (!s.draft) return;
   if (s.selection?.kind === "audio") return removeAudioSelection();
+  if (s.selection?.kind === "overlay") return removeOverlaySelection();
   if (selectIsMulti(s)) {
     editor().untagCut(removeClipsById(selectedClipIds(s)));
     return;
@@ -602,9 +605,9 @@ export function moveClipsBody(ids: readonly string[], timeline: StitchTimelineCl
   s.apply((d) => ({ ...d, timeline }));
 }
 
-/** One output frame: the encoder's grid. */
-const NUDGE_SEC = 1 / FRAME_RATE;
-const BIG_NUDGE_FRAMES = 10;
+/** One output frame: the encoder's grid. ⌥←/→ move clips, audio clips and text layers by it (⇧: ten). */
+export const NUDGE_SEC = 1 / FRAME_RATE;
+export const BIG_NUDGE_FRAMES = 10;
 const START_STEP_SEC = 0.1;
 const BIG_START_STEP_SEC = 1;
 

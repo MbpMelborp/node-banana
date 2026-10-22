@@ -29,6 +29,7 @@ import { Ingestor } from "../ingest";
 import { JobRunner, runExport, runImport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { newAssetId } from "../../client/ids";
+import { listFonts } from "@/lib/edits/fontServer";
 import { createEdit, listEdits } from "@/lib/edits/server";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -174,6 +175,55 @@ describe("move", () => {
     expect(walk(path.join(oldRoot, "Edits"))).toEqual(["notes.txt"]);
     expect((await listEdits()).edits.map((e) => [e.id, e.name])).toEqual([[edit.id, "Trip"]]);
     expect((await listEdits()).folder).toBe(path.join(newRoot, "Edits"));
+  });
+
+  it("carries the font files, and only those, from the Fonts folder", async () => {
+    const oldRoot = (await getLibraryStatus()).root!;
+    await record();
+    const fonts = path.join(oldRoot, "Fonts");
+    fs.mkdirSync(path.join(fonts, "Folder.ttf"), { recursive: true });
+    fs.writeFileSync(path.join(fonts, "Georgia.ttf"), Buffer.from([0, 1, 0, 0, 1, 2, 3]));
+    fs.writeFileSync(path.join(fonts, "Inter.woff2"), "wOF2");
+    fs.writeFileSync(path.join(fonts, "notes.txt"), "the user's own file");
+    fs.writeFileSync(path.join(fonts, ".DS_Store"), "x");
+
+    const newRoot = path.join(base, "External", "NB");
+    expect(await finished((await setLibraryRoot({ root: newRoot, mode: "move" })).job!)).toMatchObject({ state: "done" });
+    expect(walk(path.join(newRoot, "Fonts"))).toEqual(["Georgia.ttf", "Inter.woff2"]);
+    expect(fs.readFileSync(path.join(newRoot, "Fonts", "Georgia.ttf"))).toEqual(Buffer.from([0, 1, 0, 0, 1, 2, 3]));
+    expect(walk(fonts)).toEqual([".DS_Store", "notes.txt"]);
+    expect(fs.existsSync(path.join(fonts, "Folder.ttf"))).toBe(true);
+    expect((await listFonts()).fonts.map((font) => font.name)).toEqual(["Georgia.ttf", "Inter.woff2"]);
+  });
+
+  it("refuses a target whose Fonts folder has a font named as one of ours, which the copy would overwrite", async () => {
+    const oldRoot = (await getLibraryStatus()).root!;
+    await record();
+    fs.mkdirSync(path.join(oldRoot, "Fonts"), { recursive: true });
+    fs.writeFileSync(path.join(oldRoot, "Fonts", "Georgia.ttf"), "ours");
+    const target = path.join(base, "Shared");
+    fs.mkdirSync(path.join(target, "Fonts"), { recursive: true });
+    fs.writeFileSync(path.join(target, "Fonts", "georgia.TTF"), "theirs");
+    fs.writeFileSync(path.join(target, "Fonts", "Inter.ttf"), "theirs too");
+
+    await expect(setLibraryRoot({ root: target, mode: "move" })).rejects.toMatchObject({
+      status: 409,
+      code: "conflict",
+      message: expect.stringContaining("already has a font named “georgia.TTF”"),
+    });
+    expect((await getLibraryStatus()).root).toBe(oldRoot);
+    expect(walk(path.join(target, "Fonts"))).toEqual(["Inter.ttf", "georgia.TTF"]);
+
+    // Fonts of other names are no clash: they stay, beside ours.
+    fs.rmSync(path.join(target, "Fonts", "georgia.TTF"));
+    expect(await finished((await setLibraryRoot({ root: target, mode: "move" })).job!)).toMatchObject({ state: "done" });
+    expect(walk(path.join(target, "Fonts"))).toEqual(["Georgia.ttf", "Inter.ttf"]);
+    expect(fs.readFileSync(path.join(target, "Fonts", "Inter.ttf"), "utf8")).toBe("theirs too");
+    // A library without fonts may move into any Fonts folder.
+    const shared = path.join(base, "Shared fonts");
+    fs.mkdirSync(path.join(shared, "Fonts"), { recursive: true });
+    fs.writeFileSync(path.join(shared, "Fonts", "Georgia.ttf"), "theirs");
+    expect(await validateMoveTarget(path.join(base, "Plain library"), shared)).toBe(shared);
   });
 
   it("leaves no data folder in the old root, so the library can be moved back there", async () => {
@@ -602,6 +652,36 @@ describe("move: edit files", () => {
     expect(switched).toBe(false);
     expect(walk(target)).toEqual([]);
     expect(fs.readdirSync(editsDir).sort()).toEqual(["Edit 0.nbedit", "Edit 1.nbedit"]);
+  });
+});
+
+describe("move: font files", () => {
+  it("removes the font files it copied when cancelled, and leaves the source's", async () => {
+    const source = path.join(base, "Source");
+    const library = new AssetLibrary(source);
+    await library.ready();
+    const fontsDir = path.join(source, "Fonts");
+    fs.mkdirSync(fontsDir);
+    for (const name of ["Georgia.ttf", "Inter.woff2"]) fs.writeFileSync(path.join(fontsDir, name), name);
+    const target = path.join(base, "Cancelled");
+    const controller = new AbortController();
+    let copiedFonts: string[] = [];
+    const ctx: JobContext = {
+      ...jobContext(),
+      signal: controller.signal,
+      checkCancelled: () => {
+        // Cancelled once both font files are in the target.
+        copiedFonts = walk(path.join(target, "Fonts"));
+        if (copiedFonts.length === 2) controller.abort();
+        if (controller.signal.aborted) throw Object.assign(new Error("Cancelled"), { code: "cancelled" });
+      },
+    };
+    await expect(
+      runMove(ctx, { library, waitForWrites: async () => true, toRoot: target, setPaused: () => {}, switchRoot: async () => {} }),
+    ).rejects.toThrow(/Cancelled/);
+    expect(copiedFonts).toEqual(["Georgia.ttf", "Inter.woff2"]);
+    expect(walk(target)).toEqual([]);
+    expect(fs.readdirSync(fontsDir).sort()).toEqual(["Georgia.ttf", "Inter.woff2"]);
   });
 });
 

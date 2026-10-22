@@ -463,6 +463,35 @@ export interface StitchAudioClip {
   curve: VolumePoint[];       // t in the clip's source seconds; empty = flat at 0 dB
 }
 
+/** A text layer's font: a family (shipped, installed or typed) and, for a file in the library's Fonts folder, its name. */
+export interface StitchOverlayFont {
+  family: string;
+  file?: string;
+}
+
+/** A text layer: words over a black wash on an overlay row, above the video. See docs/edit-video.md, "Text layers". */
+export interface StitchTextOverlay {
+  id: string;                 // Stable within the edit; "ovl_xxxxxxxx"
+  kind: "text";
+  row: number;                // 0-based overlay row, 0 nearest the video; a higher row draws in front; stored compacted
+  startSec: number;           // Sequence seconds (one loop), 0–600
+  endSec: number;             // > startSec, at most 600 s after it
+  fadeInSec: number;          // >= 0: opacity 0 at startSec, 1 fadeInSec later
+  fadeOutSec: number;         // >= 0: opacity 1 until fadeOutSec before endSec, 0 at endSec
+  text: string;               // "\n" between lines; at most 2000 UTF-16 units
+  font: StitchOverlayFont;
+  size: number;               // Fraction of the frame's height, 0.01–0.5
+  weight: number;             // CSS weight, 100–900
+  color: string;              // "#rrggbb", lower case
+  align: "left" | "center" | "right";
+  x: number;                  // The text block's centre, 0–1 of the frame's width
+  y: number;                  // The text block's centre, 0–1 of the frame's height
+  wash: { opacity: number };  // 0–1: black over the whole frame, fading with the text; 0 = none
+}
+
+/** Every overlay kind; a later kind (an image, a shape, a wash alone) is one more member. */
+export type StitchOverlay = StitchTextOverlay;
+
 /** How a Stitch sequence is laid out. See docs/edit-video.md. */
 export interface StitchSequenceLayout {
   /**
@@ -493,6 +522,8 @@ export interface VideoStitchNodeData extends BaseNodeData {
   audioMuted?: boolean;
   /** Audio clips. Absent = the audio is the connected music alone, read from audioCurve and audioMuted. */
   audioClips?: StitchAudioClip[];
+  /** Overlay layers above the video. Absent = none. Only the editor's Done writes it. */
+  overlays?: StitchOverlay[];
   /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
   sequenceLayout?: StitchSequenceLayout;
   /** The edit project the editor's Save and Done keep in step with this node (see docs/edit-video.md, "Saved to Edits"). */

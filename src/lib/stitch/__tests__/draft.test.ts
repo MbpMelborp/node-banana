@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { StitchAudioClip, StitchTimelineClip, VideoStitchNodeData } from "@/types";
+import type { StitchAudioClip, StitchOverlay, StitchTextOverlay, StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import {
   describeDraftChanges,
@@ -14,6 +14,7 @@ import {
   type StitchDraft,
 } from "../draft";
 import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID } from "../audioClips";
+import { createTextOverlay } from "../overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import { createClip, type SourceKey } from "../timeline";
 
@@ -442,5 +443,66 @@ describe("audio in the draft", () => {
     expect(musicAudio(d)).toBe(d.legacyAudio);
     const withClip = { ...d, audioClips: [music(), tone("t1", { row: 1 })] };
     expect(musicAudio(withClip)).toEqual({ curve: [], muted: false });
+  });
+});
+
+const overlay = (id: string, init: Partial<StitchTextOverlay> = {}) => createTextOverlay({ id, ...init });
+
+describe("overlays in the draft", () => {
+  const ctx = { liveEdgeIds: ["e1"], hasMusic: false };
+  const timeline = [edgeClip("a", "e1")];
+  const withOverlays = (overlays: StitchOverlay[]): StitchDraft => ({
+    timeline,
+    audioClips: [],
+    legacyAudio: { curve: [], muted: false },
+    loopCount: 1,
+    sequenceLayout: TRACK_LAYOUT,
+    overlays,
+  });
+
+  it("reads a node's overlays sanitized and compacted, legacy or not, and no key without any", () => {
+    const stored = [overlay("o2", { row: 3, startSec: 1 }), overlay("o1", { startSec: 2, color: "#ABCDEF" })];
+    expect(readStitchDraft(nodeData({ timeline, overlays: stored }), ctx).overlays).toEqual([
+      { ...stored[1], color: "#abcdef" },
+      { ...stored[0], row: 1 },
+    ]);
+    expect(readStitchDraft(nodeData({ clipOrder: ["e1"], overlays: stored }), ctx).overlays).toHaveLength(2);
+    const unknown = [{ id: "i", kind: "image", row: 0 }] as unknown as StitchOverlay[];
+    for (const overlays of [undefined, [], unknown]) {
+      expect(readStitchDraft(nodeData({ clipOrder: ["e1"], overlays }), ctx)).not.toHaveProperty("overlays");
+    }
+  });
+
+  it("sees an overlay change in sameDraft, but not an empty row a move left, nor no list against an empty one", () => {
+    const base = withOverlays([overlay("o1"), overlay("o2", { row: 1 })]);
+    expect(sameDraft(base, { ...base, overlays: base.overlays!.map((o) => ({ ...o, row: o.row * 2 })) })).toBe(true);
+    for (const patch of [{ text: "Other" }, { startSec: 1 }, { wash: { opacity: 0 } }, { font: { family: "Inter", file: "Inter.ttf" } }]) {
+      const edited = base.overlays!.map((o) => (o.id === "o1" ? { ...o, ...patch } : o));
+      expect(sameDraft(base, { ...base, overlays: edited }), JSON.stringify(patch)).toBe(false);
+    }
+    expect(sameDraft(base, { ...base, overlays: undefined })).toBe(false);
+    const none = { ...base, overlays: undefined };
+    expect(sameDraft(none, { ...none, overlays: [] })).toBe(true);
+  });
+
+  it("writes the overlays compacted in draftPatch, last, and undefined with none", () => {
+    const patch = draftPatch(withOverlays([overlay("o1", { row: 2 }), overlay("o2", { row: 4 })]));
+    expect(patch.overlays).toEqual([overlay("o1"), overlay("o2", { row: 1 })]);
+    expect(Object.keys(patch).at(-1)).toBe("overlays");
+    expect(draftPatch(withOverlays([])).overlays).toBeUndefined();
+    expect(draftPatch({ ...withOverlays([]), overlays: undefined }).overlays).toBeUndefined();
+  });
+
+  it("never writes on read: reading the patch of a read gives the same draft", () => {
+    for (const data of [
+      nodeData({ clipOrder: ["e1"], overlays: [overlay("o1", { row: 2, startSec: 0.2, endSec: 0.30000000000000004 })] }),
+      nodeData({ timeline, overlays: [overlay("o1"), overlay("o2", { row: 1, text: "a\r\nb" })] }),
+      nodeData({ timeline, overlays: [] }),
+    ]) {
+      const read = readStitchDraft(data, ctx);
+      const again = readStitchDraft({ ...data, ...draftPatch(read) }, ctx);
+      expect(sameDraft(again, read)).toBe(true);
+      expect(again.overlays).toEqual(read.overlays);
+    }
   });
 });

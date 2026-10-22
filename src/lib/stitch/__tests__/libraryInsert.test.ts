@@ -315,6 +315,18 @@ describe("libraryDropAt", () => {
     expect(libraryDropAt(d, video(), at(16 + 70, 0, 40, true), g, noAudio)).toMatchObject({ startSec: 7 });
   });
 
+  it("nothing drops on the text layers' rows, and Stacked's rows start under them", () => {
+    const d = draftOf(abc(), { sequenceLayout: STACKED });
+    // One text row (52 px) under the ruler: the video starts at 76
+    const g = geometry({ stacked: true, ruler: 24 + 52, overlays: { top: 24, bottom: 24 + 52 } });
+    expect(libraryDropAt(d, video(), at(46, 30), g, noAudio)).toBeNull();
+    expect(libraryDropAt(d, sound(), at(46, 75), g, noAudio)).toBeNull();
+    expect(libraryDropAt(d, video(), at(46, 76 + 10), g, noAudio)).toEqual({ lane: "clips", mode: "stacked", startSec: 3, row: 0 });
+    expect(libraryDropAt(d, video(), at(46, 76 + 52 + 40), g, noAudio)).toEqual({ lane: "clips", mode: "stacked", startSec: 3, row: 2 });
+    // Over the ruler, as before: the top
+    expect(libraryDropAt(d, video(), at(46, 10), g, noAudio)).toEqual({ lane: "clips", mode: "stacked", startSec: 3, row: 0 });
+  });
+
   it("a video never drops on the audio rows, a sound never on the clip rows", () => {
     const d = draftOf(abc());
     expect(libraryDropAt(d, video(), at(40, 210), geometry(), noAudio)).toBeNull();

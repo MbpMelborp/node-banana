@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { createAudioClip } from "@/lib/stitch/audioClips";
 import type { StitchDraft } from "@/lib/stitch/draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
@@ -9,7 +9,7 @@ import { createClip } from "@/lib/stitch/timeline";
 import type { HitBox } from "@/lib/stitch/selection";
 import { useMarqueeSelect, type MarqueeOptions } from "../timeline/useMarqueeSelect";
 
-// The selection box's gesture with the audio rows' options: their kind, commit and clear.
+// The selection box's gesture with the audio rows' and the text rows' options: their kind, commit and clear.
 
 const store = () => useStitchEditorStore.getState();
 const BOXES: HitBox[] = [
@@ -95,5 +95,24 @@ describe("useMarqueeSelect's options", () => {
     press(10, 10);
     up();
     expect(store().selection).toBeNull();
+  });
+
+  it("adds to an overlay selection only on the text rows, and never to an audio one", () => {
+    const commit = vi.fn();
+    const { unmount } = render(<Lane kind="overlay" commit={commit} />);
+    store().select(overlaySelectionOf({ clipId: "y" }));
+    fireEvent.pointerDown(screen.getByTestId("lane"), { button: 0, clientX: 10, clientY: 10, pointerId: 1, shiftKey: true });
+    move(60, 30);
+    expect(screen.getByTestId("drawn").textContent).toBe("y,x");
+    up();
+    expect(commit).toHaveBeenCalledWith(["x"], true);
+    unmount();
+
+    render(<Lane kind="overlay" commit={vi.fn()} />);
+    store().select(audioSelectionOf({ clipId: "y" }));
+    fireEvent.pointerDown(screen.getByTestId("lane"), { button: 0, clientX: 10, clientY: 10, pointerId: 1, shiftKey: true });
+    move(60, 30);
+    expect(screen.getByTestId("drawn").textContent).toBe("x");
+    up();
   });
 });

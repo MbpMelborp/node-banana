@@ -52,7 +52,7 @@ function openExternal(url) { if (/^https?:\/\//i.test(url)) shell.openExternal(u
 function allowedPermission(contents, permission, requestingURL) {
   if (!contents || contents !== window?.webContents) return false;
   try { if (new URL(requestingURL).origin !== origin) return false; } catch { return false; }
-  return ['clipboard-read', 'clipboard-sanitized-write', 'deprecated-sync-clipboard-read', 'fullscreen'].includes(permission);
+  return ['clipboard-read', 'clipboard-sanitized-write', 'deprecated-sync-clipboard-read', 'fullscreen', 'local-fonts'].includes(permission);
 }
 function sendStatus() { window?.webContents.send('desktop:backend-status', !!backend?.online()); }
 function updateChanged(state) {

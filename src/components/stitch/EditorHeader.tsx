@@ -3,6 +3,7 @@
 import { Redo2, Undo2 } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { selectCanRedo, selectCanUndo, selectIsDirty, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { NO_OVERLAYS } from "@/lib/stitch/overlays";
 import { MoreMenu } from "./ActionMenu";
 import { HEADER_GHOST, HEADER_ICON_BUTTON, HEADER_PRIMARY, HEADER_TITLE } from "./editorStyles";
 import { sequenceMetaLine, useLoopMenuEntry } from "./sequenceMenu";
@@ -61,6 +62,10 @@ export function EditorHeader({
 }) {
   const dirty = useStitchEditorStore(selectIsDirty);
   const initialClipCount = useStitchEditorStore((s) => s.initial?.timeline.length ?? 0);
+  // A node's text layers can be applied with no clip
+  const hasOverlays = useStitchEditorStore(
+    (s) => (s.draft?.overlays ?? NO_OVERLAYS).length > 0 || (s.initial?.overlays ?? NO_OVERLAYS).length > 0,
+  );
   const loop = useLoopMenuEntry();
 
   return (
@@ -85,7 +90,7 @@ export function EditorHeader({
           className={`${HEADER_PRIMARY} ml-1`}
           // Off only when there is nothing and nothing was given; a user who removed every clip can apply that.
           // Not "dirty": with nothing given, a loop count alone is nothing to keep.
-          disabled={clipCount === 0 && initialClipCount === 0}
+          disabled={clipCount === 0 && initialClipCount === 0 && !hasOverlays}
           onClick={onDone}
         >
           Done

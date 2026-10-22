@@ -6,7 +6,15 @@ import { commitStitchEdit, saveStitchEdit } from "../commitStitchEdit";
 import { createClip, removeClip, splitClipAt, trimClip, type SourceKey } from "@/lib/stitch/timeline";
 import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID, removeAudioClips } from "@/lib/stitch/audioClips";
 import { musicAudio, type StitchDraft } from "@/lib/stitch/draft";
-import type { StitchSequenceLayout, VideoStitchNodeData, VolumePoint, WorkflowEdge, WorkflowNode } from "@/types";
+import { createTextOverlay, trimOverlay } from "@/lib/stitch/overlays";
+import type {
+  StitchOverlay,
+  StitchSequenceLayout,
+  VideoStitchNodeData,
+  VolumePoint,
+  WorkflowEdge,
+  WorkflowNode,
+} from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
@@ -537,6 +545,91 @@ describe("audio clips on Done", () => {
     editor().apply((d) => ({ ...d, loopCount: 2 }));
     commitStitchEdit();
     expect(edgeIds()).toContain("eM");
+  });
+});
+
+describe("overlays on Done and Save", () => {
+  const trimA = () => editor().apply((d) => ({ ...d, timeline: trimClip(d.timeline, "clip:eA", DURATIONS, { inSec: 1 }) }));
+  const reopenWith = (overlays: StitchOverlay[]) => {
+    editor().close();
+    wf().updateNodeData("stitch", { overlays });
+    openStitchEditor("stitch");
+    editor().setDurations(DURATIONS);
+  };
+
+  it("adds no key for an edit that leaves the overlays alone", () => {
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect("overlays" in data()).toBe(false);
+  });
+
+  it("writes added overlays with their rows compacted, and one canvas Undo takes the key away again", () => {
+    const before = data();
+    editor().apply((d) => ({ ...d, overlays: [createTextOverlay({ id: "o1", row: 2 })] }));
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().overlays).toEqual([createTextOverlay({ id: "o1" })]);
+    wf().undo();
+    expect("overlays" in data()).toBe(false);
+    expect(data()).toEqual(before);
+  });
+
+  it("writes an undefined when every overlay was removed, and the node reads none", () => {
+    reopenWith([createTextOverlay({ id: "o1" })]);
+    expect(editor().draft!.overlays).toHaveLength(1);
+    editor().apply((d) => ({ ...d, overlays: [] }));
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().overlays).toBeUndefined();
+    openStitchEditor("stitch");
+    expect(editor().draft).not.toHaveProperty("overlays");
+  });
+
+  it("leaves layers of a kind this build does not read on a Done that did not touch the overlays", () => {
+    const later = [{ id: "i1", kind: "image", row: 0, startSec: 0, endSec: 2 }] as unknown as StitchOverlay[];
+    reopenWith(later);
+    expect(editor().draft).not.toHaveProperty("overlays");
+    trimA();
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().overlays).toBe(later);
+  });
+
+  it("leaves stored overlays exactly as stored when the session did not change them", () => {
+    const stored = [{ ...createTextOverlay({ id: "o1", row: 3 }), color: "#ABCDEF" }];
+    reopenWith(stored);
+    trimA();
+    commitStitchEdit();
+    expect(data().overlays).toBe(stored);
+  });
+
+  it("is clean after a Save of a layer trimmed to its shortest, and has nothing more to write", () => {
+    reopenWith([createTextOverlay({ id: "o1", startSec: 0.2, endSec: 3 })]);
+    editor().apply((d) => ({ ...d, overlays: trimOverlay(d.overlays!, "o1", { endSec: 0 }) }));
+    expect(editor().draft!.overlays![0].endSec).toBe(0.2 + 0.1);
+    expect(saveStitchEdit()).toBe("saved");
+    expect(selectIsDirty(editor())).toBe(false);
+    expect(data().overlays![0].endSec).toBe(0.2 + 0.1);
+    const saved = wf().nodes;
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(commitStitchEdit()).toBe("closed");
+    expect(wf().nodes).toBe(saved);
+  });
+
+  it("counts overlay changes from the last Save: a later edit is written, undoing back to the Save writes nothing", () => {
+    editor().apply((d) => ({ ...d, overlays: [createTextOverlay({ id: "o1" })] }));
+    saveStitchEdit();
+    editor().apply((d) => ({ ...d, overlays: d.overlays!.map((o) => ({ ...o, text: "Later" })) }));
+    expect(selectIsDirty(editor())).toBe(true);
+    editor().undo();
+    expect(selectIsDirty(editor())).toBe(false);
+    editor().redo();
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().overlays![0].text).toBe("Later");
+  });
+
+  it("hands the Edits mirror the overlays it wrote", () => {
+    mirror.mockClear();
+    editor().apply((d) => ({ ...d, overlays: [createTextOverlay({ id: "o1", row: 1 })] }));
+    commitStitchEdit();
+    expect(mirror.mock.calls[0][0].draft.overlays).toEqual([createTextOverlay({ id: "o1" })]);
   });
 });
 

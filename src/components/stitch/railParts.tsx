@@ -174,13 +174,18 @@ export function RailSlider({
 
 export interface RailSegment {
   label: string;
+  /** Drawn in place of the label, which then names the segment and is its hover label. */
+  icon?: ReactNode;
   pressed: boolean;
   disabled?: boolean;
   title?: string;
   onClick: () => void;
 }
 
-/** A row of segments on the field ground, the pressed ones lifted (a clip's Sound across a selection, a volume curve). */
+/**
+ * A row of segments on the field ground, the pressed ones lifted (a clip's Sound across a selection, a volume curve,
+ * a text layer's alignment as icons).
+ */
 export function RailSegments({
   label,
   segments,
@@ -198,12 +203,13 @@ export function RailSegments({
           key={segment.label}
           type="button"
           aria-pressed={segment.pressed}
+          aria-label={segment.icon ? segment.label : undefined}
           disabled={segment.disabled}
-          title={segment.title}
+          title={segment.title ?? (segment.icon ? segment.label : undefined)}
           onClick={segment.onClick}
-          className={cn(SEGMENT, segment.pressed ? SEGMENT_ON : SEGMENT_OFF)}
+          className={cn(SEGMENT, segment.pressed ? SEGMENT_ON : SEGMENT_OFF, segment.icon && "flex items-center justify-center")}
         >
-          {segment.label}
+          {segment.icon ?? segment.label}
         </button>
       ))}
     </div>

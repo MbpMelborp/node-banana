@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StitchTimelineClip } from "@/types";
 import { describeDraftChanges, type ClipOrigin, type StitchDraft } from "../draft";
 import { createAudioClip, legacyMusicClip } from "../audioClips";
+import { createTextOverlay, splitOverlayAt } from "../overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import {
   createClip,
@@ -215,6 +216,39 @@ describe("describeDraftChanges", () => {
       });
       expect(describeDraftChanges(withMusic, edited, durations, new Map([["p1", "pasted" as const]]))).toBe(
         `A trim, an added audio clip, a pasted audio clip and the loop count${LOST}`,
+      );
+    });
+  });
+
+  describe("text layers", () => {
+    const title = createTextOverlay({ id: "o1", startSec: 1, endSec: 5 });
+    const withTitle = draft(base.timeline, { overlays: [title] });
+
+    it("names text layer changes after the audio's parts, before the loop count", () => {
+      const edited = draft(base.timeline, {
+        audioClips: [createAudioClip({ kind: "asset", assetId: "atone00000001" }, { id: "t1" })],
+        overlays: [{ ...title, text: "Other" }, createTextOverlay({ id: "o2", row: 1 })],
+        loopCount: 2,
+      });
+      expect(describeDraftChanges(withTitle, edited, durations)).toBe(
+        `An added audio clip, an added text layer, an edited text layer and the loop count${LOST}`,
+      );
+    });
+
+    it("names a split, a cut and a pasted text layer by the session's tags", () => {
+      const split = splitOverlayAt([title], "o1", 3, "o1b")!.overlays;
+      expect(describeDraftChanges(withTitle, draft(base.timeline, { overlays: split }))).toBe(`A text layer split${LOST}`);
+      const tags = new Map<string, ClipOrigin>([
+        ["o1", "cut"],
+        ["p1", "pasted"],
+      ]);
+      const pasted = draft(base.timeline, { overlays: [createTextOverlay({ id: "p1", startSec: 6 })] });
+      expect(describeDraftChanges(withTitle, pasted, durations, tags)).toBe(`A pasted text layer and a cut text layer${LOST}`);
+    });
+
+    it("finds no change between no overlays and an empty list", () => {
+      expect(describeDraftChanges(base, draft(base.timeline, { overlays: [] }))).toBe(
+        "Your changes will be lost. The node keeps what it had.",
       );
     });
   });

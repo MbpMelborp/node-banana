@@ -5,6 +5,8 @@ import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
+import type { OverlaySize } from "@/lib/stitch/overlayDraw";
+import { draftOverlays } from "@/lib/stitch/overlays";
 import { clipIdsOf } from "@/lib/stitch/selection";
 import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
@@ -24,6 +26,7 @@ import {
   trimSelected,
 } from "./editorActions";
 import { AudioClipRail } from "./AudioClipRail";
+import { TextOverlayRail } from "./TextOverlayRail";
 import {
   RailAction,
   RailActions,
@@ -57,18 +60,22 @@ function clipNamesLine(indices: readonly number[]): string {
  * Out side by side (in Stacked Start first: where it starts on the timeline);
  * its own Sound and Volume; then, at the foot, Split at playhead, Reset trim
  * (only while trimmed), Reveal source node (the dialog's) and Remove clip.
- * With audio clips selected it shows them instead (AudioClipRail), and with
- * several video clips what applies to all of them (MultiClipRail). The keys
- * are in the fields' and the actions' hover labels. Frame to canvas is in the
- * control row under the video; Loop is in the header's ⋯ menu.
+ * With audio clips selected it shows them instead (AudioClipRail), with text
+ * layers those (TextOverlayRail), and with several video clips what applies
+ * to all of them (MultiClipRail). The keys are in the fields' and the
+ * actions' hover labels. Frame to canvas is in the control row under the
+ * video; Loop is in the header's ⋯ menu.
  */
 export function EditorRail({
   media,
   audio,
+  frameSize,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   /** Each audio clip's view. */
   audio: ReadonlyMap<string, AudioClipView>;
+  /** The output's size, which a text layer's fit is measured in; null while no clip has one. */
+  frameSize: OverlaySize | null;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
   const durations = useStitchEditorStore((s) => s.durations);
@@ -105,25 +112,36 @@ export function EditorRail({
     return draft.audioClips.filter((c) => ids.has(c.id));
   }, [selection, draft]);
   const audioSelected = selectedAudio.length > 0;
+  const selectedOverlays = useMemo(() => {
+    if (selection?.kind !== "overlay" || !draft) return [];
+    const overlays = draftOverlays(draft);
+    const ids = new Set(clipIdsOf(selection, overlays.map((o) => o.id)));
+    return overlays.filter((o) => ids.has(o.id));
+  }, [selection, draft]);
+  const overlaySelected = selectedOverlays.length > 0;
+  const overlayMulti = selectedOverlays.length > 1;
 
-  // A swap of the rail's body (the last clip removed, the track for a clip or back, Start or Crossfade coming or going
-  // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
+  // A swap of the rail's body (the last clip removed, the track for a clip or back, one text layer for several, Start or
+  // Crossfade coming or going with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays
+  // inside
   useEffect(() => {
     const active = document.activeElement;
     if (active === null || active === document.body) {
       railRef.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
     }
-  }, [hasClip, audioSelected, stacked, multi]);
+  }, [hasClip, audioSelected, overlaySelected, overlayMulti, stacked, multi]);
 
   return (
     <aside
       ref={railRef}
-      aria-label={audioSelected ? "Audio clip" : "Clip"}
+      aria-label={audioSelected ? "Audio clip" : overlaySelected ? "Text" : "Clip"}
       className="w-[280px] shrink-0 overflow-y-auto border-l border-edit-line"
     >
       <div className="flex min-h-full flex-col p-5">
         {audioSelected ? (
           <AudioClipRail clips={selectedAudio} views={audio} />
+        ) : overlaySelected ? (
+          <TextOverlayRail overlays={selectedOverlays} frameSize={frameSize} />
         ) : multi && draft ? (
           <MultiClipRail
             timeline={draft.timeline}
@@ -134,7 +152,11 @@ export function EditorRail({
         ) : !clip ? (
           // An empty editor has nothing to select; the stage says why
           draft &&
-          draft.timeline.length > 0 && <p className="text-[13px] leading-5 text-ink-3">Select a clip to edit it.</p>
+          (draft.timeline.length > 0 || draftOverlays(draft).length > 0) && (
+            <p className="text-[13px] leading-5 text-ink-3">
+              {draft.timeline.length > 0 ? "Select a clip to edit it." : "Select a text layer to edit it."}
+            </p>
+          )
         ) : (
           <>
             <RailTitle

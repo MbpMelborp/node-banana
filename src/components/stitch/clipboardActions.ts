@@ -2,6 +2,7 @@ import { useToast } from "@/components/Toast";
 import {
   selectedAudioIds,
   selectedClipIds,
+  selectedOverlayIds,
   useStitchEditorStore,
   type StitchEditorState,
 } from "@/store/stitchEditorStore";
@@ -17,10 +18,12 @@ import {
   type ClipboardAudioItem,
   type ClipboardItem,
   type ClipboardOrigin,
+  type ClipboardOverlayItem,
   type ClipboardVideoItem,
   type PasteTarget,
 } from "@/lib/stitch/clipboard";
 import { copyAudioItems, duplicateAudioClips, pasteAudioClips, type AudioRowMap } from "@/lib/stitch/audioClips";
+import { copyOverlayItems, draftOverlays, duplicateOverlays, pasteOverlays } from "@/lib/stitch/overlays";
 import { draftSpans, type ClipOrigin } from "@/lib/stitch/draft";
 import { makeSelection } from "@/lib/stitch/selection";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
@@ -35,6 +38,7 @@ import {
   removeClipsById,
   selectAudioClips,
 } from "./editorActions";
+import { insertOverlayCopies, removeOverlaysById } from "./overlayActions";
 import type { StitchAudioClip } from "@/types";
 
 /**
@@ -81,21 +85,28 @@ function copyOrigin(s: Pick<StitchEditorState, "nodeId" | "editId">): ClipboardO
   return { kind: "node", nodeId: s.nodeId, tabId: wf.activeTabId, workflowId: wf.ensureWorkflowId() };
 }
 
+/** The selected ids of the kind the selection holds, in that kind's order. */
+function selectedIdsOf(s: StitchEditorState): string[] {
+  const kind = s.selection?.kind;
+  return kind === "audio" ? selectedAudioIds(s) : kind === "overlay" ? selectedOverlayIds(s) : selectedClipIds(s);
+}
+
 /**
- * ⌘C: the selected clips to the clipboard, video or audio as the selection holds. An unsaved workflow is given its id
- * first, so a clip from a connected video (or the music) still knows its own node after a tab switch. False when
- * nothing is selected (the clipboard is kept).
+ * ⌘C: the selected clips to the clipboard, video, audio or overlays as the selection holds. An unsaved workflow is
+ * given its id first, so a clip from a connected video (or the music) still knows its own node after a tab switch.
+ * False when nothing is selected (the clipboard is kept).
  */
 export function copySelection(): boolean {
   const s = editor();
   if (!s.draft) return false;
-  const audio = s.selection?.kind === "audio";
-  const ids = audio ? selectedAudioIds(s) : selectedClipIds(s);
+  const kind = s.selection?.kind;
+  const ids = selectedIdsOf(s);
   if (ids.length === 0) return false;
   const origin = copyOrigin(s);
   if (!origin) return false;
-  if (audio) {
-    const items = copyAudioItems(s.draft.audioClips, ids);
+  if (kind === "audio" || kind === "overlay") {
+    const items =
+      kind === "audio" ? copyAudioItems(s.draft.audioClips, ids) : copyOverlayItems(draftOverlays(s.draft), ids);
     if (items.length === 0) return false;
     useStitchClipboard.getState().setClipboard({ origin, items });
     return true;
@@ -109,10 +120,11 @@ export function copySelection(): boolean {
 /** ⌘X: copy, then remove the selected clips in one step; the clip now at the first removed place is selected. */
 export function cutSelection(): void {
   const s = editor();
-  const audio = s.selection?.kind === "audio";
-  const ids = audio ? selectedAudioIds(s) : selectedClipIds(s);
+  const kind = s.selection?.kind;
+  const ids = selectedIdsOf(s);
   if (!copySelection()) return;
-  const removed = audio ? removeAudioClipsById(ids) : removeClipsById(ids);
+  const removed =
+    kind === "audio" ? removeAudioClipsById(ids) : kind === "overlay" ? removeOverlaysById(ids) : removeClipsById(ids);
   editor().tagClips(removed, "cut");
 }
 
@@ -122,6 +134,10 @@ function videoItems(items: readonly ClipboardItem[]): ClipboardVideoItem[] {
 
 function audioItems(items: readonly ClipboardItem[]): ClipboardAudioItem[] {
   return items.filter((item): item is ClipboardAudioItem => item.track === "audio");
+}
+
+function overlayItems(items: readonly ClipboardItem[]): ClipboardOverlayItem[] {
+  return items.filter((item): item is ClipboardOverlayItem => item.track === "overlay");
 }
 
 /** Audio copies made by a paste or a duplicate: tagged, selected (the first leading), the expanded row following. */
@@ -194,8 +210,9 @@ function lastSelectedIndex(s: StitchEditorState): number {
 /**
  * ⌘V, by what the clipboard holds. Video: in Track after the last selected clip (or at the end); in Stacked on new
  * rows below it (or at the bottom), the first at the playhead and the others at their copied offsets. Audio: on new
- * rows under the last, the first at the playhead, the time and row spacing kept. Clips that may not be pasted here
- * are left out and a notice says why; with none left, nothing is written.
+ * rows under the last, the first at the playhead, the time and row spacing kept. Overlays: likewise on new rows in
+ * front of the others. Clips that may not be pasted here are left out and a notice says why; with none left, nothing
+ * is written.
  */
 export function pasteClipboard(): void {
   const s = editor();
@@ -218,6 +235,11 @@ export function pasteClipboard(): void {
       if (notice) useToast.getState().show(notice, "info");
       return;
     }
+    case "overlay": {
+      // Overlays hold no media: every one pastes, anywhere
+      const pasted = pasteOverlays(draftOverlays(s.draft), overlayItems(items), drawnPlayhead(s));
+      return insertOverlayCopies(pasted, "pasted");
+    }
     default: {
       const unknown: never = track;
       return unknown;
@@ -227,10 +249,17 @@ export function pasteClipboard(): void {
 
 /**
  * ⌘D: copies of the selected clips right after them (Stacked: starting where the selection ends). Audio copies start
- * where the selection ends, on their own rows when they fit there, else on new rows under it. The clipboard is kept.
+ * where the selection ends, on their own rows when they fit there, else on new rows under it; overlay copies too, the
+ * new rows in front of it. The clipboard is kept.
  */
 export function duplicateSelection(): void {
   const s = editor();
+  if (s.selection?.kind === "overlay") {
+    if (!s.draft) return;
+    const ids = selectedOverlayIds(s);
+    if (ids.length === 0) return;
+    return insertOverlayCopies(duplicateOverlays(draftOverlays(s.draft), ids), "duplicated");
+  }
   if (s.selection?.kind === "audio") {
     if (!s.draft) return;
     const ids = selectedAudioIds(s);

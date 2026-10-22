@@ -1,4 +1,11 @@
-import type { StitchAudioClip, StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
+import type {
+  StitchAudioClip,
+  StitchOverlay,
+  StitchSequenceLayout,
+  StitchTimelineClip,
+  VideoStitchNodeData,
+  VolumePoint,
+} from "@/types";
 import {
   compactAudioRows,
   describeAudioChanges,
@@ -13,6 +20,13 @@ import {
 import { sameCurve, sortCurve } from "./curve";
 import { counted } from "./labels";
 import { isLegacyStitch, migrateStitchTimeline, reconcileTimelineWithEdges, sanitizeTimeline } from "./migrate";
+import {
+  compactOverlayRows,
+  describeOverlayChanges,
+  draftOverlays,
+  sameOverlays,
+  sanitizeOverlays,
+} from "./overlays";
 import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT } from "./stack";
 import {
   edgeIdsInOrder,
@@ -40,6 +54,8 @@ export interface StitchDraft {
   legacyAudio: { curve: VolumePoint[]; muted: boolean };
   loopCount: 1 | 2 | 3;
   sequenceLayout: StitchSequenceLayout;
+  /** Overlay layers above the video. Absent = none, as [] is: read it with draftOverlays. */
+  overlays?: StitchOverlay[];
   /**
    * An edit project's media: the asset ids that belong to the edit, in the order they were added, every one its clips
    * use among them. Undefined in a node's draft, which never writes it.
@@ -101,11 +117,12 @@ export function draftDuration(d: Pick<StitchDraft, "timeline" | "sequenceLayout"
  *   (a video connected later to a node whose clips are all muted under music follows them, so the mix stays uniform).
  * Audio: without audioClips, the music (when connected) as one clip with audioCurve and audioMuted; with them, the
  * stored clips with a music clip added on row 0 when music is connected and none is stored.
+ * Overlays, legacy or not: sanitizeOverlays, the key only when there are some.
  */
 export function readStitchDraft(
   data: Pick<
     VideoStitchNodeData,
-    "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "audioClips" | "loopCount" | "sequenceLayout"
+    "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "audioClips" | "loopCount" | "sequenceLayout" | "overlays"
   >,
   ctx: StitchReadContext,
 ): StitchDraft {
@@ -129,12 +146,14 @@ export function readStitchDraft(
     legacyAudio = { curve: [], muted: false };
     audioClips = reconcileMusicClip(sanitizeAudioClips(data.audioClips), ctx.hasMusic);
   }
+  const overlays = sanitizeOverlays(data.overlays);
   return {
     timeline,
     audioClips,
     legacyAudio,
     loopCount: readLoopCount(data.loopCount),
     sequenceLayout: readSequenceLayout(data.sequenceLayout, legacy),
+    ...(overlays.length > 0 ? { overlays } : {}),
   };
 }
 
@@ -181,23 +200,30 @@ export function sameDraft(a: StitchDraft, b: StitchDraft): boolean {
     a.timeline.length === b.timeline.length &&
     a.timeline.every((clip, i) => sameClip(clip, b.timeline[i])) &&
     sameAudioClips(a.audioClips, b.audioClips) &&
+    sameOverlays(draftOverlays(a), draftOverlays(b)) &&
     (!legacyAudioCounts(a, b) ||
       (a.legacyAudio.muted === b.legacyAudio.muted && sameCurve(a.legacyAudio.curve, b.legacyAudio.curve)))
   );
 }
 
 /**
- * What Done writes: timeline, the audio, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline).
- * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it.
+ * What Done writes: timeline, the audio, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline), overlays.
+ * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it, and overlays when the
+ * session did not change them.
  *
  * Audio, rows compacted: legacy-shaped (none, or one untouched music clip) → audioClips undefined (the node keeps or
  * goes back to no audioClips), audioCurve and audioMuted from the music clip, else from legacyAudio. Otherwise
  * audioClips, with audioCurve and audioMuted as legacyCopy gives them for older builds.
+ *
+ * Overlays, rows compacted; undefined when there are none.
  */
 export function draftPatch(
   d: StitchDraft,
 ): Required<Pick<VideoStitchNodeData, "timeline" | "audioCurve" | "audioMuted" | "sequenceLayout">> &
-  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> & { audioClips: StitchAudioClip[] | undefined } {
+  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> & {
+    audioClips: StitchAudioClip[] | undefined;
+    overlays: StitchOverlay[] | undefined;
+  } {
   const audioClips = compactAudioRows(d.audioClips).clips;
   const audio = isLegacyAudioShape(audioClips)
     ? {
@@ -206,12 +232,14 @@ export function draftPatch(
         audioMuted: audioClips[0]?.muted ?? d.legacyAudio.muted,
       }
     : { audioClips, ...legacyCopy(audioClips) };
+  const overlays = draftOverlays(d);
   return {
     timeline: d.timeline,
     ...audio,
     loopCount: d.loopCount,
     sequenceLayout: { ...d.sequenceLayout },
     clipOrder: edgeIdsInOrder(d.timeline),
+    overlays: overlays.length > 0 ? compactOverlayRows(overlays).overlays : undefined,
   };
 }
 
@@ -276,8 +304,8 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * "duplicated" is a pasted or duplicated clip (never a split, though its
  * source is in the sequence), and a removed clip tagged "cut" is a cut clip.
  *
- * Audio clips are named by describeAudioChanges; a legacy node's music curve and mute without music connected, as
- * "the volume curve" and "the music mute".
+ * Audio clips are named by describeAudioChanges, then overlays by describeOverlayChanges; a legacy node's music curve
+ * and mute without music connected, as "the volume curve" and "the music mute".
  */
 export function describeDraftChanges(
   initial: StitchDraft,
@@ -330,6 +358,7 @@ export function describeDraftChanges(
     counted(removed, "a removed clip", "removed clips"),
     counted(cut, "a cut clip", "cut clips"),
     ...describeAudioChanges(initial.audioClips, draft.audioClips, origins),
+    ...describeOverlayChanges(draftOverlays(initial), draftOverlays(draft), origins),
     !legacyAudioCounts(initial, draft) || sameCurve(initial.legacyAudio.curve, draft.legacyAudio.curve)
       ? null
       : "the volume curve",

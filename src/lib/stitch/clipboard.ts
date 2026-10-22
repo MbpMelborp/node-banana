@@ -1,6 +1,7 @@
 import type {
   StitchAudioSource,
   StitchClipSource,
+  StitchOverlay,
   StitchSequenceLayout,
   StitchTimelineClip,
   VolumePoint,
@@ -48,8 +49,19 @@ export interface ClipboardAudioItem {
   rowOffset: number;
 }
 
-/** Every kind of copied clip. One copy holds one kind: a selection holds video clips or audio clips, never both. */
-export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem;
+/** One copied overlay: its settings, a copy; its id, row and times are given again on paste. */
+export interface ClipboardOverlayItem {
+  track: "overlay";
+  overlay: Omit<StitchOverlay, "id" | "row" | "startSec" | "endSec">;
+  lengthSec: number;
+  /** Its start less the earliest copied start (>= 0). */
+  offsetSec: number;
+  /** Its row less the lowest copied row (>= 0). */
+  rowOffset: number;
+}
+
+/** Every kind of copied clip. One copy holds one kind: a selection holds one kind (video, audio or overlays). */
+export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem | ClipboardOverlayItem;
 
 /**
  * Where the clips were copied. A node: tabId is the workflow store's activeTabId, workflowId ensureWorkflowId() at
@@ -127,6 +139,8 @@ function isOwnNode(origin: ClipboardOrigin, target: Extract<PasteTarget, { kind:
 
 /** Whether an item may be pasted into the target, or why not. */
 function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteTarget): SkipReason | null {
+  // An overlay holds no media (a font file is the library's, not the node's)
+  if (item.track === "overlay") return null;
   if (item.source.kind === "asset") return null;
   // An edit holds only library clips: a connected video or the music has no node there to come from
   if (target.kind === "edit") return "notInEdit";
@@ -147,10 +161,10 @@ function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteT
 }
 
 /**
- * Asset items always pass. An edge item passes only into its own node (the same node, tab and workflow) while its
- * edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item passes only
- * into its own node, else "music". Into an edit, every item that is not an asset is "notInEdit". Skipped counts come
- * in the order otherNode, disconnected, music, notInEdit, leaving out a reason with no clip.
+ * Asset and overlay items always pass. An edge item passes only into its own node (the same node, tab and workflow)
+ * while its edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item
+ * passes only into its own node, else "music". Into an edit, every other item is "notInEdit". Skipped counts come in
+ * the order otherNode, disconnected, music, notInEdit, leaving out a reason with no clip.
  */
 export function pastableItems(
   clipboard: StitchClipboard,

@@ -25,6 +25,7 @@ export function LibraryDropMarker({
   audioLayout,
   audioScroll,
   sectionContentTop,
+  videoTop = GEOMETRY.ruler,
 }: {
   axis: TimeAxis;
   /** The clip boxes at rest (Track's lane boxes). */
@@ -34,6 +35,8 @@ export function LibraryDropMarker({
   audioScroll: number;
   /** The audio section's top in the lanes' content, now. */
   sectionContentTop: () => number;
+  /** Where the video starts in the lanes' content: under the ruler and the text layers' rows. */
+  videoTop?: number;
 }) {
   const target = useSyncExternalStore(libraryDrop.subscribe, libraryDrop.get, () => null);
   const item = useSyncExternalStore(libraryDrop.subscribe, libraryDrop.item, () => null);
@@ -48,12 +51,12 @@ export function LibraryDropMarker({
         <div
           data-testid="library-drop-marker"
           className={`${BAR} w-0.5`}
-          style={{ left: x - 1, top: GEOMETRY.ruler + GEOMETRY.clipTop, height: GEOMETRY.clipHeight }}
+          style={{ left: x - 1, top: videoTop + GEOMETRY.clipTop, height: GEOMETRY.clipHeight }}
         />
       );
     }
     if (target.mode !== "stacked") return null;
-    const y = GEOMETRY.ruler + target.row * GEOMETRY.stackRow;
+    const y = videoTop + target.row * GEOMETRY.stackRow;
     return (
       <div data-testid="library-drop-marker">
         <div className={`${BAR} h-0.5`} style={{ left: 0, width: contentWidth, top: y - 1 }} />

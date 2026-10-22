@@ -57,7 +57,7 @@ export const BYTE_BLEND_FORMATS: ReadonlySet<string> = new Set([
 ]);
 
 /** Bytes of a tightly packed frame, so a frame whose visible area differs from its coded size never takes the bytes path. */
-function packedSize(format: VideoSamplePixelFormat, width: number, height: number): number {
+export function packedSize(format: VideoSamplePixelFormat, width: number, height: number): number {
   const luma = width * height;
   const halfW = Math.ceil(width / 2);
   const halfH = Math.ceil(height / 2);
@@ -162,14 +162,14 @@ function blackPlanes(
  * I420 for a YUV format it does not (10- and 12-bit), or no format with a known colour space, so the frame keeps ref's
  * colour tags whatever its bit depth (the encoder takes 8-bit I420 from any source); null for an RGB or unknown one.
  */
-function madeFormat(ref: BlenderRef): VideoSamplePixelFormat | null {
+export function madeFormat(ref: BlenderRef): VideoSamplePixelFormat | null {
   if (ref.format && blackPlanes(ref.format, 2, 2, 0)) return ref.format;
   if (ref.format ? /^(I4|NV)/.test(ref.format) : ref.colorSpace !== undefined) return "I420";
   return null;
 }
 
 /** (Kr, Kb) of a colour space's Y'CbCr matrix: BT.709 when it names none; null for an RGB one. */
-function lumaCoefficients(matrix: string | null | undefined): [number, number] | null {
+export function lumaCoefficients(matrix: string | null | undefined): [number, number] | null {
   switch (matrix) {
     case "rgb":
       return null;
