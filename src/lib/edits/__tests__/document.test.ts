@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssetView } from "@/lib/assets/types";
 import { createAudioClip } from "@/lib/stitch/audioClips";
 import { sameDraft } from "@/lib/stitch/draft";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
 import {
   containsMediaString,
@@ -143,6 +144,14 @@ describe("sequence ⇄ draft (T-DOC-2)", () => {
       ],
       loopCount: 3,
     },
+    withOverlays: {
+      ...emptyEditSequence(),
+      timeline: [video("c1", A)],
+      overlays: [
+        createTextOverlay({ id: "o1", startSec: 1, endSec: 5, font: { family: "Inter", file: "Inter.ttf" } }),
+        createTextOverlay({ id: "o2", row: 1, text: "Line one\nLine two", fadeInSec: 0, wash: { opacity: 0 } }),
+      ],
+    },
   };
 
   for (const [label, sequence] of Object.entries(sequences)) {
@@ -165,6 +174,16 @@ describe("sequence ⇄ draft (T-DOC-2)", () => {
     const draft = { ...draftFromEditSequence(sequences.withAudio) };
     draft.audioClips = draft.audioClips.map((clip) => (clip.id === "m2" ? { ...clip, row: 3 } : clip));
     expect(editSequenceFromDraft(draft).audioClips.map((clip) => clip.row)).toEqual([0, 1]);
+  });
+
+  it("compacts the draft's empty overlay rows on the way back, writes them last, and no key with none", () => {
+    const draft = draftFromEditSequence(sequences.withOverlays);
+    const moved = { ...draft, overlays: draft.overlays!.map((o) => (o.id === "o2" ? { ...o, row: 4 } : o)) };
+    const seq = editSequenceFromDraft(moved);
+    expect(seq.overlays!.map((o) => o.row)).toEqual([0, 1]);
+    expect(Object.keys(seq)).toEqual(["timeline", "audioClips", "loopCount", "sequenceLayout", "overlays"]);
+    expect(editSequenceFromDraft({ ...draft, overlays: [] })).not.toHaveProperty("overlays");
+    expect(editSequenceFromDraft({ ...draft, overlays: undefined })).not.toHaveProperty("overlays");
   });
 
   it("lists the asset ids in use, timeline then audio, once each", () => {
@@ -199,6 +218,70 @@ describe("sanitizeEditSequence (T-DOC-3)", () => {
   it("reads anything else as an empty sequence", () => {
     expect(sanitizeEditSequence(null)).toEqual(emptyEditSequence());
     expect(sanitizeEditSequence({ timeline: "no" })).toEqual(emptyEditSequence());
+  });
+
+  it("sanitizes the overlays, keeping the key last and only when one is left", () => {
+    const seq = sanitizeEditSequence({
+      ...emptyEditSequence(),
+      overlays: [
+        { ...createTextOverlay({ id: "o1", row: 2 }), font: { family: "Inter", file: "../../.ssh/id.ttf" }, size: 9, color: "#ABCDEF" },
+        { id: "i1", kind: "image", row: 0 },
+        "junk",
+      ],
+    });
+    expect(seq.overlays).toEqual([
+      { ...createTextOverlay({ id: "o1" }), font: { family: "Inter" }, size: 0.5, color: "#abcdef" },
+    ]);
+    expect(Object.keys(seq).at(-1)).toBe("overlays");
+    for (const overlays of [[], "no", [{ id: "i1", kind: "image" }], undefined]) {
+      expect(sanitizeEditSequence({ ...emptyEditSequence(), overlays })).not.toHaveProperty("overlays");
+    }
+  });
+});
+
+describe("overlays in the file (version 1)", () => {
+  const overlays = [
+    createTextOverlay({ id: "o1", startSec: 1, endSec: 5, text: "Hello\nthere", font: { family: "Inter", file: "Inter.ttf" } }),
+    createTextOverlay({ id: "o2", row: 1, startSec: 2.5, endSec: 3, fadeInSec: 1, fadeOutSec: 0, wash: { opacity: 0 } }),
+  ];
+
+  it("round-trips a document with overlays, and its draft", () => {
+    const sequence: EditSequence = { ...emptyEditSequence(), timeline: [video("c1", A)], overlays };
+    const doc = documentOf({ sequence });
+    const text = JSON.stringify(doc, null, 2);
+    const parsed = parseEditDocument(JSON.parse(text));
+    expect(parsed).toEqual({ ok: true, document: doc });
+    expect(parsed.ok && JSON.stringify(parsed.document, null, 2)).toBe(text);
+    expect(parsed.ok && parsed.document.version).toBe(1);
+    const draft = draftFromEditSequence(sequence);
+    expect(draft.overlays).toEqual(overlays);
+    expect(editSequenceFromDraft(draft)).toEqual(sequence);
+  });
+
+  it("leaves a document without overlays byte for byte as it was", () => {
+    const plain = documentOf();
+    const text = JSON.stringify(plain, null, 2);
+    const parsed = parseEditDocument(JSON.parse(text));
+    expect(parsed.ok && JSON.stringify(parsed.document, null, 2)).toBe(text);
+    expect(Object.keys(sanitizeEditSequence(plain.sequence))).toEqual(["timeline", "audioClips", "loopCount", "sequenceLayout"]);
+    expect(draftFromEditSequence(plain.sequence)).not.toHaveProperty("overlays");
+    expect(JSON.stringify(editSequenceFromDraft(draftFromEditSequence(plain.sequence)))).toBe(JSON.stringify(plain.sequence));
+  });
+
+  it("lets a text layer's words read like a data: URL, and still refuses media anywhere else", () => {
+    const sequence = { ...emptyEditSequence(), overlays: [createTextOverlay({ id: "o1", text: "data:,hello" })] };
+    expect(containsMediaString(documentOf({ sequence }))).toBe(false);
+    expect(containsMediaString({ baseUpdatedAt: 1, sequence, media: [] })).toBe(false);
+    const refused = [
+      { sequence: { ...sequence, overlays: [{ ...sequence.overlays[0], font: { family: "data:,x" } }] } },
+      { sequence: { ...sequence, overlays: [{ ...sequence.overlays[0], note: "blob:http://localhost:3000/1" }] } },
+      { sequence: { ...sequence, overlays: [{ id: "i", kind: "image", text: "data:image/png;base64,AAAA" }] } },
+      { sequence: { ...sequence, overlays: [{ ...sequence.overlays[0], text: ["data:image/png;base64,AAAA"] }] } },
+      { sequence: { ...sequence, timeline: [{ kind: "text", text: "data:,x" }] } },
+      { kind: "text", text: "data:,x" },
+      { name: "data:,x", sequence },
+    ];
+    for (const value of refused) expect(containsMediaString(value), JSON.stringify(value)).toBe(true);
   });
 });
 

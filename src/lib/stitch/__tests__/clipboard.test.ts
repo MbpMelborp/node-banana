@@ -13,6 +13,7 @@ import {
   type StitchClipboard,
 } from "../clipboard";
 import { copyAudioItems, createAudioClip } from "../audioClips";
+import { copyOverlayItems, createTextOverlay } from "../overlays";
 import {
   createClip,
   layoutSpans,
@@ -255,6 +256,24 @@ describe("audio items", () => {
     ).toBe(
       "1 clip not pasted: clips from connected videos paste only into their own node. 2 clips not pasted: their videos are no longer connected. 1 music clip not pasted: music clips paste only into their own node.",
     );
+  });
+});
+
+describe("overlay items", () => {
+  const overlays = [createTextOverlay({ id: "o1", startSec: 1, font: { family: "Inter", file: "Inter.ttf" } })];
+  const clipboard: StitchClipboard = { origin: ORIGIN, items: copyOverlayItems(overlays, ["o1"]) };
+
+  it("paste into any node, any tab and workflow, and any edit, with nothing skipped", () => {
+    const targets: PasteTarget[] = [
+      { kind: "node", nodeId: "n1", tabId: "t1", workflowId: "w1", liveEdgeIds: [] },
+      { kind: "node", nodeId: "n2", tabId: "t2", workflowId: null, liveEdgeIds: [] },
+      { kind: "edit", editId: "ed0000000000000001" },
+    ];
+    for (const target of targets) {
+      expect(pastableItems(clipboard, target)).toEqual({ items: clipboard.items, skipped: [] });
+    }
+    const fromEdit: StitchClipboard = { origin: { kind: "edit", editId: "ed0000000000000001" }, items: clipboard.items };
+    expect(pastableItems(fromEdit, targets[0]).skipped).toEqual([]);
   });
 });
 

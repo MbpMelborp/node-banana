@@ -5,7 +5,7 @@
  * server module, the routes and the browser; no Node or DOM imports.
  */
 
-import type { StitchAudioClip, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { StitchAudioClip, StitchOverlay, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 
 export const EDIT_KIND = "node-banana-edit";
 export const EDIT_VERSION = 1;
@@ -24,6 +24,11 @@ export interface EditSequence {
   audioClips: StitchAudioClip[];
   loopCount: 1 | 2 | 3;
   sequenceLayout: StitchSequenceLayout;
+  /**
+   * Overlay layers, rows compacted. Absent = none: written last and only when there are some, so an edit without them
+   * is the file it was before them. Builds before them ignore the key and drop it when they write the edit.
+   */
+  overlays?: StitchOverlay[];
 }
 
 /** What the library said about an asset when the edit was last saved, so a clip the library lost can still be named. */
