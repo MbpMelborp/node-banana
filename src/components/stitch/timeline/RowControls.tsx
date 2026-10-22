@@ -8,10 +8,11 @@ import {
   type RefObject,
   type UIEvent,
 } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Plus, Spline, Volume1, VolumeX } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Plus, Spline, Type, Volume1, VolumeX, type LucideIcon } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { hiddenAudioRows, type AudioSectionLayout } from "@/lib/stitch/audioLayout";
+import { hiddenOverlayRows, type OverlaySectionLayout } from "@/lib/stitch/overlayLayout";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import {
@@ -23,6 +24,7 @@ import {
   toggleRowMute,
 } from "../editorActions";
 import { EDITOR_PANEL_SELECTOR, GEOMETRY, TEXT_GHOST } from "../editorStyles";
+import { addTextOverlay } from "../overlayActions";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import { audioRowName } from "./AudioLane";
 import { keepFocus } from "./ClipBox";
@@ -285,7 +287,7 @@ export interface StackedRowGrips {
   rowsRef: RefObject<HTMLDivElement | null>;
   /** The lanes' vertical scroll now, for the row under the pointer. */
   scrollTop: () => number;
-  /** The rows' visible height, under the ruler. */
+  /** The rows' visible height, under the ruler and the text layers' rows. */
   viewport: number;
   /**
    * A press on a grip is a press on its clip: a click selects it (⌘ and ⇧ as on its box), a drag moves it up or down,
@@ -307,11 +309,14 @@ export function StackedRowHandles({
   rootRef,
   dragging,
   grips,
+  top = GEOMETRY.ruler,
 }: {
   rootRef: RefObject<HTMLElement | null>;
   /** A grip's drag is running: the grips give way to the lifted clip. */
   dragging: boolean;
   grips: StackedRowGrips;
+  /** Where the rows' view starts in the timeline: under the ruler and the text layers' rows. */
+  top?: number;
 }) {
   const { spans, rowsRef, scrollTop, viewport, onRowPointerDown } = grips;
   const layerRef = useRef<HTMLDivElement>(null);
@@ -323,7 +328,7 @@ export function StackedRowHandles({
     <div
       ref={layerRef}
       className="pointer-events-none absolute left-0 z-5 overflow-hidden"
-      style={{ top: GEOMETRY.ruler, height: Math.max(0, viewport), width: GEOMETRY.origin }}
+      style={{ top, height: Math.max(0, viewport), width: GEOMETRY.origin }}
     >
       <div
         ref={rowsRef}
@@ -386,35 +391,79 @@ function LineUpButton() {
 }
 
 /**
+ * How many rows of a section are out of view above and below, as a quiet count (after the section's glyph, when it
+ * has one); nothing when none are.
+ */
+function HiddenRows({
+  testId,
+  noun,
+  hidden,
+  Icon,
+}: {
+  testId: string;
+  noun: string;
+  hidden: { above: number; below: number };
+  Icon?: LucideIcon;
+}) {
+  const title = [
+    hidden.above > 0 ? `${hidden.above} ${noun} row${hidden.above === 1 ? "" : "s"} above` : "",
+    hidden.below > 0 ? `${hidden.below} ${noun} row${hidden.below === 1 ? "" : "s"} below` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  if (!title) return null;
+  return (
+    <span
+      data-testid={testId}
+      title={`${title}: scroll over the rows`}
+      className="pointer-events-auto flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-ink-3"
+    >
+      <span className="sr-only">{title}</span>
+      {Icon && <Icon aria-hidden="true" size={11} strokeWidth={1.5} />}
+      {hidden.above > 0 && (
+        <span aria-hidden="true" className="flex items-center">
+          <ChevronUp size={12} strokeWidth={1.5} />
+          {hidden.above}
+        </span>
+      )}
+      {hidden.below > 0 && (
+        <span aria-hidden="true" className="flex items-center">
+          <ChevronDown size={12} strokeWidth={1.5} />
+          {hidden.below}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * The quiet line under the last audio row, over the lanes' strip (where a
  * dragged audio clip drops onto a new row): "+ Audio", which opens Add media
- * on audio (off while the library is); in Stacked, Line up; and at the
- * right, how many audio rows are out of view. It gives way to the strip's
- * "New row" while a dragged clip would land there.
+ * on audio (off while the library is); "+ Text", which adds a text layer at
+ * the playhead; in Stacked, Line up; and at the right, how many text and
+ * audio rows are out of view. It gives way to the strip's "New row" while a
+ * dragged clip would land there.
  */
 export function TimelineFoot({
   layout,
   scroll,
+  overlayLayout,
+  overlayScroll,
   stacked,
   bottom,
   landingNewRow,
 }: {
   layout: AudioSectionLayout;
   scroll: number;
+  overlayLayout: OverlaySectionLayout;
+  /** The overlay rows' scroll, kept from the bottom. */
+  overlayScroll: number;
   stacked: boolean;
   /** The room kept under it for a horizontal scrollbar, px. */
   bottom: number;
   landingNewRow: boolean;
 }) {
   const libraryOn = useLibraryAvailable();
-  // Rows past the view show no edge of their own: the line counts them
-  const hidden = hiddenAudioRows(scroll, layout);
-  const hiddenTitle = [
-    hidden.above > 0 ? `${hidden.above} audio row${hidden.above === 1 ? "" : "s"} above` : "",
-    hidden.below > 0 ? `${hidden.below} audio row${hidden.below === 1 ? "" : "s"} below` : "",
-  ]
-    .filter(Boolean)
-    .join(", ");
   return (
     <div
       data-testid="stitch-timeline-foot"
@@ -433,28 +482,27 @@ export function TimelineFoot({
         <Plus size={12} strokeWidth={1.5} />
         Audio
       </button>
+      <button
+        type="button"
+        aria-label="Add text"
+        title="Add text"
+        onClick={() => addTextOverlay()}
+        className={cn(TEXT_GHOST, "pointer-events-auto")}
+      >
+        <Plus size={12} strokeWidth={1.5} />
+        Text
+      </button>
       {stacked && <LineUpButton />}
-      {hiddenTitle && (
-        <span
-          data-testid="stitch-audio-hidden-rows"
-          title={`${hiddenTitle}: scroll over the rows`}
-          className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-ink-3"
-        >
-          <span className="sr-only">{hiddenTitle}</span>
-          {hidden.above > 0 && (
-            <span aria-hidden="true" className="flex items-center">
-              <ChevronUp size={12} strokeWidth={1.5} />
-              {hidden.above}
-            </span>
-          )}
-          {hidden.below > 0 && (
-            <span aria-hidden="true" className="flex items-center">
-              <ChevronDown size={12} strokeWidth={1.5} />
-              {hidden.below}
-            </span>
-          )}
-        </span>
-      )}
+      {/* Rows past a view show no edge of their own: the line counts them */}
+      <div className="ml-auto flex items-center gap-3">
+        <HiddenRows
+          testId="stitch-overlay-hidden-rows"
+          noun="text"
+          hidden={hiddenOverlayRows(overlayScroll, overlayLayout)}
+          Icon={Type}
+        />
+        <HiddenRows testId="stitch-audio-hidden-rows" noun="audio" hidden={hiddenAudioRows(scroll, layout)} />
+      </div>
     </div>
   );
 }

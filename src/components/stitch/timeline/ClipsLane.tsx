@@ -228,6 +228,7 @@ export function ClipsLane({
   viewLeft,
   viewRight,
   laneWidth,
+  top = GEOMETRY.ruler,
   onBodyPointerDown,
   onHandlePointerDown,
   onLanePointerDown,
@@ -247,6 +248,8 @@ export function ClipsLane({
   viewLeft: number;
   viewRight: number;
   laneWidth: number;
+  /** The clips row's top in the lanes' content: under the ruler and the text layers' rows. */
+  top?: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
   /** A press on the listbox itself: the selection box. */
@@ -257,7 +260,7 @@ export function ClipsLane({
   const tabStop = laneTabStop(spans, selectedId);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => onLaneKeyDown(event, spans, tabStop);
 
-  const rowStyle = { top: GEOMETRY.ruler, height: GEOMETRY.clipRow };
+  const rowStyle = { top, height: GEOMETRY.clipRow };
   if (spans.length === 0) {
     return (
       <div ref={rowRef} className="absolute inset-x-0" style={rowStyle}>
@@ -415,7 +418,7 @@ export function ClipsLane({
       <AddSlotButton
         libraryOn={libraryOn}
         left={slotX}
-        top={GEOMETRY.ruler + GEOMETRY.clipTop}
+        top={top + GEOMETRY.clipTop}
         height={GEOMETRY.clipHeight}
         onFocus={onFocus}
         onBlur={onBlur}

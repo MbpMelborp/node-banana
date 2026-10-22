@@ -1023,6 +1023,34 @@ describe("the media pane", () => {
     expect(editor().pickerOpen).toBe("all");
   });
 
+  it("Add text in its head puts a text layer at the playhead, selected, with no picker and no media", async () => {
+    // jsdom has no 2D canvas; the stage's overlay canvas draws nothing
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    measure(A, B);
+    await renderOpen();
+    const pane = screen.getByRole("complementary", { name: "Media" });
+    const head = within(pane).getByRole("heading", { name: "Media" }).parentElement!;
+    // After Add media, before Hide media, as an icon button with its own tooltip
+    expect(within(head).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "List",
+      "Grid",
+      "Add media",
+      "Add text",
+      "Hide media",
+    ]);
+    const addText = within(pane).getByRole("button", { name: "Add text" });
+    expect(within(addText.parentElement!).getByText("Add text")).toBeInTheDocument();
+    act(() => editor().setPlayhead(3));
+    fireEvent.click(addText);
+    const overlays = editor().draft!.overlays!;
+    expect(overlays).toEqual([expect.objectContaining({ startSec: 3, endSec: 7, text: "Title" })]);
+    expect(editor().selection).toEqual({ kind: "overlay", clipId: overlays[0].id });
+    expect(editor().playhead).toBe(3.5);
+    expect(editor().pickerOpen).toBe(false);
+    expect(editor().draft!.media).toEqual([A, B]);
+    expect(screen.getByRole("listbox", { name: "Text layers" })).toBeInTheDocument();
+  });
+
   it("Add media's Add puts the picks in the pane, selects and shows the last, and places nothing", async () => {
     measure(A, B);
     const scrolledTo: Element[] = [];

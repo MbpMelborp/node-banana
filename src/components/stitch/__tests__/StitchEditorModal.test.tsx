@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { requestSave, useSaveRequestStore } from "@/store/saveRequestStore";
 import {
@@ -688,6 +688,34 @@ describe("StitchEditorModal", () => {
     const controls = screen.getByTestId("stitch-controls");
     expect(controls.closest("[inert]")).not.toBeNull();
     expect(controls).toContainElement(screen.getByRole("button", { name: "Play", hidden: true }));
+  });
+
+  it("lets Done apply a node's text layers with no clip: ones added with \"+ Text\", or ones it was given", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    seed({ clips: false });
+    openEditor();
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Add text" }));
+    // No video: at 0:00, and the playhead stays
+    expect(editor().draft!.overlays).toEqual([expect.objectContaining({ startSec: 0, endSec: 4, text: "Title" })]);
+    expect(editor().playhead).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(editor().isOpen).toBe(false);
+    expect(stitchData().overlays).toEqual([expect.objectContaining({ startSec: 0, endSec: 4, text: "Title" })]);
+    expect(stitchData().timeline).toEqual([]);
+
+    // Given: Done stays on once they are all removed, and takes them off the node
+    act(() => {
+      openStitchEditor("stitch");
+    });
+    const done = screen.getByRole("button", { name: "Done" });
+    expect(done).toBeEnabled();
+    act(() => editor().select(overlaySelectionOf({ clipId: editor().draft!.overlays![0].id })));
+    press(document.body, "Backspace");
+    expect(editor().draft!.overlays).toEqual([]);
+    expect(done).toBeEnabled();
+    fireEvent.click(done);
+    expect(stitchData().overlays).toBeUndefined();
   });
 
   it("keeps Done off in an empty editor whatever the loop count, and Loop off in the menu", () => {

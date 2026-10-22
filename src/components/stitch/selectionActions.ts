@@ -1,11 +1,15 @@
 import {
   audioSelectionOf,
+  overlaySelectionOf,
   selectedAudioIds,
   selectedClipIds,
+  selectedOverlayIds,
   useStitchEditorStore,
   type AudioSelection,
+  type OverlaySelection,
   type StitchEditorState,
 } from "@/store/stitchEditorStore";
+import { draftOverlays } from "@/lib/stitch/overlays";
 import {
   clipIdsOf,
   makeSelection,
@@ -17,9 +21,9 @@ import {
 
 /**
  * How clicks, ⌘A and the selection box change which clips are selected. A
- * selection holds video clips or audio clips, never both: a click, ⌘A or a
- * box of the other kind starts a new selection of that kind. A selection
- * change is not an undo step.
+ * selection holds one kind (video clips, audio clips or text layers): a
+ * click, ⌘A or a box of another kind starts a new selection of that kind. A
+ * selection change is not an undo step.
  */
 
 const editor = () => useStitchEditorStore.getState();
@@ -33,6 +37,12 @@ const audioSelectionIn = (s: StitchEditorState): AudioSelection | null =>
   s.selection?.kind === "audio" ? s.selection : null;
 const asAudio = (selection: ClipSelection | null): AudioSelection | null =>
   selection ? audioSelectionOf(selection) : null;
+/** Overlay order: row, then start, then id (the draft keeps its overlays sorted so). */
+const overlayOrderOf = (s: StitchEditorState): string[] => (s.draft ? draftOverlays(s.draft).map((o) => o.id) : []);
+const overlaySelectionIn = (s: StitchEditorState): OverlaySelection | null =>
+  s.selection?.kind === "overlay" ? s.selection : null;
+const asOverlay = (selection: ClipSelection | null): OverlaySelection | null =>
+  selection ? overlaySelectionOf(selection) : null;
 
 function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -114,7 +124,7 @@ export function applyBoxSelection(base: ClipSelection | null, hitIds: readonly s
   s.select(next);
 }
 
-/** A click on empty space in any lane, video or audio: nothing selected, whichever kind the selection holds. */
+/** A click on empty space in any lane (video, audio or text): nothing selected, whichever kind the selection holds. */
 export function clearClipSelection(): void {
   const s = editor();
   if (s.selection !== null) s.select(null);
@@ -165,6 +175,52 @@ export function applyAudioBoxSelection(hitIds: readonly string[], additive: bool
   const hits = new Set(hitIds);
   const lead = base && ids.includes(base.clipId) ? base.clipId : order.find((id) => hits.has(id));
   const next = asAudio(makeSelection(order, ids, lead, base?.anchorId));
+  if (next === null) return additive ? undefined : clearClipSelection();
+  s.select(next);
+}
+
+/** A click on a text layer's box, as clickClip in overlay order. Nothing while the clip menu is open. */
+export function clickOverlay(id: string, mods: { toggle: boolean; range: boolean }): void {
+  const s = editor();
+  if (s.menu !== null) return;
+  if (mods.range) s.select(asOverlay(rangeTo(overlayOrderOf(s), overlaySelectionIn(s), id)));
+  else if (mods.toggle) s.select(asOverlay(toggleClip(overlayOrderOf(s), overlaySelectionIn(s), id)));
+  else s.select(overlaySelectionOf({ clipId: id }));
+}
+
+/** The layers a press on `id` drags: the selection when it holds `id` and others, else `id` alone. */
+export function pressOverlayGroup(id: string): string[] {
+  const ids = selectedOverlayIds(editor());
+  return ids.length > 1 && ids.includes(id) ? ids : [id];
+}
+
+/** After a group drag of text layers: the same layers selected, the one pressed leading. */
+export function keepOverlayGroupSelected(ids: readonly string[], lead: string): void {
+  const s = editor();
+  s.select(asOverlay(makeSelection(overlayOrderOf(s), ids, lead, overlaySelectionIn(s)?.anchorId)));
+}
+
+/** ⌘A with text layers selected: every layer, the lead kept. */
+export function selectAllOverlays(): void {
+  const s = editor();
+  if (!s.draft) return;
+  const selection = asOverlay(selectAll(overlayOrderOf(s), overlaySelectionIn(s)));
+  if (selection) s.select(selection);
+  clearTextSelection();
+}
+
+/**
+ * The selection box's release on the overlay rows: the layers it touched, added to the overlay selection when
+ * additive (another kind of selection is replaced). Nothing touched → nothing selected, or no change when additive.
+ */
+export function applyOverlayBoxSelection(hitIds: readonly string[], additive: boolean): void {
+  const s = editor();
+  const order = overlayOrderOf(s);
+  const base = overlaySelectionIn(s);
+  const ids = additive ? [...clipIdsOf(base, order), ...hitIds] : [...hitIds];
+  const hits = new Set(hitIds);
+  const lead = base && ids.includes(base.clipId) ? base.clipId : order.find((id) => hits.has(id));
+  const next = asOverlay(makeSelection(order, ids, lead, base?.anchorId));
   if (next === null) return additive ? undefined : clearClipSelection();
   s.select(next);
 }

@@ -29,8 +29,8 @@ const MIN_GHOST_PX = 1;
 const MIN_GAP_LABEL_PX = 64;
 /** Each character the label has past "Gap 1.0 s" ("Gap 10.0 s") asks this much more of the band, px. */
 const GAP_LABEL_CHAR_PX = 7;
-/** The gap label's drop below the sticky ruler, px. */
-const GAP_LABEL_TOP = GEOMETRY.ruler + 6;
+/** The gap label's drop below the sticky rows' top, px. */
+const GAP_LABEL_DROP = 6;
 
 /** A placed stack's marks: each clip's share of the picture (weightPieces), by clip id, and the covering clips' names. */
 export interface LaneMarks {
@@ -84,6 +84,7 @@ export function StackedClipsLane({
   viewLeft,
   viewRight,
   contentWidth,
+  rowsTop = GEOMETRY.ruler,
   onBodyPointerDown,
   onHandlePointerDown,
   onLanePointerDown,
@@ -120,6 +121,8 @@ export function StackedClipsLane({
   viewLeft: number;
   viewRight: number;
   contentWidth: number;
+  /** Where the rows start in the lanes' view: under the sticky ruler and the text layers' rows. */
+  rowsTop?: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
   /** A press on the listbox itself (a row's free time): the selection box. */
@@ -202,7 +205,7 @@ export function StackedClipsLane({
               // Sticky under the ruler: it stays at the top of the visible rows while they scroll
               <span
                 className={cn(EDITOR_CHIP, "sticky mt-1.5 self-start whitespace-nowrap text-neutral-400")}
-                style={{ top: GAP_LABEL_TOP }}
+                style={{ top: rowsTop + GAP_LABEL_DROP }}
               >
                 {label}
               </span>

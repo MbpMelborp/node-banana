@@ -4,7 +4,7 @@ import { isSaveShortcut } from "@/utils/saveShortcut";
 import { editorKeyAction, isBrowserKey, isCanvasKey, isTypingTarget, NO_REPEAT, type EditorKeyAction } from "./editorKeys";
 import { copySelection, cutSelection, duplicateSelection, pasteClipboard } from "./clipboardActions";
 import type { TimelineZoom } from "./timeline/useTimelineZoom";
-import { hasTextSelection, selectAllAudioClips, selectAllClips } from "./selectionActions";
+import { hasTextSelection, selectAllAudioClips, selectAllClips, selectAllOverlays } from "./selectionActions";
 import {
   endSelectedAtPlayhead,
   endSelectedAudioAtPlayhead,
@@ -28,6 +28,15 @@ import {
   toggleSelectedAudioMute,
   toggleSelectedClipMute,
 } from "./editorActions";
+import {
+  endSelectedOverlayAtPlayhead,
+  moveSelectedOverlayRow,
+  nudgeSelectedOverlays,
+  removeOverlaySelection,
+  setOverlayEdgeAtPlayhead,
+  splitSelectedOverlaysAtPlayhead,
+  startSelectedOverlayAtPlayhead,
+} from "./overlayActions";
 
 /** A dialog stacked over the editor (the discard sheet, the picker, anything else): it owns the keys. */
 function stackedDialogOpen(root: HTMLElement | null): boolean {
@@ -50,6 +59,7 @@ export interface StitchEditorKeyOptions {
 /**
  * Each action is handled in either layout; the ones that place a video clip in time or change its row do nothing in
  * Track. With audio clips selected, the clip keys act on them (audio always has a start and a row); M mutes them.
+ * With text layers selected they act on those too (⌥↑ a row up, in front); M mutes the music, as with video.
  */
 function run(
   action: EditorKeyAction,
@@ -87,6 +97,37 @@ function run(
         return selectAllAudioClips();
       default:
         // Playback, history, Escape and the clipboard (which reads the selection's kind itself)
+        break;
+    }
+  }
+  if (s.selection?.kind === "overlay") {
+    switch (action) {
+      case "setIn":
+        return setOverlayEdgeAtPlayhead("in");
+      case "setOut":
+        return setOverlayEdgeAtPlayhead("out");
+      case "split":
+        return splitSelectedOverlaysAtPlayhead();
+      case "remove":
+        return removeOverlaySelection();
+      case "toggleClipMute":
+        return;
+      case "nudgeEarlier":
+        return nudgeSelectedOverlays(-1, e.shiftKey, e.repeat);
+      case "nudgeLater":
+        return nudgeSelectedOverlays(1, e.shiftKey, e.repeat);
+      case "rowUp":
+        return moveSelectedOverlayRow(1);
+      case "rowDown":
+        return moveSelectedOverlayRow(-1);
+      case "startAtPlayhead":
+        return startSelectedOverlayAtPlayhead();
+      case "endAtPlayhead":
+        return endSelectedOverlayAtPlayhead();
+      case "selectAll":
+        return selectAllOverlays();
+      default:
+        // M (the music), playback, history, Escape and the clipboard
         break;
     }
   }

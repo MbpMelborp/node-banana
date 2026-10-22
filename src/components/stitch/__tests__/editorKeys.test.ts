@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import type { StitchDraft } from "@/lib/stitch/draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
@@ -380,6 +381,134 @@ describe("the editor's keys with an audio selection", () => {
     store().setPickerOpen("audio");
     press("Backspace");
     expect(audio()).toHaveLength(2);
+  });
+});
+
+describe("the editor's keys with a text layer selection", () => {
+  const store = () => useStitchEditorStore.getState();
+  const layers = () => store().draft!.overlays ?? [];
+  const layer = (id: string) => layers().find((o) => o.id === id)!;
+  const video = () => store().draft!.timeline;
+  const press = (k: string, mods: Partial<KeyLike> = {}) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: mods.code ?? "", bubbles: true, cancelable: true, ...mods }));
+
+  beforeEach(() => {
+    store().close();
+    const draft: StitchDraft = {
+      timeline: [createClip({ kind: "edge", edgeId: "e1" }, { id: "a" }), createClip({ kind: "edge", edgeId: "e2" }, { id: "b" })],
+      audioClips: [createAudioClip({ kind: "music" }, { id: MUSIC_CLIP_ID })],
+      overlays: [
+        createTextOverlay({ id: "t", startSec: 2, endSec: 6 }),
+        createTextOverlay({ id: "u", row: 1, startSec: 7, endSec: 9 }),
+      ],
+      legacyAudio: { curve: [], muted: false },
+      loopCount: 1,
+      sequenceLayout: DEFAULT_SEQUENCE_LAYOUT,
+    };
+    store().open({ nodeId: "n1", draft, canvasGeneration: 1 });
+    store().setDurations(
+      new Map<SourceKey, number>([
+        ["edge:e1", 5],
+        ["edge:e2", 5],
+      ]),
+    );
+    store().setAudioDurations(new Map([["music", 20]]));
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    renderHook(() => useStitchEditorKeys({ current: root }, () => {}));
+  });
+  afterEach(() => {
+    store().close();
+    document.body.innerHTML = "";
+  });
+
+  it("S splits the selected text layer, and leaves the video under the playhead alone", () => {
+    store().select(overlaySelectionOf({ clipId: "t" }));
+    store().setPlayhead(3);
+    press("s");
+    expect(video().map((c) => c.id)).toEqual(["a", "b"]);
+    expect(store().past).toHaveLength(1);
+    expect(layers()).toHaveLength(3);
+    expect(layer("t")).toMatchObject({ startSec: 2, endSec: 3 });
+    expect(store().selection).toMatchObject({ kind: "overlay" });
+    expect(layer(store().selection!.clipId)).toMatchObject({ startSec: 3, endSec: 6, row: 0 });
+    // Nothing of it under the playhead: nothing at all, not the video either
+    store().setPlayhead(9.5);
+    press("s");
+    expect(video()).toHaveLength(2);
+    expect(store().past).toHaveLength(1);
+  });
+
+  it("⌫ removes the selected text layers, not a clip", () => {
+    store().select(overlaySelectionOf({ clipId: "u" }));
+    press("Backspace");
+    expect(layers().map((o) => o.id)).toEqual(["t"]);
+    expect(video()).toHaveLength(2);
+    expect(store().selection).toEqual({ kind: "overlay", clipId: "t" });
+  });
+
+  it("I and O move its start and end to the playhead, the video's In and Out untouched", () => {
+    store().select(overlaySelectionOf({ clipId: "t" }));
+    store().setPlayhead(3);
+    press("i");
+    expect(layer("t")).toMatchObject({ startSec: 3, endSec: 6 });
+    store().setPlayhead(5);
+    press("o");
+    expect(layer("t")).toMatchObject({ startSec: 3, endSec: 5 });
+    expect(video().map((c) => [c.inSec, c.outSec])).toEqual([
+      [0, null],
+      [0, null],
+    ]);
+  });
+
+  it("⌥ arrows nudge it in Track, and ⌥↑ puts it a row up, in front, making a new row on top", () => {
+    store().select(overlaySelectionOf({ clipId: "u" }));
+    press("ArrowLeft", { altKey: true });
+    expect(layer("u").startSec).toBeCloseTo(7 - 1 / 60, 9);
+    press("ArrowLeft", { altKey: true, shiftKey: true });
+    expect(layer("u").startSec).toBeCloseTo(7 - 11 / 60, 9);
+    press("ArrowUp", { altKey: true });
+    expect(layer("u").row).toBe(2);
+    press("ArrowDown", { altKey: true });
+    press("ArrowDown", { altKey: true });
+    expect(layer("u").row).toBe(0);
+    // Row 0 is the lowest: ⌥↓ does nothing more
+    press("ArrowDown", { altKey: true });
+    expect(layer("u").row).toBe(0);
+    expect(video().map((c) => c.startSec)).toEqual([undefined, undefined]);
+  });
+
+  it("⌘C and ⌘V copy and paste text layers, ⌘D duplicates them and ⌘X cuts them, the video untouched", () => {
+    store().select(overlaySelectionOf({ clipId: "t" }));
+    press("c", { metaKey: true });
+    store().setPlayhead(1);
+    press("v", { metaKey: true });
+    const pasted = store().selection!.clipId;
+    expect(layer(pasted)).toMatchObject({ row: 2, startSec: 1, endSec: 5 });
+    press("d", { metaKey: true });
+    const copy = store().selection!.clipId;
+    expect(layer(copy)).toMatchObject({ startSec: 5, endSec: 9 });
+    press("x", { metaKey: true });
+    expect(layers().map((o) => o.id)).not.toContain(copy);
+    expect(layers()).toHaveLength(3);
+    expect(video()).toHaveLength(2);
+    expect(store().past).toHaveLength(3);
+  });
+
+  it("[ and ] place it at the playhead; ⌘A selects every text layer; M still mutes the music", () => {
+    store().select(overlaySelectionOf({ clipId: "t" }));
+    store().setPlayhead(5);
+    press("[");
+    expect(layer("t")).toMatchObject({ startSec: 5, endSec: 9 });
+    press("]");
+    expect(layer("t")).toMatchObject({ startSec: 1, endSec: 5 });
+    press("a", { metaKey: true });
+    expect(store().selection).toEqual({ kind: "overlay", clipId: "t", clipIds: ["t", "u"] });
+    press("m");
+    expect(store().draft!.audioClips[0].muted).toBe(true);
+    // ⌥M has no clip to mute
+    press("µ", { altKey: true, code: "KeyM" });
+    expect(video().every((c) => !c.muted)).toBe(true);
   });
 });
 

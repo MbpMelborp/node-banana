@@ -13,9 +13,6 @@ import type { MoveLive } from "./useClipMove";
 const CHIP_GAP = 12;
 const CHIP_DROP = 10;
 
-/** A box's bottom in the lane content from its top in the rows block, which starts under the ruler, px. */
-const boxBottom = (rowTop: number) => GEOMETRY.ruler + rowTop + GEOMETRY.stackClipHeight;
-
 /**
  * Inside the lanes, scrolling with them, while Stacked's body drag runs: the
  * chip with where the clip will play and how far it moved ("0:11.00–0:14.20
@@ -34,6 +31,7 @@ export function MoveOverlay({
   targetBoxTop,
   scrollLeft,
   laneWidth,
+  rowsTop = GEOMETRY.ruler,
   group = null,
 }: {
   move: MoveLive;
@@ -48,6 +46,8 @@ export function MoveOverlay({
   /** The visible lanes' left in the content, and their width, px. */
   scrollLeft: number;
   laneWidth: number;
+  /** Where the rows block starts in the lane content: under the ruler and the text layers' rows, px. */
+  rowsTop?: number;
   /** A group drag: from the earliest moved start to the latest moved end, sequence seconds; null for one clip. */
   group?: { fromSec: number; toSec: number } | null;
 }) {
@@ -55,7 +55,9 @@ export function MoveOverlay({
   const { startSec, deltaSec } = move.result;
   const left = move.x;
   const right = move.x + boxWidth;
-  const top = GEOMETRY.ruler + boxTop + CHIP_DROP;
+  const top = rowsTop + boxTop + CHIP_DROP;
+  // A box's bottom in the lane content from its top in the rows block
+  const boxBottom = (rowTop: number) => rowsTop + rowTop + GEOMETRY.stackClipHeight;
 
   // Right of the box when it fits in the visible lanes, else left of it, never past their sides
   useLayoutEffect(() => {

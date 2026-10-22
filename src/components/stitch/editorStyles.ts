@@ -1,5 +1,6 @@
 import { cn } from "@/components/nodes/ui/cn";
 import { AUDIO_ROW_EXPANDED_PX, AUDIO_ROW_PX, AUDIO_ROWS_CAP, AUDIO_STRIP_PX } from "@/lib/stitch/audioLayout";
+import { OVERLAY_ROW_PX } from "@/lib/stitch/overlayLayout";
 
 /**
  * The Stitch editor's class constants and geometry, in one place so the
@@ -126,6 +127,10 @@ export const GEOMETRY = {
   audioStrip: AUDIO_STRIP_PX,
   /** Audio rows shown before the rest scroll. */
   audioRowsCap: AUDIO_ROWS_CAP,
+  /** A text layer's row over the video: its 40px block with 6px over and under it, as Stacked's. */
+  overlayRow: OVERLAY_ROW_PX,
+  overlayBlockTop: 6,
+  overlayBlock: 40,
   /**
    * The stage keeps at least this much height, its padding and the control row under the video included (a 240px
    * frame): the timeline gives up room below it first.
