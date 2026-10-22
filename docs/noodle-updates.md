@@ -48,10 +48,11 @@ design canvas.
 ### 2. Noodle behaviour polish — done
 
 - [x] Re-plug a connection by dragging its end (`reconnectEdge` in the store, `onReconnect` on the canvas), keeping pause and order data and re-checking the loop
-- [x] The edge toolbar is rendered by the edge itself at the path midpoint (`EdgeLabelRenderer`), counter-scaled with the zoom
+- [x] The edge toolbar is rendered by the edge itself (`EdgeLabelRenderer`) above the last click, counter-scaled with the zoom: where a visible noodle was clicked or a marquee released (`edgeMenuAnchor`), above the pill a hidden noodle was clicked by, and at the path midpoint when there is no click
 - [x] Noodles always sit beneath nodes, selected or not (`elevateEdgesOnSelect` is off, since a lifted noodle crossed the node it fed); hover and selection use the edge's own active stroke via `--edge-stroke-active`
 - [x] Offset handle stays angular-only. Decision: curved and straight lines have nothing to bend; offsets saved in angular mode are simply ignored in the other styles
 - [x] Multi-select edges: the first selected edge carries the toolbar, which pauses or deletes the whole selection (`removeEdges`, `setEdgesPause`)
+- [x] Jump to start and Jump to end on the toolbar of any single noodle, visible, hidden (from either pill) or a split grid's reference link. Each centres that end at the current zoom over 300 ms: the handle of a visible noodle, with the toolbar staying where it is, or the pill of a hidden one, with the toolbar moving onto it. The edge builds the jump (`onJump`); the toolbar only names the end. Not shown when several noodles are selected or a bundle acts as one. Decision (2026-10-23): they replaced the crosshair a hidden noodle's downstream pill offered, which only went upstream
 
 ### 3. Hide connections — done
 
@@ -67,10 +68,10 @@ save; they just leave selection and hit-testing.
 
 ### 4. Noodle labels — done
 
-- [x] `label` on edge data, edited in the toolbar's label field (Enter commits, Escape reverts). Decision: no double-click editing; selecting the noodle already puts the field on it
+- [x] `label` on edge data, edited by double-clicking a hidden noodle's pill (`HiddenEdgeStub`: Enter or a click away commits, Escape discards); on a collapsed pill the name goes to every connection in the stack. Decision (2026-10-23): this is the only place a label is edited. The toolbar's label field went, so a visible noodle is named by hiding it first
 - [x] One `EdgeLabel` component via `EdgeLabelRenderer`, replacing the `foreignObject` loop badge. The pause marker stays an SVG mark by the target, since its position is the information
 - [x] Auto labels: "Image N" order or the data type; loop count in the same pill
-- [x] Only a label the user typed sits on the noodle itself; the automatic names live on the toolbar and the hidden-connection stubs (the always / hover / never setting was dropped)
+- [x] Only a label the user typed sits on the noodle itself; the automatic names live on the hidden-connection stubs (the always / hover / never setting was dropped)
 - [x] Placed at the path midpoint, offset for parallel connections between the same nodes; hidden stubs reuse the label
 
 ### 5. Noodle grouping and bundling — done
@@ -101,7 +102,7 @@ the same two nodes", which is not a real case; rebuilt around a shared handle.
 | Gradients | `SharedEdgeGradients.tsx` | 10 colours × active/dimmed rendered once; dimmed stops follow the faded-opacity setting |
 | Loading pulse | `EditableEdge.tsx` + `.edge-running` in `globals.css`; head colour from `edgeHighlightColor` | Two overlay paths (head and tail) while the target node is loading; paused by `canvas-interacting` and the navigation classes; static under `prefers-reduced-motion` |
 | Hit area | transparent 15px path (10px on reference edges) | |
-| Toolbar | `src/components/EdgeToolbar.tsx` | Rendered by the selected edge at its midpoint; pause, loop count, delete, "Image N" order; bulk pause/delete for a multi-selection |
+| Toolbar | `src/components/EdgeToolbar.tsx` | Rendered by the first selected edge above the last click (see item 2); loop count, Jump to start and end, Hide or Show, pause, delete; for a multi-selection or a bundle, the count, Bundle or Unbundle and the bulk actions, without the jumps. No label field: labels are edited on a hidden noodle's pill |
 | Store actions | `workflowStore.ts` | `onConnect`, `addEdgeWithType`, `removeEdge`, `toggleEdgePause`, `setLoopCount`, `onEdgesChange`, `setEdgeStyle` |
 | Persistence | `workflowStore.ts` save/load/dirty-check, `undoHistory.ts` | `edgeStyle` is in all four. Any new persisted edge setting needs the same treatment |
 | Hidden connections | `HiddenEdgeStub.tsx`, `src/lib/edges/labels.ts` | Stub labels and stacking; `setEdgesHidden` / `setAllEdgesHidden` in the store |
