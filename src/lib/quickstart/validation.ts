@@ -1,6 +1,6 @@
 import { WorkflowFile } from "@/store/workflowStore";
 import { NodeType, WorkflowNodeData } from "@/types";
-import { getEasingBezier } from "@/lib/easing-presets";
+import { getEasingBezier } from "@/lib/easing";
 import { DEFAULT_LLM_MODEL, DEFAULT_LLM_PROVIDER } from "@/lib/llm/catalog";
 
 interface ValidationError {

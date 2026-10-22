@@ -11,8 +11,7 @@ import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { CubicBezierEditor } from "@/components/CubicBezierEditor";
-import { EASING_PRESETS, getEasingBezier } from "@/lib/easing-presets";
-import { getAllEasingNames, getEasingFunction } from "@/lib/easing-functions";
+import { EASING_PRESETS, getAllEasingNames, getEasingBezier, getEasingFunction } from "@/lib/easing";
 import {
   ControlsCard,
   EmptyState,

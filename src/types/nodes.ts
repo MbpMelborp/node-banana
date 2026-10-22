@@ -427,6 +427,22 @@ export type StitchClipSource =
   | { kind: "edge"; edgeId: string }
   | { kind: "asset"; assetId: string };
 
+/** A time remap: output progress → source progress on [0, 1], monotone non-decreasing, 0 → 0 and 1 → 1. */
+export type ClipWarpCurve =
+  | { kind: "preset"; name: string }                              // A monotone named easing (src/lib/easing)
+  | { kind: "bezier"; handles: [number, number, number, number] } // CSS cubic-bezier, every handle in [0, 1]
+  | { kind: "points"; points: Array<[number, number]> };          // Monotone cubic Hermite through the points
+
+/** A video clip's retiming. See docs/edit-video.md, "Speed and ramps". */
+export interface ClipWarp {
+  speed: number;                 // Average rate: the clip plays (Out − In) / speed seconds. The rail sets 0.1–10,
+                                 // stored 1e-9–1e9 (a split piece of a ramp can be far outside the rail's range)
+  curve: ClipWarpCurve | null;   // The ramp; null = constant speed
+  window?: [number, number];     // The part of the curve this clip plays, 0 ≤ a < b ≤ 1; absent = [0, 1]. Set by Split
+  reverse: boolean;              // Plays the source range backwards
+  blend: boolean;                // Slow motion blends neighbouring frames instead of holding them
+}
+
 /** One clip of the Edit Video sequence. See docs/edit-video.md. */
 export interface StitchTimelineClip {
   id: string;                 // Stable within the node; generated once
@@ -437,6 +453,7 @@ export interface StitchTimelineClip {
   volume: number;             // 0..1 linear gain on the clip's own sound, default 1
   startSec?: number;          // Stacked: where the trimmed clip starts on the timeline, seconds (0–600). Absent = laid out
                               // from Overlap. Track ignores it.
+  warp?: ClipWarp;            // Absent = plays at its own speed; never stored when it changes nothing
 }
 
 /**

@@ -37,6 +37,7 @@ import {
   type ClipSpan,
   type SourceDurations,
 } from "./timeline";
+import { isPieceOfWarp, sameWarp } from "./warp";
 
 /**
  * Everything the Stitch editor edits, read from a node the same way by the
@@ -175,7 +176,8 @@ function sameClip(a: StitchTimelineClip, b: StitchTimelineClip): boolean {
     a.outSec === b.outSec &&
     a.muted === b.muted &&
     a.volume === b.volume &&
-    a.startSec === b.startSec
+    a.startSec === b.startSec &&
+    sameWarp(a.warp, b.warp)
   );
 }
 
@@ -300,6 +302,9 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * the frames where they were, are not. Dropping every placement is "lining up
  * the clips" instead.
  *
+ * A clip whose speed, ramp, reverse or blend changed is a speed change; the
+ * warps Split gives its pieces are part of the split.
+ *
  * `origins` names clips by what made them: an added clip tagged "pasted" or
  * "duplicated" is a pasted or duplicated clip (never a split, though its
  * source is in the sequence), and a removed clip tagged "cut" is a cut clip.
@@ -326,6 +331,7 @@ export function describeDraftChanges(
   let muted = 0;
   let unmuted = 0;
   let volumes = 0;
+  let retimed = 0;
   for (const clip of draft.timeline) {
     const was = before.get(clip.id);
     if (!was) continue;
@@ -333,6 +339,7 @@ export function describeDraftChanges(
     if (!was.muted && clip.muted) muted++;
     if (was.muted && !clip.muted) unmuted++;
     if (was.volume !== clip.volume) volumes++;
+    if (!isPieceOfWarp(was.warp, clip.warp)) retimed++;
   }
   const splits = pieces.length;
   const gone = initial.timeline.filter((c) => !after.has(c.id));
@@ -352,6 +359,7 @@ export function describeDraftChanges(
     counted(muted, "a muted clip", "muted clips"),
     counted(unmuted, "an unmuted clip", "unmuted clips"),
     counted(volumes, "a clip volume", "clip volumes"),
+    counted(retimed, "a speed change", "speed changes"),
     counted(added.length - splits, "an added clip", "added clips"),
     counted(pasted, "a pasted clip", "pasted clips"),
     counted(duplicated, "a duplicated clip", "duplicated clips"),

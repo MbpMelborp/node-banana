@@ -23,7 +23,7 @@ import type {
   Resolution,
 } from "@/types";
 import { EXTENDED_ASPECT_RATIOS, GEMINI_IMAGE_MODELS, GEMINI_IMAGE_OPTIONS, type GeminiImageOptions } from "@/types";
-import { getAllEasingNames } from "@/lib/easing-functions";
+import { getAllEasingNames } from "@/lib/easing";
 import {
   DEFAULT_LLM_MODEL,
   DEFAULT_LLM_PROVIDER,
@@ -264,7 +264,7 @@ export const REMOVE_BACKGROUND_MODELS: ReadonlyArray<{ id: BackgroundRemovalMode
 export const MATCH_MODES: readonly MatchMode[] = ["exact", "contains", "starts-with", "ends-with"];
 
 let easingNames: string[] | null = null;
-/** Every easing name the Ease Curve node knows (`easing-functions.ts`). */
+/** Every easing name the Ease Curve node knows (`src/lib/easing`). */
 export function getEasingNames(): string[] {
   if (!easingNames) easingNames = getAllEasingNames();
   return easingNames;

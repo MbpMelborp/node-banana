@@ -7,7 +7,9 @@ import { createClip, removeClip, splitClipAt, trimClip, type SourceKey } from "@
 import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID, removeAudioClips } from "@/lib/stitch/audioClips";
 import { musicAudio, type StitchDraft } from "@/lib/stitch/draft";
 import { createTextOverlay, trimOverlay } from "@/lib/stitch/overlays";
+import { normalizeWarp, splitWarp, withWarp } from "@/lib/stitch/warp";
 import type {
+  ClipWarp,
   StitchOverlay,
   StitchSequenceLayout,
   VideoStitchNodeData,
@@ -630,6 +632,51 @@ describe("overlays on Done and Save", () => {
     editor().apply((d) => ({ ...d, overlays: [createTextOverlay({ id: "o1", row: 1 })] }));
     commitStitchEdit();
     expect(mirror.mock.calls[0][0].draft.overlays).toEqual([createTextOverlay({ id: "o1" })]);
+  });
+});
+
+describe("warps on Done and Save", () => {
+  const RAMP: ClipWarp = normalizeWarp({
+    speed: 0.5,
+    curve: { kind: "preset", name: "easeInOutSine" },
+    reverse: true,
+    blend: true,
+  })!;
+  const retime = (clipId: string, warp: ClipWarp, range: { inSec: number; outSec: number | null } | null = null) =>
+    editor().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === clipId ? withWarp({ ...c, ...(range ?? {}) }, warp) : c)),
+    }));
+
+  it("writes the warps into the node's timeline, undone in one canvas step", () => {
+    const before = data();
+    retime("clip:eA", RAMP);
+    expect(commitStitchEdit()).toBe("written");
+    expect(data().timeline![0].warp).toEqual(RAMP);
+    expect("warp" in data().timeline![1]).toBe(false);
+    wf().undo();
+    expect(data()).toEqual(before);
+  });
+
+  it("keeps them on Save, clean after a Save of a split piece's warp and of a three-digit speed", () => {
+    // A piece cut near a ramp's slow end: about 3e-7×, with a window
+    const quint: ClipWarp = { ...RAMP, speed: 0.1, curve: { kind: "preset", name: "easeInQuint" } };
+    const piece = splitWarp({ inSec: 0, outSec: 60 }, quint, 25)!.first;
+    retime("clip:eA", piece.warp, { inSec: piece.range.inSec, outSec: piece.range.outSec });
+    retime("clip:eB", normalizeWarp({ speed: 1.23, curve: null, reverse: false, blend: false })!);
+    expect(saveStitchEdit()).toBe("saved");
+    expect(selectIsDirty(editor())).toBe(false);
+    expect(data().timeline![0].warp).toEqual(piece.warp);
+    expect(data().timeline![1].warp!.speed).toBe(1.23);
+    expect(saveStitchEdit()).toBe("unchanged");
+    expect(commitStitchEdit()).toBe("closed");
+  });
+
+  it("hands the Edits mirror the warps it wrote", () => {
+    mirror.mockClear();
+    retime("clip:eB", RAMP);
+    commitStitchEdit();
+    expect(mirror.mock.calls[0][0].draft.timeline[1].warp).toEqual(RAMP);
   });
 });
 

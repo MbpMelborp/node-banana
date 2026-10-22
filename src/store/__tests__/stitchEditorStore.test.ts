@@ -240,6 +240,22 @@ describe("stitchEditorStore", () => {
     expect(selectIsDirty(store())).toBe(false);
   });
 
+  it("pushes a step for a warp change and none for an equal copy, and the change makes the editor dirty", () => {
+    const warp = { speed: 2, curve: { kind: "preset" as const, name: "easeInQuad" }, reverse: false, blend: false };
+    const setWarp = (w: typeof warp) => (d: StitchDraft) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === "a" ? { ...c, warp: w } : c)),
+    });
+    openOn();
+    store().apply(setWarp(warp));
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+    store().apply(setWarp(structuredClone(warp)));
+    expect(store().past).toHaveLength(1);
+    store().undo();
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
   it("reads a draft with no overlays and one with an empty list as the same", () => {
     openOn();
     store().apply((d) => ({ ...d, overlays: [] }));

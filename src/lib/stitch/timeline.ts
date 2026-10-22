@@ -1,4 +1,4 @@
-import type { StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import {
   buildEnvelope,
   domOpacities,
@@ -46,7 +46,15 @@ export function newClipId(): string {
 
 export function createClip(
   source: StitchClipSource,
-  init: { id?: string; inSec?: number; outSec?: number | null; muted?: boolean; volume?: number; startSec?: number } = {},
+  init: {
+    id?: string;
+    inSec?: number;
+    outSec?: number | null;
+    muted?: boolean;
+    volume?: number;
+    startSec?: number;
+    warp?: ClipWarp;
+  } = {},
 ): StitchTimelineClip {
   return {
     id: init.id ?? newClipId(),
@@ -57,6 +65,7 @@ export function createClip(
     volume: init.volume ?? 1,
     // Kept as given: sanitising is migrate's
     ...(init.startSec !== undefined ? { startSec: init.startSec } : {}),
+    ...(init.warp !== undefined ? { warp: init.warp } : {}),
   };
 }
 

@@ -12,7 +12,7 @@
  */
 
 import type { LLMProvider, NodeType } from "@/types";
-import { getEasingBezier } from "@/lib/easing-presets";
+import { getEasingBezier } from "@/lib/easing";
 import {
   defaultLLMModel,
   getEasingNames,

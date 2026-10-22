@@ -27,6 +27,7 @@ import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { isPlaced, sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
 import { resolveEdgeVideo, resolveEdgeVideos } from "@/lib/stitch/sources";
+import { activeWarp } from "@/lib/stitch/warp";
 import { gatherAudioClipInputs } from "./audioClipInputs";
 import type { NodeExecutionContext } from "./types";
 
@@ -63,8 +64,9 @@ export const NO_CLIP_TO_RENDER = "Add a clip to render";
 
 type Placed = GatheredStitch["placed"];
 
-/** A timeline clip's trim and sound, and its start when the stack is placed. */
+/** A timeline clip's trim, sound and warp, and its start when the stack is placed. */
 function clipTrim(clip: StitchTimelineClip, placed: Placed): Omit<StitchClipInput, "blob" | "source"> {
+  const warp = activeWarp(clip);
   return {
     inSec: clip.inSec,
     outSec: clip.outSec,
@@ -72,6 +74,7 @@ function clipTrim(clip: StitchTimelineClip, placed: Placed): Omit<StitchClipInpu
     volume: clip.volume,
     // A clip dropped below takes its start with it; no other clip moves
     ...(placed && clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+    ...(warp ? { warp } : {}),
   };
 }
 
@@ -109,6 +112,7 @@ export async function fetchClipBlobs(pending: readonly PendingClip[], signal?: A
     volume: clip.volume,
     ...(clip.source !== undefined ? { source: clip.source } : {}),
     ...(clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+    ...(clip.warp !== undefined ? { warp: clip.warp } : {}),
   }));
 }
 

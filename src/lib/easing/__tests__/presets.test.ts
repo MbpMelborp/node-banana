@@ -5,9 +5,9 @@ import {
   EASING_PRESETS,
   getPresetBezier,
   getEasingBezier,
-} from "../easing-presets";
+} from "..";
 
-describe("easing-presets", () => {
+describe("easing presets", () => {
   describe("constants", () => {
     it("DEFAULT_CUSTOM_BEZIER is [0.42, 0, 0.58, 1]", () => {
       expect(DEFAULT_CUSTOM_BEZIER).toEqual([0.42, 0, 0.58, 1]);

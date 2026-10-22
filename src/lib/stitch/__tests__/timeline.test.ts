@@ -79,6 +79,21 @@ describe("sourceKey and createClip", () => {
     expect(clip).toMatchObject({ inSec: 0, outSec: null, muted: false, volume: 1 });
     expect(clip.id).toMatch(/^clip_[0-9a-f]{8}$/);
   });
+
+  it("keeps a warp as given, last, and adds no key without one", () => {
+    const warp = { speed: 2, curve: null, reverse: true, blend: false };
+    const clip = createClip({ kind: "edge", edgeId: "e1" }, { id: "a", startSec: 3, warp });
+    expect(clip.warp).toBe(warp);
+    expect(Object.keys(clip)).toEqual(["id", "source", "inSec", "outSec", "muted", "volume", "startSec", "warp"]);
+    expect(Object.keys(createClip({ kind: "edge", edgeId: "e1" }, { id: "b" }))).toEqual([
+      "id",
+      "source",
+      "inSec",
+      "outSec",
+      "muted",
+      "volume",
+    ]);
+  });
 });
 
 describe("clipLength", () => {

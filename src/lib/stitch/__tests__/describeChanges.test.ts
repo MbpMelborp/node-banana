@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchTimelineClip } from "@/types";
 import { describeDraftChanges, type ClipOrigin, type StitchDraft } from "../draft";
 import { createAudioClip, legacyMusicClip } from "../audioClips";
 import { createTextOverlay, splitOverlayAt } from "../overlays";
@@ -13,6 +13,7 @@ import {
   trimClipInPlace,
   type SourceKey,
 } from "../timeline";
+import { splitWarp, warpMap, withWarp } from "../warp";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -196,6 +197,75 @@ describe("describeDraftChanges", () => {
       for (const [initial, edited] of fixtures) {
         expect(describeDraftChanges(initial, edited, durations, new Map())).toBe(describeDraftChanges(initial, edited, durations));
       }
+    });
+  });
+
+  describe("speed changes", () => {
+    const W = (speed: number, curve: ClipWarp["curve"] = null, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+      speed,
+      curve,
+      reverse: false,
+      blend: false,
+      ...extra,
+    });
+    const SINE: ClipWarp["curve"] = { kind: "preset", name: "easeInOutSine" };
+    const warped = (id: string, edgeId: string, warp: ClipWarp, init: Partial<StitchTimelineClip> = {}) =>
+      withWarp(clip(id, edgeId, init), warp);
+
+    /** Split a forward warped clip at an output offset as Split does: the earlier piece keeps the id, a null Out stays. */
+    function splitByWarp(c: StitchTimelineClip, d: number, offset: number, rightId: string): StitchTimelineClip[] {
+      const split = splitWarp({ inSec: c.inSec, outSec: c.outSec ?? d }, c.warp!, offset)!;
+      return [
+        withWarp({ ...c, outSec: split.at }, split.first.warp),
+        withWarp({ ...c, id: rightId, inSec: split.at, outSec: c.outSec }, split.second.warp),
+      ];
+    }
+
+    it("counts a changed speed, reverse, ramp or blend, after a clip volume", () => {
+      const slow = draft([warped("a", "e1", W(0.5)), clip("b", "e2"), clip("c", "e3")]);
+      const one = draft([warped("a", "e1", W(0.75)), clip("b", "e2"), clip("c", "e3")]);
+      expect(describeDraftChanges(slow, one)).toBe(`A speed change${LOST}`);
+      const two = draft([clip("a", "e1"), warped("b", "e2", W(2)), clip("c", "e3")]);
+      expect(describeDraftChanges(slow, two)).toBe(`Two speed changes${LOST}`);
+      for (const changed of [W(0.5, null, { reverse: true }), W(0.5, SINE), W(0.5, null, { blend: true })]) {
+        const edited = draft([warped("a", "e1", changed), clip("b", "e2"), clip("c", "e3")]);
+        expect(describeDraftChanges(slow, edited)).toBe(`A speed change${LOST}`);
+      }
+      const both = draft([warped("a", "e1", W(0.75), { volume: 0.5 }), clip("b", "e2"), clip("c", "e3")]);
+      expect(describeDraftChanges(slow, both)).toBe(`A clip volume and a speed change${LOST}`);
+      // Blend alone at 1× is no warp, held on the clip or not
+      const plain = draft([clip("a", "e1")]);
+      const blendOnly = draft([clip("a", "e1", { warp: W(1, null, { blend: true }) })]);
+      expect("warp" in blendOnly.timeline[0]).toBe(true);
+      expect(describeDraftChanges(plain, blendOnly)).toBe("Your changes will be lost. The node keeps what it had.");
+      expect(describeDraftChanges(blendOnly, plain)).toBe("Your changes will be lost. The node keeps what it had.");
+    });
+
+    it("counts a split of a warped clip as a split, not a trim or a speed change", () => {
+      const ramp = draft([warped("a", "e1", W(0.8, SINE)), clip("b", "e2"), clip("c", "e3")]);
+      const [a] = ramp.timeline;
+      const once = [...splitByWarp(a, 5, 2, "a2"), ...ramp.timeline.slice(1)];
+      expect(describeDraftChanges(ramp, draft(once))).toBe(`A split${LOST}`);
+      const twice = [...splitByWarp(once[0], 5, 1, "a3"), ...once.slice(1)];
+      expect(describeDraftChanges(ramp, draft(twice))).toBe(`Two splits${LOST}`);
+      const constant = draft([warped("a", "e1", W(2))]);
+      const constantSplit = draft(splitByWarp(constant.timeline[0], 5, 1, "a2"));
+      expect(describeDraftChanges(constant, constantSplit)).toBe(`A split${LOST}`);
+      // A piece cut near a ramp's slow end averages about 3e-7×; splitting it again is still a split
+      const root = splitWarp({ inSec: 0, outSec: 60 }, W(0.1, { kind: "preset", name: "easeInQuint" }), 25)!.first;
+      const piece = draft([warped("a", "e1", root.warp, { outSec: root.range.outSec })]);
+      const pieceLength = warpMap(root.range, root.warp).length;
+      expect(describeDraftChanges(piece, draft(splitByWarp(piece.timeline[0], 60, pieceLength * 0.8, "a2")))).toBe(
+        `A split${LOST}`,
+      );
+    });
+
+    it("counts a speed change on a piece after the split", () => {
+      const ramp = draft([warped("a", "e1", W(0.8, SINE)), clip("b", "e2"), clip("c", "e3")]);
+      const [left, right] = splitByWarp(ramp.timeline[0], 5, 2, "a2");
+      const faster = { ...left, warp: { ...left.warp!, speed: left.warp!.speed * 1.5 } };
+      const edited = [faster, right, ...ramp.timeline.slice(1)];
+      expect(describeDraftChanges(ramp, draft(edited))).toBe(`A split and a speed change${LOST}`);
     });
   });
 

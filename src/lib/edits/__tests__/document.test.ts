@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { AssetView } from "@/lib/assets/types";
+import type { ClipWarp } from "@/types";
 import { createAudioClip } from "@/lib/stitch/audioClips";
+import { copyItems, pasteIntoTimeline } from "@/lib/stitch/clipboard";
 import { sameDraft } from "@/lib/stitch/draft";
+import { sanitizeTimeline } from "@/lib/stitch/migrate";
 import { createTextOverlay } from "@/lib/stitch/overlays";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
+import { normalizeWarp } from "@/lib/stitch/warp";
 import {
   containsMediaString,
   copyName,
@@ -282,6 +286,76 @@ describe("overlays in the file (version 1)", () => {
       { name: "data:,x", sequence },
     ];
     for (const value of refused) expect(containsMediaString(value), JSON.stringify(value)).toBe(true);
+  });
+});
+
+describe("warps in the file (version 1)", () => {
+  // Canonical, as every writer stores them
+  const W = (speed: number, curve: ClipWarp["curve"] = null, extra: Partial<ClipWarp> = {}): ClipWarp =>
+    normalizeWarp({ speed, curve, reverse: false, blend: false, ...extra })!;
+  const timeline = [
+    video("c1", A, { warp: W(2, { kind: "preset", name: "easeInOutCubic" }) }),
+    video("c2", B, {
+      inSec: 1,
+      outSec: 4,
+      warp: W(1.5, { kind: "bezier", handles: [0.42, 0, 0.58, 1] }, { window: [0.25, 0.75] }),
+    }),
+    video("c3", A, {
+      inSec: 2,
+      warp: W(
+        0.8,
+        {
+          kind: "points",
+          points: [
+            [0, 0],
+            [0.3, 0.1],
+            [0.7, 0.8],
+            [1, 1],
+          ],
+        },
+        { reverse: true },
+      ),
+    }),
+    video("c4", B, { warp: W(0.5, null, { blend: true }) }),
+  ];
+  const sequence: EditSequence = { ...emptyEditSequence(), timeline };
+  const warpedDocument = () =>
+    documentOf({
+      sequence,
+      media: [A, B],
+      assets: {
+        [A]: { name: "a.mp4", kind: "video", project: "Trip", durationSec: 4 },
+        [B]: { name: "b.mp4", kind: "video", project: null, durationSec: 6 },
+      },
+      summary: { clipCount: 4, audioClipCount: 0, durationSec: 9.5, posterAssetId: A },
+    });
+
+  it("round-trips a document with warps byte for byte, and its draft", () => {
+    const doc = warpedDocument();
+    const text = JSON.stringify(doc, null, 2);
+    const parsed = parseEditDocument(JSON.parse(text));
+    expect(parsed).toEqual({ ok: true, document: doc });
+    expect(parsed.ok && JSON.stringify(parsed.document, null, 2)).toBe(text);
+    expect(parsed.ok && parsed.document.version).toBe(1);
+    const draft = draftFromEditSequence(sequence);
+    expect(draft.timeline.map((clip) => clip.warp)).toEqual(timeline.map((clip) => clip.warp));
+    expect(editSequenceFromDraft(draft)).toEqual(sequence);
+  });
+
+  it("writes no warp key for an edit without warps, so it saves byte for byte as before", () => {
+    const plain = [video("a", A, { inSec: 0.5, outSec: 3 })];
+    expect(JSON.stringify(sanitizeTimeline(plain))).toBe(
+      '[{"id":"a","source":{"kind":"asset","assetId":"a0000000000001"},"inSec":0.5,"outSec":3,"muted":false,"volume":1}]',
+    );
+    const layout = emptyEditSequence().sequenceLayout;
+    const durations = new Map<SourceKey, number>([[`asset:${A}`, 4]]);
+    const items = copyItems({ timeline: plain, sequenceLayout: layout }, durations, ["a"]);
+    const pasted = pasteIntoTimeline(plain, durations, layout, items, { afterIndex: 0, startSec: 0 }).timeline;
+    for (const clip of [...sanitizeTimeline(plain), ...pasted, ...items]) expect("warp" in clip).toBe(false);
+  });
+
+  it("finds no media in a warped document: a warp's only string is a preset's name", () => {
+    expect(containsMediaString(warpedDocument())).toBe(false);
   });
 });
 

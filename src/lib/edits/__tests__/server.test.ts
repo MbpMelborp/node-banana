@@ -7,6 +7,7 @@ import { installBridge, meta, sha256, streamOf, tempDir, TINY_MP4 } from "@/lib/
 import { AssetLibrary } from "@/lib/assets/server/library";
 import { createTextOverlay } from "@/lib/stitch/overlays";
 import { createClip } from "@/lib/stitch/timeline";
+import { normalizeWarp } from "@/lib/stitch/warp";
 import { emptyEditSequence } from "../document";
 import {
   __resetEditsForTests,
@@ -294,6 +295,38 @@ describe("overlays", () => {
     const cleared = await saveEdit(fresh.id, saveOf(saved, { sequence: sequenceOf(A) }), deps);
     expect(cleared.sequence).not.toHaveProperty("overlays");
     expect(stored("Fresh.nbedit").sequence).not.toHaveProperty("overlays");
+  });
+});
+
+describe("warps", () => {
+  const warped = (): EditSequence => {
+    const sequence = sequenceOf(A, B);
+    const warp = normalizeWarp({
+      speed: 0.4,
+      curve: { kind: "bezier", handles: [0.42, 0, 0.58, 1] },
+      window: [0.1, 0.6],
+      reverse: true,
+      blend: true,
+    });
+    return { ...sequence, timeline: [{ ...sequence.timeline[0], warp }, sequence.timeline[1]] };
+  };
+  const timelineText = (fileName: string) => JSON.stringify(stored(fileName).sequence.timeline);
+
+  it("keeps a warped clip byte for byte through a save, a duplicate and a rename", async () => {
+    const sent = JSON.stringify(warped().timeline);
+    const edit = await createEdit({ name: "Ramps" }, deps);
+    now += 1;
+    const saved = await saveEdit(edit.id, saveOf(edit, { sequence: warped() }), deps);
+    expect(JSON.stringify(saved.sequence.timeline)).toBe(sent);
+    expect(timelineText("Ramps.nbedit")).toBe(sent);
+
+    await createEdit({ from: edit.id }, deps);
+    expect(timelineText("Ramps copy.nbedit")).toBe(sent);
+
+    now += 1;
+    await patchEdit(edit.id, { op: "rename", name: "Speed ramps" }, deps);
+    expect(timelineText("Speed ramps.nbedit")).toBe(sent);
+    expect(JSON.stringify((await readEdit(edit.id)).sequence.timeline)).toBe(sent);
   });
 });
 
