@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fonts for text layers: the app's own fonts, font files you add to the Fonts folder in the Node Banana folder, and the fonts installed on your computer once you allow it (the desktop app allows it).
 - Text layers in the video: Render and Frame to canvas burn the text layers in as the preview shows them.
 
+### Changed
+
+- Jump to either end: the toolbar of any noodle you click has Jump to start and Jump to end, which move the view to that end of the noodle.
+- Noodle labels: the toolbar has no label field now, so you rename a noodle by double-clicking its label while it is hidden.
+- The crosshair on a hidden noodle's toolbar is gone, because Jump to start does the same job.
+
 ### Notes
 
 Edit files keep version 1, so Node Banana 2.2.0 still opens an edit with text
