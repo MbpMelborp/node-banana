@@ -21,7 +21,7 @@ import { atlasBudget, readGpuInfo } from "@/lib/gpuCanvas/budget";
 import { detectHtmlInCanvas } from "@/lib/gpuCanvas/htmlInCanvas";
 import { openPaintStore } from "@/lib/gpuCanvas/paintCache";
 import { GpuCanvasStats } from "@/lib/gpuCanvas/stats";
-import { getLowDetailSettings, setZoomedOut } from "@/components/nodes/lowDetail";
+import { getLowDetailSettings } from "@/components/nodes/lowDetail";
 import { createPanActivityTracker } from "@/hooks/useWheelPanZoom";
 import { Painter, type PainterStatus } from "./painter";
 import { LiveFlow, LiveLayer, type LiveConnection } from "./LiveLayer";
@@ -187,8 +187,6 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
   useEffect(() => {
     const host = hostRef.current, canvas = canvasRef.current, liveElement = liveRef.current;
     if (!host || !canvas || !liveElement) return;
-    // Today's canvas sets this from its zoom; nodes here are never at low detail.
-    setZoomedOut(false);
     const stats = new GpuCanvasStats();
     stats.observeLongFrames();
     const store = useWorkflowStore.getState();

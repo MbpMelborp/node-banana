@@ -3,46 +3,42 @@
 The GPU canvas draws the workflow as a three.js scene instead of one page
 element per node. Each node is a picture of the real node component, painted
 off screen with HTML-in-Canvas; the nodes being worked in are the real
-components, laid over the scene. It is the desktop app's canvas. The
-classic React Flow canvas stays one switch away for one release, and the
-browser build keeps it.
+components, laid over the scene. It is the only canvas: the classic React
+Flow canvas was removed in 3.0. React Flow is still used, only to host the
+live nodes and the painter's sheets (`LiveLayer.tsx`, `PainterSheet.tsx`),
+which reuse the node components as they are. Below, "classic" names the
+React Flow canvas it replaced, whose behaviour it was built to match.
 
-## Turning it on and off
+## Where it runs
 
-Settings › Canvas › "GPU canvas" (`node-banana-gpu-canvas` in localStorage,
-`on` or `off`; absent means on in the desktop app, off in the browser). It
-needs HTML-in-Canvas, which Chromium 152 ships behind the
-`CanvasDrawElement` Blink feature:
+It needs WebGL2. Painting nodes also needs HTML-in-Canvas, which Chromium
+152 ships behind the `CanvasDrawElement` Blink feature
+(`detectHtmlInCanvas`, `src/lib/gpuCanvas/htmlInCanvas.ts`):
 
 - **Desktop app**: every launch appends
-  `--enable-blink-features=CanvasDrawElement` unless the classic canvas was
-  chosen (`electron/lib/gpu-canvas.cjs`, which keeps the choice in
-  `gpu-canvas-v1.json` under user data). Turning the setting off switches to
-  the classic canvas at once and leaves the feature off from the next
-  launch; turning it back on takes a restart, and the setting says so.
-  `NODE_BANANA_GPU_CANVAS=1` or `=0` turns the feature on or off for one run
-  (the runners use it).
-- **Browser**: the classic canvas, unless Chromium was started with the same
-  switch and the setting is turned on.
+  `--enable-blink-features=CanvasDrawElement` and
+  `--enable-unsafe-swiftshader` (`electron/lib/gpu-canvas.cjs`). The second
+  lets WebGL fall back to SwiftShader, Chromium's CPU renderer, where the GPU
+  is missing or blocklisted; Chromium no longer does that by itself, and
+  without it such a machine gets no WebGL2 at all (checked on Electron 44
+  with `--disable-gpu`). A real GPU is used whenever there is one; on
+  software, the canvas says once a session that it may be slow.
+  `NODE_BANANA_HTML_IN_CANVAS=0` leaves HTML-in-Canvas off for one launch.
+- **Browser**, or any page without HTML-in-Canvas (an Electron whose API
+  changed, see the Chromium 155 rename): the same canvas, with no painter.
+  The nodes in view are live components instead of pictures, up to
+  `LIVE_MODE_MAX_NODES` (400) and down to the low-detail zoom (Settings ›
+  Canvas, 25% unless changed; 15% when low detail is off). Further out, or
+  with more in view, nodes are the scene's stand-in cards
+  (`showViewLive` in `GpuCanvas.tsx`).
 
-The canvas is active when the setting is on, `texElementImage2D` exists and
-the GPU canvas has not failed this session (`useGpuCanvasActive`,
-`src/lib/gpuCanvas/setting.ts`). Otherwise the classic canvas runs,
-unchanged.
-
-**Falling back.** If the scene cannot start (no WebGL2) or one of its
-shaders does not compile, the page hands over to the classic canvas for the
-rest of the session and says so in a notice; the setting is left as it was.
-When the GPU resets (`webglcontextlost`), the GPU canvas is built afresh once
-WebGL is back (or after 3 s), repainting from the disk cache; a second reset
-in the same session falls back to the classic canvas.
-
-**Removing React Flow.** With the GPU canvas on, React Flow no longer draws
-the workflow: the scene does, and React Flow only hosts the live nodes and
-the painter's sheets (`LiveLayer.tsx`, `PainterSheet.tsx`), which reuse the
-node components as they are. The classic canvas, and its `WorkflowCanvas`
-branch, are removed once the release that keeps it behind the setting is
-out.
+**When it cannot draw.** If the scene cannot start (no WebGL2) or one of its
+shaders does not compile, the canvas's place shows why, with Try again
+(`CanvasUnavailable.tsx`, `src/lib/gpuCanvas/failure.ts`); the workflow,
+saving, Assets and the chat are unaffected. When the GPU resets
+(`webglcontextlost`), the canvas is built afresh once WebGL is back (or
+after 3 s), repainting from the disk cache; a second reset shows the same
+screen.
 
 ## How it fits together
 
@@ -645,14 +641,11 @@ also compares each node painted alone (bypassing the cache). Without a GPU
 `--input synthetic --chromium-flags "--no-sandbox --use-angle=swiftshader"`;
 frame-rate checks are meaningless there, the rest still run.
 
-The desktop smoke test (`npm run electron:smoke`) runs on whichever canvas
-the app opens with, the GPU canvas by default (`NODE_BANANA_GPU_CANVAS=0`
-for the classic one): it adds a Prompt, makes it live and types into it. In a
-Linux container pass `NODE_BANANA_SMOKE_CHROMIUM_FLAGS="--no-sandbox
---use-angle=swiftshader"` and run it under `xvfb-run`. The acceptance and
-large-workflow runs check recovery through the classic canvas, so they pin
-it unless `NODE_BANANA_GPU_CANVAS` says otherwise, and
-`electron:performance` measures the classic canvas.
+The desktop smoke test (`npm run electron:smoke`) adds a Prompt, makes it
+live and types into it. In a Linux container pass
+`NODE_BANANA_SMOKE_CHROMIUM_FLAGS="--no-sandbox --use-angle=swiftshader"`
+and run it under `xvfb-run`. The acceptance and large-workflow runs check
+recovery through the same `window.__gpuCanvas` calls.
 
 `window.__gpuCanvas` (stats, painter status, sharpness, view, node rects,
 live nodes, `paintNow`, `repaint`) is what the runner drives.

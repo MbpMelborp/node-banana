@@ -50,7 +50,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 | Cost calculations | `src/utils/costCalculator.ts` |
 | Grid splitting utility | `src/utils/gridSplitter.ts` |
 | Asset library (always-on saving, Assets view) | `src/lib/assets/`, `src/components/assets/`, `docs/asset-library.md` |
-| GPU canvas (the desktop app's canvas; the classic React Flow canvas stays behind a setting for one release: scene, painter, atlas, live layer, disk cache) | `src/lib/gpuCanvas/`, `src/components/gpuCanvas/`, `docs/gpu-canvas.md` |
+| GPU canvas (the only canvas: scene, painter, atlas, live layer, disk cache; without HTML-in-Canvas, as in a browser, the nodes in view are live) | `src/lib/gpuCanvas/`, `src/components/gpuCanvas/`, `docs/gpu-canvas.md` |
 | Full-screen media viewer (stage, dock-scaled filmstrip, details rail; the recent-generations drop-down and the output gallery node both mount it with their own actions) | `src/components/MediaViewer.tsx`, `src/hooks/useAddMediaNode.ts` |
 | Edit video view and edit projects (`Edits/*.nbedit`) | `src/components/edit/`, `src/store/editProjectStore.ts`, `src/lib/edits/`, `docs/edit-video.md` |
 
@@ -624,7 +624,7 @@ All routes in `src/app/api/`:
 - `node-banana-low-detail` - Low detail when zoomed out (absent or `on` means on; Settings › Canvas)
 - `node-banana-low-detail-zoom` - The zoom low detail starts below (default 0.25)
 - `node-banana-perf-overlay` - The performance overlay is shown (`on`)
-- `node-banana-gpu-canvas` - The GPU canvas (`on`/`off`; Settings › Canvas). Absent means on in the desktop app and off in the browser. The desktop app mirrors it in `gpu-canvas-v1.json` under user data and turns HTML-in-Canvas on at launch unless the classic canvas was chosen (`NODE_BANANA_GPU_CANVAS=1`/`0` overrides one run). Painted node images are cached in IndexedDB (`node-banana-paint-cache`, 512 MB)
+- `node-banana-paint-cache` (IndexedDB, not localStorage) - Painted node images for the GPU canvas, 512 MB
 - `node-banana-comfy-apps` - Saved Comfy nodes (workflow + contract + settings)
 - `node-banana-agent-settings` - Agent harness, and model and thinking-effort choice per harness
 - `node-banana-agent-conversations` - Agent chat history (messages, the agent's summary, workflow name, tab and id; newest 50, size-capped)
