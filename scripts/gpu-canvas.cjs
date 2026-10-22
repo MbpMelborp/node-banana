@@ -1,10 +1,8 @@
-// GPU canvas runner. Opens the production Electron app with the GPU canvas
-// on, loads the stress workflow tiled to about 5,000 nodes (media by
+// GPU canvas runner. Opens the production Electron app, loads the stress workflow tiled to about 5,000 nodes (media by
 // reference, as a saved workflow opens) and measures the phase 2 targets on
 // real workflows: opening behind the loading screen, reopening from the disk
 // cache, pans while painting, a change shown, painted against live nodes,
-// image tiers and jumps, scene gestures, and input latency against today's
-// canvas. Writes a JSON report. Runs unchanged on Windows and the Mac.
+// image tiers and jumps, scene gestures, and input latency. Writes a JSON report. Runs unchanged on Windows and the Mac.
 //
 //   npm run build
 //   node scripts/gpu-canvas.cjs --output gpu-canvas-mac.json
@@ -176,7 +174,7 @@ async function main() {
   try {
     log('Launching…');
     app = await launchElectron({ executable: require('electron'), args: [...flags, root], cwd: root,
-      env: { ...process.env, NODE_BANANA_ELECTRON_USER_DATA: profile, NODE_BANANA_ELECTRON_PORT: String(port), NODE_BANANA_GPU_CANVAS: '1' } });
+      env: { ...process.env, NODE_BANANA_ELECTRON_USER_DATA: profile, NODE_BANANA_ELECTRON_PORT: String(port) } });
     const { page } = app;
     await app.run(({ dialog }) => { dialog.showMessageBoxSync = () => 1; });
     await app.window();
@@ -208,16 +206,15 @@ async function main() {
       });
     }, port);
 
-    // The page: the GPU canvas on, the welcome dialog away, watchers installed.
-    async function ready({ gpu = true } = {}) {
-      await page.evaluate(gpu => localStorage.setItem('node-banana-gpu-canvas', gpu ? 'on' : 'off'), gpu);
+    // The page: the welcome dialog away, watchers installed.
+    async function ready() {
       await app.run(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
       await delay(1500);
       // Linux with no keyring asks where keys go; the runner stores none.
       await page.click('Use for this session only', { optional: true, timeout: 5000 });
       // A reload looks like a crash to session recovery; reopening starts from an empty workspace.
       await page.click('Discard', { optional: true, timeout: 3000 });
-      await page.waitFor(() => !!document.querySelector('[data-gpu-canvas], .react-flow'), null, { timeout: 120000, message: 'the canvas' });
+      await page.waitFor(() => !!document.querySelector('[data-gpu-canvas]'), null, { timeout: 120000, message: 'the canvas' });
       await page.click('Close', { last: true, optional: true, timeout: 5000 });
       await page.click('Skip', { optional: true, timeout: 2000 });
       await page.key('Escape');
@@ -231,10 +228,8 @@ async function main() {
         addEventListener('pointerup', event => { window.__runnerInput.up = { x: event.clientX, y: event.clientY }; }, { capture: true, passive: true });
         addEventListener('pointermove', event => { window.__runnerInput.move = { x: event.clientX, y: event.clientY }; }, { capture: true, passive: true });
       });
-      if (gpu) {
-        const api = await page.waitFor(() => !!window.__gpuCanvas && window.__gpuCanvas.info().htmlInCanvas, null, { timeout: 30000, message: 'the GPU canvas with HTML-in-Canvas' }).catch(() => false);
-        assert.ok(api, 'The GPU canvas did not start with HTML-in-Canvas');
-      }
+      const api = await page.waitFor(() => !!window.__gpuCanvas && window.__gpuCanvas.info().htmlInCanvas, null, { timeout: 30000, message: 'the GPU canvas with HTML-in-Canvas' }).catch(() => false);
+      assert.ok(api, 'The GPU canvas did not start with HTML-in-Canvas');
     }
     // Drops the workflow on the canvas, as a user opening a saved one does.
     async function drop() {
@@ -243,7 +238,7 @@ async function main() {
       await page.evaluate(() => {
         const transfer = new DataTransfer();
         transfer.items.add(new File(window.__runnerText, 'gpu-canvas.json', { type: 'application/json' }));
-        (document.querySelector('[data-gpu-canvas]') || document.querySelector('.react-flow')).dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer, clientX: 400, clientY: 300 }));
+        document.querySelector('[data-gpu-canvas]').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer, clientX: 400, clientY: 300 }));
         delete window.__runnerText;
       });
     }
@@ -578,27 +573,16 @@ async function main() {
       return { ...traceResult(traced, results), info: await page.evaluate(() => window.__gpuCanvas.info()) };
     });
 
-    // Input latency, the GPU canvas against today's canvas, with the same pan at the same zoom (25%).
+    // Input latency: a pan at 25%, where the most nodes are in view at full detail.
     await section('latency', async () => {
-      const result = {};
-      for (const gpu of [true, false]) {
-        if (!gpu) {
-          await ready({ gpu: false });
-          await drop();
-          await page.waitFor(() => document.querySelectorAll('.react-flow__node').length > 0 && window.__gpuCanvas == null, null, { timeout: 180000, message: "today's canvas" });
-          await delay(5000);
-        }
-        await page.evaluate(gpu => {
-          if (gpu) { const v = window.__gpuCanvas.view(); window.__gpuCanvas.setView({ zoom: 0.25, x: v.x, y: v.y }); }
-        }, gpu);
-        await delay(2000);
-        const traced = [], results = [];
-        for (let round = 0; round < 2; round++) results.push(await measure('pan-sweep', `${gpu ? 'gpu' : 'today'}-pan`, traced));
-        const trace = analyzeTrace(traced);
-        console.log(`\n${formatReport(trace)}\n`);
-        result[gpu ? 'gpuCanvas' : 'todaysCanvas'] = { trace: trace.summary, pageInputLatency: results.map(r => r.pageStats?.samples['input.latencyMs'] ?? null) };
-      }
-      return result;
+      const v = await page.evaluate(() => window.__gpuCanvas.view());
+      await page.evaluate(v => window.__gpuCanvas.setView({ zoom: 0.25, x: v.x, y: v.y }), v);
+      await delay(2000);
+      const traced = [], results = [];
+      for (let round = 0; round < 2; round++) results.push(await measure('pan-sweep', 'gpu-pan', traced));
+      const trace = analyzeTrace(traced);
+      console.log(`\n${formatReport(trace)}\n`);
+      return { gpuCanvas: { trace: trace.summary, pageInputLatency: results.map(r => r.pageStats?.samples['input.latencyMs'] ?? null) } };
     });
     log(`Saved ${output}`);
   } catch (error) {

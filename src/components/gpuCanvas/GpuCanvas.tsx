@@ -103,11 +103,18 @@ export interface GpuCanvasProps {
   children?: ReactNode;
   /** Drawn inside the page's React Flow, in its viewport's context (group controls, the navigator). */
   flowChildren?: ReactNode;
-  /** The scene could not start or draw (no WebGL2, a shader failed): the page falls back to the classic canvas. */
+  /** The scene could not start or draw (no WebGL2, a shader failed): the page shows why in the canvas's place. */
   onFailure: (reason: string) => void;
   /** The GPU reset and WebGL is back (or gave up coming back): the page builds the canvas again. */
   onContextLost: () => void;
 }
+
+/**
+ * WebGL drawn by the CPU: the desktop app allows SwiftShader (--enable-unsafe-swiftshader) so a machine
+ * whose GPU is missing or blocked still gets a canvas, and says so once a session.
+ */
+const SOFTWARE_RENDERER = /swiftshader|llvmpipe|software/i;
+let toldSoftwareRendering = false;
 
 export interface GpuCanvasApi {
   stats: GpuCanvasStats;
@@ -310,8 +317,13 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     live.setView(scene.view);
 
     const gl = scene.renderer.getContext() as WebGL2RenderingContext;
+    const gpuInfo = readGpuInfo(gl);
+    if (SOFTWARE_RENDERER.test(gpuInfo.renderer) && !toldSoftwareRendering) {
+      toldSoftwareRendering = true;
+      useToast.getState().show("No graphics card is available, so the canvas draws in software and may be slow", "warning");
+    }
     const htmlInCanvas = detectHtmlInCanvas().available;
-    const budget = htmlInCanvas ? atlasBudget(readGpuInfo(gl)) : null;
+    const budget = htmlInCanvas ? atlasBudget(gpuInfo) : null;
     const painter = budget ? new Painter(scene, { nodeTypes: types, headers: headerProxy, budget, cache: openPaintStore(), salt: APP_VERSION, stats }) : null;
     live.painter = painter;
     engineRef.current = { painter, scene };
