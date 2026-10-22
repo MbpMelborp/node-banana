@@ -52,6 +52,12 @@ const REFRAME_WAIT_MS = 2000;
 /** Above this zoom every visible node is live. */
 const LIVE_ZOOM = 1;
 /**
+ * Without HTML-in-Canvas (a browser, or a Chromium whose API changed) nothing is painted: every node in view is live
+ * from the low-detail zoom up (or the overview's, with low detail off), as classic renders them, and the rest are
+ * stand-in cards. Past this many nodes in view they are all stand-ins, as no page holds that many live.
+ */
+const LIVE_MODE_MAX_NODES = 400;
+/**
  * From this zoom, connections that show more than a line (labels, stubs, clamps) are live while near the view:
  * where classic stops drawing connections (its overview). Those showing a run's comet are live at any zoom.
  */
@@ -377,6 +383,23 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       live.wantOnly("added", added);
     };
 
+    // The nodes live for the view: those visible above 100%, or without a painter every one in view (LIVE_MODE_MAX_NODES).
+    const showViewLive = () => {
+      const { zoom } = scene.view;
+      let ids: string[] = [];
+      if (painter) {
+        if (zoom > LIVE_ZOOM) ids = scene.visible(0).map((i) => scene.graph.nodes[i].id);
+      } else {
+        const lowDetail = getLowDetailSettings();
+        if (zoom >= (lowDetail.enabled ? lowDetail.zoom : OVERVIEW_ZOOM_THRESHOLD)) {
+          const visible = scene.visible(0);
+          if (visible.length <= LIVE_MODE_MAX_NODES) ids = visible.map((i) => scene.graph.nodes[i].id);
+        }
+      }
+      live.wantOnly("zoom", ids);
+    };
+    if (!painter) showViewLive();
+
     // Store changes reach the graph, the scene, the painter and the live layer.
     const unsubscribeNodes = subscribeToWorkflowNodeChanges((changes) => {
       const state = useWorkflowStore.getState();
@@ -421,6 +444,8 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       }
       showSelection();
       showLiveEdges();
+      // Without a painter a node added, removed or moved in or out of view is live or a stand-in at once.
+      if (!painter && (moved === null || moved.length)) showViewLive();
       selectionChanged();
     });
     const showEdgeSelection = () => {
@@ -567,7 +592,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // As classic's onMoveStart: a moving view drops the hovered node's header controls and video preview,
     // and live nodes take no hover (NodeShell reads isPanningRef) until it has been still a moment (onMoveEnd).
     // The scene still hovers what comes under the pointer, so a node turning live there takes the next wheels.
-    let settleTimer = 0, moveEndTimer = 0, liveEdgesFrame = 0, lastView = { ...scene.view };
+    let settleTimer = 0, moveEndTimer = 0, liveEdgesFrame = 0, viewLiveFrame = 0, lastView = { ...scene.view };
     const unsubscribeView = scene.onViewChanged(() => {
       // Connections coming into view are live as they arrive, once a frame while the view moves.
       if (!liveEdgesFrame) liveEdgesFrame = requestAnimationFrame(() => {
@@ -584,12 +609,16 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         clearTimeout(moveEndTimer);
         moveEndTimer = window.setTimeout(() => { isPanningRef.current = false; }, MOVE_END_MS);
       }
+      // Without a painter the nodes coming into view are live as they arrive, once a frame.
+      if (!painter && !viewLiveFrame) viewLiveFrame = requestAnimationFrame(() => {
+        viewLiveFrame = 0;
+        showViewLive();
+      });
       // Above 100% every visible node is live, once the view settles; the view is kept for the tab.
       clearTimeout(settleTimer);
       settleTimer = window.setTimeout(() => {
-        const visible = scene.view.zoom > LIVE_ZOOM ? scene.visible(0).map((i) => scene.graph.nodes[i].id) : [];
         showLiveEdges();
-        live.wantOnly("zoom", visible);
+        showViewLive();
         measureChrome();
         useWorkflowStore.getState().setCanvasViewport({ ...scene.view });
       }, 120);
@@ -714,6 +743,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       clearTimeout(settleTimer);
       clearTimeout(moveEndTimer);
       cancelAnimationFrame(liveEdgesFrame);
+      cancelAnimationFrame(viewLiveFrame);
       cancelAnimationFrame(chromeFrame);
       unsubscribeChromeLayout();
       document.removeEventListener("click", measureChrome, true);

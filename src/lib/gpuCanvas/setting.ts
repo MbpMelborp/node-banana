@@ -89,11 +89,14 @@ export function useGpuCanvasEnabled(): boolean {
   return useSyncExternalStore(subscribe, getGpuCanvasEnabled, () => false);
 }
 
-/** The canvas draws with the GPU canvas: the setting is on, this page supports it, and it has not failed. */
+/**
+ * The canvas draws with the GPU canvas: the setting is on and it has not failed. Without HTML-in-Canvas
+ * (`gpuCanvasSupported`) it runs with every node in view live instead of painted.
+ */
 export function useGpuCanvasActive(): boolean {
   const enabled = useGpuCanvasEnabled();
   const failed = useGpuCanvasFailure() !== null;
-  return enabled && !failed && gpuCanvasSupported();
+  return enabled && !failed;
 }
 
 if (typeof window !== "undefined") {
