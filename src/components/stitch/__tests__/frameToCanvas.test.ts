@@ -5,6 +5,7 @@ import { useAssetStore } from "@/store/assetStore";
 import { FrameCaptureError, type FrameCapture, type FrameCaptureJob } from "@/lib/stitch/frameCapture";
 import * as mediaBlob from "@/lib/assets/client/mediaBlob";
 import { frameOptions, shownAt } from "@/lib/stitch/framePlan";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import { createClip, layoutSpans, sourceKey, type SourceKey } from "@/lib/stitch/timeline";
 import { getNodeSize } from "@/utils/nodeDimensions";
 import type { ImageInputNodeData, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
@@ -305,6 +306,17 @@ describe("frameToCanvas", () => {
     expect(job.size).toEqual(SIZE);
     expect(job.options).toEqual({ loopCount: 1 });
     expect(job.signal).toBeInstanceOf(AbortSignal);
+    expect("overlays" in job).toBe(false);
+    expect("overlays" in recordUiAsset.mock.calls[0][0].parameters).toBe(false);
+  });
+
+  it("hands the capture the draft's overlays to draw over the frame, and counts them in the record", async () => {
+    const overlays = [createTextOverlay({ id: "ovl_a", startSec: 0.5 }), createTextOverlay({ id: "ovl_b", row: 1 })];
+    editor().apply((d) => ({ ...d, overlays }));
+    editor().setPlayhead(1);
+    await press();
+    expect(capture.mock.calls[0][0].overlays).toEqual(overlays);
+    expect(recordUiAsset.mock.calls[0][0].parameters).toMatchObject({ overlays: 2 });
   });
 
   it("drops the frame when the canvas is replaced during the capture", async () => {

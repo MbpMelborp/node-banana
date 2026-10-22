@@ -5,15 +5,24 @@
  * (readStitchDraft), so the encode is the sequence they show. An edit
  * project's draft (the Edit video view) is gathered by the same rules from
  * its library clips (gatherDraftInputs), and both build the engine's options
- * and the recorded parameters with the same two functions.
+ * and the recorded parameters with the same two functions. Either way the
+ * overlays' fonts are loaded before the run (gatherOverlayInputs).
  */
 
-import type { StitchTimelineClip, VideoStitchNodeData } from "@/types";
+import type { StitchOverlay, StitchTimelineClip, VideoStitchNodeData } from "@/types";
 import { AssetApiError, fetchAssetBlob } from "@/lib/assets/client/api";
-import type { StitchAudioClipInput, StitchClipInput, StitchMusicInput, StitchOptions } from "@/lib/stitch/engineTypes";
+import type {
+  StitchAudioClipInput,
+  StitchClipInput,
+  StitchMusicInput,
+  StitchOptions,
+  StitchOverlayInput,
+} from "@/lib/stitch/engineTypes";
 import { isLegacyAudioShape } from "@/lib/stitch/audioClips";
 import { requestAssetInfo } from "@/lib/stitch/assetInfo";
 import { musicAudio, readStitchDraft, type StitchDraft } from "@/lib/stitch/draft";
+import { ensureOverlayFonts, overlayFontList } from "@/lib/stitch/fonts";
+import { draftOverlays } from "@/lib/stitch/overlays";
 import { isLegacyStitch, stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { isPlaced, sourceKey } from "@/lib/stitch/timeline";
 import { fetchMusicBlob } from "@/lib/stitch/musicBlob";
@@ -38,6 +47,8 @@ export interface GatheredStitch {
   stack: { overlapSec: number; crossfade: boolean } | null;
   /** Stacked with a stored start; null for Track, lined-up stacks, legacy nodes and inputs gathered without edges. */
   placed: { crossfade: boolean; overlapSec: number } | null;
+  /** The overlays, each with the family list its loaded font is drawn in; absent when there are none. */
+  overlays?: StitchOverlayInput[];
 }
 
 type ClipMedia = { kind: "url"; url: string } | { kind: "asset"; assetId: string; position: number };
@@ -102,10 +113,27 @@ export async function fetchClipBlobs(pending: readonly PendingClip[], signal?: A
 }
 
 /**
- * The engine's options for a gathered stitch. A Track sequence passes the loop count alone, as it always did, and a
- * lined-up stack its overlap as before; audio clips only when the audio is not legacy-shaped.
+ * The overlays as the engine draws them, each font loaded first (a font that cannot be had resolves to the app's
+ * sans), with the family list each is drawn in. Undefined when there are none.
  */
-export function stitchEngineOptions(g: Pick<GatheredStitch, "loopCount" | "placed" | "stack" | "audioClips">): StitchOptions {
+export async function gatherOverlayInputs(
+  overlays: readonly StitchOverlay[],
+  signal?: AbortSignal,
+): Promise<StitchOverlayInput[] | undefined> {
+  if (overlays.length === 0) return undefined;
+  const fontList = overlayFontList(await ensureOverlayFonts(overlays));
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  return overlays.map((o) => ({ ...o, fontList: fontList(o.font) }));
+}
+
+/**
+ * The engine's options for a gathered stitch. A Track sequence passes the loop count alone, as it always did, and a
+ * lined-up stack its overlap as before; audio clips only when the audio is not legacy-shaped, overlays only when
+ * there are some.
+ */
+export function stitchEngineOptions(
+  g: Pick<GatheredStitch, "loopCount" | "placed" | "stack" | "audioClips" | "overlays">,
+): StitchOptions {
   return {
     loopCount: g.loopCount,
     ...(g.placed
@@ -114,6 +142,7 @@ export function stitchEngineOptions(g: Pick<GatheredStitch, "loopCount" | "place
         ? { overlapSec: g.stack.overlapSec, crossfade: g.stack.crossfade }
         : {}),
     ...(g.audioClips ? { audioClips: g.audioClips } : {}),
+    ...(g.overlays ? { overlays: g.overlays } : {}),
   };
 }
 
@@ -124,6 +153,7 @@ export function stitchRecordParameters(g: GatheredStitch): Record<string, unknow
     loopCount: g.loopCount,
     withAudio: g.music !== null || (g.audioClips?.length ?? 0) > 0,
     ...(g.audioClips ? { audioClips: g.audioClips.length } : {}),
+    ...(g.overlays ? { overlays: g.overlays.length } : {}),
     ...(g.placed
       ? {
           crossfade: g.placed.crossfade,
@@ -213,6 +243,7 @@ export async function gatherStitchInputs(
   } else {
     audioClips = await gatherAudioClipInputs(draft.audioClips, { musicUrl, signal });
   }
+  const overlays = await gatherOverlayInputs(draftOverlays(draft), signal);
 
   // Without edges the clips play whole and carry no source keys: stacking them would dissolve where the editor shows cuts
   const stack =
@@ -220,7 +251,16 @@ export async function gatherStitchInputs(
       ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
       : null;
 
-  return { clips, music, audioClips, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
+  return {
+    clips,
+    music,
+    audioClips,
+    loopCount: draft.loopCount,
+    clipCount: clips.length,
+    stack,
+    placed,
+    ...(overlays ? { overlays } : {}),
+  };
 }
 
 /**
@@ -251,9 +291,19 @@ export async function gatherDraftInputs(draft: StitchDraft, signal?: AbortSignal
   const audioClips = isLegacyAudioShape(draft.audioClips)
     ? null
     : await gatherAudioClipInputs(draft.audioClips, { musicUrl: null, signal });
+  const overlays = await gatherOverlayInputs(draftOverlays(draft), signal);
   const stack =
     layout.mode === "stacked" && layout.overlapSec > 0
       ? { overlapSec: layout.overlapSec, crossfade: layout.crossfade }
       : null;
-  return { clips, music: null, audioClips, loopCount: draft.loopCount, clipCount: clips.length, stack, placed };
+  return {
+    clips,
+    music: null,
+    audioClips,
+    loopCount: draft.loopCount,
+    clipCount: clips.length,
+    stack,
+    placed,
+    ...(overlays ? { overlays } : {}),
+  };
 }

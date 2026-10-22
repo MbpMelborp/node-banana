@@ -7,6 +7,7 @@ import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { blobToDataUrl } from "@/lib/assets/client/mediaBlob";
 import type { FrameCapture, FrameCaptureError } from "@/lib/stitch/frameCapture";
 import { frameClips, frameOptions, shownAt } from "@/lib/stitch/framePlan";
+import { draftOverlays } from "@/lib/stitch/overlays";
 import { isPlaced, type ClipSpan, type SourceKey } from "@/lib/stitch/timeline";
 import { formatTimecode } from "@/lib/stitch/timecode";
 import { STACK_GAP } from "@/utils/arrangeNodes";
@@ -206,6 +207,7 @@ export async function frameToCanvas(a: {
   const assetOf = new Map(
     draft.timeline.flatMap((clip) => (clip.source.kind === "asset" ? [[clip.id, clip.source.assetId] as const] : [])),
   );
+  const overlays = draftOverlays(draft);
 
   let capture: FrameCapture;
   let engine: FrameCaptureModule | null = null;
@@ -224,6 +226,7 @@ export async function frameToCanvas(a: {
       srcOf: (source) => srcBySource.get(source) ?? null,
       clipNumberOf: (clipId) => clipNumber.get(clipId) ?? 0,
       size: a.size,
+      ...(overlays.length > 0 ? { overlays } : {}),
       signal: controller.signal,
     });
   } catch (error) {
@@ -284,6 +287,7 @@ export async function frameToCanvas(a: {
       slot: capture.plan.slot,
       mode: !stacked ? "track" : placed ? "placed" : "stacked",
       crossfade: layout.crossfade,
+      ...(overlays.length > 0 ? { overlays: overlays.length } : {}),
       layers: capture.drawn.map((layer) => {
         const assetId = assetOf.get(layer.clipId);
         return {

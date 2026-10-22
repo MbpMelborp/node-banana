@@ -28,6 +28,7 @@ import {
 import {
   normalizeAudioClips,
   normalizeLoopCount,
+  normalizeOverlays,
   normalizeStack,
   normalizeStitchArgs,
   type StitchAudioData,
@@ -39,6 +40,7 @@ import { FrameSlotter, secToSlot, type PlannedClip } from '@/lib/stitch/sequence
 import { clipFadeSamples, dissolveFrames, sharedCadence, soloPass, type Dissolve } from '@/lib/stitch/stack';
 import { createFrameBlender, encodeDissolve, type FrameBlender } from '@/lib/stitch/crossfadeFrames';
 import { encodePlacedLoop, openClipReader, type ClipReaderWindow, type PlacedEncodeState } from '@/lib/stitch/clipReader';
+import { createOverlayWriter, type OverlayWriter } from '@/lib/stitch/overlayFrames';
 import { gainPieces, LAYER_WARNING, SLOT_SEC, TIME_EPS } from '@/lib/stitch/placement';
 import { maxVisibleLayers, pictureSegments, segmentsInLoop } from '@/lib/stitch/placedSchedule';
 import { planPicture } from '@/lib/stitch/picturePlan';
@@ -213,6 +215,7 @@ export async function stitchVideosAsync(
 ): Promise<Blob> {
   const { clips, music } = normalizeStitchArgs(videoClips, audio);
   const audioClips = normalizeAudioClips(options);
+  const overlays = normalizeOverlays(options);
   const loopCount = normalizeLoopCount(options);
   const stack = normalizeStack(options);
   let totalVideos = clips.length * loopCount;
@@ -234,6 +237,7 @@ export async function stitchVideosAsync(
   let audioSource: AudioBufferSource | null = null;
   let output: Output | null = null;
   let outputStarted = false;
+  let overlayWriter: OverlayWriter | null = null;
 
   try {
     updateProgress('processing', 'Starting the render...', 0);
@@ -516,6 +520,27 @@ export async function stitchVideosAsync(
         audioSource = null;
       }
 
+      // Without overlays every frame goes to the encoder as it always did
+      const writer =
+        overlays.length > 0
+          ? createOverlayWriter({
+              overlays,
+              loopLength,
+              loopCount,
+              layout:
+                aggregateRotation === 90 || aggregateRotation === 270
+                  ? { width: safeHeight, height: safeWidth }
+                  : { width: safeWidth, height: safeHeight },
+              rotation: aggregateRotation,
+              add: (sample) => encoderSource.add(sample),
+              signal,
+            })
+          : null;
+      overlayWriter = writer;
+      const writeFrame = writer
+        ? (sample: VideoSample) => writer.write(sample)
+        : (sample: VideoSample) => encoderSource.add(sample);
+
       // Every frame lands on the 60 fps grid at its own offset into its clip;
       // each clip starts exactly where the one before ends, so nothing drifts.
       const slotter = new FrameSlotter(MAX_OUTPUT_FPS);
@@ -524,7 +549,7 @@ export async function stitchVideosAsync(
       let ref: { width: number; height: number } | null = null;
       const addToEncoder = async (sample: VideoSample) => {
         if (sp && !ref) ref = { width: sample.codedWidth, height: sample.codedHeight };
-        await encoderSource.add(sample);
+        await writeFrame(sample);
       };
 
       /**
@@ -656,7 +681,7 @@ export async function stitchVideosAsync(
             fallbackRef: { width: safeWidth, height: safeHeight },
             makeBlender: (size) => createFrameBlender(size),
             claim: (slot) => slotter.claim(slot),
-            add: (sample) => encoderSource.add(sample),
+            add: writeFrame,
             report: (segment, slot) => {
               if (segment.kind === 'black') return;
               const share = 12 + Math.min(1, slot / totalSlots) * 85;
@@ -787,6 +812,7 @@ export async function stitchVideosAsync(
         }
       }
 
+      if (writer) await writer.flush();
       // Flush encoder before finalizing container
       await encoderSource.close();
       videoSource = null; // Already closed, prevent double-close in finally
@@ -813,6 +839,7 @@ export async function stitchVideosAsync(
       return outputBlob;
     } finally {
       // Close whatever an error left open; the probed Inputs are released either way
+      overlayWriter?.close();
       if (audioSource) {
         try {
           await audioSource.close();
