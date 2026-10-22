@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   edgeTypeLabel,
   edgeAutoLabel,
+  getImageSequenceNumber,
   edgeDisplayLabelById,
   stackHiddenStubs,
   hiddenStubOffset,
@@ -32,6 +33,21 @@ describe("edgeTypeLabel", () => {
     expect(edgeTypeLabel("3d")).toBe("3D");
     expect(edgeTypeLabel("easeCurve")).toBe("Ease curve");
     expect(edgeTypeLabel(null)).toBe("Connection");
+  });
+});
+
+describe("getImageSequenceNumber", () => {
+  it("orders siblings by creation time", () => {
+    const edges = [edge("late", { data: { createdAt: 20 } }), edge("early", { source: "c", data: { createdAt: 10 } })];
+    expect(getImageSequenceNumber(edges[0], edges)).toBe(2);
+    expect(getImageSequenceNumber(edges[1], edges)).toBe(1);
+  });
+
+  it("is null for lone or non-image connections", () => {
+    const lone = edge("e1");
+    expect(getImageSequenceNumber(lone, [lone])).toBeNull();
+    const text = edge("t", { sourceHandle: "text", targetHandle: "text" });
+    expect(getImageSequenceNumber(text, [text, edge("t2", { sourceHandle: "text", targetHandle: "text", source: "c" })])).toBeNull();
   });
 });
 

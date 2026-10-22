@@ -954,7 +954,7 @@ describe("EditableEdge when hidden", () => {
     expect(container.querySelector('[data-testid="hidden-edge-ghost"]')).not.toBeNull();
   });
 
-  it("takes the downstream pill's toolbar to the upstream end", () => {
+  it("opens the toolbar above whichever pill was clicked", () => {
     mockUseWorkflowStore.mockImplementation((selector) =>
       selector(createDefaultState({ edgeAppearance: baseAppearance, edges: [{ ...hiddenEdge, selected: true }] }))
     );
@@ -963,17 +963,9 @@ describe("EditableEdge when hidden", () => {
         <EditableEdge {...createDefaultProps({ data: { hidden: true }, selected: true })} />
       </TestWrapper>
     );
-    // Opened from the upstream pill there is nowhere to go
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
     fireEvent.click(screen.getByTestId("hidden-edge-stub-target").querySelector("button")!);
-    const toolbar = () => container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement;
     // Target stub anchored at x=288, extending left
-    expect(toolbar().style.transform).toBe("translate(288px, 40px)");
-    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
-    // Centres the upstream pill (x=112, unmeasured width) at the current zoom
-    expect(mockSetCenter).toHaveBeenCalledWith(112, 50, { zoom: 1.5, duration: 300 });
-    expect(toolbar().style.transform).toBe("translate(112px, 40px)");
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+    expect((container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement).style.transform).toBe("translate(288px, 40px)");
   });
 });
 

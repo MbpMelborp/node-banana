@@ -1,16 +1,13 @@
 "use client";
 
-import { Eye, EyeOff, Minus, Pause, Play, Plus, Crosshair, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Minus, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { MenuSurface } from "@/components/ui/Menu";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { useViewport } from "@xyflow/react";
 import { EdgeLabelRenderer } from "@/components/flowPortals";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { getImageSequenceNumber } from "@/lib/edges/labels";
 import { edgeGraphIndex } from "@/lib/edges/graphIndex";
 import { bundleIdAt, bundleMembership, sharedEnd } from "@/lib/edges/bundles";
-
-export { getImageSequenceNumber };
 
 /**
  * The toolbar for a selected connection. It is rendered by the edge itself
@@ -25,8 +22,6 @@ interface EdgeToolbarProps {
   /** Anchor in flow coordinates, normally the path's label position. */
   x: number;
   y: number;
-  /** Shown on a hidden connection's downstream pill: brings its upstream end into view. */
-  onGoUpstream?: () => void;
 }
 
 /** True for the edge that should carry the toolbar: the first selected one. */
@@ -37,7 +32,7 @@ export function useIsToolbarEdge(edgeId: string): boolean {
 const iconButton =
   "p-1.5 rounded hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed";
 
-export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
+export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
   const edges = useWorkflowStore((state) => state.edges);
   const clickAnchor = useWorkflowStore((state) => state.edgeMenuAnchor);
   const toggleEdgePause = useWorkflowStore((state) => state.toggleEdgePause);
@@ -45,16 +40,9 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
   const removeEdges = useWorkflowStore((state) => state.removeEdges);
   const setLoopCount = useWorkflowStore((state) => state.setLoopCount);
   const setEdgesHidden = useWorkflowStore((state) => state.setEdgesHidden);
-  const setEdgeLabel = useWorkflowStore((state) => state.setEdgeLabel);
   const hookEdges = useWorkflowStore((state) => state.hookEdges);
   const unbundleEdges = useWorkflowStore((state) => state.unbundleEdges);
   const { zoom } = useViewport();
-
-  const edgeLabel = useWorkflowStore((state) => state.edges.find((e) => e.id === edgeId)?.data?.label ?? "");
-  const [draftLabel, setDraftLabel] = useState(edgeLabel);
-  useEffect(() => setDraftLabel(edgeLabel), [edgeLabel, edgeId]);
-  // Escape blurs the field, and that blur must not commit the draft it discards
-  const discardingRef = useRef(false);
 
   const selectedEdges = useMemo(() => edges.filter((e) => e.selected), [edges]);
   const anchor = clickAnchor && selectedEdges.some((e) => e.id === clickAnchor.edgeId) ? clickAnchor : { x, y };
@@ -68,7 +56,6 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
   const grouped = multi || bundled;
   const selectedIds = multi ? selectedEdges.map((e) => e.id) : bundled ? bundle.members : [edge.id];
   const groupEdges = grouped ? edges.filter((e) => selectedIds.includes(e.id)) : [edge];
-  const sequenceNumber = grouped ? null : getImageSequenceNumber(edge, edges);
   const isLoop = !grouped && Boolean(edge.data?.isLoop);
   const loopCount = edge.data?.loopCount ?? 3;
   const allPaused = groupEdges.every((e) => e.data?.hasPause);
@@ -134,33 +121,6 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
               <div className="w-px h-4 bg-neutral-600" />
             </>
           )}
-          {!grouped && (
-            <input
-              type="text"
-              value={draftLabel}
-              // The image order is the name an unlabelled connection goes by
-              placeholder={sequenceNumber !== null ? `Image ${sequenceNumber}` : "Label"}
-              aria-label="Connection label"
-              onChange={(e) => setDraftLabel(e.target.value)}
-              onBlur={() => {
-                if (!discardingRef.current) setEdgeLabel(edge.id, draftLabel);
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") {
-                  setEdgeLabel(edge.id, draftLabel);
-                  (e.target as HTMLInputElement).blur();
-                } else if (e.key === "Escape") {
-                  setDraftLabel(edgeLabel);
-                  // blur() fires the handler synchronously, before the reset draft renders
-                  discardingRef.current = true;
-                  (e.target as HTMLInputElement).blur();
-                  discardingRef.current = false;
-                }
-              }}
-              className="nodrag nopan nokey w-24 h-6 px-2 text-[11px] text-neutral-100 bg-neutral-900 border border-neutral-600 rounded placeholder:text-neutral-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
-            />
-          )}
           {canBundle && (
             <button
               onClick={() => hookEdges(selectedIds, { x: anchor.x, y: anchor.y })}
@@ -177,16 +137,6 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
               title="Unbundle"
             >
               Unbundle
-            </button>
-          )}
-          {onGoUpstream && !grouped && (
-            <button
-              onClick={onGoUpstream}
-              className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
-              title="Go to upstream connection"
-              aria-label="Go to upstream connection"
-            >
-              <Crosshair size={16} strokeWidth={1.5} />
             </button>
           )}
           {isHiddenEdge ? (

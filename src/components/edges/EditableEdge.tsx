@@ -107,7 +107,7 @@ export function EditableEdge({
   source,
   target,
 }: EdgeProps) {
-  const { setEdges, screenToFlowPosition, setCenter, getZoom } = useReactFlow();
+  const { setEdges, screenToFlowPosition } = useReactFlow();
   const edgeStyle = useWorkflowStore((state) => state.edgeStyle);
   const appearance = useWorkflowStore((state) => state.edgeAppearance);
   const [isDragging, setIsDragging] = useState(false);
@@ -436,7 +436,7 @@ export function EditableEdge({
 
   // Labels: one the user typed sits on the noodle, and so does the item an
   // Array connection carries; the automatic type and image-order names stay
-  // on the toolbar and the hidden-connection stubs
+  // on the hidden-connection stubs
   const labelText = hasOwnLabel ? displayLabel : arrayLabel ?? "";
   const showLabel = Boolean(labelText) || Boolean(edgeData?.isLoop);
   const targetDirection = targetPosition === "right" ? 1 : -1;
@@ -545,15 +545,6 @@ export function EditableEdge({
             edgeId={id}
             x={toolbarStub.x + toolbarDir * (toolbarWidth / 2)}
             y={toolbarStub.y - 10}
-            // From the downstream pill: centre the upstream pill and move the toolbar onto it
-            onGoUpstream={
-              toolbarSide === "target"
-                ? () => {
-                    setToolbarSide("source");
-                    void setCenter(sourceStub.x + sourceDir * (sourceWidth / 2), sourceStub.y, { zoom: getZoom(), duration: 300 });
-                  }
-                : undefined
-            }
           />
         )}
       </>

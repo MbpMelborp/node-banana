@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { EdgeToolbar, useIsToolbarEdge, getImageSequenceNumber } from "@/components/EdgeToolbar";
+import { EdgeToolbar, useIsToolbarEdge } from "@/components/EdgeToolbar";
 import type { WorkflowEdge } from "@/types";
 
 // Mock the workflow store
@@ -10,7 +10,6 @@ const mockSetEdgesPause = vi.fn();
 const mockRemoveEdges = vi.fn();
 const mockSetLoopCount = vi.fn();
 const mockSetEdgesHidden = vi.fn();
-const mockSetEdgeLabel = vi.fn();
 const mockHookEdges = vi.fn();
 const mockUnbundleEdges = vi.fn();
 const mockUseWorkflowStore = vi.fn();
@@ -56,7 +55,6 @@ const createDefaultState = (overrides = {}) => ({
   removeEdges: mockRemoveEdges,
   setLoopCount: mockSetLoopCount,
   setEdgesHidden: mockSetEdgesHidden,
-  setEdgeLabel: mockSetEdgeLabel,
   hookEdges: mockHookEdges,
   unbundleEdges: mockUnbundleEdges,
   ...overrides,
@@ -128,51 +126,12 @@ describe("EdgeToolbar", () => {
     expect(screen.getByTitle("Remove pause")).toBeInTheDocument();
   });
 
-  it("edits the label of a single edge", () => {
-    withEdges([edge("e1", { selected: true, data: { label: "old" } })]);
-    render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
-    const input = screen.getByLabelText("Connection label") as HTMLInputElement;
-    expect(input.value).toBe("old");
-    fireEvent.change(input, { target: { value: "hero shot" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(mockSetEdgeLabel).toHaveBeenCalledWith("e1", "hero shot");
-  });
-
-  it("reverts the label draft on Escape", () => {
-    withEdges([edge("e1", { selected: true, data: { label: "old" } })]);
-    render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
-    const input = screen.getByLabelText("Connection label") as HTMLInputElement;
-    input.focus();
-    fireEvent.change(input, { target: { value: "typo" } });
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(input.value).toBe("old");
-    // The blur Escape triggers must not commit the discarded draft
-    expect(mockSetEdgeLabel).not.toHaveBeenCalled();
-    expect(document.activeElement).not.toBe(input);
-  });
-
   it("offers to show a hidden edge instead of hiding it", () => {
     withEdges([edge("e1", { selected: true, data: { hidden: true } })]);
     render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
     expect(screen.queryByTitle("Hide connection")).toBeNull();
     fireEvent.click(screen.getByTitle("Show connection"));
     expect(mockSetEdgesHidden).toHaveBeenCalledWith(["e1"], false);
-  });
-
-  it("offers a jump to the upstream end only when the edge asks for one", () => {
-    const onGoUpstream = vi.fn();
-    withEdges([edge("e1", { selected: true, data: { hidden: true } })]);
-    const { rerender } = render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
-    rerender(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={onGoUpstream} />);
-    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
-    expect(onGoUpstream).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the upstream jump out when several edges are selected", () => {
-    withEdges([edge("e1", { selected: true, data: { hidden: true } }), edge("e2", { selected: true, data: { hidden: true } })]);
-    render(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
   });
 
   it("hides a single edge", () => {
@@ -189,14 +148,10 @@ describe("EdgeToolbar", () => {
     expect(mockRemoveEdges).toHaveBeenCalledWith(["e1"]);
   });
 
-  it("puts the image order in the empty label field instead of a separate chip", () => {
-    withEdges([
-      edge("e1", { data: { createdAt: 1 } }),
-      edge("e2", { selected: true, source: "c", data: { createdAt: 2, label: "model" } }),
-    ]);
-    render(<EdgeToolbar edgeId="e2" x={0} y={0} />);
-    expect(screen.queryByText("Image 2")).toBeNull();
-    expect(screen.getByLabelText("Connection label")).toHaveAttribute("placeholder", "Image 2");
+  it("has no label field: a label is edited on a hidden connection's pill", () => {
+    withEdges([edge("e1", { selected: true, data: { label: "model" } })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("offers loop controls instead of pause on a loop edge", () => {
@@ -216,12 +171,10 @@ describe("EdgeToolbar", () => {
       edge("e3", { selected: false, source: "d" }),
     ];
 
-    it("says how many are selected and offers no label field", () => {
+    it("says how many are selected", () => {
       withEdges(three);
       render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
       expect(screen.getByText("2 noodles")).toBeInTheDocument();
-      expect(screen.queryByText(/^Image \d/)).toBeNull();
-      expect(screen.queryByLabelText("Connection label")).toBeNull();
     });
 
     it("pauses every selected edge when not all are paused", () => {
@@ -302,7 +255,6 @@ describe("EdgeToolbar bundles", () => {
     ]);
     render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
     expect(screen.getByText("2 noodles")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Connection label")).toBeNull();
     fireEvent.click(screen.getByTitle("Pause all"));
     expect(mockSetEdgesPause).toHaveBeenCalledWith(["e1", "e2"], true);
     fireEvent.click(screen.getByTitle("Unbundle"));
@@ -316,21 +268,6 @@ describe("useIsToolbarEdge", () => {
     expect(renderHook(() => useIsToolbarEdge("e2")).result.current).toBe(true);
     expect(renderHook(() => useIsToolbarEdge("e3")).result.current).toBe(false);
     expect(renderHook(() => useIsToolbarEdge("e1")).result.current).toBe(false);
-  });
-});
-
-describe("getImageSequenceNumber", () => {
-  it("orders siblings by creation time", () => {
-    const edges = [edge("late", { data: { createdAt: 20 } }), edge("early", { source: "c", data: { createdAt: 10 } })];
-    expect(getImageSequenceNumber(edges[0], edges)).toBe(2);
-    expect(getImageSequenceNumber(edges[1], edges)).toBe(1);
-  });
-
-  it("is null for lone or non-image connections", () => {
-    const lone = edge("e1");
-    expect(getImageSequenceNumber(lone, [lone])).toBeNull();
-    const text = edge("t", { sourceHandle: "text", targetHandle: "text" });
-    expect(getImageSequenceNumber(text, [text, edge("t2", { sourceHandle: "text", targetHandle: "text", source: "c" })])).toBeNull();
   });
 });
 
