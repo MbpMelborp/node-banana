@@ -5,7 +5,7 @@ import { lumaCoefficients, madeFormat, packedSize, rgbaToYuv, type BlenderRef } 
 import type { StitchOverlayInput } from "./engineTypes";
 import { familyList } from "./fonts";
 import { drawOverlays, type OverlayFontList, type OverlayLayoutCache, type OverlayRotation, type OverlaySize } from "./overlayDraw";
-import { overlayOpacityAt } from "./overlays";
+import { overlayOpacitiesAt } from "./overlays";
 import { FRAME_RATE, secToSlot } from "./sequencePlan";
 
 /**
@@ -78,24 +78,23 @@ function defaultContext2d(size: OverlaySize, settings: CanvasRenderingContext2DS
 }
 
 /**
- * Sequence seconds of output slot `slot`: its time less its loop's start, its loop being the last to start at or
- * before it. A loop starts on the slot its start rounds to, which can be a hair before it: 0 there.
+ * The start, in seconds, of the loop output slot `slot` is in: the last loop to start at or before it. A loop starts on
+ * the slot its start rounds to, as the engine starts its first clip there, which can be a hair before it.
  */
-export function overlaySlotTime(slot: number, loopLength: number, loopCount: number): number {
+export function overlayLoopStart(slot: number, loopLength: number, loopCount: number): number {
   let loop = 0;
   while (loop + 1 < loopCount && secToSlot((loop + 1) * loopLength) <= slot) loop++;
-  return Math.max(0, slot / FRAME_RATE - loop * loopLength);
+  return loop * loopLength;
 }
 
 function opacitiesAt(overlays: readonly StitchOverlayInput[], slot: number, loopLength: number, loopCount: number): number[] {
-  const t = overlaySlotTime(slot, loopLength, loopCount);
-  return overlays.map((o) => overlayOpacityAt(o, t));
+  return overlayOpacitiesAt(overlays, slot, overlayLoopStart(slot, loopLength, loopCount));
 }
 
 /**
  * The output slots whose overlays differ from the slot before's (each layer's opacity; slot 0's against none), in
- * order: every slot of a fade, the first slot at or after a cut in or out, and a loop's first slot when it opens on
- * other overlays than the loop before ends on.
+ * order: every slot of a fade, the slot a cut in or out rounds to (where a clip on that cut starts), and a loop's
+ * first slot when it opens on other overlays than the loop before ends on.
  */
 export function forcedOverlaySlots(overlays: readonly StitchOverlayInput[], loopLength: number, loopCount: number): number[] {
   const forced: number[] = [];
@@ -215,7 +214,7 @@ export function createOverlayWriter(job: OverlayWriterJob, deps: OverlayWriterDe
     if (key !== pictureKey) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, box.width, box.height);
-      draw(ctx, { layout: job.layout, canvas: box, rotation: job.rotation }, overlaySlotTime(slot, loopLength, loopCount), overlays, fontList, layouts);
+      draw(ctx, { layout: job.layout, canvas: box, rotation: job.rotation }, opacities, overlays, fontList, layouts);
       pictureKey = key;
       pictureRgba = null;
     }

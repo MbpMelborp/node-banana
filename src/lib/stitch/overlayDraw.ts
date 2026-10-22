@@ -1,6 +1,6 @@
 import type { StitchOverlay, StitchOverlayFont } from "@/types";
 import { fontGeneration } from "./fonts";
-import { APP_SANS_FAMILY, overlayOpacityAt, overlayOrder } from "./overlays";
+import { APP_SANS_FAMILY, overlayOrder } from "./overlays";
 
 /**
  * Drawing the overlays: one function for the preview, the encoder and Frame
@@ -190,14 +190,15 @@ function cachedLayout(
 }
 
 /**
- * Paints the overlays visible at `timeSec` (sequence seconds) onto `ctx` over what it holds, through
- * overlayTransform's transform, which it sets and then puts back to identity (globalAlpha back to 1). Returns whether
- * it painted anything. `cache` keeps layouts between calls; a font load (fonts.ts's generation) renews them.
+ * Paints the overlays onto `ctx` over what it holds, each at its opacity in `opacities` (overlayOpacitiesAt's on the
+ * slot drawn; one at 0 is not painted), through overlayTransform's transform, which it sets and then puts back to
+ * identity (globalAlpha back to 1). Returns whether it painted anything. `cache` keeps layouts between calls; a font
+ * load (fonts.ts's generation) renews them.
  */
 export function drawOverlays(
   ctx: Context2D,
   target: OverlayTarget,
-  timeSec: number,
+  opacities: readonly number[],
   overlays: readonly StitchOverlay[],
   fontList: OverlayFontList,
   cache?: OverlayLayoutCache,
@@ -205,7 +206,7 @@ export function drawOverlays(
   const { layout: size } = target;
   if (!(size.width > 0 && size.height > 0 && target.canvas.width > 0 && target.canvas.height > 0)) return false;
   const visible = overlays
-    .map((o) => ({ o, opacity: overlayOpacityAt(o, timeSec) }))
+    .map((o, i) => ({ o, opacity: opacities[i] ?? 0 }))
     .filter(({ opacity }) => opacity > 0)
     .sort((a, b) => overlayOrder(a.o, b.o));
   if (!visible.length) return false;

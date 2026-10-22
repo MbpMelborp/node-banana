@@ -3,6 +3,7 @@ import type { StitchOverlay, StitchTextOverlay } from "@/types";
 import type { ClipboardOverlayItem } from "./clipboard";
 import type { ClipOrigin, StitchDraft } from "./draft";
 import { counted } from "./labels";
+import { FRAME_RATE, secToSlot } from "./sequencePlan";
 import { MAX_START_SEC } from "./timeline";
 
 /**
@@ -641,8 +642,8 @@ export function describeOverlayChanges(
 /**
  * How opaque a layer is at sequence time t, 0..1: 0 before its start and from its end on; rising linearly over
  * fadeInSec from the start and falling over fadeOutSec to the end, the lower of the two where they overlap (so fades
- * that overlap peak below 1). A fade of 0 is a cut. The drawing, the render, Frame to canvas and the timeline's ramps
- * all read it.
+ * that overlap peak below 1). A fade of 0 is a cut. The curve the drawing reads on the 60 fps grid
+ * (overlayOpacityAtSlot), and whose corners the timeline's ramps take (overlayFadeKnees).
  */
 export function overlayOpacityAt(
   o: Pick<StitchOverlay, "startSec" | "endSec" | "fadeInSec" | "fadeOutSec">,
@@ -652,6 +653,28 @@ export function overlayOpacityAt(
   const rise = o.fadeInSec > 0 ? (t - o.startSec) / o.fadeInSec : 1;
   const fall = o.fadeOutSec > 0 ? (o.endSec - t) / o.fadeOutSec : 1;
   return clamp(Math.min(rise, fall), 0, 1);
+}
+
+/**
+ * A layer's opacity on output slot `slot` of the render's 60 fps grid, in the loop that starts at loopStartSec (0 for
+ * the first, which the stage and Frame to canvas show): overlayOpacityAt with the layer's start and end moved to the
+ * slots they round to there, as FrameSlotter rounds a clip's window. So a layer that starts or ends on a cut does so on
+ * the slot the clip after the cut starts on, in every loop, and its fades step from there. The stage, the render and
+ * Frame to canvas all draw at it.
+ */
+export function overlayOpacityAtSlot(
+  o: Pick<StitchOverlay, "startSec" | "endSec" | "fadeInSec" | "fadeOutSec">,
+  slot: number,
+  loopStartSec = 0,
+): number {
+  const startSec = secToSlot(loopStartSec + o.startSec) / FRAME_RATE;
+  const endSec = secToSlot(loopStartSec + o.endSec) / FRAME_RATE;
+  return overlayOpacityAt({ startSec, endSec, fadeInSec: o.fadeInSec, fadeOutSec: o.fadeOutSec }, slot / FRAME_RATE);
+}
+
+/** Each layer's overlayOpacityAtSlot, in order: what drawOverlays paints them at. */
+export function overlayOpacitiesAt(overlays: readonly StitchOverlay[], slot: number, loopStartSec = 0): number[] {
+  return overlays.map((o) => overlayOpacityAtSlot(o, slot, loopStartSec));
 }
 
 /**

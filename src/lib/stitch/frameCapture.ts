@@ -15,8 +15,8 @@ import {
   type FramePlan,
   type FrameSourceFacts,
 } from "./framePlan";
+import { overlayOpacitiesAt } from "./overlays";
 import { domOpacities, LAYER_WARNING } from "./placement";
-import { FRAME_RATE } from "./sequencePlan";
 import type { SourceKey } from "./timeline";
 
 /**
@@ -347,7 +347,7 @@ export async function captureSequenceFrame(job: FrameCaptureJob, deps: Partial<F
       ctx.globalAlpha = 1;
       if (fontList) {
         const target = { layout: overlayLayoutSize(width, height), canvas: { width, height }, rotation: 0 as const };
-        d.drawOverlays(ctx, target, plan.slot / FRAME_RATE, overlays, fontList);
+        d.drawOverlays(ctx, target, overlayOpacitiesAt(overlays, plan.slot), overlays, fontList);
       }
       blob = await untilStopped(toBlob());
     } catch (error) {

@@ -912,7 +912,13 @@ Grotesk, on the stage, in the render and in Frame to canvas, and the rail
 says so under Font: "Inter isn't on this computer: Space Grotesk stands
 in." for a file not in the Fonts folder or a family this computer lacks,
 "Inter couldn't be read: Space Grotesk stands in." for a file that would
-not load. A font file is registered in the page under a made-up family
+not load. Whether a family is on this computer is told by measuring a few
+Latin letters, and the layer's own text, in it against the browser's
+generic families: the layer's text is what finds a font made for one
+script only, such as an Arabic font, which draws no Latin letter. A family
+stays first in the list the layer is drawn in whatever that check says, so
+a font the computer has is always drawn, and the check changes only the
+note. A font file is registered in the page under a made-up family
 name, so it never takes the place of an app font or an installed font of
 the same name, and for every weight, so it draws at its own weight with no
 faked bold.
@@ -933,15 +939,20 @@ over its fade in, falls over its fade out, and is the lower of the two
 where they meet (`overlayOpacityAt` in `src/lib/stitch/overlays.ts`; the
 box's ramps take their corners from `overlayFadeKnees` beside it, which
 must follow the same curve). The wash is drawn at Wash times that opacity,
-the text at that opacity.
+the text at that opacity. The stage, the render and Frame to canvas read
+it on the render's 60 fps grid, with the layer's start and end moved to the
+slots they round to, as a clip's first frame is (`overlayOpacityAtSlot`):
+a layer that starts on a cut shows from the first frame of the clip after
+the cut, and one that ends there is gone from that frame, wherever in its
+slot the cut falls.
 
 On the stage the layers have a canvas of their own over the picture, sized
 to the frame at the screen's pixel ratio and laid out at the output's size
 (1920 × 1080 until a clip has a size). It is drawn every frame while the
 preview plays, on every move of the playhead while paused, and on an edit
 to the layers, an undo, a font that loads or a resize, with no React
-render. The time it draws at is the playhead's slot on the render's 60 fps
-grid (the nearest 1/60 s), never past the last slot, so a paused frame
+render. It draws the slot the playhead is in on the render's 60 fps grid
+(the nearest 1/60 s), never past the last slot, so a paused frame
 shows the text and the wash as that frame of the render holds them. With no video the stage shows a black frame with the
 layers instead of the empty card, drawn where the selected layer (else the
 one that starts first) has faded in; there is no render to match then.
@@ -1186,13 +1197,16 @@ N/M...", "Blending video N into M..." or "Blending N videos...".
 **Text layers.** Every frame the encoder takes, in Track and in both stacks,
 passes one hook in slot order (`createOverlayWriter` in
 `src/lib/stitch/overlayFrames.ts`). A frame on a slot where a text layer
-shows gets the layers over it; any other goes on untouched. A slot's time is
-its own less the start of its loop, so the layers repeat with each loop,
-and the part of a layer past the loop's end is never drawn.
+shows gets the layers over it; any other goes on untouched. In each loop a
+layer starts and ends on the slots that the loop's start plus its own start
+and end round to, as the clips' windows do, so the layers repeat with each
+loop and a layer on a cut changes on the cut's frame in every loop (each
+loop's start rounds on its own). The part of a layer past the loop's end is
+never drawn.
 
 A fade steps on every 60 fps slot. A slot is *forced* when some layer's
-opacity there differs from the slot before: every slot of a fade, the first
-slot at or after a start or an end with no fade, and a loop's first slot
+opacity there differs from the slot before: every slot of a fade, the slot
+a start or an end with no fade rounds to, and a loop's first slot
 when the loop before ends on other text. The engine writes a frame only
 where the picture changes: one black frame for a gap, a clip's frames at
 its own rate (every 2 or 3 slots at 24 fps, once for a still). So before
@@ -1233,7 +1247,11 @@ and the render's differ by at most 0.21 of one luma level (out of 255), and
 the text's box by at most 1.55 px. Every 60 fps slot of each fade has a frame
 of its own, over 24 fps footage, over a gap's black frame and over a clip at
 4 fps, and the text's opacity read back from those frames moves on every
-slot, by 0.5 to 1.6 times one slot's step.
+slot, by 0.5 to 1.6 times one slot's step. There is no colour step where the
+text starts: up to its first frame the two renders' frames are the same, and
+from it on, a band of the picture the text never covers moves by the wash
+alone, to within 0.4 of a luma level and 0.1 of a chroma level, so a clip
+that a text layer covers in part needs no canvas pass of its own.
 
 **Loops.** `loopCount` repeats the sequence: the encoded length is the
 sequence length times the loop count. In Stacked one loop runs to the end

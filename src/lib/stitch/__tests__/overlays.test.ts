@@ -15,7 +15,9 @@ import {
   NO_OVERLAYS,
   normalizeOverlays,
   overlayFadeKnees,
+  overlayOpacitiesAt,
   overlayOpacityAt,
+  overlayOpacityAtSlot,
   overlayOverlapsOnRow,
   overlayRowCount,
   pasteOverlays,
@@ -27,6 +29,7 @@ import {
   trimOverlay,
   updateOverlay,
 } from "../overlays";
+import { FrameSlotter, planSequence } from "../sequencePlan";
 
 const text = (id: string, init: Partial<StitchTextOverlay> = {}) => createTextOverlay({ id, ...init });
 const at = (overlays: readonly StitchOverlay[], id: string) => overlays.find((o) => o.id === id)!;
@@ -607,6 +610,61 @@ describe("opacity", () => {
     const late = { startSec: 0, endSec: 1, fadeInSec: 0, fadeOutSec: 2 };
     expect(overlayFadeKnees(late)).toEqual({ fadeInEnd: 0, fadeOutStart: 0, peak: 0.5 });
     expect(overlayOpacityAt(late, 0)).toBe(0.5);
+  });
+});
+
+describe("opacity on the 60 fps grid", () => {
+  /** The slot the first frame of the clip that starts `startSec` into loop `loop` goes on, as Render places it. */
+  const clipStartSlot = (startSec: number, loopLength = 0, loop = 0) => {
+    const slotter = new FrameSlotter();
+    slotter.begin({ origin: 0, startSec: loop * loopLength + startSec, length: 1 });
+    return Math.round(slotter.place(0)! * 60);
+  };
+  const shownOn = (o: Parameters<typeof overlayOpacityAtSlot>[0], slots: number[], loopStartSec = 0) =>
+    slots.filter((slot) => overlayOpacityAtSlot(o, slot, loopStartSec) > 0);
+
+  it("is overlayOpacityAt at the slot's time when the layer's edges are on the grid", () => {
+    const o = text("o", { startSec: 2, endSec: 6, fadeInSec: 1, fadeOutSec: 2 });
+    for (const slot of [119, 120, 150, 180, 240, 300, 359, 360, 420]) {
+      expect(overlayOpacityAtSlot(o, slot)).toBeCloseTo(overlayOpacityAt(o, slot / 60), 12);
+    }
+  });
+
+  // A playhead split, a 29.97 or 23.976 fps clip of 150 or 120 frames: the cut is in the first half of a slot
+  it("starts and ends a layer on a cut on the slot the clip after the cut starts on", () => {
+    const { clips } = planSequence([
+      { inSec: 0, outSec: 5.005, sourceDuration: 10 },
+      { inSec: 0, outSec: null, sourceDuration: 5 },
+    ]);
+    const cut = clips[1].seqStart;
+    expect(clipStartSlot(cut)).toBe(300);
+    const title = { startSec: cut, endSec: 8, fadeInSec: 0, fadeOutSec: 0 };
+    expect(shownOn(title, [298, 299, 300, 301])).toEqual([300, 301]);
+    expect(overlayOpacityAtSlot(title, 300)).toBe(1);
+    const before = { startSec: 2, endSec: cut, fadeInSec: 0, fadeOutSec: 0 };
+    expect(shownOn(before, [298, 299, 300, 301])).toEqual([298, 299]);
+    // A cut in the second half of a slot, and one on it, too
+    for (const at of [5.0125, 5]) {
+      expect(shownOn({ ...title, startSec: at }, [299, 300, 301, 302])[0]).toBe(clipStartSlot(at));
+    }
+  });
+
+  it("puts each loop's edges where that loop's clips start, as each loop rounds its own", () => {
+    // Loop 1 starts at 10.005 s: its cut at 5 s is 15.005 s, which rounds to slot 900, not 901
+    const title = { startSec: 5, endSec: 7, fadeInSec: 0, fadeOutSec: 0 };
+    expect(clipStartSlot(5, 10.005, 1)).toBe(900);
+    expect(shownOn(title, [899, 900, 901], 10.005)).toEqual([900, 901]);
+    expect(shownOn(title, [1019, 1020], 10.005)).toEqual([1019]);
+    expect(shownOn(title, [299, 300], 0)).toEqual([300]);
+  });
+
+  it("steps a fade one slot at a time from the slot the layer starts on, and gives each layer its own", () => {
+    const fading = text("a", { startSec: 5.005, endSec: 6, fadeInSec: 0.5, fadeOutSec: 0 });
+    const cut = text("b", { startSec: 5.005, endSec: 6, fadeInSec: 0, fadeOutSec: 0 });
+    expect(overlayOpacitiesAt([fading, cut], 299)).toEqual([0, 0]);
+    expect(overlayOpacitiesAt([fading, cut], 300)).toEqual([0, 1]);
+    expect(overlayOpacitiesAt([fading, cut], 315)[0]).toBeCloseTo(0.5, 12);
+    expect(overlayOpacitiesAt([fading, cut], 330)).toEqual([1, 1]);
   });
 });
 

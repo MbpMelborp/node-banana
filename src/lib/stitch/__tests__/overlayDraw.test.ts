@@ -9,7 +9,7 @@ import {
   type OverlayLayoutCache,
   type OverlayRotation,
 } from "../overlayDraw";
-import { createTextOverlay } from "../overlays";
+import { createTextOverlay, overlayOpacitiesAt } from "../overlays";
 
 const fonts = vi.hoisted(() => ({ generation: 0 }));
 vi.mock("../fonts", () => ({ fontGeneration: () => fonts.generation }));
@@ -69,23 +69,34 @@ describe("overlayLayoutSize", () => {
 describe("the fade", () => {
   const o = text("a", { startSec: 2, endSec: 6, fadeInSec: 0.5, fadeOutSec: 0.5, wash: { opacity: 0.5 } });
 
-  const drawAt = (t: number) => {
+  /** Drawn on 60 fps slot `slot`, as the stage, the render and Frame to canvas draw. */
+  const drawAt = (slot: number) => {
     const { as2d, painted } = fakeContext();
-    const drew = drawOverlays(as2d, FLAT, t, [o], fontList);
+    const drew = drawOverlays(as2d, FLAT, overlayOpacitiesAt([o], slot), [o], fontList);
     return { drew, painted: painted().map(({ op, alpha }) => [op, alpha]) };
   };
 
   it("rises from nothing at the start, holds, and falls to nothing at the end, the wash with the text", () => {
-    expect(drawAt(2)).toEqual({ drew: false, painted: [] });
-    expect(drawAt(2.25)).toEqual({ drew: true, painted: [["fillRect", 0.25], ["fillText", 0.5]] });
-    expect(drawAt(4)).toEqual({ drew: true, painted: [["fillRect", 0.5], ["fillText", 1]] });
-    expect(drawAt(5.75)).toEqual({ drew: true, painted: [["fillRect", 0.25], ["fillText", 0.5]] });
-    expect(drawAt(6)).toEqual({ drew: false, painted: [] });
+    expect(drawAt(120)).toEqual({ drew: false, painted: [] });
+    expect(drawAt(135)).toEqual({ drew: true, painted: [["fillRect", 0.25], ["fillText", 0.5]] });
+    expect(drawAt(240)).toEqual({ drew: true, painted: [["fillRect", 0.5], ["fillText", 1]] });
+    expect(drawAt(345)).toEqual({ drew: true, painted: [["fillRect", 0.25], ["fillText", 0.5]] });
+    expect(drawAt(360)).toEqual({ drew: false, painted: [] });
+  });
+
+  it("paints each layer at its own opacity, by its place in the list, and none at 0", () => {
+    const { as2d, painted } = fakeContext();
+    const other = { ...o, id: "b", text: "Other", wash: { opacity: 0.4 } };
+    drawOverlays(as2d, FLAT, [0, 0.5], [o, other], fontList);
+    expect(painted().map((c) => [c.op, c.op === "fillText" ? c.args[0] : null, c.alpha])).toEqual([
+      ["fillRect", null, 0.2],
+      ["fillText", "Other", 0.5],
+    ]);
   });
 
   it("paints the wash black over the whole layout frame and the text in its colour, then restores the context", () => {
     const { ctx, as2d, calls } = fakeContext();
-    drawOverlays(as2d, FLAT, 4, [{ ...o, color: "#ff8800" }], fontList);
+    drawOverlays(as2d, FLAT, [1], [{ ...o, color: "#ff8800" }], fontList);
     expect(calls.find((c) => c.op === "fillRect")).toMatchObject({ args: [0, 0, 1000, 1000], style: "#000" });
     expect(calls.find((c) => c.op === "fillText")).toMatchObject({ style: "#ff8800", font: `600 80px ${APP}`, align: "center" });
     expect(ctx.textBaseline).toBe("middle");
@@ -98,7 +109,7 @@ describe("the fade", () => {
 
   it("paints no wash at 0, and only the wash for empty text", () => {
     const { as2d, painted } = fakeContext();
-    drawOverlays(as2d, FLAT, 4, [{ ...o, wash: { opacity: 0 } }, { ...o, id: "b", text: "" }], fontList);
+    drawOverlays(as2d, FLAT, [1, 1], [{ ...o, wash: { opacity: 0 } }, { ...o, id: "b", text: "" }], fontList);
     expect(painted().map((c) => [c.op, c.op === "fillText" ? c.args[0] : c.alpha])).toEqual([
       ["fillRect", 0.5],
       ["fillText", "Title"],
@@ -107,7 +118,7 @@ describe("the fade", () => {
 
   it("draws nothing on an empty frame", () => {
     const { as2d, calls } = fakeContext();
-    expect(drawOverlays(as2d, { ...FLAT, canvas: { width: 0, height: 10 } }, 4, [o], fontList)).toBe(false);
+    expect(drawOverlays(as2d, { ...FLAT, canvas: { width: 0, height: 10 } }, [1], [o], fontList)).toBe(false);
     expect(calls).toEqual([]);
   });
 });
@@ -177,7 +188,7 @@ describe("drawOverlays", () => {
     const { as2d, painted } = fakeContext();
     const lower = text("lower", { row: 0, text: "Lower", wash: { opacity: 0.4 } });
     const upper = text("upper", { row: 1, text: "Upper", wash: { opacity: 0.5 } });
-    drawOverlays(as2d, FLAT, 2, [upper, lower], fontList);
+    drawOverlays(as2d, FLAT, [1, 1], [upper, lower], fontList);
     expect(painted().map((c) => [c.op, c.op === "fillText" ? c.args[0] : c.alpha])).toEqual([
       ["fillRect", 0.4],
       ["fillRect", 0.5],
@@ -191,7 +202,7 @@ describe("drawOverlays", () => {
     const layout = { width: 1920, height: 1080 };
     const drawn = (canvas: { width: number; height: number }, o = text("a")) => {
       const { as2d, calls } = fakeContext();
-      drawOverlays(as2d, { layout, canvas, rotation: 0 }, 2, [o], fontList);
+      drawOverlays(as2d, { layout, canvas, rotation: 0 }, [1], [o], fontList);
       return calls.filter((c) => c.op === "fillText").map((c) => [...c.args, c.font]);
     };
     expect(drawn({ width: 960, height: 540 })).toEqual([["Title", 960, 540, `600 86.4px ${APP}`]]);
@@ -205,7 +216,7 @@ describe("drawOverlays", () => {
     const { as2d, calls } = fakeContext();
     const target = { layout: { width: 720, height: 1280 }, canvas: { width: 1280, height: 720 }, rotation: 90 as const };
     // 0.08 of 1280 is 102.4 px, 51.2 to a character: 12 fit in the 648 a 720-wide frame leaves inside its margins.
-    drawOverlays(as2d, target, 2, [text("a", { text: "aaaaaa bbbbbb cccccc" })], fontList);
+    drawOverlays(as2d, target, [1], [text("a", { text: "aaaaaa bbbbbb cccccc" })], fontList);
     expect(calls.filter((c) => c.op === "fillText").map((c) => [c.args[0], c.font])).toEqual([
       ["aaaaaa", `600 102.4px ${APP}`],
       ["bbbbbb", `600 102.4px ${APP}`],
@@ -218,14 +229,14 @@ describe("drawOverlays", () => {
     const { ctx, as2d, calls } = fakeContext();
     const cache: OverlayLayoutCache = new WeakMap();
     const o = text("a", { text: "Hello", size: 0.04, align: "left", x: 0.5 });
-    drawOverlays(as2d, FLAT, 2, [o], fontList, cache);
+    drawOverlays(as2d, FLAT, [1], [o], fontList, cache);
     const measured = ctx.measureText.mock.calls.length;
-    drawOverlays(as2d, FLAT, 2.5, [o], fontList, cache);
+    drawOverlays(as2d, FLAT, [0.5], [o], fontList, cache);
     expect(ctx.measureText.mock.calls.length).toBe(measured);
 
     ctx.glyph = 0.25;
     fonts.generation++;
-    drawOverlays(as2d, FLAT, 2.5, [o], fontList, cache);
+    drawOverlays(as2d, FLAT, [0.5], [o], fontList, cache);
     expect(ctx.measureText.mock.calls.length).toBeGreaterThan(measured);
     expect(calls.filter((c) => c.op === "fillText").map((c) => c.args[1])).toEqual([450, 450, 475]);
   });
@@ -270,7 +281,7 @@ describe("overlayTransform", () => {
   it("is what drawOverlays draws through, with the layout's frame for the wash", () => {
     const { as2d, calls } = fakeContext();
     const target = { layout: { width: 720, height: 1280 }, canvas: { width: 1280, height: 720 }, rotation: 90 as const };
-    drawOverlays(as2d, target, 2, [text("a")], fontList);
+    drawOverlays(as2d, target, [1], [text("a")], fontList);
     expect(calls[0]).toMatchObject({ op: "transform", args: overlayTransform(target) });
     expect(calls[1]).toMatchObject({ op: "fillRect", args: [0, 0, 720, 1280] });
     expect(calls.at(-1)).toMatchObject({ op: "transform", args: [1, 0, 0, 1, 0, 0] });

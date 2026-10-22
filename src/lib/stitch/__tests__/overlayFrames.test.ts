@@ -4,8 +4,9 @@ import type { StitchTextOverlay } from "@/types";
 import { rgbaToYuv } from "../crossfadeFrames";
 import type { StitchOverlayInput } from "../engineTypes";
 import type { OverlayRotation, OverlaySize } from "../overlayDraw";
-import { blendOverlayPlanes, createOverlayWriter, forcedOverlaySlots, overlaySlotTime } from "../overlayFrames";
-import { createTextOverlay } from "../overlays";
+import { blendOverlayPlanes, createOverlayWriter, forcedOverlaySlots, overlayLoopStart } from "../overlayFrames";
+import { createTextOverlay, overlayOpacitiesAt } from "../overlays";
+import { FrameSlotter, planSequence } from "../sequencePlan";
 
 /** Every VideoSample the module constructs: its data (copied, as mediabunny copies a buffer it is given) and init. */
 const constructed: Array<{ data: unknown; init: Record<string, unknown>; timestamp: number; close: Mock }> = [];
@@ -153,6 +154,9 @@ const text = (init: Partial<StitchTextOverlay>): StitchOverlayInput => ({ ...cre
 
 const asSample = (f: FakeFrame) => f as unknown as VideoSample;
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+/** The layers' opacities on each of `slots`, in the loop starting at loopStartSec: what a picture drawn there takes. */
+const on = (overlays: StitchOverlayInput[], slots: number[], loopStartSec = 0) =>
+  slots.map((slot) => overlayOpacitiesAt(overlays, slot, loopStartSec));
 
 function writer(
   overlays: StitchOverlayInput[],
@@ -194,8 +198,9 @@ function writer(
       }
     }
   };
-  const drawnAt = () => draw.mock.calls.map((call) => (call as unknown[])[2] as number);
-  return { w, add, added, draw, drawnAt, feed, ...contexts };
+  /** Each picture drawn: the layers' opacities it was drawn at. */
+  const drawn = () => draw.mock.calls.map((call) => (call as unknown[])[2] as number[]);
+  return { w, add, added, draw, drawn, feed, overlays, ...contexts };
 }
 
 /** Every frame and every sample made here closed exactly once. */
@@ -207,18 +212,17 @@ beforeEach(() => {
   frames.length = 0;
 });
 
-describe("overlaySlotTime", () => {
-  it("is the slot's time less its loop's start", () => {
-    expect(overlaySlotTime(90, 4, 2)).toBe(1.5);
-    expect(overlaySlotTime(270, 4, 2)).toBeCloseTo(0.5, 12);
-    expect(overlaySlotTime(270, 4, 1)).toBe(4.5);
+describe("overlayLoopStart", () => {
+  it("is the start of the loop the slot is in", () => {
+    expect(overlayLoopStart(90, 4, 2)).toBe(0);
+    expect(overlayLoopStart(270, 4, 2)).toBe(4);
+    expect(overlayLoopStart(270, 4, 1)).toBe(0);
   });
 
-  it("gives a later loop's first slot 0 when the loop starts a hair after it, not the loop before's end", () => {
+  it("puts a later loop's first slot in that loop when the loop starts a hair after it, not in the loop before", () => {
     // 1.005 s rounds to slot 60, which is 1 s
-    expect(overlaySlotTime(60, 1.005, 2)).toBe(0);
-    expect(overlaySlotTime(59, 1.005, 2)).toBe(59 / 60);
-    expect(overlaySlotTime(61, 1.005, 2)).toBeCloseTo(61 / 60 - 1.005, 12);
+    expect(overlayLoopStart(60, 1.005, 2)).toBe(1.005);
+    expect(overlayLoopStart(59, 1.005, 2)).toBe(0);
   });
 });
 
@@ -228,7 +232,19 @@ describe("forcedOverlaySlots", () => {
   });
 
   it("is one slot for a cut in and one for a cut out, in every loop, and a loop's first slot when it opens on a layer", () => {
-    expect(forcedOverlaySlots([text({ startSec: 0, endSec: 0.5, fadeInSec: 0, fadeOutSec: 0 })], 1.005, 2)).toEqual([0, 30, 60, 91]);
+    // Loop 1 starts on slot 60 (1.005 s) and its cut out, 1.505 s, rounds to slot 90
+    expect(forcedOverlaySlots([text({ startSec: 0, endSec: 0.5, fadeInSec: 0, fadeOutSec: 0 })], 1.005, 2)).toEqual([0, 30, 60, 90]);
+  });
+
+  it("is the slot a clip on the cut starts on, in each loop, however the cut rounds", () => {
+    // A cut at 5 s in a 10.005 s loop: slot 300, then 15.005 s, slot 900, where loop 1's clip after the cut starts
+    const starts = [0, 1].map((loop) => {
+      const slotter = new FrameSlotter();
+      slotter.begin({ origin: 0, startSec: loop * 10.005 + 5, length: 2 });
+      return Math.round(slotter.place(0)! * 60);
+    });
+    expect(starts).toEqual([300, 900]);
+    expect(forcedOverlaySlots([text({ startSec: 5, endSec: 7, fadeInSec: 0, fadeOutSec: 0 })], 10.005, 2)).toEqual([300, 420, 900, 1020]);
   });
 
   it("stops at the loop's end: what lies past it is cut", () => {
@@ -263,7 +279,7 @@ describe("createOverlayWriter", () => {
     const ended = t.added.at(-2)!.sample as FakeFrame;
     expect(ended.name).toMatch(/^black'+$/);
     expect(ended.setTimestamp).toHaveBeenCalledWith(150 / 60);
-    expect(t.drawnAt()).toEqual(range(91, 149).map((slot) => slot / 60));
+    expect(t.drawn()).toEqual(on(t.overlays, range(91, 149)));
     expect(allClosedOnce()).toBe(true);
   });
 
@@ -278,7 +294,7 @@ describe("createOverlayWriter", () => {
     expect(slots.filter((slot) => slot > 90 && slot < 151)).toEqual([100, 110, 120, 130, 140, 150]);
     expect(constructed.map((s) => Math.round(s.timestamp * 60)).filter((slot) => slot > 90 && slot < 151)).toEqual([100, 110, 120, 130, 140, 150]);
     // One picture per state: each fade slot's, and the plateau's once (at slot 90, where it is reached)
-    expect(t.drawnAt()).toEqual([...range(61, 90), ...range(151, 179)].map((slot) => slot / 60));
+    expect(t.drawn()).toEqual(on(t.overlays, [...range(61, 90), ...range(151, 179)]));
     expect(t.overlay.getImageData).toHaveBeenCalledTimes(59);
     expect(allClosedOnce()).toBe(true);
   });
@@ -295,15 +311,59 @@ describe("createOverlayWriter", () => {
     expect(allClosedOnce()).toBe(true);
   });
 
-  it("draws a later loop's first slot at 0 when the loop starts a hair after it", async () => {
+  it("starts a later loop's layer on the loop's first slot when the loop starts a hair after it, and ends it where it rounds to", async () => {
     const t = writer([text({ startSec: 0, endSec: 0.5, fadeInSec: 0, fadeOutSec: 0.5 })], { loopLength: 1.005, loopCount: 2 });
     await t.feed(frame("a", 0), frame("b", 60));
     expect(t.added.map((x) => x.slot)).toEqual([...range(0, 30), 60]);
-    expect(t.drawnAt().at(-1)).toBe(0);
+    expect(t.drawn().at(-1)).toEqual([1]);
     await t.w.flush();
-    expect(t.added.map((x) => x.slot)).toEqual([...range(0, 30), ...range(60, 91)]);
-    expect(t.drawnAt().at(-1)).toBeCloseTo(90 / 60 - 1.005, 12);
+    // 1.505 s rounds to slot 90: the fade's last slot is 89, as loop 0's is 29
+    expect(t.added.map((x) => x.slot)).toEqual([...range(0, 30), ...range(60, 90)]);
+    expect(t.drawn().at(-1)![0]).toBeCloseTo(1 / 30, 12);
+    expect(t.drawn().slice(-29)).toEqual(on(t.overlays, range(61, 89), 1.005));
     expect(allClosedOnce()).toBe(true);
+  });
+
+  // Clip a trimmed to 5.005 s: clip b's first frame goes on slot 300 (300.3 rounds down), a's last on 299
+  describe("a layer on a cut", () => {
+    const { clips } = planSequence([
+      { inSec: 0, outSec: 5.005, sourceDuration: 10 },
+      { inSec: 0, outSec: null, sourceDuration: 5 },
+    ]);
+    const cut = clips[1].seqStart;
+    /** Each clip's frames as the engine places them: a's at 4.99 s, b's first. */
+    const placed = () => {
+      const slotter = new FrameSlotter();
+      slotter.begin({ origin: 0, startSec: clips[0].seqStart, length: clips[0].length });
+      const lastOfA = Math.round(slotter.place(4.99)! * 60);
+      slotter.begin({ origin: 0, startSec: clips[1].seqStart, length: clips[1].length });
+      return [lastOfA, Math.round(slotter.place(0)! * 60)];
+    };
+
+    it("is burned into the first frame of the clip after the cut, and not the last before it", async () => {
+      expect(placed()).toEqual([299, 300]);
+      const t = writer([text({ startSec: cut, endSec: 8, fadeInSec: 0, fadeOutSec: 0 })], { loopLength: 10.005 });
+      const [a, b] = [frame("a", 299), frame("b", 300)];
+      await t.feed(a, b);
+      expect(t.added.map((x) => x.slot)).toEqual([299, 300]);
+      expect(t.added[0].sample).toBe(a);
+      expect(t.added[1].sample).toBe(constructed[0]);
+      expect(t.drawn()).toEqual([[1]]);
+      // Its cut out at 8 s, slot 480, is the frame held from b
+      await t.w.flush();
+      expect(t.added.map((x) => x.slot)).toEqual([299, 300, 480]);
+      expect(allClosedOnce()).toBe(true);
+    });
+
+    it("ending there, leaves the first frame of the clip after the cut bare", async () => {
+      const t = writer([text({ startSec: 2, endSec: cut, fadeInSec: 0, fadeOutSec: 0 })], { loopLength: 10.005 });
+      const [a, b] = [frame("a", 299), frame("b", 300)];
+      await t.feed(a, b);
+      expect(t.added[0].sample).toBe(constructed[0]);
+      expect(t.added[1].sample).toBe(b);
+      await t.w.flush();
+      expect(allClosedOnce()).toBe(true);
+    });
   });
 
   it("blends a frame at the box into its own planes and colour space; what the layer leaves clear keeps its bytes", async () => {
@@ -333,7 +393,7 @@ describe("createOverlayWriter", () => {
     expect(t.draw).toHaveBeenCalledWith(
       t.overlay,
       { layout: { width: 4, height: 2 }, canvas: { width: 4, height: 2 }, rotation: 0 },
-      0,
+      [1],
       expect.any(Array),
       expect.any(Function),
       expect.any(WeakMap),
@@ -368,7 +428,7 @@ describe("createOverlayWriter", () => {
     // A portrait file: 4 × 2 coded frames shown turned 90°, then a clip of 6 × 4 frames the encoder fits into the box
     const t = writer([text({ startSec: 0, endSec: 4, fadeInSec: 0, fadeOutSec: 0.5 })], { layout: { width: 2, height: 4 }, rotation: 90 });
     await t.feed(frame("a", 0), frame("big", 220, { width: 6, height: 4 }));
-    expect(t.drawnAt()).toEqual([0, ...range(211, 220)].map((slot) => slot / 60));
+    expect(t.drawn()).toEqual(on(t.overlays, [0, ...range(211, 220)]));
     expect(t.draw.mock.calls.map((call) => (call as unknown[])[1])).toEqual(
       Array(11).fill({ layout: { width: 2, height: 4 }, canvas: { width: 4, height: 2 }, rotation: 90 }),
     );

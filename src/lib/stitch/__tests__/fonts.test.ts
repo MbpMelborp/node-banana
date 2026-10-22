@@ -204,9 +204,32 @@ describe("ensureOverlayFonts", () => {
       { ...page().deps, measure },
     );
     expect(resolved.get("family:Inter")).toEqual({ list: `"Inter", ${APP}`, state: "ready" });
-    expect(resolved.get("family:Nowhere Sans")).toEqual({ list: APP, state: "missing" });
+    // A family that looks missing keeps its place in the list: the canvas falls through it where the computer lacks it
+    expect(resolved.get("family:Nowhere Sans")).toEqual({ list: `"Nowhere Sans", ${APP}`, state: "missing" });
     expect(resolved.get("family:JetBrains Mono")).toEqual({ list: `"JetBrains Mono", ${APP}`, state: "ready" });
     expect(measure.mock.calls.some(([font]) => font.includes("JetBrains"))).toBe(false);
+  });
+
+  it("finds a font for one script only by the layers' own text, which the Latin probe cannot", async () => {
+    // Farah draws no Latin letter, so the probe measures as the generic; the Arabic it draws does not
+    const arabic = /[\u0600-\u06ff]/;
+    const measure = vi.fn((font: string, sample: string) => (font.includes('"Farah"') && arabic.test(sample) ? 233.8 : 317.9));
+    const layers = [
+      text("a", { text: "مرحبا", font: { family: "Farah" } }),
+      text("b", { text: "بالعالم\nمرحبا", font: { family: "Farah" } }),
+      text("c", { text: "Hello", font: { family: "Nowhere Sans" } }),
+    ];
+    const resolved = await ensureOverlayFonts(layers, { ...page().deps, measure });
+    expect(resolved.get("family:Farah")).toEqual({ list: `"Farah", ${APP}`, state: "ready" });
+    expect(resolved.get("family:Nowhere Sans")).toEqual({ list: `"Nowhere Sans", ${APP}`, state: "missing" });
+    // Measured in the layers' characters, each once, with no line break
+    const farahText = measure.mock.calls.find(([font, sample]) => font.includes('"Farah"') && sample !== "mmmmmmmmmmlli@#WQ")?.[1];
+    expect(farahText).toBe([...new Set("مرحبابالعالم")].join(""));
+
+    // Arabic text in a font that draws none of it is still told apart from a font that is there
+    const latinOnly = vi.fn((font: string, sample: string) => (font.includes('"Georgia"') && !arabic.test(sample) ? 900 : 500));
+    const georgiaArabic = await ensureOverlayFonts([text("d", { text: "مرحبا", font: { family: "Georgia" } })], { ...page().deps, measure: latinOnly });
+    expect(georgiaArabic.get("family:Georgia")).toEqual({ list: `"Georgia", ${APP}`, state: "ready" });
   });
 
   it("loads the faces each weight needs for the layers' characters, unless they are loaded", async () => {

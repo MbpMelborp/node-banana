@@ -7,6 +7,7 @@ import { createTextOverlay } from "@/lib/stitch/overlays";
 import { overlaySelectionOf, setLivePlayhead, useStitchEditorStore } from "@/store/stitchEditorStore";
 import type { StitchTextOverlay } from "@/types";
 import { CONTROLS_MIN_PX, EditorStage, stageLayout } from "../EditorStage";
+import { overlayNoVideoSlot } from "../OverlayCanvas";
 import { GEOMETRY } from "../editorStyles";
 import { useEditorComposition } from "../useEditorComposition";
 
@@ -344,6 +345,19 @@ describe("the text layers on the stage", () => {
     expect(take(ops)).toEqual([["clear"], ["wash", 0.5], ["Title", 1]]);
   });
 
+  it("shows a layer that starts on a cut with the playhead on the cut, as the render's first frame after the cut has it", () => {
+    sized(STAGE.width, STAGE.height);
+    const { ops } = fakeContext();
+    // A clip trimmed to 5.005 s: the clip after it starts on slot 300 (300.3 rounds down), and so does the layer
+    openWith([text("a", { startSec: 5.005, endSec: 8, fadeInSec: 0, fadeOutSec: 0 })]);
+    playheadAt(5.005);
+    renderStage(false, 16 / 9, { hasOverlays: true, frameSize: HD, total: 10.005 });
+    expect(painted(lastDraw(ops))).toEqual([["clear"], ["wash", 0.5], ["Title", 1]]);
+    // The slot before the cut, the clip before it's last frame, has none
+    act(() => setLivePlayhead(4.99));
+    expect(take(ops)).toEqual([["clear"]]);
+  });
+
   it("shows the black frame with the layers, not the empty card, when there is no video, at the selected layer's height", () => {
     sized(STAGE.width, STAGE.height);
     const { ops } = fakeContext();
@@ -371,6 +385,15 @@ describe("the text layers on the stage", () => {
     // There is no playhead to follow
     act(() => setLivePlayhead(6));
     expect(take(ops)).toEqual([["clear"], ["wash", 1 / 3], ["Second", 2 / 3]]);
+  });
+
+  it("draws a layer with no video on the slot its fade-in tops out on, on the grid its edges round to", () => {
+    // 1.0125 s rounds to slot 61; a 5 ms fade-in is over by the next slot, though 1.0175 s itself rounds to 61
+    const brief = text("a", { startSec: 1.0125, endSec: 3, fadeInSec: 0.005 });
+    expect(overlayNoVideoSlot([brief], null)).toBe(62);
+    expect(overlayNoVideoSlot([text("a", { startSec: 1, endSec: 3 })], null)).toBe(90);
+    // A layer shorter than its fade-in is drawn inside its end
+    expect(overlayNoVideoSlot([text("a", { startSec: 1, endSec: 1.2, fadeInSec: 2, fadeOutSec: 0 })], null)).toBe(71);
   });
 
   it("follows the playhead while the clips' lengths are still being read, whatever layer is selected", () => {

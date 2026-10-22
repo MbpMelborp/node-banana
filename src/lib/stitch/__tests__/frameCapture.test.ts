@@ -61,7 +61,7 @@ type Op =
   | { op: "fill"; style: unknown; alpha: number }
   | { op: "draw"; name: string; alpha: number; options: unknown }
   | { op: "fonts"; ids: string[] }
-  | { op: "overlays"; target: unknown; time: number; ids: string[]; fontList: unknown };
+  | { op: "overlays"; target: unknown; opacities: readonly number[]; ids: string[]; fontList: unknown };
 
 /** What the fake font load resolves to. */
 const FONT_LIST: OverlayFontList = () => '"Space Grotesk", sans-serif';
@@ -156,8 +156,8 @@ function fakes(
       ops.push({ op: "fonts", ids: overlays.map((o) => o.id) });
       return FONT_LIST;
     },
-    drawOverlays: vi.fn<FrameCaptureDeps["drawOverlays"]>((_ctx, target, time, overlays, fontList) => {
-      ops.push({ op: "overlays", target, time, ids: overlays.map((o) => o.id), fontList });
+    drawOverlays: vi.fn<FrameCaptureDeps["drawOverlays"]>((_ctx, target, opacities, overlays, fontList) => {
+      ops.push({ op: "overlays", target, opacities, ids: overlays.map((o) => o.id), fontList });
       return true;
     }),
   };
@@ -438,7 +438,7 @@ describe("captureSequenceFrame: overlays", () => {
   it("draws the overlays over the composite at the frame's slot, laid out at the frame's size, after their fonts load", async () => {
     const toBlob = vi.fn(async () => new Blob(["png"], { type: "image/png" }));
     const f = fakes({ toBlob });
-    // 7.004 s plays on slot 420: the overlays are drawn at 7 s, as the render's frame there
+    // 7.004 s plays on slot 420: the overlays are drawn as the render's frame there has them
     const result = await captureSequenceFrame(job(ab, five, TRACK, 7.004, { overlays: [title], size: { width: 65, height: 37 } }), f.deps);
     expect(result.plan.slot).toBe(420);
     expect(f.ops).toEqual([
@@ -448,13 +448,26 @@ describe("captureSequenceFrame: overlays", () => {
       {
         op: "overlays",
         target: { layout: { width: 64, height: 36 }, canvas: { width: 65, height: 37 }, rotation: 0 },
-        time: 7,
+        opacities: [1],
         ids: ["ovl_a"],
         fontList: FONT_LIST,
       },
     ]);
     expect(vi.mocked(f.deps.drawOverlays).mock.invocationCallOrder[0]).toBeLessThan(toBlob.mock.invocationCallOrder[0]);
     expect(f.allReleased()).toBe(true);
+  });
+
+  it("draws a layer that starts on a cut over the first frame of the clip after it, as the render does", async () => {
+    // Clip a runs to 5.005 s, so b starts on slot 300 (300.3 rounds down): the playhead on the cut is that slot
+    const cut = [edgeClip("a", { outSec: 5.005 }), edgeClip("b")];
+    const onCut = createTextOverlay({ id: "ovl_cut", startSec: 5.005, endSec: 8, fadeInSec: 0, fadeOutSec: 0 });
+    const f = fakes();
+    const result = await captureSequenceFrame(job(cut, { a: 10, b: 5 }, TRACK, 5.005, { overlays: [onCut] }), f.deps);
+    expect(result.plan.slot).toBe(300);
+    expect(f.ops.slice(-2)).toEqual([
+      { op: "draw", name: "edge:b@300", alpha: 1, options: { fit: "cover" } },
+      expect.objectContaining({ op: "overlays", opacities: [1], ids: ["ovl_cut"] }),
+    ]);
   });
 
   it("loads no font and draws no overlay without overlays", async () => {

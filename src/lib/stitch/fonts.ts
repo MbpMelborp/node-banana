@@ -61,7 +61,10 @@ export interface FontDeps {
 
 /** Keywords that name a generic family: never quoted, or they would name a family called that. */
 const GENERIC_FAMILIES: ReadonlySet<string> = new Set(["sans-serif", "serif", "monospace", "system-ui"]);
-/** A family is on this computer when this text measures differently in it than in the generic it falls back to. */
+/**
+ * A family is on this computer when this text, or the layer's own, measures differently in it than in the generic it
+ * falls back to. The layer's text finds a font for one script only (Arabic, say), which draws none of these.
+ */
 const PROBE_TEXT = "mmmmmmmmmmlli@#WQ";
 
 /* Family lists --------------------------------------------------------- */
@@ -240,20 +243,27 @@ function loadFile(name: string, deps: FontDeps): Promise<FontState> {
   return load.state;
 }
 
-function isInstalled(family: string, measure: FontDeps["measure"]): boolean {
+function isInstalled(family: string, text: string, measure: FontDeps["measure"]): boolean {
   if (!measure) return true;
-  return ["monospace", "serif", "sans-serif"].some(
-    (generic) => measure(`72px ${quoteFamily(family)}, ${generic}`, PROBE_TEXT) !== measure(`72px ${generic}`, PROBE_TEXT),
+  const samples = text.trim() ? [PROBE_TEXT, text] : [PROBE_TEXT];
+  return samples.some((sample) =>
+    ["monospace", "serif", "sans-serif"].some(
+      (generic) => measure(`72px ${quoteFamily(family)}, ${generic}`, sample) !== measure(`72px ${generic}`, sample),
+    ),
   );
 }
 
-async function resolveFont(font: StitchOverlayFont, deps: FontDeps, appSans: string): Promise<ResolvedFont> {
+/**
+ * `font`, for layers that draw `text`. A family keeps its own list whatever isInstalled says: the canvas falls through
+ * one the computer lacks, so a wrong verdict changes only the rail's note.
+ */
+async function resolveFont(font: StitchOverlayFont, text: string, deps: FontDeps, appSans: string): Promise<ResolvedFont> {
   if (font.file) {
     const state = await loadFile(font.file, deps);
     return { list: state === "ready" ? readyList(font, appSans) : appSans, state };
   }
-  if (shippedFont(font.family) || isInstalled(font.family, deps.measure)) return { list: readyList(font, appSans), state: "ready" };
-  return { list: appSans, state: "missing" };
+  const here = shippedFont(font.family) !== null || isInstalled(font.family, text, deps.measure);
+  return { list: readyList(font, appSans), state: here ? "ready" : "missing" };
 }
 
 /** Loads the faces `font` (a CSS font value) needs for `text`, unless they are loaded. A value the set cannot parse draws in the fallback. */
@@ -269,8 +279,9 @@ async function loadFaces(font: string, text: string, fonts: FontDeps["fonts"]): 
 
 /**
  * Resolves every layer's font, loading font files and the faces each layer's weight and text need, so the first frame
- * drawn after it is in the right font. Never rejects: a font that cannot be had resolves to the app's sans, with its
- * state. Keyed by fontKey; overlayFontList turns the result into the lists drawOverlays takes.
+ * drawn after it is in the right font. Never rejects: a font file that cannot be had resolves to the app's sans, a
+ * family to its own list, each with its state. Keyed by fontKey; overlayFontList turns the result into the lists
+ * drawOverlays takes.
  */
 export async function ensureOverlayFonts(
   overlays: readonly StitchOverlay[],
@@ -289,14 +300,14 @@ export async function ensureOverlayFonts(
   }
   await Promise.all(
     [...groups].map(async ([key, group]) => {
+      const text = [...new Set(group.text.replace(/\n/g, ""))].join("") || " ";
       let font: ResolvedFont;
       try {
-        font = await resolveFont(group.font, d, appSans);
+        font = await resolveFont(group.font, text, d, appSans);
       } catch {
         font = { list: appSans, state: "failed" };
       }
       resolved.set(key, font);
-      const text = [...new Set(group.text.replace(/\n/g, ""))].join("") || " ";
       await Promise.all([...group.weights].map((weight) => loadFaces(`${weight} 16px ${font.list}`, text, d.fonts)));
     }),
   );

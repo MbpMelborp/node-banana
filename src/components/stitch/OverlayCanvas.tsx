@@ -9,7 +9,7 @@ import {
   type OverlayLayoutCache,
   type OverlaySize,
 } from "@/lib/stitch/overlayDraw";
-import { draftOverlays, NO_OVERLAYS, overlayFadeKnees, overlayOpacityAt } from "@/lib/stitch/overlays";
+import { draftOverlays, NO_OVERLAYS, overlayFadeKnees, overlayOpacitiesAt } from "@/lib/stitch/overlays";
 import { FRAME_RATE, secToSlot } from "@/lib/stitch/sequencePlan";
 import {
   livePlayhead,
@@ -26,25 +26,28 @@ export const OVERLAY_FALLBACK_FRAME: OverlaySize = { width: 1920, height: 1080 }
 const overlaysOf = (s: Pick<StitchEditorState, "draft">) => (s.draft ? draftOverlays(s.draft) : NO_OVERLAYS);
 
 /**
- * The sequence time the overlays are drawn at for playhead `t`: the start of the render's 60 fps slot it lands in,
- * never past the last slot, so a paused frame shows what the render's frame there holds. While the clips' lengths are
- * still being read (`total` 0) there is no last slot yet: the playhead's own.
+ * The render's 60 fps slot the overlays are drawn on for playhead `t`: the one it lands in, never past the last, so a
+ * paused frame shows what the render's frame there holds. While the clips' lengths are still being read (`total` 0)
+ * there is no last slot yet: the playhead's own.
  */
-export function overlayPreviewTime(t: number, total: number): number {
+export function overlayPreviewSlot(t: number, total: number): number {
   const last = total > 0 ? secToSlot(total) - 1 : Infinity;
-  return Math.max(0, Math.min(secToSlot(total > 0 ? Math.min(t, total) : t), last)) / FRAME_RATE;
+  return Math.max(0, Math.min(secToSlot(total > 0 ? Math.min(t, total) : t), last));
 }
 
 /**
- * The time drawn with no video clip, where there is no render to match and no playhead to move: the lead selected
- * layer (else the one that starts first) at the top of its fade-in, inside its end.
+ * The slot drawn with no video clip, where there is no render to match and no playhead to move: the lead selected
+ * layer (else the one that starts first) at the top of its fade-in, on the grid overlayOpacityAtSlot puts it on, inside
+ * its end.
  */
-export function overlayNoVideoTime(overlays: readonly StitchOverlay[], selection: StitchSelection): number {
+export function overlayNoVideoSlot(overlays: readonly StitchOverlay[], selection: StitchSelection): number {
   const lead = selection?.kind === "overlay" ? overlays.find((o) => o.id === selection.clipId) : undefined;
   const earlier = (a: StitchOverlay | undefined, o: StitchOverlay) => (a && a.startSec <= o.startSec ? a : o);
   const shown = lead ?? overlays.reduce<StitchOverlay | undefined>(earlier, undefined);
   if (!shown) return 0;
-  return Math.max(shown.startSec, Math.min(overlayFadeKnees(shown).fadeInEnd, shown.endSec - 1 / FRAME_RATE));
+  const from = secToSlot(shown.startSec);
+  const top = from + Math.ceil((overlayFadeKnees(shown).fadeInEnd - shown.startSec) * FRAME_RATE - 1e-6);
+  return Math.max(from, Math.min(top, secToSlot(shown.endSec) - 1));
 }
 
 /**
@@ -87,8 +90,9 @@ export function OverlayCanvas({
     const draw = (t: number) => {
       const s = useStitchEditorStore.getState();
       const overlays = overlaysOf(s);
-      const at = noVideo ? overlayNoVideoTime(overlays, s.selection) : overlayPreviewTime(t, total);
-      if (blank.current && !overlays.some((o) => overlayOpacityAt(o, at) > 0)) return;
+      const slot = noVideo ? overlayNoVideoSlot(overlays, s.selection) : overlayPreviewSlot(t, total);
+      const opacities = overlayOpacitiesAt(overlays, slot);
+      if (blank.current && !opacities.some((opacity) => opacity > 0)) return;
       const ratio = window.devicePixelRatio || 1;
       const width = Math.round((frameWidth ?? canvas.clientWidth) * ratio);
       const height = Math.round((frameHeight ?? canvas.clientHeight) * ratio);
@@ -100,7 +104,7 @@ export function OverlayCanvas({
       ctx.clearRect(0, 0, width, height);
       fonts.current ??= overlayFontList(new Map());
       const target = { layout, canvas: { width, height }, rotation: 0 as const };
-      blank.current = !drawOverlays(ctx, target, at, overlays, fonts.current, cache);
+      blank.current = !drawOverlays(ctx, target, opacities, overlays, fonts.current, cache);
     };
     redraw.current = () => draw(livePlayhead());
     redraw.current();
