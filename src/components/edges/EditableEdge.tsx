@@ -107,7 +107,7 @@ export function EditableEdge({
   source,
   target,
 }: EdgeProps) {
-  const { setEdges, screenToFlowPosition } = useReactFlow();
+  const { setEdges, screenToFlowPosition, setCenter, getZoom } = useReactFlow();
   const edgeStyle = useWorkflowStore((state) => state.edgeStyle);
   const appearance = useWorkflowStore((state) => state.edgeAppearance);
   const [isDragging, setIsDragging] = useState(false);
@@ -149,6 +149,8 @@ export function EditableEdge({
     },
     [id, setEdges]
   );
+  // The toolbar's jumps centre one end of the noodle at the current zoom
+  const centreOn = (x: number, y: number) => void setCenter(x, y, { zoom: getZoom(), duration: 300 });
   const ownLabel = (data as EdgeData | undefined)?.label?.trim() ?? "";
   const hasOwnLabel = Boolean(ownLabel);
   const [hovered, setHovered] = useState(false);
@@ -545,6 +547,12 @@ export function EditableEdge({
             edgeId={id}
             x={toolbarStub.x + toolbarDir * (toolbarWidth / 2)}
             y={toolbarStub.y - 10}
+            // Centre that end's pill and move the toolbar onto it
+            onJump={(end) => {
+              setToolbarSide(end);
+              if (end === "source") centreOn(sourceStub.x + sourceDir * (sourceWidth / 2), sourceStub.y);
+              else centreOn(targetStub.x + targetDir * (targetWidth / 2), targetStub.y);
+            }}
           />
         )}
       </>
@@ -568,7 +576,14 @@ export function EditableEdge({
         } as React.CSSProperties}
       />
 
-      {selected && carriesToolbar && !hookBundle && <EdgeToolbar edgeId={id} x={labelX} y={labelY} />}
+      {selected && carriesToolbar && !hookBundle && (
+        <EdgeToolbar
+          edgeId={id}
+          x={labelX}
+          y={labelY}
+          onJump={(end) => (end === "source" ? centreOn(sourceX, sourceY) : centreOn(targetX, targetY))}
+        />
+      )}
       {hookData.map((handle, index) => {
         const members = hookGroups[index];
         if (!members || members.length < 2 || members[0].id !== id) return null;

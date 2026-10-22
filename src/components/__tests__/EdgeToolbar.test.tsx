@@ -134,6 +134,30 @@ describe("EdgeToolbar", () => {
     expect(mockSetEdgesHidden).toHaveBeenCalledWith(["e1"], false);
   });
 
+  it("jumps to either end of a single noodle", () => {
+    const onJump = vi.fn();
+    withEdges([edge("e1", { selected: true })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onJump={onJump} />);
+    fireEvent.click(screen.getByRole("button", { name: "Jump to start of noodle" }));
+    expect(onJump).toHaveBeenLastCalledWith("source");
+    fireEvent.click(screen.getByRole("button", { name: "Jump to end of noodle" }));
+    expect(onJump).toHaveBeenLastCalledWith("target");
+  });
+
+  it("places the jumps, start then end, before hide", () => {
+    withEdges([edge("e1", { selected: true })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onJump={vi.fn()} />);
+    const start = screen.getByTitle("Jump to start of noodle");
+    expect(start.nextElementSibling).toBe(screen.getByTitle("Jump to end of noodle"));
+    expect(start.nextElementSibling!.nextElementSibling).toBe(screen.getByTitle("Hide connection"));
+  });
+
+  it("leaves the jumps out when several edges are selected", () => {
+    withEdges([edge("e1", { selected: true }), edge("e2", { selected: true, source: "c" })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onJump={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /^Jump to/ })).toBeNull();
+  });
+
   it("hides a single edge", () => {
     withEdges([edge("e1", { selected: true })]);
     render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
@@ -253,8 +277,9 @@ describe("EdgeToolbar bundles", () => {
       edge("e1", { selected: true, data: { sourceBundleId: "x", createdAt: 1 } }),
       edge("e2", { target: "z", data: { sourceBundleId: "x", createdAt: 2 } }),
     ]);
-    render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onJump={vi.fn()} />);
     expect(screen.getByText("2 noodles")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Jump to/ })).toBeNull();
     fireEvent.click(screen.getByTitle("Pause all"));
     expect(mockSetEdgesPause).toHaveBeenCalledWith(["e1", "e2"], true);
     fireEvent.click(screen.getByTitle("Unbundle"));

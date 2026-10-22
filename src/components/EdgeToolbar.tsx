@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, EyeOff, Minus, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { ArrowLeftToLine, ArrowRightToLine, Eye, EyeOff, Minus, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { MenuSurface } from "@/components/ui/Menu";
 import { useMemo } from "react";
 import { useViewport } from "@xyflow/react";
@@ -22,6 +22,8 @@ interface EdgeToolbarProps {
   /** Anchor in flow coordinates, normally the path's label position. */
   x: number;
   y: number;
+  /** Brings one end of the connection into view: "source" is its start, "target" its end. */
+  onJump?: (end: "source" | "target") => void;
 }
 
 /** True for the edge that should carry the toolbar: the first selected one. */
@@ -32,7 +34,7 @@ export function useIsToolbarEdge(edgeId: string): boolean {
 const iconButton =
   "p-1.5 rounded hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed";
 
-export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
+export function EdgeToolbar({ edgeId, x, y, onJump }: EdgeToolbarProps) {
   const edges = useWorkflowStore((state) => state.edges);
   const clickAnchor = useWorkflowStore((state) => state.edgeMenuAnchor);
   const toggleEdgePause = useWorkflowStore((state) => state.toggleEdgePause);
@@ -138,6 +140,26 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
             >
               Unbundle
             </button>
+          )}
+          {onJump && !grouped && (
+            <>
+              <button
+                onClick={() => onJump("source")}
+                className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
+                title="Jump to start of noodle"
+                aria-label="Jump to start of noodle"
+              >
+                <ArrowLeftToLine size={16} strokeWidth={1.5} />
+              </button>
+              <button
+                onClick={() => onJump("target")}
+                className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
+                title="Jump to end of noodle"
+                aria-label="Jump to end of noodle"
+              >
+                <ArrowRightToLine size={16} strokeWidth={1.5} />
+              </button>
+            </>
           )}
           {isHiddenEdge ? (
             <button
