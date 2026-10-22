@@ -8,6 +8,7 @@
 import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, promises as fs } from "fs";
 import path from "path";
+import { fontFileKey, isFontFileName } from "@/lib/edits/fontFiles";
 import { newAssetId, newRunId } from "../client/ids";
 import { MAX_IMPORT_PROJECTS, type AssetModelRef, type AssetRecord, type LibraryJobStatus, type LibraryJobType } from "../types";
 import { errnoCode, LibraryError } from "./errors";
@@ -22,7 +23,7 @@ import {
   sweepStaleTemps,
   unlinkWithRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, EDITS_DIR, GENERATIONS_DIR, WRITERS_DIR } from "./layout";
+import { acquireLock, DATA_DIR, EDITS_DIR, FONTS_DIR, GENERATIONS_DIR, WRITERS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import { isUnreadableFile } from "./readable";
@@ -729,12 +730,22 @@ async function holdsEditFiles(dir: string): Promise<boolean> {
   }
 }
 
+/** The `fontFileKey`s of the font files in `dir`: what a move copies from a Fonts folder. */
+async function fontFileKeys(dir: string): Promise<Set<string>> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return new Set(entries.filter((dirent) => dirent.isFile() && isFontFileName(dirent.name)).map((dirent) => fontFileKey(dirent.name)));
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * Checks a move destination before the job starts: absolute, not the
  * current root, neither inside the other (after resolving symlinks such as
  * macOS's /var → /private/var, case-folded where the disk folds case), and
- * not already holding a library (nor another library's edits, which the
- * copy would overwrite).
+ * not already holding a library (nor another library's edits, nor a font
+ * named like one of ours, which the copy would overwrite).
  */
 export async function validateMoveTarget(fromRoot: string, target: unknown, platform: NodeJS.Platform = process.platform): Promise<string> {
   if (typeof target !== "string" || !path.isAbsolute(target) || target.includes("\0")) {
@@ -765,6 +776,18 @@ export async function validateMoveTarget(fromRoot: string, target: unknown, plat
       "conflict",
     );
   }
+  const ours = await fontFileKeys(path.join(fromRoot, FONTS_DIR));
+  if (ours.size) {
+    const theirs = await fs.readdir(path.join(to, FONTS_DIR)).catch((): string[] => []);
+    const clash = theirs.find((name) => ours.has(fontFileKey(name)));
+    if (clash) {
+      throw new LibraryError(
+        `The new folder's Fonts folder already has a font named “${clash}”. Move or rename it there, or choose another folder.`,
+        409,
+        "conflict",
+      );
+    }
+  }
   return to;
 }
 
@@ -786,8 +809,9 @@ const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Library-owned files only: the day folders of Generations/, the edit files
- * in Edits/ and .nodebanana/ — never projects (not even a project file that ended up
- * under Generations/), caches, locks, move markers or temp files.
+ * in Edits/, the font files in Fonts/ and .nodebanana/ — never projects (not
+ * even a project file that ended up under Generations/), caches, locks, move
+ * markers or temp files.
  */
 async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
@@ -823,6 +847,7 @@ async function buildManifest(root: string, library?: AssetLibrary): Promise<Mani
   };
   await walk(path.join(root, GENERATIONS_DIR), (dirent) => dirent.isDirectory() && DAY_FOLDER.test(dirent.name));
   await walk(path.join(root, EDITS_DIR), (dirent) => dirent.isFile() && dirent.name.toLowerCase().endsWith(".nbedit"));
+  await walk(path.join(root, FONTS_DIR), (dirent) => dirent.isFile() && isFontFileName(dirent.name));
   await walk(data);
   return entries;
 }
@@ -876,10 +901,10 @@ function relKey(rel: string): string {
   return rel.split(path.sep).join("/");
 }
 
-/** A target path the move may have written: inside the target's Generations, Edits or data folder. */
+/** A target path the move may have written: inside the target's Generations, Edits, Fonts or data folder. */
 function movedPath(toRoot: string, rel: string): string | null {
   const dest = path.join(toRoot, ...rel.split("/"));
-  const inside = [GENERATIONS_DIR, EDITS_DIR, DATA_DIR].some((dir) => isInsideRoot(path.join(toRoot, dir), dest));
+  const inside = [GENERATIONS_DIR, EDITS_DIR, FONTS_DIR, DATA_DIR].some((dir) => isInsideRoot(path.join(toRoot, dir), dest));
   return inside ? dest : null;
 }
 

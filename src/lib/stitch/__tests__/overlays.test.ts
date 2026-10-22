@@ -150,7 +150,7 @@ describe("sanitizeOverlays", () => {
     const fileOf = (file: unknown) => sanitizeOverlays([{ ...text("o"), font: { family: "F", file } }])[0].font.file;
     expect(fileOf("Inter-Bold.woff2")).toBe("Inter-Bold.woff2");
     expect(fileOf("Ünïcödé Sans.OTF")).toBe("Ünïcödé Sans.OTF");
-    for (const bad of ["../x.ttf", "a/b.ttf", "a\\b.ttf", ".hidden.ttf", "x.exe", "x.ttc", "%2e%2e.ttf", "", 3]) {
+    for (const bad of ["../x.ttf", "a/b.ttf", "a\\b.ttf", ".hidden.ttf", "x.exe", "x.ttc", "%2e%2e.ttf", "Half \uD83C.ttf", "", 3]) {
       expect(fileOf(bad), String(bad)).toBeUndefined();
     }
   });

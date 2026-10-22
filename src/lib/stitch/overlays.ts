@@ -195,7 +195,8 @@ export function sanitizeOverlays(raw: unknown): StitchOverlay[] {
   return compactOverlayRows(normalizeOverlays(overlays)).overlays;
 }
 
-function overlayOrder(a: StitchOverlay, b: StitchOverlay): number {
+/** The list's order, and the order layers are painted in: by row, then start, then id. */
+export function overlayOrder(a: StitchOverlay, b: StitchOverlay): number {
   return a.row - b.row || a.startSec - b.startSec || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
