@@ -130,7 +130,7 @@ export function TrimOverlay({
       <div className={cn(CHROME_SURFACE, "w-full rounded-media p-1")}>
         <EdgeFrame src={src} time={time} fallback={fallback} />
         <div className="flex h-[18px] items-center justify-between px-1 text-[10px]">
-          <span className="text-neutral-400">{trim.edge === "out" ? "Out" : "In"}</span>
+          <span className="text-neutral-400">{trim.result.field === "outSec" ? "Out" : "In"}</span>
           <span className="tabular-nums text-neutral-100">{formatTimecode(time)}</span>
         </div>
       </div>

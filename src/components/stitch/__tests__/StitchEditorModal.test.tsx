@@ -13,6 +13,7 @@ import {
 } from "@/lib/stitch/mediaInfo";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { createClip } from "@/lib/stitch/timeline";
+import { normalizeWarp, withWarp } from "@/lib/stitch/warp";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { musicAudio } from "@/lib/stitch/draft";
 import { createTextOverlay } from "@/lib/stitch/overlays";
@@ -21,7 +22,7 @@ import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { libraryDrop } from "../timeline/libraryDrop";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
-import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
 import { LOOP_AUDIO_NOTE } from "../sequenceMenu";
 
@@ -215,6 +216,38 @@ describe("StitchEditorModal", () => {
     seed({ fps: [24, 30] });
     openEditor();
     expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  /** The first clip retimed, as an edit writes it. */
+  const retimeFirst = (warp: Partial<ClipWarp>) =>
+    act(() =>
+      editor().apply((d) => ({
+        ...d,
+        timeline: d.timeline.map((c, i) =>
+          i === 0 ? withWarp(c, normalizeWarp({ speed: 1, curve: null, reverse: false, blend: false, ...warp })) : c,
+        ),
+      })),
+    );
+
+  it("names no rate once a clip is retimed", () => {
+    seed();
+    openEditor();
+    retimeFirst({ speed: 2 });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  it("names no rate for a clip on a ramp at an average 1×", () => {
+    seed();
+    openEditor();
+    retimeFirst({ curve: { kind: "preset", name: "easeInQuad" } });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  it("keeps the rate for a clip that is only reversed", () => {
+    seed();
+    openEditor();
+    retimeFirst({ reverse: true });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080 · 24 fps");
   });
 
   it("leaves a clip the encode drops out of the size and rate", () => {

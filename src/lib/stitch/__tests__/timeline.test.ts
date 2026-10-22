@@ -1,20 +1,27 @@
 import { describe, it, expect } from "vitest";
-import type { StitchTimelineClip } from "@/types";
-import { planSequence } from "../sequencePlan";
+import type { ClipWarp, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import { sanitizeTimeline } from "../migrate";
+import { resolveStarts } from "../placement";
+import { FRAME_RATE, planSequence } from "../sequencePlan";
+import { joinOverlaps } from "../stack";
 import {
   END_EPSILON_SEC,
   MIN_CLIP_SEC,
   appendClips,
+  canResetTrim,
   canSplitClipsAt,
   clampTrim,
   clearStarts,
   clipAtTime,
   clipLength,
+  clipSourceOut,
   clipSpans,
   createClip,
+  edgeAtPlayheadPatch,
   edgeIdsInOrder,
   inOverlap,
   isPlaced,
+  isTrimmed,
   layersAt,
   layoutSpans,
   MAX_START_SEC,
@@ -40,12 +47,15 @@ import {
   shiftRows,
   snapTo,
   sourceKey,
+  sourceTimeAt,
   spanAtTime,
   spansAt,
   spansEnd,
   spansEnvelope,
+  spanWarpMap,
   splitClipAt,
   splitClipsAt,
+  splitRefusal,
   topSpanAt,
   trimClip,
   trimClipInPlace,
@@ -55,6 +65,7 @@ import {
   type SourceDurations,
   type SourceKey,
 } from "../timeline";
+import { normalizeWarp, withWarp } from "../warp";
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -67,6 +78,30 @@ function durations(entries: Record<string, number>): SourceDurations {
 // Three clips of 5, 4 and 6 seconds: spans 0–5, 5–9, 9–15.
 const three = () => [edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")];
 const threeDurations = durations({ "edge:e1": 5, "edge:e2": 4, "edge:e3": 6 });
+
+const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+  speed,
+  curve: null,
+  reverse: false,
+  blend: false,
+  ...extra,
+});
+/** Source progress = output progress², in closed form. */
+const QUAD = { kind: "preset", name: "easeInQuad" } as const;
+const OUT_QUAD = { kind: "preset", name: "easeOutQuad" } as const;
+/** In memory only: a warp that changes nothing, which every path must read as none. It is never stored. */
+const IDENTITY: ClipWarp = { speed: 1, curve: null, reverse: false, blend: true };
+/** A retime as an edit writes it. */
+const retimed = (clip: StitchTimelineClip, warp: ClipWarp) => withWarp(clip, normalizeWarp(warp));
+
+// Seeded: the placement simulations' LCG.
+function lcg(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1103515245 + 12345) % 2147483648;
+    return s / 2147483648;
+  };
+}
 
 describe("sourceKey and createClip", () => {
   it("keys edge and asset sources apart", () => {
@@ -821,9 +856,21 @@ describe("group operations", () => {
       { name: "track", timeline: board().map((c) => ({ ...c, startSec: undefined })), layout: TRACK },
       { name: "lined up", timeline: [edgeClip("c1", "a"), edgeClip("c2", "b"), edgeClip("c3", "c")], layout: STACKED },
       { name: "placed", timeline: board(), layout: STACKED },
+      {
+        // c2 eases in from a standstill at 6 (its speed refuses a cut until about 6.5); c3 runs backwards at 2×
+        name: "placed, retimed",
+        timeline: board().map((c) => {
+          if (c.id === "c2") return retimed(c, W(0.25, { curve: QUAD }));
+          return c.id === "c3" ? retimed(c, W(2, { reverse: true })) : c;
+        }),
+        layout: STACKED,
+      },
     ];
     const selections = [["c1"], ["c2"], ["c1", "c3"], ["c2", "c3"], ["c3", "c4"], ["c1", "c2", "c3", "c4"]];
-    const times = [-1, 0, 0.05, 0.1, 2.5, 4, 4.5, 4.95, 5, 5.05, 6, 6.05, 8.5, 9.2, 9.25, 10, 10.15, 11, 12, 14.2, 15.15, 15.2, 20];
+    const times = [
+      -1, 0, 0.05, 0.1, 2.5, 4, 4.5, 4.95, 5, 5.05, 6, 6.05, 6.12, 6.2, 7, 8.5, 9.2, 9.25, 9.3, 10, 10.15, 11, 12, 14.2,
+      15.15, 15.2, 20,
+    ];
     for (const { name, timeline, layout } of cases) {
       const spans = layoutSpans(timeline, boardDurations, layout);
       const placed = layout.mode === "stacked" && isPlaced(timeline);
@@ -875,5 +922,700 @@ describe("group operations", () => {
     const gappedSpans = layoutSpans(gapped, d, STACKED);
     expect(runEndIndex(gappedSpans, 1)).toBe(1);
     expect(runEndIndex(gappedSpans, 0)).toBe(2);
+  });
+});
+
+describe("an edit without warps", () => {
+  // 705eed7e's span maths: the reference for "an edit without warps gives identical spans". A deliberate change to
+  // these functions updates this copy in the same commit.
+  type RefSpan = Omit<ClipSpan, "sourceOut">;
+  const refClamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+  function refClipLength(clip: StitchTimelineClip, sourceDuration: number | undefined): number {
+    if (sourceDuration === undefined || !Number.isFinite(sourceDuration)) return 0;
+    const end = Math.min(clip.outSec ?? sourceDuration, sourceDuration);
+    const length = Math.max(0, end - Math.min(clip.inSec, sourceDuration));
+    return length < 1 / FRAME_RATE ? 0 : length;
+  }
+  function refClipSpans(timeline: readonly StitchTimelineClip[], d: SourceDurations, overlapSec: number): RefSpan[] {
+    const lengths = timeline.map((clip) => refClipLength(clip, d.get(sourceKey(clip.source))));
+    const overlaps = joinOverlaps(
+      timeline.map((clip, i) => ({ length: lengths[i], source: sourceKey(clip.source) })),
+      overlapSec,
+    );
+    let cursor = 0;
+    const spans = timeline.map((clip, index): RefSpan => {
+      const length = lengths[index];
+      if (!(length > 0)) return { clip, index, start: cursor, end: cursor, length, overlapIn: 0, overlapOut: 0 };
+      const start = cursor - overlaps[index];
+      cursor = start + length;
+      return { clip, index, start, end: cursor, length, overlapIn: overlaps[index], overlapOut: 0 };
+    });
+    let next: RefSpan | null = null;
+    for (let i = spans.length - 1; i >= 0; i--) {
+      if (!(spans[i].length > 0)) continue;
+      if (next) spans[i].overlapOut = next.overlapIn;
+      next = spans[i];
+    }
+    return spans;
+  }
+  function refPlacedSpans(timeline: readonly StitchTimelineClip[], d: SourceDurations, overlapSec: number): RefSpan[] {
+    const lengths = timeline.map((clip) => refClipLength(clip, d.get(sourceKey(clip.source))));
+    const starts = resolveStarts(
+      timeline.map((clip, i) => ({ start: clip.startSec, length: lengths[i], source: sourceKey(clip.source) })),
+      overlapSec,
+    );
+    return timeline.map((clip, index): RefSpan => {
+      const length = lengths[index] > 0 ? lengths[index] : 0;
+      const start = starts[index];
+      return { clip, index, start, end: start + length, length, overlapIn: 0, overlapOut: 0 };
+    });
+  }
+  function refLayoutSpans(timeline: readonly StitchTimelineClip[], d: SourceDurations, layout: StitchSequenceLayout) {
+    if (layout.mode !== "stacked") return refClipSpans(timeline, d, 0);
+    return isPlaced(timeline)
+      ? refPlacedSpans(timeline, d, layout.overlapSec)
+      : refClipSpans(timeline, d, layout.overlapSec);
+  }
+  const refSourceTimeAt = (span: RefSpan, t: number) => span.clip.inSec + refClamp(t - span.start, 0, span.length);
+
+  const SOURCES = ["e1", "e2", "e3", "e4", "missing"];
+  const FIELDS = ["index", "start", "end", "length", "overlapIn", "overlapOut"] as const;
+
+  /** A random edit: sources of odd lengths (a frame, under MIN), trims past the ends, and all three layouts. */
+  function randomEdit(rnd: () => number) {
+    const lengths = [5, 4, 6, 1 / 60, 0.05];
+    const entries: Record<string, number> = {};
+    for (const source of SOURCES.slice(0, 4)) {
+      const k = Math.floor(rnd() * 6);
+      entries[`edge:${source}`] = k < 5 ? lengths[k] : rnd() * 12;
+    }
+    const mode = rnd() < 1 / 3 ? "track" : "stacked";
+    const placed = mode === "stacked" && rnd() < 0.5;
+    const timeline = Array.from({ length: 1 + Math.floor(rnd() * 6) }, (_, i) =>
+      edgeClip(`c${i}`, SOURCES[Math.floor(rnd() * SOURCES.length)], {
+        inSec: rnd() < 0.5 ? 0 : Math.round(rnd() * 60) / 10,
+        outSec: rnd() < 0.5 ? null : Math.round(rnd() * 80) / 10,
+        ...(placed && rnd() < 0.6 ? { startSec: Math.round(rnd() * 120) / 10 } : {}),
+      }),
+    );
+    const layout: StitchSequenceLayout = {
+      mode,
+      overlapSec: Math.round(rnd() * 30) / 10,
+      crossfade: rnd() < 0.5,
+    };
+    return { timeline, d: durations(entries), layout };
+  }
+
+  /** Instants to read the source at: before, on and either side of every edge, a few inside, past the end, NaN. */
+  function instants(spans: readonly { start: number; end: number }[], rnd: () => number): number[] {
+    const total = spans.reduce((end, s) => Math.max(end, s.end), 0);
+    const times = [-1, 0, total + 1, NaN];
+    for (const s of spans) times.push(s.start - 1e-7, s.start, s.start + 1e-7, s.end - 1e-7, s.end, s.end + 1e-7);
+    for (let k = 0; k < 4; k++) times.push(rnd() * total);
+    return times;
+  }
+
+  const withIdentity = (timeline: readonly StitchTimelineClip[]) =>
+    timeline.map((clip) => ({ ...clip, warp: IDENTITY }));
+  /** The same clips, field for field, the identity warp aside (the loops are long: no deep equality in them). */
+  const sameClips = (a: readonly StitchTimelineClip[], b: readonly StitchTimelineClip[]) =>
+    a.length === b.length &&
+    a.every((clip, i) => {
+      const other = b[i];
+      return (
+        clip.id === other.id &&
+        sourceKey(clip.source) === sourceKey(other.source) &&
+        Object.is(clip.inSec, other.inSec) &&
+        Object.is(clip.outSec, other.outSec) &&
+        clip.muted === other.muted &&
+        clip.volume === other.volume &&
+        Object.is(clip.startSec, other.startSec) &&
+        ("startSec" in clip) === ("startSec" in other)
+      );
+    });
+
+  it("gives 705eed7e's spans and source times on 2,000 random edits", () => {
+    const rnd = lcg(2026);
+    const misses: string[] = [];
+    for (let n = 0; n < 2000; n++) {
+      const { timeline, d, layout } = randomEdit(rnd);
+      for (const lay of [layout, { ...layout, mode: "track" as const }]) {
+        const got = layoutSpans(timeline, d, lay);
+        const want = refLayoutSpans(timeline, d, lay);
+        if (got.length !== want.length) misses.push(`${n} ${lay.mode}: ${got.length} spans`);
+        const times = instants(want, rnd);
+        got.forEach((span, i) => {
+          const w = want[i];
+          if (span.clip !== w.clip) misses.push(`${n} ${lay.mode} span ${i}: clip`);
+          for (const field of FIELDS) {
+            if (!Object.is(span[field], w[field])) misses.push(`${n} ${lay.mode} span ${i}: ${field}`);
+          }
+          const sd = d.get(sourceKey(span.clip.source));
+          const { inSec, outSec } = span.clip;
+          const out = sd === undefined ? inSec : Math.max(inSec, Math.min(outSec ?? sd, sd));
+          if (!Object.is(span.sourceOut, out)) misses.push(`${n} ${lay.mode} span ${i}: sourceOut`);
+          for (const t of times) {
+            if (!Object.is(sourceTimeAt(span, t), refSourceTimeAt(w, t))) misses.push(`${n} span ${i}: source at ${t}`);
+          }
+        });
+      }
+    }
+    expect(misses.slice(0, 10)).toEqual([]);
+  });
+
+  it("reads a warp that changes nothing as none, in every span, trim, split and edge", () => {
+    const rnd = lcg(7);
+    const misses: string[] = [];
+    // The label's parts are joined only for a miss: the loops are long
+    const same = (a: unknown, b: unknown, ...what: unknown[]) => {
+      if (!Object.is(a, b)) misses.push(`${what.join(" ")}: ${String(a)} ≠ ${String(b)}`);
+    };
+    // An op on the plain timeline and on its identity copy: the same clips, and the same array back when unchanged
+    const sameResult = (
+      n: number,
+      what: string,
+      input: StitchTimelineClip[],
+      plain: StitchTimelineClip[] | null,
+      identityInput: StitchTimelineClip[],
+      result: StitchTimelineClip[] | null,
+    ) => {
+      same(result === identityInput, plain === input, n, what, "unchanged");
+      if ((result === null) !== (plain === null)) misses.push(`${n} ${what}: null`);
+      else if (result && plain && !sameClips(result, plain)) misses.push(`${n} ${what}: clips`);
+    };
+    const patchOf = (): { inSec?: number; outSec?: number | null } => {
+      const value = () => Math.round((rnd() * 13 - 1) * 100) / 100;
+      const k = Math.floor(rnd() * 4);
+      if (k === 0) return { inSec: value() };
+      if (k === 1) return { outSec: value() };
+      return k === 2 ? { outSec: null } : { inSec: value(), outSec: value() };
+    };
+    for (let n = 0; n < 2000; n++) {
+      const { timeline, d, layout } = randomEdit(rnd);
+      const ident = withIdentity(timeline);
+      for (const clip of timeline) {
+        const sd = d.get(sourceKey(clip.source));
+        same(clipLength({ ...clip, warp: IDENTITY }, sd), clipLength(clip, sd), n, "length");
+      }
+      const spans = layoutSpans(timeline, d, layout);
+      const identSpans = layoutSpans(ident, d, layout);
+      const placed = layout.mode === "stacked" && isPlaced(timeline);
+      const times = instants(spans, rnd);
+      spans.forEach((span, i) => {
+        for (const field of [...FIELDS, "sourceOut"] as const) {
+          same(identSpans[i][field], span[field], n, "span", i, field);
+        }
+        for (const t of times) same(sourceTimeAt(identSpans[i], t), sourceTimeAt(span, t), n, "span", i, "at", t);
+        const t = span.start + rnd() * (span.length + 0.2) - 0.1;
+        same(splitRefusal(identSpans[i], t, placed), splitRefusal(span, t, placed), n, "refusal", i);
+      });
+      const env = spansEnvelope(spans, layout.crossfade);
+      const identEnv = spansEnvelope(identSpans, layout.crossfade);
+      same(JSON.stringify(identEnv.units), JSON.stringify(env.units), n, "units");
+      same(identEnv.units.some((unit) => "sourceEnds" in unit), false, n, "sourceEnds");
+      same(identEnv.runOf.join(), env.runOf.join(), n, "runs");
+
+      const total = spansEnd(spans);
+      const t = rnd() * (total + 1) - 0.5;
+      const ids = new Set(timeline.filter(() => rnd() < 0.5).map((c) => c.id));
+      same(canSplitClipsAt(identSpans, t, ids, placed), canSplitClipsAt(spans, t, ids, placed), n, "canSplit");
+      const prefer = timeline[Math.floor(rnd() * timeline.length)].id;
+      const split = splitClipAt(timeline, d, t, () => "new", { layout, preferClipId: prefer });
+      const identSplit = splitClipAt(ident, d, t, () => "new", { layout, preferClipId: prefer });
+      if ((split === null) !== (identSplit === null)) misses.push(`${n} split: null`);
+      else if (split && identSplit && !sameClips(identSplit.timeline, split.timeline)) misses.push(`${n} split: clips`);
+
+      const overlap = layout.mode === "stacked" ? layout.overlapSec : 0;
+      const edgeClipId = timeline[Math.floor(rnd() * timeline.length)].id;
+      const edge = rnd() < 0.5 ? "in" : "out";
+      const edgeAt = rnd() * (total + 1) - 0.5;
+      sameResult(
+        n,
+        "edge",
+        timeline,
+        setEdgeAtPlayhead(timeline, d, edgeClipId, edge, edgeAt, overlap),
+        ident,
+        setEdgeAtPlayhead(ident, d, edgeClipId, edge, edgeAt, overlap),
+      );
+      timeline.forEach((clip, i) => {
+        const sd = d.get(sourceKey(clip.source));
+        for (let k = 0; k < 4; k++) {
+          const patch = patchOf();
+          const trimmed = clampTrim(clip, sd, patch);
+          const identTrimmed = clampTrim(ident[i], sd, patch);
+          same(identTrimmed.inSec, trimmed.inSec, n, "clamp in");
+          same(identTrimmed.outSec, trimmed.outSec, n, "clamp out");
+          sameResult(n, "trim", timeline, trimClip(timeline, clip.id, d, patch), ident, trimClip(ident, clip.id, d, patch));
+          sameResult(
+            n,
+            "in place",
+            timeline,
+            trimClipInPlace(timeline, clip.id, d, patch, overlap),
+            ident,
+            trimClipInPlace(ident, clip.id, d, patch, overlap),
+          );
+        }
+        sameResult(n, "reset", timeline, resetTrim(timeline, clip.id, d), ident, resetTrim(ident, clip.id, d));
+        sameResult(
+          n,
+          "reset in place",
+          timeline,
+          resetTrimInPlace(timeline, clip.id, d, overlap),
+          ident,
+          resetTrimInPlace(ident, clip.id, d, overlap),
+        );
+        same(canResetTrim(clip, sd), isTrimmed(clip), n, "can reset");
+        same(canResetTrim(ident[i], sd), isTrimmed(clip), n, "can reset identity");
+      });
+    }
+    expect(misses.slice(0, 10)).toEqual([]);
+  });
+});
+
+describe("retimed clips", () => {
+  const d = threeDurations;
+  const three2x = () => three().map((c) => (c.id === "b" ? retimed(c, W(2)) : c));
+  /** The source shown at t, and which source: the picture a split must not change. */
+  const picture = (timeline: StitchTimelineClip[], t: number, layout?: StitchSequenceLayout) => {
+    const spans = layout ? layoutSpans(timeline, d, layout) : clipSpans(timeline, d, 0);
+    const span = spanAtTime(spans, t)!;
+    return { source: sourceKey(span.clip.source), at: sourceTimeAt(span, t) };
+  };
+  const samePicture = (a: StitchTimelineClip[], b: StitchTimelineClip[], total: number, count: number, digits = 9) => {
+    for (let i = 0; i < count; i++) {
+      const t = ((i + 0.5) * total) / count;
+      const want = picture(a, t);
+      const got = picture(b, t);
+      expect(got.source).toBe(want.source);
+      expect(got.at).toBeCloseTo(want.at, digits);
+    }
+  };
+
+  it("lasts its source range over its average speed", () => {
+    const clip = edgeClip("a", "e1");
+    expect(clipLength(retimed(clip, W(2)), 5)).toBe(2.5);
+    expect(clipLength(retimed(clip, W(0.5)), 5)).toBe(10);
+    // A ramp keeps its average, and reverse its length
+    expect(clipLength(retimed(clip, W(1, { curve: QUAD })), 5)).toBe(5);
+    expect(clipLength(retimed(clip, W(1, { reverse: true })), 5)).toBe(5);
+    expect(clipLength(retimed(edgeClip("a", "e1", { inSec: 1, outSec: 3 }), W(4)), 5)).toBe(0.5);
+    // 0.01 s of output is under a frame, as the encode drops it
+    expect(clipLength(retimed(edgeClip("a", "e1", { inSec: 4.9 }), W(10)), 5)).toBe(0);
+    expect(clipLength(edgeClip("a", "e1", { inSec: 4.9 }), 5)).toBeCloseTo(0.1);
+    expect(clipLength({ ...clip, warp: IDENTITY }, 5)).toBe(5);
+  });
+
+  it("carries the resolved Out on every span", () => {
+    const timeline = [
+      edgeClip("a", "e1", { inSec: 1 }),
+      edgeClip("b", "e2", { outSec: 9 }),
+      edgeClip("x", "missing", { inSec: 2 }),
+    ];
+    expect(clipSpans(timeline, d, 0).map((s) => s.sourceOut)).toEqual([5, 4, 2]);
+    expect(clipSourceOut(edgeClip("a", "e1", { inSec: 7 }), 5)).toBe(7);
+    expect(clipSpans(three2x(), d, 0).map((s) => [s.start, s.end])).toEqual([
+      [0, 5],
+      [5, 7],
+      [7, 13],
+    ]);
+    expect(sequenceDuration(three2x(), d, 0)).toBe(13);
+  });
+
+  it("reads the source through the warp, one compiled map per span", () => {
+    expect(sourceTimeAt(clipSpans(three2x(), d, 0)[1], 6)).toBeCloseTo(2, 12);
+    const reversed = clipSpans(three().map((c) => (c.id === "b" ? retimed(c, W(1, { reverse: true })) : c)), d, 0);
+    expect([5, 6, 9, 99, -1].map((t) => sourceTimeAt(reversed[1], t))).toEqual([4, 3, 0, 0, 4]);
+    const ramp = clipSpans(three().map((c) => (c.id === "c" ? retimed(c, W(1, { curve: QUAD })) : c)), d, 0)[2];
+    expect(sourceTimeAt(ramp, 12)).toBe(1.5);
+    for (const t of [8, 9, 10.3, 14.99, 15, 20]) {
+      const offset = Math.min(Math.max(t - ramp.start, 0), ramp.length);
+      expect(sourceTimeAt(ramp, t)).toBe(spanWarpMap(ramp)!.sourceTimeAt(offset));
+    }
+    expect(spanWarpMap(ramp)).toBe(spanWarpMap(ramp));
+    // A clip with no length answers its In, reversed or not, and has no map
+    const empty = clipSpans([retimed(edgeClip("x", "missing", { inSec: 2 }), W(2, { reverse: true }))], d, 0)[0];
+    expect(sourceTimeAt(empty, 0)).toBe(2);
+    expect(spanWarpMap(empty)).toBeNull();
+    expect(spanWarpMap(clipSpans(three(), d, 0)[0])).toBeNull();
+  });
+
+  it("re-anchors a time on a retimed clip at the same offset", () => {
+    const before = clipSpans(three2x(), d, 0);
+    const after = clipSpans(three2x(), d, 1);
+    expect(reanchorTime(before, after, 6.5)).toBe(after[1].start + (6.5 - before[1].start));
+  });
+
+  it("bounds a trim in output time", () => {
+    const clip = edgeClip("a", "e1");
+    // The least is MIN_CLIP_SEC of output: 1 s of source at 10×, 0.01 s at 0.1×
+    expect(clampTrim(retimed(clip, W(10)), 5, { inSec: 4.9 })).toEqual({ inSec: 4, outSec: null });
+    expect(clampTrim(retimed(clip, W(0.1)), 5, { outSec: 0.005 }).outSec).toBeCloseTo(0.01, 12);
+    // The end snap is END_EPSILON_SEC of output too: at 0.1× an Out 0.004 s of source from the end is kept
+    const slow = retimed(edgeClip("a", "e1", { inSec: 9 }), W(0.1));
+    expect(clampTrim(slow, 10, { outSec: 9.996 }).outSec).toBe(9.996);
+    expect(clampTrim(slow, 10, { outSec: 9.9997 }).outSec).toBeNull();
+    expect(clampTrim(edgeClip("a", "e1", { inSec: 9 }), 10, { outSec: 9.996 }).outSec).toBeNull();
+  });
+
+  it("gives way only at the edge a trim moves on a clip already under the shortest length", () => {
+    const short = [retimed(edgeClip("a", "e1", { inSec: 2, outSec: 2.4 }), W(10))];
+    for (const patch of [{ inSec: 2 }, { inSec: 2.1 }, { outSec: 2.3 }]) {
+      expect(clampTrim(short[0], 5, patch)).toEqual({ inSec: 2, outSec: 2.4 });
+      expect(trimClip(short, "a", durations({ "edge:e1": 5 }), patch)).toBe(short);
+    }
+    expect(clampTrim(short[0], 5, { outSec: 3 })).toEqual({ inSec: 2, outSec: 3 });
+    // On a source shorter than the shortest length, no reset to the whole source either
+    const tiny = retimed(edgeClip("a", "e1", { inSec: 0.2, outSec: 0.6 }), W(10));
+    expect(clampTrim(tiny, 0.8, { outSec: 0.5 })).toEqual({ inSec: 0.2, outSec: 0.6 });
+  });
+
+  it("never trims a clip slower than 1× past 600 s of output, and lets one already longer only shrink", () => {
+    const slow = retimed(edgeClip("a", "e1", { inSec: 10, outSec: 16 }), W(0.1));
+    expect(clampTrim(slow, 900, { outSec: null })).toEqual({ inSec: 10, outSec: 70 });
+    expect(clampTrim(slow, 900, { inSec: 0 })).toEqual({ inSec: 0, outSec: 16 });
+    const long = retimed(edgeClip("a", "e1", { inSec: 10, outSec: 110 }), W(0.1));
+    expect(clampTrim(long, 900, { inSec: 0 })).toEqual({ inSec: 10, outSec: 110 });
+    expect(clampTrim(long, 900, { outSec: 50 })).toEqual({ inSec: 10, outSec: 50 });
+    // Without a known duration a numeric Out is capped the same way
+    expect(clampTrim(slow, undefined, { outSec: 200 })).toEqual({ inSec: 10, outSec: 70 });
+    expect(clampTrim(retimed(edgeClip("a", "e1", { outSec: 200 }), W(0.1)), undefined, { inSec: 0 })).toEqual({
+      inSec: 0,
+      outSec: 200,
+    });
+    // and an In move on a clip at its cap stops there
+    const capped = retimed(edgeClip("a", "e1", { inSec: 100, outSec: 160 }), W(0.1));
+    expect(clampTrim(capped, undefined, { inSec: 0 })).toEqual({ inSec: 100, outSec: 160 });
+  });
+
+  it("resets a slow clip's trim to 600 s of output, keeping the frame it starts on", () => {
+    const long = durations({ "edge:e1": 600 });
+    const forward = [retimed(edgeClip("a", "e1", { inSec: 100, outSec: 106 }), W(0.1))];
+    expect(resetTrim(forward, "a", long)[0]).toMatchObject({ inSec: 100, outSec: 160 });
+    const late = [retimed(edgeClip("a", "e1", { inSec: 590, outSec: 596 }), W(0.1))];
+    expect(resetTrim(late, "a", long)[0]).toMatchObject({ inSec: 540, outSec: null });
+    // An Out the cap reaches within the end snap (0.0005 s of source at 0.1×) is to the end
+    const nearEnd = [retimed(edgeClip("a", "e1", { inSec: 539.9997, outSec: 545.9997 }), W(0.1))];
+    expect(resetTrim(nearEnd, "a", long)[0]).toMatchObject({ inSec: 539.9997, outSec: null });
+    // Reversed, the tail is the In: it grows first, then the Out (the head) when the In reaches the source's start
+    const reversed = [retimed(edgeClip("a", "e1", { inSec: 100, outSec: 106 }), W(0.1, { reverse: true }))];
+    expect(resetTrim(reversed, "a", long)[0]).toMatchObject({ inSec: 46, outSec: 106 });
+    const early = [retimed(edgeClip("a", "e1", { inSec: 2, outSec: 6 }), W(0.1, { reverse: true }))];
+    expect(resetTrim(early, "a", long)[0]).toMatchObject({ inSec: 0, outSec: 60 });
+    // and its Out, kept or reached by the cap, is to the end within the snap
+    const lateReversed = [retimed(edgeClip("a", "e1", { inSec: 590, outSec: 599.999 }), W(0.5, { reverse: true }))];
+    const lateReset = resetTrim(lateReversed, "a", long)[0];
+    expect(lateReset.inSec).toBeCloseTo(299.999, 9);
+    expect(lateReset.outSec).toBeNull();
+    expect(resetTrim(early, "a", durations({ "edge:e1": 60.0003 }))[0]).toMatchObject({ inSec: 0, outSec: null });
+    // In Stacked its start moves back by what its head (the Out) gains over the speed: (60 − 6) / 0.1
+    const earlyPlaced = resetTrimInPlace([{ ...early[0], startSec: 545 }], "a", long, 1)[0];
+    expect(earlyPlaced).toMatchObject({ inSec: 0, outSec: 60 });
+    expect(earlyPlaced.startSec).toBeCloseTo(5, 9);
+    // At its cap already: nothing to reset
+    const capped = [retimed(edgeClip("a", "e1", { inSec: 100, outSec: 160 }), W(0.1))];
+    expect(resetTrim(capped, "a", long)).toBe(capped);
+    // At 1× and faster, the whole source as before, with the durations or without
+    for (const known of [long, undefined]) {
+      expect(resetTrim([retimed(edgeClip("a", "e1", { inSec: 100 }), W(2))], "a", known)[0]).toMatchObject({
+        inSec: 0,
+        outSec: null,
+      });
+    }
+    // In Stacked the start stays: the head (the In) did not move
+    const placed = [{ ...forward[0], startSec: 3 }];
+    expect(resetTrimInPlace(placed, "a", long, 1)[0]).toMatchObject({ inSec: 100, outSec: 160, startSec: 3 });
+    const tracks = { mode: "track" as const, overlapSec: 1, crossfade: true };
+    expect(resetTrims(forward, long, new Set(["a"]), tracks)[0]).toMatchObject({ inSec: 100, outSec: 160 });
+  });
+
+  it("offers Reset trim on a slow clip only while it would change something", () => {
+    const long = durations({ "edge:e1": 600 });
+    const forward = [retimed(edgeClip("a", "e1", { inSec: 100, outSec: 106 }), W(0.1))];
+    expect(canResetTrim(forward[0], 600)).toBe(true);
+    const once = resetTrim(forward, "a", long);
+    expect(isTrimmed(once[0])).toBe(true);
+    expect(canResetTrim(once[0], 600)).toBe(false);
+    expect(resetTrim(once, "a", long)).toBe(once);
+    // One that already plays more than the cap may only shrink: nothing to reset
+    expect(canResetTrim(retimed(edgeClip("a", "e1", { inSec: 10, outSec: 110 }), W(0.1)), 900)).toBe(false);
+    // Without the duration there is nothing to give back yet; at 1× and faster, and unwarped, it is isTrimmed
+    expect(canResetTrim(forward[0], undefined)).toBe(false);
+    for (const known of [600, undefined]) {
+      expect(canResetTrim(retimed(edgeClip("a", "e1", { inSec: 100 }), W(2)), known)).toBe(true);
+      expect(canResetTrim(edgeClip("a", "e1", { inSec: 1 }), known)).toBe(true);
+    }
+    expect(canResetTrim(edgeClip("a", "e1"), 5)).toBe(false);
+    expect(canResetTrim(retimed(edgeClip("a", "e1"), W(0.1)), 5)).toBe(false);
+  });
+
+  it("leaves a slow clip's trim alone while its source length is unknown", () => {
+    // Reset then would give it the whole source, ten times 600 s of output once a 600 s source is read
+    const unknown = durations({});
+    const stacked = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+    const tracks = { ...stacked, mode: "track" as const };
+    for (const reverse of [false, true]) {
+      const slow = [retimed(edgeClip("a", "e1", { inSec: 100, outSec: 106 }), W(0.1, { reverse }))];
+      expect(canResetTrim(slow[0], undefined)).toBe(false);
+      expect(resetTrim(slow, "a", unknown)).toBe(slow);
+      expect(resetTrimInPlace(slow, "a", unknown, 1)).toBe(slow);
+      for (const layout of [stacked, tracks]) expect(resetTrims(slow, unknown, new Set(["a"]), layout)).toBe(slow);
+      // Read, it gets its 600 s of output
+      const reset = resetTrim(slow, "a", durations({ "edge:e1": 600 }))[0];
+      expect(clipLength(reset, 600)).toBeCloseTo(600, 9);
+    }
+  });
+
+  it("leaves a clip already past the cap exactly as it is", () => {
+    // Its edges are kept, never rebuilt from the cap an ulp away (400.4 − (400.4 − 0.1) is not 0.1)
+    const over = [retimed(edgeClip("a", "e1", { inSec: 0.1 }), W(0.25, { reverse: true }))];
+    const short = durations({ "edge:e1": 400.4 });
+    expect(canResetTrim(over[0], 400.4)).toBe(false);
+    expect(resetTrim(over, "a", short)).toBe(over);
+    expect(resetTrimInPlace([{ ...over[0], startSec: 3 }], "a", short, 1)[0]).toMatchObject({ inSec: 0.1, startSec: 3 });
+    const late = [retimed(edgeClip("a", "e1", { inSec: 412.35 }), W(0.394, { reverse: true }))];
+    const lateSource = durations({ "edge:e1": 1702.031 });
+    expect(canResetTrim(late[0], 1702.031)).toBe(false);
+    expect(resetTrim(late, "a", lateSource)).toBe(late);
+    // A trim that would lengthen it changes nothing, at either edge, in Track and in place
+    const long = [retimed(edgeClip("a", "e1", { inSec: 415.45, outSec: 1028.11 }), W(0.539))];
+    const longSource = durations({ "edge:e1": 2474.508 });
+    for (const patch of [{ inSec: 410.45 }, { outSec: 1033.11 }]) {
+      expect(trimClip(long, "a", longSource, patch)).toBe(long);
+      expect(trimClipInPlace(long, "a", longSource, patch, 1)).toBe(long);
+      expect(trimClip(long, "a", durations({}), patch)).toBe(long);
+    }
+    // and one that shortens it still does
+    expect(trimClip(long, "a", longSource, { inSec: 420 })[0]).toMatchObject({ inSec: 420, outSec: 1028.11 });
+  });
+
+  it("splits a constant warp where the picture is, keeping the speed", () => {
+    const result = splitClipAt(three2x(), d, 6, () => "new")!;
+    expect(result.timeline.map((c) => c.id)).toEqual(["a", "b", "new", "c"]);
+    expect(result.timeline[1]).toMatchObject({ id: "b", inSec: 0, warp: W(2) });
+    expect(result.timeline[1].outSec).toBeCloseTo(2);
+    expect(result.timeline[2]).toMatchObject({ id: "new", outSec: null, warp: W(2) });
+    expect(result.timeline[2].inSec).toBeCloseTo(2);
+    const spans = clipSpans(result.timeline, d, 0);
+    [[0, 5], [5, 6], [6, 7], [7, 13]].forEach(([start, end], i) => {
+      expect(spans[i].start).toBeCloseTo(start, 9);
+      expect(spans[i].end).toBeCloseTo(end, 9);
+    });
+    samePicture(three2x(), result.timeline, 13, 40);
+  });
+
+  it("splits a reversed clip with the id on the piece that plays first, which keeps the Out", () => {
+    const timeline = three().map((c) => (c.id === "b" ? retimed(c, W(1, { reverse: true })) : c));
+    const result = splitClipAt(timeline, d, 6, () => "new")!;
+    expect(result.timeline[1]).toMatchObject({ id: "b", inSec: 3, outSec: null, warp: { reverse: true } });
+    expect(result.timeline[2]).toMatchObject({ id: "new", inSec: 0, outSec: 3, warp: { reverse: true } });
+    const spans = clipSpans(result.timeline, d, 0);
+    expect([spans[1].start, spans[1].end, spans[2].start, spans[2].end]).toEqual([5, 6, 6, 9]);
+    samePicture(timeline, result.timeline, 15, 40);
+  });
+
+  it.each([false, true])("splits a ramp into two windows of it, keeping the picture (reverse %s)", (reverse) => {
+    const timeline = three().map((c) => (c.id === "c" ? retimed(c, W(1, { curve: QUAD, reverse })) : c));
+    const once = splitClipAt(timeline, d, 12, () => "c2")!;
+    const [left, right] = once.timeline.slice(2);
+    expect(left).toMatchObject({ id: "c", warp: { window: [0, 0.5] } });
+    expect(right).toMatchObject({ id: "c2", warp: { window: [0.5, 1] } });
+    expect(left.warp!.speed).toBeCloseTo(0.5, 12);
+    expect(right.warp!.speed).toBeCloseTo(1.5, 12);
+    expect(reverse ? [left.inSec, left.outSec, right.inSec] : [left.inSec, right.inSec, right.outSec]).toEqual([
+      reverse ? 4.5 : 0,
+      reverse ? null : 1.5,
+      reverse ? 0 : null,
+    ]);
+    expect(reverse ? right.outSec : left.outSec).toBe(reverse ? 4.5 : 1.5);
+    const spans = clipSpans(once.timeline, d, 0);
+    expect(spans[2].start).toBe(9);
+    expect(spans[2].end).toBeCloseTo(12, 9);
+    expect(spans[3].end).toBeCloseTo(15, 9);
+    samePicture(timeline, once.timeline, 15, 200);
+    const twice = splitClipAt(once.timeline, d, 13.5, () => "c3", { preferClipId: "c2" })!;
+    expect(twice.timeline.map((c) => c.id)).toEqual(["a", "b", "c", "c2", "c3"]);
+    samePicture(timeline, twice.timeline, 15, 200);
+  });
+
+  it("refuses a cut where the speed is too slow, and says why", () => {
+    // 5 s of source eased in at 0.25×: 20 s, standing almost still at its start
+    const ramp = [retimed(edgeClip("a", "e1"), W(0.25, { curve: QUAD }))];
+    expect(splitClipAt(ramp, d, 0.15)).toBeNull();
+    expect(splitClipAt(ramp, d, 2)).not.toBeNull();
+    const span = clipSpans(ramp, d, 0)[0];
+    expect(splitRefusal(span, 0.15, false)).toBe("warp");
+    expect(splitRefusal(span, 0.05, false)).toBe("edge");
+    expect(splitRefusal(span, 2, false)).toBeNull();
+    // Near an ease-out's slow end the right piece would hold under END_EPSILON_SEC of source
+    const ease = [retimed(edgeClip("a", "e1"), W(1, { curve: OUT_QUAD }))];
+    expect(splitClipAt(ease, d, 4.88)).toBeNull();
+    expect(splitRefusal(clipSpans(ease, d, 0)[0], 4.88, false)).toBe("warp");
+    expect(splitClipAt(ease, d, 4.8)).not.toBeNull();
+    // At 10× b lasts 0.4 s: each piece needs MIN_CLIP_SEC of output
+    const fast = three().map((c) => (c.id === "b" ? retimed(c, W(10)) : c));
+    expect(splitClipAt(fast, d, 5.05)).toBeNull();
+    expect(splitClipAt(fast, d, 5.2)).not.toBeNull();
+  });
+
+  it.each([W(0.5), W(0.5, { curve: QUAD, reverse: true })])("splits a placed retimed clip into one run", (warp) => {
+    const STACKED = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+    const timeline = [retimed(edgeClip("a", "e1", { startSec: 2 }), warp)];
+    const result = splitClipAt(timeline, d, 7, () => "new", { layout: STACKED })!;
+    expect(result.timeline.map((c) => c.startSec)).toEqual([2, 7]);
+    const spans = layoutSpans(result.timeline, d, STACKED);
+    expect(spans[0].start).toBe(2);
+    expect(spans[0].end).toBeCloseTo(7, 9);
+    expect(spans[1].end).toBeCloseTo(12, 9);
+    expect(runEndIndex(spans, 0)).toBe(1);
+  });
+
+  it("moves an edge to the playhead as a drag snapped there would", () => {
+    const reversed = three().map((c) => (c.id === "b" ? retimed(c, W(1, { reverse: true })) : c));
+    expect(setEdgeAtPlayhead(reversed, d, "b", "in", 6, 0)![1]).toMatchObject({ inSec: 0, outSec: 3 });
+    expect(setEdgeAtPlayhead(reversed, d, "b", "out", 8, 0)![1]).toMatchObject({ inSec: 1, outSec: null });
+    const fast = setEdgeAtPlayhead(three2x(), d, "b", "in", 6, 0)!;
+    expect(fast[1]).toMatchObject({ inSec: 2 });
+    const fastSpan = clipSpans(fast, d, 0)[1];
+    expect([fastSpan.start, fastSpan.end]).toEqual([5, 6]);
+    // On a ramp the edge lands on the playhead (the frame under 12 was 1.5) and the far edge stays
+    for (const reverse of [false, true]) {
+      const ramp = three().map((c) => (c.id === "c" ? retimed(c, W(1, { curve: QUAD, reverse })) : c));
+      const out = setEdgeAtPlayhead(ramp, d, "c", "out", 12, 0)!;
+      expect(out[2]).toMatchObject(reverse ? { inSec: 3, outSec: null } : { inSec: 0, outSec: 3 });
+      expect(clipSpans(out, d, 0)[2].end).toBe(12);
+      const head = setEdgeAtPlayhead(ramp, d, "c", "in", 12, 0)!;
+      expect(head[2]).toMatchObject(reverse ? { inSec: 0, outSec: 3 } : { inSec: 3, outSec: null });
+      expect(clipSpans(head, d, 0)[2].end).toBe(12);
+    }
+    const plain = clipSpans(three(), d, 0)[1];
+    const patch = edgeAtPlayheadPatch(plain, "in", 6.3);
+    expect(patch).toEqual({ inSec: sourceTimeAt(plain, 6.3) });
+  });
+
+  describe("in Stacked", () => {
+    const placedD = durations({ "edge:e1": 5, "edge:e2": 5, "edge:e3": 6 });
+    const STACKED = { mode: "stacked" as const, overlapSec: 1, crossfade: true };
+    const board = (b: StitchTimelineClip) => [
+      edgeClip("a", "e1", { startSec: 0 }),
+      b,
+      edgeClip("c", "e3", { startSec: 12 }),
+    ];
+    const REVERSED_2X = W(2, { reverse: true });
+    const spanOf = (timeline: StitchTimelineClip[], id: string) =>
+      layoutSpans(timeline, placedD, STACKED).find((s) => s.clip.id === id)!;
+
+    it("moves the start by the head's change over the speed, and keeps the tail", () => {
+      // b at 2× from In 1: 4–6
+      const timeline = board(retimed(edgeClip("b", "e2", { startSec: 4, inSec: 1 }), W(2)));
+      const head = trimClipInPlace(timeline, "b", placedD, { inSec: 2 }, 1);
+      expect(head[1].startSec).toBeCloseTo(4.5);
+      expect(spanOf(head, "b").end).toBeCloseTo(6);
+      const tail = trimClipInPlace(timeline, "b", placedD, { outSec: 4 }, 1);
+      expect(tail[1].startSec).toBe(4);
+      expect(spanOf(tail, "b").end).toBeCloseTo(5.5);
+      expect(trimClipInPlace(timeline, "b", placedD, { inSec: 1 }, 1)).toBe(timeline);
+      // The head stops where the clip would start before 0:00
+      const early = board(retimed(edgeClip("b", "e2", { startSec: 0.5, inSec: 2 }), W(2)));
+      expect(trimClipInPlace(early, "b", placedD, { inSec: 0 }, 1)[1]).toMatchObject({ inSec: 1, startSec: 0 });
+    });
+
+    it("moves a reversed clip's start by its Out's change, its head", () => {
+      // b reversed at 2×, 1–4.5: 4–5.75
+      const timeline = board(retimed(edgeClip("b", "e2", { startSec: 4, inSec: 1, outSec: 4.5 }), REVERSED_2X));
+      const head = trimClipInPlace(timeline, "b", placedD, { outSec: 3.5 }, 1);
+      expect(head[1].startSec).toBeCloseTo(4.5);
+      expect(spanOf(head, "b").end).toBeCloseTo(5.75);
+      const tail = trimClipInPlace(timeline, "b", placedD, { inSec: 2 }, 1);
+      expect(tail[1].startSec).toBe(4);
+      expect(spanOf(tail, "b").end).toBeCloseTo(5.25);
+      const early = board(retimed(edgeClip("b", "e2", { startSec: 0.5, inSec: 1, outSec: 3 }), REVERSED_2X));
+      expect(trimClipInPlace(early, "b", placedD, { outSec: null }, 1)[1]).toMatchObject({ outSec: 4, startSec: 0 });
+    });
+
+    it.each([false, true])("starts a ramp at the playhead with I, then changes nothing (reverse %s)", (reverse) => {
+      const timeline = board(retimed(edgeClip("b", "e2", { startSec: 4 }), W(1, { curve: QUAD, reverse })));
+      const span = spanOf(timeline, "b");
+      expect([span.start, span.end]).toEqual([4, 9]);
+      const once = trimClipInPlace(timeline, "b", placedD, edgeAtPlayheadPatch(span, "in", 6), 1);
+      const after = spanOf(once, "b");
+      expect([after.start, after.end]).toEqual([6, 9]);
+      expect(trimClipInPlace(once, "b", placedD, edgeAtPlayheadPatch(after, "in", 6), 1)).toBe(once);
+    });
+
+    it("resets a retimed trim, the start back by what the head gains over the speed", () => {
+      const forward = [retimed(edgeClip("a", "e1", { startSec: 3, inSec: 1, outSec: 4 }), W(2))];
+      const reset = resetTrimInPlace(forward, "a", placedD, 1);
+      expect(reset[0]).toMatchObject({ startSec: 2.5, inSec: 0, outSec: null });
+      expect(reset[0].warp).toEqual(W(2));
+      // Reversed, the head is the Out: it gains (5 − 4) / 2, where the In's 0.5 / 2 would give 2.75
+      const reversed = [retimed(edgeClip("a", "e1", { startSec: 3, inSec: 0.5, outSec: 4 }), W(2, { reverse: true }))];
+      expect(resetTrimInPlace(reversed, "a", placedD, 1)[0].startSec).toBe(2.5);
+      const early = [retimed(edgeClip("a", "e1", { startSec: 0.2, inSec: 1 }), W(2))];
+      expect(resetTrimInPlace(early, "a", placedD, 1)[0].startSec).toBe(0);
+    });
+
+    it("gives a retimed clip's unit its source ends, and an unwarped one none", () => {
+      const timeline = [
+        retimed(edgeClip("a", "e1", { startSec: 0, inSec: 1 }), W(2)),
+        retimed(edgeClip("b", "e2", { startSec: 1, inSec: 1 }), W(2, { reverse: true })),
+        edgeClip("c", "e3", { startSec: 2 }),
+      ];
+      const units = spansEnvelope(layoutSpans(timeline, placedD, STACKED), true).units;
+      expect(units[0]).toMatchObject({ sourceEnds: [1, 5] });
+      expect(units[1]).toMatchObject({ sourceEnds: [5, 1] });
+      expect("sourceEnds" in units[2]).toBe(false);
+    });
+  });
+
+  it("keeps every warp canonical through 200 runs of random edits", () => {
+    // Key order aside (sanitizeTimeline writes its own): the loop is long, so no deep equality in it
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(sorted)
+        : value && typeof value === "object"
+          ? Object.fromEntries(Object.keys(value).sort().map((k) => [k, sorted((value as Record<string, unknown>)[k])]))
+          : value;
+    const misses: string[] = [];
+    const rnd = lcg(31);
+    const warps: ClipWarp[] = [
+      W(2),
+      W(0.5),
+      W(3, { reverse: true }),
+      W(0.25, { curve: QUAD }),
+      W(1, { curve: OUT_QUAD, reverse: true }),
+      W(1.5, { curve: { kind: "bezier", handles: [0.42, 0, 0.58, 1] } }),
+      W(0.8, { curve: { kind: "points", points: [[0, 0], [0.3, 0.1], [0.7, 0.9], [1, 1]] }, blend: true }),
+      W(0.6, { curve: QUAD, window: [0.2, 0.7] }),
+    ];
+    const long = durations({ "edge:e1": 5, "edge:e2": 4, "edge:e3": 6, "edge:e4": 9 });
+    for (let run = 0; run < 200; run++) {
+      const layout: StitchSequenceLayout = { mode: rnd() < 0.5 ? "track" : "stacked", overlapSec: 1, crossfade: true };
+      let timeline = Array.from({ length: 2 + Math.floor(rnd() * 3) }, (_, i) => {
+        const inSec = rnd() < 0.5 ? 0 : Math.round(rnd() * 20) / 10;
+        const clip = edgeClip(`c${i}`, `e${1 + Math.floor(rnd() * 4)}`, { inSec });
+        return rnd() < 0.8 ? retimed(clip, warps[Math.floor(rnd() * warps.length)]) : clip;
+      });
+      let made = 0;
+      for (let op = 0; op < 20; op++) {
+        const clip = timeline[Math.floor(rnd() * timeline.length)];
+        const total = spansEnd(layoutSpans(timeline, long, layout));
+        const t = rnd() * total;
+        const value = Math.round(rnd() * 90) / 10;
+        const patch = rnd() < 0.5 ? { inSec: value } : { outSec: value };
+        const k = Math.floor(rnd() * 6);
+        const makeId = () => `n${run}-${made++}`;
+        const split = () => splitClipAt(timeline, long, t, makeId, { layout, preferClipId: clip.id })?.timeline;
+        if (k === 0) timeline = split() ?? timeline;
+        else if (k === 1) timeline = trimClip(timeline, clip.id, long, patch);
+        else if (k === 2) timeline = trimClipInPlace(timeline, clip.id, long, patch, 1);
+        else if (k === 3) timeline = resetTrim(timeline, clip.id, long);
+        else if (k === 4) timeline = resetTrimInPlace(timeline, clip.id, long, 1);
+        else timeline = setEdgeAtPlayhead(timeline, long, clip.id, rnd() < 0.5 ? "in" : "out", t, 0) ?? timeline;
+        const saved = JSON.stringify(sorted(timeline));
+        const loaded = JSON.stringify(sorted(sanitizeTimeline(JSON.parse(saved))));
+        if (loaded !== saved) misses.push(`run ${run} op ${op}: ${saved}`);
+      }
+    }
+    expect(misses.slice(0, 3)).toEqual([]);
   });
 });

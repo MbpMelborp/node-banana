@@ -197,6 +197,8 @@ export function ClipBox({
         frames={view?.frames ?? []}
         duration={view?.duration ?? null}
         inSec={inSec}
+        lengthSec={lengthSec}
+        warp={clip.warp}
         pxPerSec={pxPerSec}
         width={width}
         boxX={x}

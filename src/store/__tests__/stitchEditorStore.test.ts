@@ -62,9 +62,11 @@ import {
   trimSelected,
 } from "@/components/stitch/editorActions";
 import { clearStarts, placeClips } from "@/lib/stitch/timeline";
+import { makeSelection } from "@/lib/stitch/selection";
+import { normalizeWarp, withWarp } from "@/lib/stitch/warp";
 import { liveFitZoom } from "@/components/stitch/liveFitZoom";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchTimelineClip } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
@@ -798,6 +800,143 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
     expect(canSplitAtPlayhead(store())).toBe(false);
     splitAtPlayhead();
     expect(steps()).toBe(0);
+  });
+
+  const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+    speed,
+    curve: null,
+    reverse: false,
+    blend: false,
+    ...extra,
+  });
+  const QUAD = { kind: "preset", name: "easeInQuad" } as const;
+  /** One undo step that gives a clip this warp. */
+  const retime = (clipId: string, warp: ClipWarp) =>
+    store().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === clipId ? withWarp(c, normalizeWarp(warp)) : c)),
+    }));
+
+  it.each([true, false])("splits a placed ramp inside an overlap and changes no weight (Crossfade %s)", (crossfade) => {
+    retime("b", W(1, { curve: QUAD }));
+    setCrossfade(crossfade);
+    setClipStart("c", 7);
+    selectClip("b");
+    store().setPlayhead(8);
+    expect(splitBlockedReason(store())).toBeNull();
+    const instants = Array.from({ length: 50 }, (_, i) => (i * 11) / 50 + 0.013);
+    const before = instants.map((t) => weightsById(t));
+
+    splitAtPlayhead();
+    const timeline = store().draft!.timeline;
+    expect(timeline).toHaveLength(4);
+    const right = timeline[2];
+    expect(right.startSec).toBe(8);
+    expect(right.warp?.window).toEqual([0.8, 1]);
+    const after = instants.map((t) => weightsById(t, { [right.id]: "b" }));
+    after.forEach((weights, i) => {
+      for (const id of new Set([...Object.keys(weights), ...Object.keys(before[i])])) {
+        expect(weights[id] ?? 0).toBeCloseTo(before[i][id] ?? 0, 9);
+      }
+    });
+  });
+
+  it("refuses a split the speed cannot make, and says why", () => {
+    // b eases in from a standstill at 0.25×: 5 s of source over 20 s, 5–25 in Track
+    openStack(undefined, TRACK_LAYOUT);
+    retime("b", W(0.25, { curve: QUAD }));
+    selectClip("b");
+    store().setPlayhead(5.15);
+    expect(splitBlockedReason(store())).toBe("Move the playhead: the speed here is too slow to split");
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    const before = steps();
+    splitAtPlayhead();
+    expect(steps()).toBe(before);
+    store().setPlayhead(7);
+    expect(splitBlockedReason(store())).toBeNull();
+    splitAtPlayhead();
+    expect(steps()).toBe(before + 1);
+
+    // Several selected: a clip that can split there, so no reason, and S splits only it
+    openStack();
+    retime("b", W(0.25, { curve: QUAD }));
+    setClipStart("a", 5);
+    setClipStart("b", 5);
+    store().select(makeSelection(ids(), ["a", "b"], "a"));
+    store().setPlayhead(5.15);
+    expect(splitBlockedReason(store())).toBeNull();
+    const b = store().draft!.timeline.find((c) => c.id === "b");
+    splitAtPlayhead();
+    expect(store().draft!.timeline).toHaveLength(4);
+    expect(store().draft!.timeline.find((c) => c.id === "b")).toBe(b);
+    expect(selectedClipIds(store())).toHaveLength(1);
+
+    // Several selected, every one refused by its speed: Split is off and says why
+    openStack();
+    retime("a", W(0.25, { curve: QUAD }));
+    retime("b", W(0.25, { curve: QUAD }));
+    setClipStart("a", 5);
+    setClipStart("b", 5);
+    store().select(makeSelection(ids(), ["a", "b"], "a"));
+    store().setPlayhead(5.15);
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    expect(splitBlockedReason(store())).toBe("Move the playhead: the speed here is too slow to split");
+    const group = steps();
+    splitAtPlayhead();
+    expect(steps()).toBe(group);
+  });
+
+  it.each([
+    ["Track", TRACK_LAYOUT],
+    ["Stacked", STACKED],
+  ] as const)("sets I and O on a reversed clip from its head, its Out (%s)", (_, layout) => {
+    openStack(undefined, layout);
+    retime("b", W(1, { reverse: true }));
+    selectClip("b");
+    const b = () => store().draft!.timeline[1];
+    const head = spans()[1].start;
+    store().setPlayhead(head + 2);
+    setEdgeAtPlayheadForSelection("in");
+    expect(b()).toMatchObject({ inSec: 1, outSec: 4 });
+    if (layout === STACKED) expect(spans()[1].start).toBeCloseTo(head + 2, 9);
+    store().setPlayhead(spans()[1].start + 1);
+    setEdgeAtPlayheadForSelection("out");
+    expect(b()).toMatchObject({ inSec: 3, outSec: 4 });
+  });
+
+  it.each([
+    ["Track", TRACK_LAYOUT],
+    ["Stacked", STACKED],
+  ] as const)("resets a slow clip's trim to 600 s of output, in one step (%s)", (_, layout) => {
+    openStack(undefined, layout);
+    store().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === "b" ? withWarp({ ...c, inSec: 100, outSec: 106 }, normalizeWarp(W(0.1))) : c)),
+    }));
+    selectClip("b");
+    const before = steps();
+    // Until its source's length is read there is nothing to give back: the cap needs it
+    store().setDurations(new Map([...DURATIONS].filter(([key]) => key !== "asset:x")));
+    resetSelectedTrim();
+    expect(steps()).toBe(before);
+    expect(store().draft!.timeline[1]).toMatchObject({ inSec: 100, outSec: 106 });
+    store().setDurations(new Map<SourceKey, number>([...DURATIONS, ["asset:x", 600]]));
+    resetSelectedTrim();
+    expect(steps()).toBe(before + 1);
+    expect(store().draft!.timeline[1]).toMatchObject({ inSec: 100, outSec: 160 });
+  });
+
+  it("starts a ramp at the playhead with I in Stacked, and a second I changes nothing", () => {
+    retime("b", W(1, { curve: QUAD }));
+    selectClip("b");
+    expect([spans()[1].start, spans()[1].end]).toEqual([4, 9]);
+    store().setPlayhead(6);
+    const before = steps();
+    setEdgeAtPlayheadForSelection("in");
+    expect(steps()).toBe(before + 1);
+    expect([spans()[1].start, spans()[1].end]).toEqual([6, 9]);
+    setEdgeAtPlayheadForSelection("in");
+    expect(steps()).toBe(before + 1);
   });
 
   it.each([true, false])("splits a placed clip inside an overlap and changes no weight (Crossfade %s)", (crossfade) => {

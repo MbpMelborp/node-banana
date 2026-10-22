@@ -8,6 +8,8 @@ import type { WeightPiece } from "@/lib/stitch/placement";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
+import { isWarped } from "@/lib/stitch/warp";
+import type { ClipWarp } from "@/types";
 import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
@@ -150,18 +152,38 @@ export function StackedClipsLane({
   }
 
   // The frames the trim cuts, drawn where they were on the side they leave from, in source order: the head just left of
-  // the box for an In trim (whose left edge moves with the In), the tail just right of it for an Out trim
+  // the box for an In trim (whose left edge moves with the In), the tail just right of it for an Out trim; a retimed
+  // clip's from its old frames at their old offsets
   const trimIndex = trim ? spans.findIndex((s) => s.clip.id === trim.clipId) : -1;
-  let ghost: { x: number; width: number; inSec: number; side: "in" | "out" } | null = null;
+  let ghost: {
+    x: number;
+    width: number;
+    inSec: number;
+    lengthSec: number;
+    warp: ClipWarp | undefined;
+    offsetSec: number;
+    side: "in" | "out";
+  } | null = null;
   if (trim && trimIndex !== -1 && spans[trimIndex].length > 0) {
     const live = boxes[trimIndex];
     const rest = restBoxes[trimIndex];
     const width = live && rest ? (rest.lengthSec - live.lengthSec) * axis.pxPerSec : 0;
     if (live && rest && width >= MIN_GHOST_PX) {
+      const clipWarp = spans[trimIndex].clip.warp;
+      const warp = isWarped(clipWarp) ? clipWarp : undefined;
+      const lengthSec = rest.lengthSec;
       ghost =
         trim.edge === "out"
-          ? { x: live.x + live.width, width, inSec: live.inSec + live.lengthSec, side: "out" }
-          : { x: live.x - width, width, inSec: rest.inSec, side: "in" };
+          ? {
+              x: live.x + live.width,
+              width,
+              inSec: warp ? rest.inSec : live.inSec + live.lengthSec,
+              lengthSec,
+              warp,
+              offsetSec: warp ? live.lengthSec : 0,
+              side: "out",
+            }
+          : { x: live.x - width, width, inSec: rest.inSec, lengthSec, warp, offsetSec: 0, side: "in" };
     }
   }
   const trimView = trimIndex === -1 ? undefined : media.get(spans[trimIndex].clip.id);
@@ -328,6 +350,9 @@ export function StackedClipsLane({
               frames={trimView?.frames ?? []}
               duration={trimView?.duration ?? null}
               inSec={ghost.inSec}
+              lengthSec={ghost.lengthSec}
+              warp={ghost.warp}
+              offsetSec={ghost.offsetSec}
               pxPerSec={axis.pxPerSec}
               width={ghost.width}
               boxX={ghost.x}

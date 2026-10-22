@@ -15,6 +15,7 @@ import { insetBox, JOIN_INSET_PX, type LaneBox } from "@/lib/stitch/laneLayout";
 import { blockInsertionX, insertionX } from "@/lib/stitch/reorder";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import type { ClipSpan } from "@/lib/stitch/timeline";
+import { isWarped } from "@/lib/stitch/warp";
 import { openLibraryPicker } from "../editorActions";
 import { GEOMETRY, EDITOR_PANEL_SELECTOR } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
@@ -288,10 +289,15 @@ export function ClipsLane({
     const out = trim.edge === "out";
     const left = out ? JOIN_INSET_PX : trimIndex > 0 ? JOIN_INSET_PX : 0;
     const right = out ? (trimIndex < spans.length - 1 ? JOIN_INSET_PX : 0) : JOIN_INSET_PX;
+    const warped = isWarped(span.clip.warp);
     return {
       x: raw.x + left,
       width: Math.max(0, raw.width - left - right),
-      inSec: out ? trim.result.edgeSourceTime : span.clip.inSec,
+      // A retimed clip's ghost shows its own frames where they were: the old clip, from the crossed part's offset
+      inSec: out && !warped ? trim.result.edgeSourceTime : span.clip.inSec,
+      lengthSec: span.length,
+      warp: warped ? span.clip.warp : undefined,
+      offsetSec: warped ? fromSec - span.start : 0,
       view: media.get(span.clip.id),
       out,
     };
@@ -391,6 +397,9 @@ export function ClipsLane({
               frames={ghost.view?.frames ?? []}
               duration={ghost.view?.duration ?? null}
               inSec={ghost.inSec}
+              lengthSec={ghost.lengthSec}
+              warp={ghost.warp}
+              offsetSec={ghost.offsetSec}
               pxPerSec={axis.pxPerSec}
               width={ghost.width}
               boxX={ghost.x}

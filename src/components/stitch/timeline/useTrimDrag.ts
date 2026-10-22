@@ -19,7 +19,7 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * wait while it runs (useStitchEditorKeys, Timeline), and a release onto a
  * draft that changed under the drag anyway is dropped.
  *
- * In Stacked a trim keeps the frames where they are in time: an In edge
+ * In Stacked a trim keeps the frames where they are in time: the head edge
  * moves the clip's start with it (never before 0:00), and no other clip
  * moves. The drag carries the timeline release applies, every clip pinned,
  * and Shift pressed or let go while the pointer rests re-places the edge.
@@ -100,8 +100,8 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
           xToTime: axis.xToTime,
           // The playhead as drawn: one left past a sequence that got shorter sits at its end
           targets: trimTargets(spans, span.clip.id, edge, Math.min(editor.playhead, axis.total), stacked ? "stacked" : "track"),
-          // Stacked: an In that lengthens the head moves the start earlier, and it stops at 0:00
-          minInSec: stacked ? span.clip.inSec - span.start : undefined,
+          // Stacked: a head that lengthens moves the start earlier, and it stops at 0:00
+          minStartSec: stacked ? 0 : undefined,
         };
         const overlapSec = draftAtStart.sequenceLayout.overlapSec;
         let moved = false;
@@ -114,7 +114,7 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
           // Until the pointer moves, the edge stays where it is (no snap on the press)
           const snap = moved && useStitchEditorStore.getState().snap && !shiftKey;
           const result = trimDragAt(start, moved ? laneX(clientX) : start.pointerX, { snap });
-          const patch = edge === "out" ? { outSec: result.outSec } : { inSec: result.inSec };
+          const patch = result.field === "outSec" ? { outSec: result.outSec } : { inSec: result.inSec };
           const next: TrimLive = {
             clipId: span.clip.id,
             edge,
@@ -173,7 +173,7 @@ export function useTrimDrag(axisNow: () => TimeAxis, contentRef: RefObject<HTMLD
             return;
           }
           released.current = span.clip.id;
-          const patch = edge === "out" ? { outSec: result.outSec } : { inSec: result.inSec };
+          const patch = result.field === "outSec" ? { outSec: result.outSec } : { inSec: result.inSec };
           s.apply((d) => ({ ...d, timeline: trimClip(d.timeline, span.clip.id, s.durations, patch) }));
         };
 
