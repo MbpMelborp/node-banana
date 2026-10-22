@@ -15,6 +15,7 @@ import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo
 import { createClip } from "@/lib/stitch/timeline";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { musicAudio } from "@/lib/stitch/draft";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
@@ -666,6 +667,27 @@ describe("StitchEditorModal", () => {
     // Nothing to select, so the rail does not ask for a selection
     expect(screen.queryByText("Select a clip to edit it.")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  });
+
+  it("shows a node's text layers on the black frame when it has no clips, the transport still off", () => {
+    // The stage is never measured here, so the overlay canvas falls back to its own size: give it one
+    vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(360);
+    const fillText = vi.fn();
+    const ctx = { setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), fillText, measureText: () => ({ width: 10 }) };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    seed({ clips: false, stitch: { overlays: [createTextOverlay({ id: "ovl_a", text: "Opening", startSec: 1, endSec: 5 })] } });
+    openEditor();
+    expect(screen.queryByText("No clips yet")).toBeNull();
+    const frame = screen.getByTestId("stitch-preview");
+    expect(frame.querySelectorAll("video")).toHaveLength(0);
+    expect(frame.lastElementChild).toBe(screen.getByTestId("stitch-overlay-canvas"));
+    // Drawn where its fade-in ends: there is no playhead to move
+    expect(fillText).toHaveBeenLastCalledWith("Opening", expect.any(Number), expect.any(Number));
+    // The transport is still gated on video: Play and the rest of its row are inert
+    const controls = screen.getByTestId("stitch-controls");
+    expect(controls.closest("[inert]")).not.toBeNull();
+    expect(controls).toContainElement(screen.getByRole("button", { name: "Play", hidden: true }));
   });
 
   it("keeps Done off in an empty editor whatever the loop count, and Loop off in the menu", () => {

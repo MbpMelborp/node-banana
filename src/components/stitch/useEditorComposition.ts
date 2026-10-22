@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { formatFps } from "@/lib/stitch/labels";
+import { NO_OVERLAYS } from "@/lib/stitch/overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { isPlaced, layoutSpans, spansEnd } from "@/lib/stitch/timeline";
 import type { StitchAudioClip, StitchTimelineClip } from "@/types";
@@ -37,6 +38,8 @@ export function useEditorComposition(
   const audioClips = useStitchEditorStore((s) => s.draft?.audioClips ?? NO_AUDIO);
   const layout = useStitchEditorStore((s) => s.draft?.sequenceLayout ?? DEFAULT_SEQUENCE_LAYOUT);
   const soundOn = useStitchEditorStore((s) => s.soundOn);
+  // Not the list: the overlay canvas reads it as it draws, so an edit to a layer renders nothing here
+  const hasOverlays = useStitchEditorStore((s) => (s.draft?.overlays ?? NO_OVERLAYS).length > 0);
 
   const { byClip, audioByClip } = useStitchEditorMedia(mediaOptions);
 
@@ -168,6 +171,7 @@ export function useEditorComposition(
   return {
     clipCount: timeline.length,
     empty: timeline.length === 0,
+    hasOverlays,
     stacked,
     spans,
     total,
