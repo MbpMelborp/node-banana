@@ -1,7 +1,9 @@
+import type { ClipWarp } from "@/types";
+
 /**
  * Where each clip of a Stitch sequence goes, and where each of its frames
  * lands on the output's 60 fps grid. Pure, so the engine's timing can be
- * tested without decoding anything.
+ * tested without decoding anything. Imports nothing at runtime.
  */
 
 /** The output frame grid. Equals MAX_OUTPUT_FPS; not imported, since video-probing loads mediabunny. */
@@ -14,6 +16,8 @@ export interface PlanClip {
   sourceDuration: number;
   /** The video track's first timestamp; both tracks of the clip are read from it. */
   firstTimestamp?: number;
+  /** Only an active warp: readClip and frameClips pass no other. */
+  warp?: ClipWarp;
 }
 
 export interface PlannedClip {
@@ -26,6 +30,11 @@ export interface PlannedClip {
   length: number;
   /** Start within one loop of the sequence, in seconds. */
   seqStart: number;
+  /**
+   * Present only for an active warp (readClip and frameClips pass no other): length is then the warped length, and
+   * frames are read through warpFrames.ts.
+   */
+  warp?: ClipWarp;
 }
 
 /**
@@ -41,8 +50,9 @@ const finiteOr = (value: number | null | undefined, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
 /**
- * In is clamped to [0, D] and Out (D when null) to [In, D], so the length is the one the editor shows. A clip
- * shorter than one output frame (a past-end trim, an empty source) is dropped, and the clips after it close up.
+ * In is clamped to [0, D] and Out (D when null) to [In, D], so the length is the one the editor shows: under a warp,
+ * the source length over its speed. A clip shorter than one output frame (a past-end trim, an empty source, a short
+ * clip sped up) is dropped, and the clips after it close up.
  */
 export function planSequence(clips: readonly PlanClip[]): { clips: PlannedClip[]; loopLength: number } {
   const planned: PlannedClip[] = [];
@@ -51,10 +61,11 @@ export function planSequence(clips: readonly PlanClip[]): { clips: PlannedClip[]
     const duration = Math.max(0, finiteOr(clip.sourceDuration, 0));
     const inSec = clamp(finiteOr(clip.inSec, 0), 0, duration);
     const outSec = clamp(finiteOr(clip.outSec, duration), inSec, duration);
-    const length = outSec - inSec;
+    // warpedLength's expression, kept here so the plan imports nothing at runtime
+    const length = clip.warp ? (outSec - inSec) / clip.warp.speed : outSec - inSec;
     if (length < 1 / FRAME_RATE) return;
     const origin = Math.max(inSec, Math.max(0, finiteOr(clip.firstTimestamp, 0)));
-    planned.push({ index, inSec, outSec, origin, length, seqStart });
+    planned.push({ index, inSec, outSec, origin, length, seqStart, ...(clip.warp ? { warp: clip.warp } : {}) });
     seqStart += length;
   });
   return { clips: planned, loopLength: seqStart };
@@ -122,7 +133,10 @@ export class FrameSlotter {
     this.endSlot = this.toSlot(window.toSec);
   }
 
-  /** A slot a dissolve writes: its output timestamp, or null when the slot is not after the last one written. */
+  /**
+   * A slot a dissolve or a retimed clip's pass writes: its output timestamp, or null when the slot is not after the last
+   * one written.
+   */
   claim(slot: number): number | null {
     if (!(slot > this.lastSlot)) return null;
     this.lastSlot = slot;

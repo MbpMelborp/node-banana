@@ -579,3 +579,68 @@ export async function encodeDissolve(
     await Promise.all([closeIterator(outgoing), closeIterator(incoming)]);
   }
 }
+
+/** One side of a dissolve: its frame on each written slot, asked in slot order. It keeps what it returns. */
+export interface DissolveSide {
+  frameOn(slot: number): Promise<VideoSample | null>;
+  close(): Promise<void>;
+}
+
+/** encodeDissolve's lockstep side: samplesAtTimestamps over rising times, one next() per call, the latest non-null held. */
+export function timesSide(track: InputVideoTrack, times: number[]): DissolveSide {
+  const iterator = new VideoSampleSink(track).samplesAtTimestamps(times);
+  let held: VideoSample | null = null;
+  return {
+    async frameOn() {
+      const next = await iterator.next();
+      if (!next.done && next.value) {
+        held?.close();
+        held = next.value;
+      }
+      return held;
+    },
+    async close() {
+      held?.close();
+      held = null;
+      await closeIterator(iterator);
+    },
+  };
+}
+
+/**
+ * encodeDissolve over two sides, for a dissolve with a retimed side: per written slot both sides' frames, blended at
+ * its alpha, added, the result closed. blenderFor gets the first outgoing frame. Abort is checked per frame; both
+ * sides are closed in finally.
+ */
+export async function encodeDissolveFrames(
+  job: {
+    outgoing: DissolveSide;
+    incoming: DissolveSide;
+    /** The written slots, beside their timestamps (slot / 60). */
+    slots: number[];
+    timestamps: number[];
+    alphas: number[];
+    frameDuration: number;
+    signal?: AbortSignal;
+  },
+  blenderFor: (firstOutgoing: VideoSample | null) => FrameBlender,
+  add: (sample: VideoSample) => Promise<void>,
+): Promise<void> {
+  let blender: FrameBlender | null = null;
+  try {
+    for (let i = 0; i < job.timestamps.length; i++) {
+      if (job.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const a = await job.outgoing.frameOn(job.slots[i]);
+      const b = await job.incoming.frameOn(job.slots[i]);
+      blender ??= blenderFor(a);
+      const blended = await blender.blend(a, b, job.alphas[i], job.timestamps[i], job.frameDuration);
+      try {
+        await add(blended);
+      } finally {
+        blended.close();
+      }
+    }
+  } finally {
+    await Promise.all([job.outgoing.close(), job.incoming.close()]);
+  }
+}

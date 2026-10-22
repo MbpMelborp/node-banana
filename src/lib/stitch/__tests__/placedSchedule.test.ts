@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import type { VideoSample } from "mediabunny";
+import type { ClipWarp } from "@/types";
 import { ClipReader, encodePlacedLoop, readerFrames, type PlacedClipSource } from "../clipReader";
 import type { FrameBlender } from "../crossfadeFrames";
-import { buildEnvelope, envelopeAt, SLOT_SEC, type PlacedUnit, type StackEnvelope } from "../placement";
+import { buildEnvelope, envelopeAt, SLOT_SEC, warpedUnitEnds, type PlacedUnit, type StackEnvelope } from "../placement";
 import {
   maxVisibleLayers,
   nextBlendSlot,
@@ -19,6 +20,9 @@ import {
 } from "../placedSchedule";
 import { FrameSlotter, planSequence, secToSlot } from "../sequencePlan";
 import { stackSequence } from "../stack";
+import { warpMap } from "../warp";
+import { pickFrame, warpSlotTime } from "../warpFrames";
+import { WarpedClipReader } from "../warpReader";
 
 // The placed encoder's plan. The configurations are the plan's §3.4.4 rows; the simulated encode runs the real walk
 // (encodePlacedLoop and ClipReader) over fake decoders and checks every frame against Track's own slotter.
@@ -365,6 +369,15 @@ interface SimUnit {
   inSec: number;
   outSec: number;
   start: number;
+  /** Retimed: read through warpReader, its frames warpFrames' schedule. */
+  warp?: ClipWarp;
+}
+
+/** A retimed unit's frame list (the frame in effect at In, then every frame before Out) and its first frame's index. */
+function clipFrameList(u: SimUnit): { times: number[]; first: number } {
+  const { times } = u.source;
+  const first = Math.max(0, times.reduce((found, t, i) => (t <= u.inSec ? i : found), -1));
+  return { times: times.slice(first).filter((t, j) => j === 0 || t < u.outSec), first };
 }
 
 interface Written {
@@ -381,10 +394,19 @@ async function simulate(units: readonly SimUnit[], crossfade: boolean, loops: nu
   const ledger = new Ledger();
   const planned = units.map((u) => {
     const first = u.source.times[0] ?? 0;
-    return { inSec: u.inSec, outSec: u.outSec, origin: Math.max(u.inSec, first), length: u.outSec - u.inSec };
+    const length = u.warp ? (u.outSec - u.inSec) / u.warp.speed : u.outSec - u.inSec;
+    return { inSec: u.inSec, outSec: u.outSec, origin: Math.max(u.inSec, first), length };
   });
+  // As planPicture builds it: a retimed unit carries its sourceEnds
   const env = buildEnvelope(
-    units.map((u, k) => ({ start: u.start, length: planned[k].length, row: k, source: u.source.id, inSec: u.inSec })),
+    units.map((u, k) => ({
+      start: u.start,
+      length: planned[k].length,
+      row: k,
+      source: u.source.id,
+      inSec: u.inSec,
+      ...(u.warp ? { sourceEnds: warpedUnitEnds(u.inSec, u.outSec, u.warp.reverse) } : {}),
+    })),
     crossfade,
   );
   const segments = pictureSegments(env);
@@ -416,9 +438,25 @@ async function simulate(units: readonly SimUnit[], crossfade: boolean, loops: nu
     outSec: planned[k].outSec,
     origin: planned[k].origin,
     frameRate: u.source.rate,
-    // As openClipReader opens one: the frame in effect at a partway start is looked up first (a packet's timestamp)
-    open: (range, window) =>
-      new ClipReader(
+    // As openClipReader opens one: the frame in effect at a partway start is looked up first (a packet's timestamp).
+    // A retimed unit's as the engine opens it, over the same all-key stream, its byte copies clones
+    open: (range, window, run) => {
+      const warp = u.warp;
+      if (warp) {
+        const list = clipFrameList(u);
+        return new WarpedClipReader(
+          warpMap({ inSec: u.inSec, outSec: u.outSec }, warp),
+          { anchorSlot: window.anchorSlot, fromSlot: run.n0, endSlot: window.endSlot },
+          {
+            frames: async () => ({ times: Float64Array.from(list.times), keys: Int32Array.from(list.times.keys()) }),
+            samples: (from, to) => ({ [Symbol.asyncIterator]: () => ledger.samples(u.source, from, to) }),
+            toBytes: async (sample) => sample.clone(),
+            frameBytes: 64 * 36 * 1.5,
+            blend: null,
+          },
+        );
+      }
+      return new ClipReader(
         readerFrames(
           range,
           window,
@@ -430,7 +468,8 @@ async function simulate(units: readonly SimUnit[], crossfade: boolean, loops: nu
           (from, to) => ({ [Symbol.asyncIterator]: () => ledger.samples(u.source, from, to) }),
         ),
         window,
-      ),
+      );
+    },
   }));
   const state = { ref: null, blender: null };
   const opened: Array<{ loop: number; unit: number }> = [];
@@ -441,9 +480,9 @@ async function simulate(units: readonly SimUnit[], crossfade: boolean, loops: nu
       loop,
       sources: sources.map((s, unit) => ({
         ...s,
-        open: (range, window) => {
+        open: (range, window, run) => {
           opened.push({ loop, unit });
-          return s.open(range, window);
+          return s.open(range, window, run);
         },
       })),
       state,
@@ -514,7 +553,15 @@ function problems(units: readonly SimUnit[], result: Awaited<ReturnType<typeof s
       return n1 > n0;
     });
     const expected = units.map((u, k) => trackFrames(env, u, k, L));
+    // A retimed unit's frame on slot n: the schedule's pick, by the source's index
+    const warpedOn = (k: number, n: number) => {
+      const u = units[k];
+      const list = clipFrameList(u);
+      const map = warpMap({ inSec: u.inSec, outSec: u.outSec }, u.warp!);
+      return list.first + pickFrame(list.times, warpSlotTime(map, n, unitSlots(env, k, L).anchor), false).a;
+    };
     const frameOn = (k: number, n: number) => {
+      if (units[k].warp) return warpedOn(k, n);
       let found_: number | null = null;
       for (const [slot, i] of expected[k]) if (slot <= n) found_ = i;
       return found_;
@@ -567,7 +614,8 @@ function problems(units: readonly SimUnit[], result: Awaited<ReturnType<typeof s
           const shown = w.shows.get(u);
           const want = frameOn(u, w.slot);
           if ((shown ?? null) !== want) found.push(`loop ${loop}: unit ${u} shows ${shown} on ${w.slot}, Track's slotter ${want}`);
-          if (shown === undefined || shown === null) continue;
+          // A retimed unit goes back reversed and skips in fast motion
+          if (shown === undefined || shown === null || units[u].warp) continue;
           const position = expected[u].findIndex(([, i]) => i === shown);
           const prev = lastShown.get(u);
           const run = runOf(u, w.slot);
@@ -647,6 +695,22 @@ describe("a simulated placed encode", () => {
       expect(problems(units, result, loops), `trial ${trial}`).toEqual([]);
     }
     expect(blends).toBeGreaterThan(200);
+  });
+
+  it("shows the warp schedule's frame for retimed units, and Track's for the rest, over 200 seeded stacks", async () => {
+    const rnd = mulberry32(17);
+    let warped = 0;
+    for (let trial = 0; trial < 200; trial++) {
+      const { units, crossfade, loops } = randomCase(rnd);
+      for (const u of units) {
+        if (rnd() < 0.5) continue;
+        u.warp = { speed: Math.exp(Math.log(0.25) + rnd() * Math.log(16)), curve: null, reverse: rnd() < 0.5, blend: false };
+        warped++;
+      }
+      const result = await simulate(units, crossfade, loops);
+      expect(problems(units, result, loops), `trial ${trial}`).toEqual([]);
+    }
+    expect(warped).toBeGreaterThan(200);
   });
 
   it("shows Track's frame where a clip shows again, from sources above 60 fps or with uneven timestamps, over 1000 seeded stacks", async () => {

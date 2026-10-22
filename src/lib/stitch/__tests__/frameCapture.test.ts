@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Input, type InputVideoTrack, type VideoSample } from "mediabunny";
-import type { StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import { Input, InputVideoTrack, VideoSampleSink, type VideoSample } from "mediabunny";
+import type { ClipWarp, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import type { ClipReader } from "../clipReader";
 import { probeClip } from "../clipProbe";
 import {
@@ -16,6 +16,7 @@ import type { OverlayFontList } from "../overlayDraw";
 import { createTextOverlay } from "../overlays";
 import { domOpacities } from "../placement";
 import { layoutSpans, sourceKey, type SourceKey } from "../timeline";
+import { normalizeWarp, withWarp } from "../warp";
 
 vi.mock("../clipProbe", () => ({ probeClip: vi.fn() }));
 
@@ -88,6 +89,7 @@ function fakes(
   const ops: Op[] = [];
   const samples: FakeSample[] = [];
   const readers: Array<{ source: string; closed: boolean; window: unknown; inSec: number; range: unknown }> = [];
+  const neighbourCalls: Array<{ source: string; time: number; end: number }> = [];
   const opened: Array<{ src: string; disposed: number }> = [];
   const sourceOf = (track: InputVideoTrack) => (track as unknown as { source: string }).source;
   const sample = (name: string, timestamp: number): VideoSample => {
@@ -152,6 +154,13 @@ function fakes(
       if (how === "hang") return new Promise<never>(() => undefined);
       return how === "none" ? null : sample(`${sourceOf(track)}@t${time}`, time);
     },
+    // A 24 fps source: the frame in effect at `time` and the next, before `end`
+    async neighbours(track, time, end) {
+      const source = sourceOf(track);
+      neighbourCalls.push({ source, time, end });
+      const j = Math.max(0, Math.floor(time * 24 + 1e-9));
+      return [j, j + 1].filter((k) => k / 24 < end).map((k) => sample(`${source}~${k}`, k / 24));
+    },
     async fonts(overlays) {
       ops.push({ op: "fonts", ids: overlays.map((o) => o.id) });
       return FONT_LIST;
@@ -164,7 +173,7 @@ function fakes(
   /** Every reader and sample closed, every source disposed once. */
   const allReleased = () =>
     readers.every((r) => r.closed) && samples.every((s) => s.closed || /@\d|@first/.test(s.name)) && opened.every((o) => o.disposed === 1);
-  return { deps, ops, samples, readers, opened, allReleased };
+  return { deps, ops, samples, readers, opened, neighbourCalls, allReleased };
 }
 
 const ab = [edgeClip("a"), edgeClip("b")];
@@ -202,6 +211,99 @@ describe("captureSequenceFrame", () => {
     ]);
     expect(result.drawn.map((d) => d.sourceSec)).toEqual(layers.map((l) => (l.read.by === "time" ? l.read.time : NaN)));
     expect(f.samples.every((s) => s.closed)).toBe(true);
+  });
+
+  describe("a retimed clip", () => {
+    const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({ speed, curve: null, reverse: false, blend: false, ...extra });
+    const retimed = (warp: ClipWarp) => [withWarp(edgeClip("a"), normalizeWarp(warp)), edgeClip("b")];
+
+    it("draws the frame nearest the warp's source time on the slot, read up to Out", async () => {
+      // 2×: slot 30 shows source second 1, frame 24
+      const f = fakes();
+      const result = await captureSequenceFrame(job(retimed(W(2)), five, TRACK, 0.5), f.deps);
+      expect(result.plan.slot).toBe(30);
+      expect(f.neighbourCalls).toEqual([{ source: "edge:a", time: 1, end: 5 }]);
+      expect(f.ops).toEqual([
+        { op: "fill", style: "black", alpha: 1 },
+        { op: "draw", name: "edge:a~24", alpha: 1, options: { fit: "cover" } },
+      ]);
+      expect(result.drawn).toEqual([{ clipId: "a", sourceSec: 1, weight: 1 }]);
+      expect(f.allReleased()).toBe(true);
+    });
+
+    it("draws the earlier frame on a tie", async () => {
+      // 1.25×: slot 1 shows source second 1/48, halfway between frames 0 and 1
+      const f = fakes();
+      const result = await captureSequenceFrame(job(retimed(W(1.25)), five, TRACK, 1 / 60), f.deps);
+      expect(result.plan.slot).toBe(1);
+      expect(result.drawn).toEqual([{ clipId: "a", sourceSec: 0, weight: 1 }]);
+      expect(f.allReleased()).toBe(true);
+    });
+
+    it("draws a blended slot as its two frames, the earlier opaque and the later at its share", async () => {
+      // 0.5× with Blend frames: slot 1 is a fifth of the way from frame 0 to frame 1
+      const f = fakes();
+      const result = await captureSequenceFrame(job(retimed(W(0.5, { blend: true })), five, TRACK, 1 / 60), f.deps);
+      expect(result.drawn.map((d) => d.clipId)).toEqual(["a", "a"]);
+      expect(result.drawn.map((d) => d.sourceSec)).toEqual([0, 1 / 24]);
+      expect(result.drawn[0].weight).toBeCloseTo(0.8, 12);
+      expect(result.drawn[1].weight).toBeCloseTo(0.2, 12);
+      const draws = f.ops.flatMap((op) => (op.op === "draw" ? [[op.name, op.alpha]] : []));
+      expect(draws[0]).toEqual(["edge:a~0", 1]);
+      expect(draws[1][0]).toBe("edge:a~1");
+      expect(draws[1][1]).toBeCloseTo(0.2, 12);
+      expect(f.allReleased()).toBe(true);
+    });
+
+    it("reads a split piece's neighbours up to the next piece's Out, drawing the frame past the join where it is nearer", async () => {
+      // [0, 2) and [2, 6) of one file at 0.5×: slot 239 shows source 1.9917 s, nearer frame 48 (2 s) than frame 47
+      const piece = (id: string, extra: Partial<StitchTimelineClip>) =>
+        withWarp(edgeClip(id, { ...extra, source: { kind: "edge", edgeId: "a" } }), normalizeWarp(W(0.5)));
+      const f = fakes();
+      const result = await captureSequenceFrame(job([piece("a", { outSec: 2 }), piece("a2", { inSec: 2 })], { a: 6, a2: 6 }, TRACK, 3.99), f.deps);
+      expect(result.plan.slot).toBe(239);
+      expect(f.neighbourCalls).toEqual([{ source: "edge:a", time: 239 / 120, end: 6 }]);
+      expect(result.drawn).toEqual([{ clipId: "a", sourceSec: 2, weight: 1 }]);
+      expect(f.allReleased()).toBe(true);
+    });
+
+    it("closes the frame it decoded when the next one fails, by default", async () => {
+      const first = { timestamp: 1, close: vi.fn() };
+      const stop = vi.fn(async () => ({ done: true as const, value: undefined }));
+      const samples = vi.spyOn(VideoSampleSink.prototype, "samples").mockImplementation(
+        () =>
+          ({
+            [Symbol.asyncIterator]: () => ({
+              next: vi
+                .fn()
+                .mockResolvedValueOnce({ done: false, value: first })
+                .mockRejectedValueOnce(new Error("decode failed")),
+              return: stop,
+            }),
+          }) as unknown as AsyncGenerator<VideoSample, void, unknown>,
+      );
+      try {
+        const track = Object.create(InputVideoTrack.prototype) as InputVideoTrack;
+        // The default neighbours, over a real VideoSampleSink
+        const deps: Partial<FrameCaptureDeps> = {
+          ...fakes().deps,
+          open: async () => ({ track, facts: { firstTimestamp: 0, frameRate: null }, dispose: () => undefined }),
+        };
+        delete deps.neighbours;
+        await expect(captureSequenceFrame(job(retimed(W(2)), five, TRACK, 0.5), deps)).rejects.toMatchObject({ kind: "unreadable" });
+        expect(first.close).toHaveBeenCalled();
+        expect(stop).toHaveBeenCalled();
+      } finally {
+        samples.mockRestore();
+      }
+    });
+
+    it("never asks for neighbours without a warp", async () => {
+      const f = fakes();
+      await captureSequenceFrame(job(ab, five, STACKED, 4.5), f.deps);
+      await captureSequenceFrame(job(ab, five, TRACK, 7), f.deps);
+      expect(f.neighbourCalls).toEqual([]);
+    });
   });
 
   it("composites a placed blend of three by the DOM opacities of its weights", async () => {

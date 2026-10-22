@@ -18,6 +18,7 @@ import {
 import { overlayOpacitiesAt } from "./overlays";
 import { domOpacities, LAYER_WARNING } from "./placement";
 import type { SourceKey } from "./timeline";
+import { pickFrame } from "./warpFrames";
 
 /**
  * Frame to canvas, in the page: the frame planned for the playhead (framePlan.ts), decoded from the clips' files
@@ -53,6 +54,8 @@ export interface FrameCaptureDeps {
   canvas(size: { width: number; height: number }): { ctx: Context2D; toBlob(): Promise<Blob> };
   reader(track: InputVideoTrack, range: { from: number; to: number }, window: ClipReaderWindow, inSec: number): ClipReader;
   sampleAt(track: InputVideoTrack, time: number): Promise<VideoSample | null>;
+  /** The frame in effect at `time` (or the first after it) and the next, both before `end`; at most two, the caller closes them. */
+  neighbours(track: InputVideoTrack, time: number, end: number): Promise<VideoSample[]>;
   /** Loads the overlays' fonts; the family lists they are drawn in. */
   fonts(overlays: readonly StitchOverlay[]): Promise<OverlayFontList>;
   drawOverlays: typeof drawOverlays;
@@ -157,6 +160,29 @@ const DEFAULT_DEPS: FrameCaptureDeps = {
   canvas: defaultCanvas,
   reader: openClipReader,
   sampleAt: (track, time) => new VideoSampleSink(track).getSample(time),
+  // One decode from the key before `time` to the frame after it
+  neighbours: async (track, time, end) => {
+    const iterator = new VideoSampleSink(track).samples(time, end)[Symbol.asyncIterator]();
+    const out: VideoSample[] = [];
+    try {
+      while (out.length < 2) {
+        const next = await iterator.next();
+        if (next.done) break;
+        out.push(next.value);
+      }
+    } catch (error) {
+      // A frame decoded before the failure never reaches the capture, which closes the rest
+      for (const sample of out) sample.close();
+      throw error;
+    } finally {
+      try {
+        await iterator.return?.(undefined);
+      } catch (error) {
+        console.warn("[VideoStitch] Failed to stop a clip decoder", error);
+      }
+    }
+    return out;
+  },
   fonts: async (overlays) => overlayFontList(await ensureOverlayFonts(overlays)),
   drawOverlays,
 };
@@ -268,20 +294,42 @@ export async function captureSequenceFrame(job: FrameCaptureJob, deps: Partial<F
       if (!source) throw new FrameCaptureError("unreadable", "The clip's video was not opened", clipNumber(layer));
       return source;
     };
-    /** The layer's frame, and its reader when it reads by slot (the reader keeps its frames; a time read's is ours). */
+    /**
+     * The layer's frames, each with its share of the layer (one at 1, or none; a retimed clip blending on its slot gives
+     * two), and its reader when it reads by slot (the reader keeps its frames; a time or warp read's are ours).
+     */
     const readLayer = async (
       layer: Omit<FrameLayer, "held" | "weight">,
-    ): Promise<{ sample: VideoSample | null; reader: ClipReader | null }> => {
+    ): Promise<{ frames: Array<{ sample: VideoSample; share: number }>; reader: ClipReader | null }> => {
       const { read } = layer;
       const { track } = sourceFor(layer);
       if (read.by === "time") {
         const sample = await untilStopped(d.sampleAt(track, read.time));
         if (sample) samples.push(sample);
-        return { sample, reader: null };
+        return { frames: sample ? [{ sample, share: 1 }] : [], reader: null };
+      }
+      if (read.by === "warp") {
+        const got = await untilStopped(d.neighbours(track, read.time, read.until));
+        // Closed in finally, picked or not
+        samples.push(...got);
+        if (got.length === 0) return { frames: [], reader: null };
+        // Over the two neighbours it picks what it picks over the clip's whole frame list, as Render does
+        const pick = pickFrame(got.map((sample) => sample.timestamp), read.time, read.blend);
+        return {
+          frames:
+            pick.b < 0
+              ? [{ sample: got[pick.a], share: 1 }]
+              : [
+                  { sample: got[pick.a], share: 1 - pick.alpha },
+                  { sample: got[pick.b], share: pick.alpha },
+                ],
+          reader: null,
+        };
       }
       const reader = d.reader(track, read.range, read.window, read.inSec);
       readers.push(reader);
-      return { sample: await untilStopped(reader.frameOn(read.slot)), reader };
+      const sample = await untilStopped(reader.frameOn(read.slot));
+      return { frames: sample ? [{ sample, share: 1 }] : [], reader };
     };
     /**
      * The held read, its source opened only now that it is needed, and planned again with that source's facts
@@ -295,37 +343,47 @@ export async function captureSequenceFrame(job: FrameCaptureJob, deps: Partial<F
       return again?.unit === layers[k].unit && again.held ? again.held : held;
     };
 
-    /** Per layer drawn: the frame, and the clip it came from (the held clip's when the layer's own read gave none). */
-    const read: Array<{ layer: FrameLayer; from: Pick<FrameLayer, "clipId" | "source">; sample: VideoSample }> = [];
+    /**
+     * Per frame drawn: the frame, the clip it came from (the held clip's when the layer's own read gave none) and its
+     * weight, the layer's times the frame's share of it.
+     */
+    const read: Array<{ from: Pick<FrameLayer, "clipId" | "source">; sample: VideoSample; weight: number }> = [];
     for (const [k, layer] of layers.entries()) {
       if (signal?.aborted) throw signal.reason;
       current = layer;
       let from: Pick<FrameLayer, "clipId" | "source"> = layer;
-      let sample: VideoSample | null;
+      let frames: Array<{ sample: VideoSample; share: number }>;
       try {
         const own = await readLayer(layer);
-        sample = own.sample;
-        if (!sample && layer.held) {
+        frames = own.frames;
+        if (frames.length === 0 && layer.held) {
           current = layer.held;
           const held = await heldRead(k, layer.held);
-          sample = (await readLayer(held)).sample;
-          if (sample) from = held;
+          const got = (await readLayer(held)).frames;
+          if (got.length > 0) {
+            frames = got;
+            from = held;
+          }
           current = layer;
         }
         // Nothing on or before the slot: the clip's first frame
-        if (!sample && own.reader) sample = await untilStopped(own.reader.firstFrame());
+        if (frames.length === 0 && own.reader) {
+          const first = await untilStopped(own.reader.firstFrame());
+          if (first) frames = [{ sample: first, share: 1 }];
+        }
       } catch (error) {
         if (signal?.aborted || error instanceof FrameCaptureError) throw error;
         throw failureOf(current ?? layer, error);
       }
-      if (sample) read.push({ layer, from, sample });
+      for (const { sample, share } of frames) read.push({ from, sample, weight: layer.weight * share });
     }
     if (signal?.aborted) throw signal.reason;
     if (read.length === 0) throw new FrameCaptureError("unreadable", "No frame could be read at the playhead", clipNumber(layers0[0]));
     current = null;
 
-    // Render's composite: the layers present, their weights divided by their sum (a zero sum gives the bottom 1)
-    const raw = read.map(({ layer }) => (Number.isFinite(layer.weight) && layer.weight > 0 ? layer.weight : 0));
+    // Render's composite: the layers present, their weights divided by their sum (a zero sum gives the bottom 1); a
+    // blended retimed layer is its two frames, the lower opaque and the upper at its share, as Render's blend makes it
+    const raw = read.map(({ weight }) => (Number.isFinite(weight) && weight > 0 ? weight : 0));
     const sum = raw.reduce((total, w) => total + w, 0);
     const weights = sum > 0 ? raw.map((w) => w / sum) : raw.map((_, k) => (k === 0 ? 1 : 0));
     const opacities = domOpacities(weights);

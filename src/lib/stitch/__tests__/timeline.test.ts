@@ -65,7 +65,7 @@ import {
   type SourceDurations,
   type SourceKey,
 } from "../timeline";
-import { normalizeWarp, withWarp } from "../warp";
+import { activeWarp, normalizeWarp, withWarp } from "../warp";
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -154,6 +154,17 @@ describe("clipLength", () => {
     expect(planSequence([{ inSec: 4.99, outSec: null, sourceDuration: 5 }]).clips).toEqual([]);
     expect(clipLength(edgeClip("b", "e2"), 1 / 60)).toBe(1 / 60);
     expect(planSequence([{ inSec: 0, outSec: null, sourceDuration: 1 / 60 }]).clips).toHaveLength(1);
+  });
+
+  it("agrees with the encode under a warp: the same length, and a clip sped under one frame dropped by both", () => {
+    const fast = retimed(edgeClip("a", "e1", { inSec: 4.98 }), W(2));
+    expect(clipLength(fast, 5)).toBe(0);
+    expect(planSequence([{ inSec: 4.98, outSec: null, sourceDuration: 5, warp: activeWarp(fast)! }]).clips).toEqual([]);
+    for (const warp of [W(2), W(0.5, { curve: QUAD }), W(1.5, { reverse: true })]) {
+      const clip = retimed(edgeClip("b", "e2", { inSec: 1, outSec: 3.5 }), warp);
+      const [planned] = planSequence([{ inSec: 1, outSec: 3.5, sourceDuration: 5, warp: activeWarp(clip)! }]).clips;
+      expect(planned.length).toBe(clipLength(clip, 5));
+    }
   });
 });
 
