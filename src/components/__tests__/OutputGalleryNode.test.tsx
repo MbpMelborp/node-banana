@@ -25,7 +25,7 @@ vi.mock("@/store/workflowStore", () => ({
     })
   ), { getState: () => ({ nodes: [], onNodesChange: vi.fn() }) }),
 }));
-vi.mock("@/components/WorkflowCanvas", () => ({ isPanningRef: { current: false }, isDraggingNodeRef: { current: false } }));
+vi.mock("@/components/WorkflowCanvas", () => ({ isPanningRef: { current: false } }));
 
 const IMG = "data:image/png;base64,iVBORw0KGgo=";
 const props = {

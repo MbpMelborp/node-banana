@@ -189,7 +189,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     // Held while the user navigates, as today's canvas does, so work that
     // waits for a quiet canvas (the desktop recovery checkpoint) waits for it.
     const interacting = createPanActivityTracker({
-      // A node or wire drag holds the class itself: a pause mid-drag must not take it away (as classic's isDraggingNodeRef).
+      // A node or wire drag holds the class itself: a pause mid-drag must not take it away.
       setActive: (active) => {
         if (active || !editor.holdsInteracting) document.documentElement.classList.toggle("canvas-interacting", active);
       },
