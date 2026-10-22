@@ -104,7 +104,6 @@ vi.mock("@/components/agent/AgentSession", () => ({
 }));
 
 vi.mock("@/components/GroupsOverlay", () => ({
-  GroupBackgroundsPortal: () => null,
   GroupControlsOverlay: () => null,
 }));
 

@@ -734,35 +734,6 @@ html {
   }
 }
 
-/* A running node drawn at low detail (NodeLowDetail): a tint over the card
-   and a halo around it that pulse, so it shows at any zoom and reads apart
-   from a blue thumbnail. Held while the canvas pans or a node drags, like the
-   comet; static under reduced motion. */
-.node-low-detail-running {
-  background: color-mix(in srgb, var(--color-running) 40%, transparent);
-  box-shadow: 0 0 0 12px color-mix(in srgb, var(--color-running) 60%, transparent);
-  pointer-events: none;
-  animation: node-low-detail-running 0.9s cubic-bezier(0.45, 0, 0.25, 1) infinite alternate;
-}
-
-@keyframes node-low-detail-running {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
-}
-
-.canvas-interacting .node-low-detail-running,
-.canvas-native-navigation-active .node-low-detail-running,
-.canvas-wheel-navigation-active .node-low-detail-running {
-  animation-play-state: paused;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .node-low-detail-running {
-    animation: none;
-    opacity: 0.8;
-  }
-}
-
 /* Fan animation for image history */
 /* Top-right chrome: the history drop-down and generation cards fall in
    from the button they hang under. */

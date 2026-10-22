@@ -290,8 +290,7 @@ const OUTLINE_FRAGMENT = /* glsl */ `
 `;
 
 /**
- * A running node seen zoomed out (as NodeLowDetail's .node-low-detail-running
- * draws it today): a tint over the node and a 12 px halo around it, pulsing
+ * A running node seen zoomed out, past the low-detail zoom: a tint over the node and a 12 px halo around it, pulsing
  * between 35% and full strength every 0.9 s; held at 80% under reduced motion.
  */
 const HALO_FRAGMENT = /* glsl */ `
