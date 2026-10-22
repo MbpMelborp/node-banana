@@ -4,6 +4,20 @@ All notable changes to Node Banana will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- Text layers: "+ Text" under the audio rows, or Add text in the Edit video view's media pane, puts words over the video on a dark wash across the picture, fading in and out, on timeline rows of their own above the video.
+- Fonts for text layers: the app's own fonts, font files you add to the Fonts folder in the Node Banana folder, and the fonts installed on your computer once you allow it (the desktop app allows it).
+- Text layers in the video: Render and Frame to canvas burn the text layers in as the preview shows them.
+
+### Notes
+
+Edit files keep version 1, so Node Banana 2.2.0 still opens an edit with text
+layers, but it drops them whenever it saves, renames, renders or duplicates
+that edit.
+
 ## [2.2.0] - 2026-10-22
 
 The Video Stitch node becomes Edit Video, with an editor on a timeline and a

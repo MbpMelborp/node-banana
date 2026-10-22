@@ -9,8 +9,10 @@ assets to it without moving any files.
 The library root is the **Node Banana folder**. It holds the projects saved
 by name (`<root>/<Project>/`), `Generations/` for workflows that have no
 project yet, `Edits/` for the Edit video view's edit files
-(`<name>.nbedit`, see [edit-video.md](edit-video.md)), and the hidden
-`.nodebanana/`. Neither `Generations` nor `Edits` is ever a project's name.
+(`<name>.nbedit`, see [edit-video.md](edit-video.md)), `Fonts/` for the
+font files text layers use (see "Text layers" there), and the hidden
+`.nodebanana/`. No project is given the name `Generations`, `Edits` or
+`Fonts`.
 
 ## Where files go
 
@@ -44,6 +46,7 @@ to the old project-only save.
 <root>/
   Generations/YYYY-MM-DD/HHMMSS_<prompt>_<sha8>.<ext>   assets of workflows with no project
   Edits/<name>.nbedit                                  edit projects (no media: asset ids only)
+  Fonts/<name>.ttf|.otf|.woff|.woff2                   font files for text layers, shared by every edit
   .nodebanana/                                         hidden metadata
     library.json                                       marker
     assets/<assetId>.json                              one sidecar per asset
@@ -266,7 +269,7 @@ is a project, holds one or is a loose workflow file.
 
 **The projects move** (job type `projects`, `projectMove.ts`) moves each
 outermost folder in turn to `<root>/<name>`, numbered past a taken name
-(case-insensitively, `Generations` and `Edits` reserved). It copies without following
+(case-insensitively, `Generations`, `Edits` and `Fonts` reserved). It copies without following
 links, checks every file's size, copies again what changed meanwhile, then
 points the library at the copy — records of its files (`relocateExternal`,
 under each record's lock), workflow rows, `media/*.ref` snapshot references
@@ -307,11 +310,15 @@ whether the plain name was taken.
 Settings → Storage → Change… offers two choices:
 
 - **Move my library there.** This is a background job. It copies
-  `Generations/`, the edit files in `Edits/` and `.nodebanana/`, verifies each file's size and hash,
+  `Generations/`, the edit files in `Edits/`, the font files in `Fonts/`
+  (not one that is a symbolic link) and `.nodebanana/`, verifies each file's size and hash,
   switches the root, then deletes only the copied files from the old folder.
   Projects stay where they are. Writes pause while the move runs, in this
   server and in any other one using the same library. A folder that already
-  holds a library, or edit files in its `Edits/`, is refused.
+  holds a library, or edit files in its `Edits/`, is refused, and so is one
+  whose `Fonts/` has a file named as one of our font files, case aside
+  (409: "The new folder's Fonts folder already has a font named
+  “Inter.ttf”. Move or rename it there, or choose another folder.").
 - **Use that folder.** This switches to the new folder; the old library stays
   on disk.
 
