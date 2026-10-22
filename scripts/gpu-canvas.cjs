@@ -90,6 +90,9 @@ async function buildFixture(dir, copies) {
     await sharp(path.join(root, 'examples/sample-images', name)).resize(1536, 1536, { fit: 'inside' }).jpeg({ quality: 88 }).toFile(path.join(dir, 'inputs', `${id}.jpg`));
     ids.push(id);
   }
+  await fs.mkdir(path.join(dir, 'generations'), { recursive: true });
+  await fs.copyFile(path.join(root, 'examples/sample-videos/clip.webm'), path.join(dir, 'generations', 'sample-video.webm'));
+  const videoUrl = `/api/workflow-images?${new URLSearchParams({ workflowPath: dir, imageId: 'sample-video', raw: '1' })}`;
   const idFor = index => ids[index % ids.length];
   const mediaFor = index => `/api/workflow-images?${new URLSearchParams({ workflowPath: dir, imageId: ids[index % ids.length], raw: '1' })}`;
   let maxX = 0, maxY = 0;
@@ -119,6 +122,17 @@ async function buildFixture(dir, copies) {
     for (const [id, group] of Object.entries(base.groups ?? {})) groups[id + suffix] = { ...group, id: id + suffix, name: `${group.name} (${copy + 1})`, position: { x: group.position.x + dx, y: group.position.y + dy } };
     const firstImage = new Map();
     for (const edge of base.edges) if (!firstImage.has(edge.target) && imageOf.has(edge.source)) firstImage.set(edge.target, edge.source);
+    // Generate Video nodes hold the sample clip, and an Edit Video node stitches the first two.
+    const videos = nodes.slice(nodes.length - base.nodes.length).filter(node => node.type === 'generateVideo');
+    for (const node of videos) Object.assign(node.data, { outputVideo: videoUrl, outputVideoRef: 'sample-video', status: 'complete' });
+    if (videos.length >= 2) {
+      const [a, b] = videos, stitch = `videoStitch-fixture${suffix}`;
+      nodes.push({ id: stitch, type: 'videoStitch', position: { x: a.position.x + 1000, y: a.position.y }, style: { width: 400, height: 280 },
+        data: { clips: [], clipOrder: [], outputVideo: null, loopCount: 1, status: 'idle', error: null, progress: 0, encoderSupported: null } });
+      for (const [i, source] of [a, b].entries()) {
+        edges.push({ id: `edge-${source.id}-${stitch}-video-${i}`, source: source.id, sourceHandle: 'video', target: stitch, targetHandle: `video-${i}`, data: { createdAt: 1756000000000 + i } });
+      }
+    }
     for (const node of nodes.slice(nodes.length - base.nodes.length)) {
       if (node.type !== 'output') continue;
       const source = firstImage.get(node.id.slice(0, -suffix.length));
