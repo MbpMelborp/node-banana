@@ -718,6 +718,26 @@ describe("StitchEditorModal", () => {
     expect(stitchData().overlays).toBeUndefined();
   });
 
+  it("hands a layer \"+ Text\" adds to the rail with its text focused and selected, so typing replaces \"Title\"", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    seed();
+    openEditor();
+    const add = within(screen.getByTestId("stitch-timeline-foot")).getByRole("button", { name: "Add text" });
+    act(() => add.focus());
+    fireEvent.click(add);
+    const rail = screen.getByRole("complementary", { name: "Text" });
+    const area = within(rail).getByRole("textbox", { name: "Text" }) as HTMLTextAreaElement;
+    expect(area).toHaveFocus();
+    expect([area.selectionStart, area.selectionEnd]).toEqual([0, "Title".length]);
+    fireEvent.change(area, { target: { value: "Lower third" } });
+    // The editor's keys leave the text alone: S splits nothing, ⌫ removes nothing
+    press(area, "s");
+    press(area, "Backspace");
+    expect(editor().draft!.overlays).toEqual([expect.objectContaining({ text: "Lower third" })]);
+    // The add, then the typing
+    expect(editor().past).toHaveLength(2);
+  });
+
   it("keeps Done off in an empty editor whatever the loop count, and Loop off in the menu", () => {
     seed({ clips: false });
     openEditor();

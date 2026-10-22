@@ -18,9 +18,11 @@ import {
   nudgeSelectedOverlays,
   removeOverlaySelection,
   setOverlayEdgeAtPlayhead,
+  setOverlayLength,
   setOverlayStart,
   splitSelectedOverlaysAtPlayhead,
   startSelectedOverlayAtPlayhead,
+  takeOverlayTextFocus,
   trimOverlayBody,
   updateOverlay,
 } from "../overlayActions";
@@ -122,6 +124,17 @@ describe("adding a text layer", () => {
     // The playhead moved since: the next one starts there
     store().setPlayhead(4);
     expect(layer(addTextOverlay()!).startSec).toBe(4);
+  });
+
+  it("asks the rail to focus the new layer's text, once, and only for that layer", () => {
+    openOn();
+    const first = addTextOverlay()!;
+    expect(takeOverlayTextFocus(first)).toBe(true);
+    expect(takeOverlayTextFocus(first)).toBe(false);
+    const second = addTextOverlay()!;
+    // A rail for another layer clears the request: it never outlives the rail it was meant for
+    expect(takeOverlayTextFocus(first)).toBe(false);
+    expect(takeOverlayTextFocus(second)).toBe(false);
   });
 
   it("starts at 0:00 with no video, and leaves the playhead alone", () => {
@@ -288,6 +301,23 @@ describe("a text layer's settings", () => {
     expect(layer("t").size).toBe(0.12);
     expect(store().past).toHaveLength(2);
     updateOverlay("gone", { text: "x" });
+    expect(store().past).toHaveLength(2);
+  });
+
+  it("sets the length from the start, which stays, kept clear of the next layer on the row and at least the least", () => {
+    openOn([text("t", { startSec: 1, endSec: 3 }), text("u", { startSec: 5, endSec: 6 })]);
+    setOverlayLength("t", 3);
+    expect(layer("t")).toMatchObject({ startSec: 1, endSec: 4 });
+    expect(store().past).toHaveLength(1);
+    setOverlayLength("t", 9, { gestureKey: "overlay-length:t" });
+    expect(layer("t")).toMatchObject({ startSec: 1, endSec: 5 });
+    setOverlayLength("t", 0, { gestureKey: "overlay-length:t" });
+    expect(layer("t").endSec).toBeCloseTo(1.1, 9);
+    expect(store().past).toHaveLength(2);
+    // Already that long, not a number, or no such layer: nothing
+    setOverlayLength("t", layer("t").endSec - 1);
+    setOverlayLength("t", Number.NaN);
+    setOverlayLength("gone", 2);
     expect(store().past).toHaveLength(2);
   });
 });

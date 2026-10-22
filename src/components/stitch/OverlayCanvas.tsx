@@ -21,7 +21,7 @@ import {
 import type { StitchOverlay } from "@/types";
 
 /** The render's size while no clip has one (video-probing's fallback, which loads mediabunny). */
-const FALLBACK_FRAME: OverlaySize = { width: 1920, height: 1080 };
+export const OVERLAY_FALLBACK_FRAME: OverlaySize = { width: 1920, height: 1080 };
 
 const overlaysOf = (s: Pick<StitchEditorState, "draft">) => (s.draft ? draftOverlays(s.draft) : NO_OVERLAYS);
 
@@ -77,7 +77,7 @@ export function OverlayCanvas({
 
   const frameWidth = frame?.width ?? null;
   const frameHeight = frame?.height ?? null;
-  const { width: outputWidth, height: outputHeight } = frameSize ?? FALLBACK_FRAME;
+  const { width: outputWidth, height: outputHeight } = frameSize ?? OVERLAY_FALLBACK_FRAME;
 
   useLayoutEffect(() => {
     const canvas = ref.current;
@@ -115,7 +115,8 @@ export function OverlayCanvas({
     };
   }, [cache, frameWidth, frameHeight, outputWidth, outputHeight, total, noVideo]);
 
-  // Font files and faces load as the layers name them; drawn in the lists they resolve to once they have
+  // Font files and faces load as the layers name them, or as the fonts change; drawn in the lists they resolve to once
+  // they have. Only a real load changes the fonts again, so this settles
   useEffect(() => {
     let live = true;
     let latest = 0;
@@ -131,7 +132,11 @@ export function OverlayCanvas({
     const offStore = useStitchEditorStore.subscribe((s, prev) => {
       if (overlaysOf(s) !== overlaysOf(prev)) load(overlaysOf(s));
     });
-    const offFonts = onFontsChanged(() => redraw.current());
+    // A face that loads shows at once; and a file added to the Fonts folder resolves only when asked again
+    const offFonts = onFontsChanged(() => {
+      redraw.current();
+      load(overlaysOf(useStitchEditorStore.getState()));
+    });
     return () => {
       live = false;
       offStore();

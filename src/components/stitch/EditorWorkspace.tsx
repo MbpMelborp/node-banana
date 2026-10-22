@@ -67,7 +67,7 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
             />
           </div>
         </EditorStage>
-        <EditorRail media={byClip} audio={audioByClip} />
+        <EditorRail media={byClip} audio={audioByClip} frameSize={composition.frameSize} />
       </div>
       <TimelineResizeHandle
         height={drawnHeight}

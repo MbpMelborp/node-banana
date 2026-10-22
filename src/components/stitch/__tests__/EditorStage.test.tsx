@@ -1,7 +1,7 @@
 import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook, screen } from "@testing-library/react";
-import { ensureOverlayFonts, type ResolvedFont } from "@/lib/stitch/fonts";
+import { ensureOverlayFonts, fileFamily, fontKey, type ResolvedFont } from "@/lib/stitch/fonts";
 import type { StitchDraft } from "@/lib/stitch/draft";
 import { createTextOverlay } from "@/lib/stitch/overlays";
 import { overlaySelectionOf, setLivePlayhead, useStitchEditorStore } from "@/store/stitchEditorStore";
@@ -424,12 +424,39 @@ describe("the text layers on the stage", () => {
     const missing: ResolvedFont = { list: '"Space Grotesk", sans-serif', state: "missing" };
     await act(async () => resolve(new Map([["family:Missing Sans", missing]])));
     expect(fonts()).toEqual([`600 ${px}px "Space Grotesk", sans-serif`]);
+    // A font that loads redraws at once, and the fonts are asked for again
     act(() => fontChanges.forEach((listener) => listener()));
     expect(take(ops)).toEqual([["clear"], ["wash", 0.5], ["Title", 1]]);
+    expect(load).toHaveBeenCalledTimes(2);
     // An edit to the layers loads what they now need
     act(() => editor().apply((d) => ({ ...d, overlays: [{ ...d.overlays![0], text: "Ünïcode" }] })));
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(load.mock.calls[2][0]).toBe(editor().draft!.overlays);
+  });
+
+  it("draws a font file added to the Fonts folder once the fonts change, the layer as it was", async () => {
+    sized(STAGE.width, STAGE.height);
+    const { ops } = fakeContext();
+    const load = vi.mocked(ensureOverlayFonts);
+    load.mockClear();
+    const inter = { family: "Inter", file: "Inter.ttf" };
+    const app = '"Space Grotesk", sans-serif';
+    load.mockResolvedValueOnce(new Map([[fontKey(inter), { list: app, state: "missing" }]]));
+    openWith([text("a", { font: inter, weight: 400 })]);
+    playheadAt(2);
+    renderStage(false, 16 / 9, { hasOverlays: true, frameSize: HD, total: 10 });
+    await act(async () => {});
+    const px = 0.08 * 1080;
+    const fonts = () => lastDraw(ops).flatMap((o) => (o.op === "text" ? [o.font] : []));
+    // Made on another computer: this one's Fonts folder has no Inter.ttf
+    expect(fonts()).toEqual([`400 ${px}px ${app}`]);
+    // It is added back under its own name: the layer is unchanged, the fonts change
+    const ready: ResolvedFont = { list: `"${fileFamily("Inter.ttf")}", ${app}`, state: "ready" };
+    load.mockResolvedValueOnce(new Map([[fontKey(inter), ready]]));
+    await act(async () => fontChanges.forEach((listener) => listener()));
     expect(load).toHaveBeenCalledTimes(2);
     expect(load.mock.calls[1][0]).toBe(editor().draft!.overlays);
+    expect(fonts()).toEqual([`400 ${px}px ${ready.list}`]);
   });
 });
 

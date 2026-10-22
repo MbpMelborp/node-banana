@@ -138,7 +138,10 @@ const changes = {
   unwatch: null as (() => void) | null,
 };
 
-/** Bumped whenever a font face is added or loads: a layout measured before may now measure otherwise. */
+/**
+ * Bumped whenever a font face is added or loads, and when the Fonts folder is listed or added to: a layout measured
+ * before may now measure otherwise, and a font that was missing may now load.
+ */
 export function fontGeneration(): number {
   return changes.generation;
 }
@@ -314,15 +317,23 @@ export class FontFileError extends Error {
   }
 }
 
+/** The Fonts folder may hold a file it lacked: a file that was missing is fetched again, and the listeners ask again. */
+function fontsFolderChanged(): void {
+  retryEpoch++;
+  fontsChanged();
+}
+
 /** The font files in the library's Fonts folder; null when there is no library here to keep them. */
 export async function listFontFiles(): Promise<FontList | null> {
-  retryEpoch++;
+  let list: FontList | null;
   try {
     const response = await fetch(FONT_ROUTES.list, { cache: "no-store" });
-    return response.ok ? ((await response.json()) as FontList) : null;
+    list = response.ok ? ((await response.json()) as FontList) : null;
   } catch {
-    return null;
+    list = null;
   }
+  if (list) fontsFolderChanged();
+  return list;
 }
 
 /** Adds a font file to the Fonts folder; the answer names the file a layer then refers to. */
@@ -343,7 +354,7 @@ export async function addFontFile(file: File): Promise<FontFileInfo> {
     const message = typeof body.error === "string" && body.error ? body.error : `${response.status} ${response.statusText}`.trim();
     throw new FontFileError(message, response.status, typeof body.code === "string" ? body.code : undefined);
   }
-  retryEpoch++;
+  fontsFolderChanged();
   return body.font;
 }
 

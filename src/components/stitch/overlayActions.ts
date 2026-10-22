@@ -45,12 +45,26 @@ function singleOverlay(s: StitchEditorState): StitchOverlay | null {
   return draftOverlays(s.draft).find((o) => o.id === ids[0]) ?? null;
 }
 
+/** The layer "+ Text" just added, whose text the rail focuses when it shows it; once. */
+let textFocusRequest: string | null = null;
+
+/**
+ * Whether the rail showing layer `id` should focus its text, with the text selected so typing replaces "Title": only
+ * for the layer "+ Text" just added. Any call clears the request, so it never outlives the rail it was meant for.
+ */
+export function takeOverlayTextFocus(id: string): boolean {
+  const wanted = textFocusRequest === id;
+  textFocusRequest = null;
+  return wanted;
+}
+
 /**
  * "+ Text" and Add text: a new text layer over a paused preview, as one undo step, selected. It starts at the
  * playhead, or at 0:00 when the playhead is at the end or there is no video; while the playhead is where the selected
  * layer's fade in ends (the playhead a layer just added left), at that layer's start, so a second press gives a
  * subtitle with the title. On the first row from the bottom with room, else a new row in front. With video the
- * playhead then goes to where its fade in ends, so the stage shows it whole. Returns its id.
+ * playhead then goes to where its fade in ends, so the stage shows it whole. The rail then focuses its text
+ * (takeOverlayTextFocus). Returns its id.
  */
 export function addTextOverlay(): string | null {
   if (!editor().draft) return null;
@@ -70,6 +84,7 @@ export function addTextOverlay(): string | null {
         : at;
   const { overlays, id } = addTextOverlayAt(draftOverlays(s.draft), start);
   s.apply((d) => ({ ...d, overlays }));
+  textFocusRequest = id;
   selectOverlays([id]);
   const added = overlays.find((o) => o.id === id);
   if (added && total > 0) editor().setPlayhead(Math.max(0, Math.min(added.startSec + added.fadeInSec, total - 1 / FRAME_RATE)));
@@ -152,6 +167,20 @@ export function setOverlayStart(id: string, sec: number, opts?: { gestureKey?: s
   if (!o) return;
   const result = moveOverlays(list, [id], sec - o.startSec, 0);
   if (result.overlays !== list) s.apply((d) => ({ ...d, overlays: result.overlays }), opts);
+}
+
+/**
+ * The rail's Length: the layer ends `sec` after its start, which stays (trimOverlay: at least MIN_OVERLAY_SEC, and no
+ * later than the next layer on its row). One undo step, or one per gesture.
+ */
+export function setOverlayLength(id: string, sec: number, opts?: { gestureKey?: string }): void {
+  const s = editor();
+  if (!s.draft || !Number.isFinite(sec)) return;
+  const list = draftOverlays(s.draft);
+  const o = list.find((other) => other.id === id);
+  if (!o) return;
+  const overlays = trimOverlay(list, id, { endSec: o.startSec + sec });
+  if (overlays !== list) s.apply((d) => ({ ...d, overlays }), opts);
 }
 
 /** [ and the menu, with text layers selected: one layer is selected. */

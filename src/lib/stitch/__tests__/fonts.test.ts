@@ -278,6 +278,29 @@ describe("the Fonts folder", () => {
     expect(await listFontFiles()).toBeNull();
   });
 
+  it("tells whoever draws once the folder is listed or added to, so a missing file is asked for again; not when either fails", async () => {
+    const listener = vi.fn();
+    const off = onFontsChanged(listener);
+    const before = fontGeneration();
+    const fetch = vi.fn(async () => json({ fonts: [INFO], folder: "/Lib/Fonts" }));
+    vi.stubGlobal("fetch", fetch);
+    await listFontFiles();
+    expect(listener).toHaveBeenCalledTimes(1);
+    fetch.mockResolvedValue(json({ error: "No library", code: "unavailable" }, 503));
+    await listFontFiles();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const file = new File([TTF], "Georgia.ttf");
+    fetch.mockResolvedValue(json({ font: INFO }, 201));
+    await addFontFile(file);
+    expect(listener).toHaveBeenCalledTimes(2);
+    fetch.mockResolvedValue(json({ error: "That file is not a font.", code: "unsupported_media_type" }, 415));
+    await expect(addFontFile(file)).rejects.toBeInstanceOf(FontFileError);
+    off();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(fontGeneration()).toBe(before + 2);
+  });
+
   it("adds a file's bytes under its name, and says why one was refused", async () => {
     const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => json({ font: INFO }, 201));
     vi.stubGlobal("fetch", fetch);
