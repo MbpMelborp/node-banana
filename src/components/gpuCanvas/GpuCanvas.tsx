@@ -665,7 +665,7 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
         return { ready: live.settled(), release: () => { for (const release of releases) release(); } };
       },
       subscribe: (listener) => {
-        const offView = scene.onViewChanged(listener), offLayout = scene.onLayoutChanged(listener);
+        const offView = scene.onViewChanged(() => listener(false)), offLayout = scene.onLayoutChanged(() => listener(true));
         return () => { offView(); offLayout(); };
       },
     });
