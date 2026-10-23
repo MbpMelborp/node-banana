@@ -30,7 +30,8 @@ export interface LongAnimationFrame {
   renderMs: number;
   layoutMs: number;
   phase: string;
-  scripts: { ms: number; invoker: string; fn: string; at: string }[];
+  /** The slowest scripts; `layoutMs` is style and layout they forced, `pauseMs` time they waited synchronously. */
+  scripts: { ms: number; invoker: string; fn: string; at: string; layoutMs: number; pauseMs: number }[];
 }
 
 /** PerformanceLongAnimationFrameTiming, which the DOM types do not have yet. */
@@ -40,7 +41,7 @@ interface LoafEntry {
   blockingDuration?: number;
   renderStart?: number;
   styleAndLayoutStart?: number;
-  scripts?: { duration: number; invoker: string; sourceFunctionName: string; sourceURL: string; sourceCharPosition: number }[];
+  scripts?: { duration: number; invoker: string; sourceFunctionName: string; sourceURL: string; sourceCharPosition: number; forcedStyleAndLayoutDuration?: number; pauseDuration?: number }[];
 }
 
 export class GpuCanvasStats {
@@ -69,6 +70,7 @@ export class GpuCanvasStats {
           phase: this.phase,
           scripts: [...(entry.scripts ?? [])].sort((a, b) => b.duration - a.duration).slice(0, 3).map((s) => ({
             ms: Math.round(s.duration), invoker: s.invoker, fn: s.sourceFunctionName, at: `${s.sourceURL}:${s.sourceCharPosition}`,
+            layoutMs: Math.round(s.forcedStyleAndLayoutDuration ?? 0), pauseMs: Math.round(s.pauseDuration ?? 0),
           })),
         });
       }
