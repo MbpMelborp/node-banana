@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Toast } from "@/components/Toast";
 import { GenerationToaster } from "@/components/GenerationToast";
@@ -9,8 +9,9 @@ import { GenerationToaster } from "@/components/GenerationToast";
  * dialog headings and buttons, JetBrains Mono the small uppercase labels;
  * body copy stays on the system stack (globals.css).
  */
-const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-space-grotesk", display: "swap" });
-const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-jetbrains-mono", display: "swap" });
+// Local copies of Google's latin variable files: next/font/google downloads them at build time and Turbopack fails when Google answers with an extensionless /l/font?kit= URL (vercel/next.js#99114).
+const spaceGrotesk = localFont({ src: "./fonts/SpaceGrotesk-latin.woff2", weight: "500 700", variable: "--font-space-grotesk", display: "swap" });
+const jetbrainsMono = localFont({ src: "./fonts/JetBrainsMono-latin.woff2", weight: "400 500", variable: "--font-jetbrains-mono", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Creativo Melborp",
