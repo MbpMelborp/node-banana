@@ -44,6 +44,11 @@ export interface CurveModel<C> {
   shift?: (start: C, dy: number) => C;
   /** Whether a line press with no travel writes its added point (the volume curve's, true); false: only a drag does. */
   addOnClick: boolean;
+  /**
+   * A toggle or range press (⌘ or Ctrl, ⇧) on the curve is the box's, which selects with it (the speed curve's);
+   * absent: the curve takes it as a plain press.
+   */
+  modifiersSelect?: boolean;
 }
 
 export type CurveHit = { kind: "point"; index: number } | { kind: "line" } | { kind: "none" };

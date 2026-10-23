@@ -23,6 +23,9 @@ export const speedGestureKey = (ids: readonly string[]) => `speed:${ids.join(","
 export const curveGestureKey = (clipId: string) => `curve:${clipId}`;
 export const roundSpeed = (speed: number) => (Number.isFinite(speed) ? Number(speed.toPrecision(3)) : speed);
 
+/** Why a speed control is off while a clip's source length is still being read. */
+export const WAITING_FOR_LENGTH = "Waiting for the clip's length";
+
 /** Why a speed change must wait: it would pin a Stacked timeline whose clips are still loading (as Paste waits). */
 export function speedWaitsReason(s: StitchEditorState): string | null {
   return s.draft?.sequenceLayout.mode === "stacked" ? pinWaitsForLoading(s.draft, s.clipsLoading) : null;
@@ -130,10 +133,13 @@ export function moveClipSpeed(clipId: string, speed: number, dir: 1 | -1, opts?:
   return after && after !== before ? (after.warp?.speed ?? 1) : null;
 }
 
-/** ↑/↓ in the Speed well: one step under speedGestureKey, so a run is one undo step until the well is left. */
-export function nudgeClipSpeed(clipId: string, dir: 1 | -1, big: boolean): number | null {
+/**
+ * ↑/↓ in the Speed well: one step under speedGestureKey, so a run is one undo step until the well is left. `blend` is
+ * the run's, carried across 1× as a slider drag carries it.
+ */
+export function nudgeClipSpeed(clipId: string, dir: 1 | -1, big: boolean, blend?: boolean): number | null {
   const from = clipOf(clipId)?.warp?.speed ?? 1;
-  return moveClipSpeed(clipId, nudgeSpeed(from, dir, big), dir, { gestureKey: speedGestureKey([clipId]) });
+  return moveClipSpeed(clipId, nudgeSpeed(from, dir, big), dir, { gestureKey: speedGestureKey([clipId]), blend });
 }
 
 /** Whether this clip's speed curve is open: Stacked, its own row; Track, the clips row (it names any clip there). */

@@ -65,6 +65,7 @@ import {
   speedWaitsReason,
   toggleClipCurveExpanded,
   toggleSelectedReverse,
+  WAITING_FOR_LENGTH,
 } from "../speedActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
@@ -319,13 +320,13 @@ function OpenMenu({
       <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
       {item("Speed…", focusSpeedWell, {
         disabled: !speedOn,
-        title: speedOn ? undefined : (waiting ?? undefined),
+        title: speedOn ? undefined : (waiting ?? WAITING_FOR_LENGTH),
       })}
       {item(reversed ? "Play forward" : "Reverse", toggleSelectedReverse)}
       {item("Reset speed", resetSelectedSpeed, { disabled: !retimed })}
       {item(curveOpen ? "Hide speed curve" : "Show speed curve", () => toggleClipCurveExpanded(clipId), {
         disabled: multi || !lengthKnown,
-        title: multi ? "Select one clip" : undefined,
+        title: multi ? "Select one clip" : lengthKnown ? undefined : WAITING_FOR_LENGTH,
       })}
       <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
       {item("Copy", copySelection, { shortcut: "⌘C" })}

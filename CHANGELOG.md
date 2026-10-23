@@ -16,7 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Ease Curve node: a click on a curve handle keeps the chosen preset, the arrow keys move a focused handle, and the plot sits on neutral black instead of navy. A steep custom curve now follows its handles exactly; before, it could be up to 0.6 % off.
+- Ease Curve node: the arrow keys move a focused handle, and the plot sits on neutral black instead of navy.
+
+### Fixed
+
+- Ease Curve node: a click on a curve handle no longer clears the chosen preset. A steep custom curve follows its handles; before, it could be up to 0.6% off.
 
 ### Notes
 

@@ -588,17 +588,32 @@ describe("Audio section", () => {
     expect(editor().selection).toMatchObject({ kind: "audio", point: 0, onCurve: true });
   });
 
-  it("leaves a Mac's Ctrl-press on the line to the clip menu: it adds no point", () => {
+  it("takes a ⇧-, Ctrl- or ⌘-press on the line as a plain one, and leaves a Mac's Ctrl-press to the clip menu", () => {
     seed();
     openEditor();
     editMusic();
+    const pressLine = (t: number, mods: Record<string, boolean>) => {
+      down(musicBox(), x(t), y(1) + 3, mods);
+      pointer("pointerup", x(t), y(1) + 3, mods);
+    };
+    pressLine(1, { shiftKey: true });
+    pressLine(3, { ctrlKey: true });
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
-    down(musicBox(), x(1), y(1) + 3, { ctrlKey: true });
-    fireEvent.contextMenu(musicBox(), { clientX: x(1), clientY: y(1) + 3, ctrlKey: true });
-    pointer("pointerup", x(1), y(1) + 3, { ctrlKey: true });
+    pressLine(5, { metaKey: true });
+    expect(curve()).toEqual([
+      { t: 1, gain: 1 },
+      { t: 3, gain: 1 },
+      { t: 5, gain: 1 },
+    ]);
+    expect(editor().past).toHaveLength(3);
+    // Still the one selected clip, so its curve still takes presses
+    expect(editor().selection).toMatchObject({ kind: "audio", clipId: MUSIC_CLIP_ID, onCurve: true });
+    down(musicBox(), x(7), y(1) + 3, { ctrlKey: true });
+    fireEvent.contextMenu(musicBox(), { clientX: x(7), clientY: y(1) + 3, ctrlKey: true });
+    pointer("pointerup", x(7), y(1) + 3, { ctrlKey: true });
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    expect(curve()).toEqual([]);
-    expect(editor().past).toHaveLength(0);
+    expect(curve()).toHaveLength(3);
+    expect(editor().past).toHaveLength(3);
   });
 
   it("moves the whole line with ⌥ held, leaving no point selected", () => {

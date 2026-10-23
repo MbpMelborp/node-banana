@@ -44,6 +44,7 @@ import {
   encodeDissolve,
   encodeDissolveFrames,
   timesSide,
+  type BlenderRef,
   type DissolveSide,
   type FrameBlender,
 } from '@/lib/stitch/crossfadeFrames';
@@ -318,11 +319,19 @@ export async function stitchVideosAsync(
       }
       totalVideos = units.length * loopCount;
 
-      // A retimed clip's map, frame list and blender: made once however many loops and runs play it
+      // A retimed clip's map and frame list: made once however many loops and runs play it
       const joins = joinOuts(picture);
       const maps = new Map<StitchUnit, WarpMap>();
       const frameLists = new Map<StitchUnit, Promise<ClipFrames>>();
-      const blends = new Map<StitchUnit, WarpBlend>();
+      // One blender per coded frame size, which every blended clip of that size shares: each keeps three frames'
+      // buffers until the render ends, and the readers blend one frame at a time
+      const blenders = new Map<string, FrameBlender>();
+      const blenderOfSize = (size: BlenderRef): FrameBlender => {
+        const key = `${size.width}x${size.height}`;
+        let blender = blenders.get(key);
+        if (!blender) blenders.set(key, (blender = createFrameBlender(size)));
+        return blender;
+      };
       const mapOf = (unit: WarpedUnit): WarpMap => {
         let map = maps.get(unit);
         if (!map) maps.set(unit, (map = warpMap({ inSec: unit.plan.inSec, outSec: unit.plan.outSec }, unit.plan.warp)));
@@ -338,12 +347,7 @@ export async function stitchVideosAsync(
         }
         return list;
       };
-      const blendOf = (unit: WarpedUnit): WarpBlend | null => {
-        if (!unit.plan.warp.blend) return null;
-        let blend = blends.get(unit);
-        if (!blend) blends.set(unit, (blend = clipBlend(createFrameBlender)));
-        return blend;
-      };
+      const blendOf = (unit: WarpedUnit): WarpBlend | null => (unit.plan.warp.blend ? clipBlend(blenderOfSize) : null);
       const warpedReader = (unit: WarpedUnit, slots: WarpSlots) =>
         openWarpedReader(unit.probe.videoTrack, mapOf(unit), { ...slots, fps: MAX_OUTPUT_FPS }, {
           frames: () => framesOf(unit),

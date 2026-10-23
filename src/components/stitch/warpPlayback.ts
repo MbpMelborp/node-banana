@@ -34,8 +34,8 @@ export const reversed = (map: WarpMap) => map.warp.reverse;
 export const silenced = (map: WarpMap) => map.warp.reverse || dropsSound(map.warp);
 
 /**
- * The rate an element plays the map at: a constant speed exactly, else the mean over the frame from `offset` (core §8),
- * the last frame of the clip near its end, the whole clip when it is shorter than a frame (its average speed). ≥ 0.
+ * The rate an element plays the map at: a constant speed exactly, else the mean over the frame from `offset`, the last
+ * frame of the clip near its end, the whole clip when it is shorter than a frame (its average speed). ≥ 0.
  */
 export function baseRate(map: WarpMap, offset: number): number {
   if (map.warp.curve === null) return map.warp.speed;

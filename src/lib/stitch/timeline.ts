@@ -636,16 +636,6 @@ export function updateClipsWarp(
   return changed ? next : timeline;
 }
 
-/** updateClipsWarp on one clip. */
-export function updateClipWarp(
-  timeline: StitchTimelineClip[],
-  clipId: string,
-  durations: SourceDurations,
-  patch: WarpPatch,
-): StitchTimelineClip[] {
-  return updateClipsWarp(timeline, new Set([clipId]), durations, patch);
-}
-
 /** Final-index semantics: the moved clip ends up at toIndex (truncated). A non-integer fromIndex or non-finite toIndex moves nothing. */
 export function moveClip(timeline: StitchTimelineClip[], fromIndex: number, toIndex: number): StitchTimelineClip[] {
   if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= timeline.length) return timeline;

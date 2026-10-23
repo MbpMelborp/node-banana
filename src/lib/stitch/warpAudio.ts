@@ -21,8 +21,13 @@ export const SINC_BETA_MIN = 1 / 64;
 const KNOTS_PER_SEC = 1000;
 const MIN_KNOTS = 4097;
 const MAX_KNOTS = 2 ** 21;
-const ABORT_CHECK_SAMPLES = 65536;
-const YIELD_SAMPLES = 262144;
+/**
+ * The clock is read every CLOCK_SAMPLES output samples, and the page gets a turn once YIELD_MS have passed: a sample's
+ * cost grows with its speed (a 15× stretch of a ramp reads over 500 source samples), so a count alone could hold the
+ * page for half a second.
+ */
+const CLOCK_SAMPLES = 4096;
+const YIELD_MS = 20;
 
 function besselI0(x: number): number {
   let sum = 1;
@@ -104,6 +109,8 @@ export async function warpResample(job: WarpSoundJob): Promise<Pcm> {
   const channels = pcm.channels.map(() => new Float32Array(n));
   const out: Pcm = { sampleRate: outRate, channels };
   if (n === 0 || channels.length === 0) return out;
+  // The page's last turn: before this call, then each yield
+  let yielded = performance.now();
 
   const knots = Math.min(MAX_KNOTS, Math.max(MIN_KNOTS, Math.ceil(length * KNOTS_PER_SEC) + 1));
   const step = length / (knots - 1);
@@ -120,9 +127,17 @@ export async function warpResample(job: WarpSoundJob): Promise<Pcm> {
   const source = pcm.channels;
   const m = source[0].length;
   const acc = new Float64Array(channels.length);
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  };
+  // Stop can only be pressed while the page has a turn: before the call and after each yield
+  throwIfAborted();
   for (let i = 0; i < n; i++) {
-    if (i % ABORT_CHECK_SAMPLES === 0 && signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    if (i > 0 && i % YIELD_SAMPLES === 0) await yieldToPage();
+    if (i > 0 && i % CLOCK_SAMPLES === 0 && performance.now() - yielded >= YIELD_MS) {
+      await yieldToPage();
+      throwIfAborted();
+      yielded = performance.now();
+    }
     const q = i / outRate / step;
     const k = Math.min(Math.floor(q), knots - 2);
     const x = lut[k] + (lut[k + 1] - lut[k]) * (q - k);

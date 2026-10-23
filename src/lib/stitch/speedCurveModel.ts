@@ -22,7 +22,7 @@ import { editablePoints, pointsOfWarp, warpCurve } from "./warp";
  * tangent, and moves that knot. Within the gap of an end, or where one more knot would pass MAX_CURVE_POINTS, the
  * line takes no press (add refuses, hover has no ghost) and the box has it. A press on the line writes nothing until
  * it travels (addOnClick false): a knot added on the line re-derives its neighbours' tangents, so even one put exactly
- * on it moves the frames shown. Pure: no React, no DOM.
+ * on it moves the frames shown. A toggle or range press on it selects, as anywhere on the box. Pure: no React, no DOM.
  */
 
 export interface SpeedCurveView {
@@ -144,5 +144,6 @@ export function speedCurveModel(view: SpeedCurveView): CurveModel<ClipWarp> {
       return { x: left + p * width, y: progressToY(easeOf(w)(p), m) };
     },
     addOnClick: false,
+    modifiersSelect: true,
   };
 }

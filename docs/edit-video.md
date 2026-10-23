@@ -1366,8 +1366,9 @@ two later ones). Two renders by the same build differ in those bytes too;
 with the SEI left out, the streams hash the same.
 
 **Clip speeds change none of this.** An edit with no retimed clip hands the
-encoder the same inputs, and every unretimed clip takes the same path as
-before. Measured with the engine on Track, a lined-up stack, a placed
+encoder the same inputs and takes the same path as before; in an edit with
+some, an unretimed clip outside a dissolve with a retimed one does too.
+Measured with the engine on Track, a lined-up stack, a placed
 stack, a loop and text layers, and in the desktop app on a Track copy of a
 real edit (915 video packets): with the SEI left out, the video stream and
 its packet timing are the same as the build's before clip speeds, and in
@@ -1383,7 +1384,9 @@ An empty curve is flat at 0 dB. Before the first point the line holds the
 first point's level, and after the last point the last one's.
 
 Click the line to add a point; drag a point (up and down, and along);
-double-click a point to remove it; ⌥-drag moves the whole line. Fade in and
+double-click a point to remove it; ⌥-drag moves the whole line. A ⌘- or
+⇧-press (Ctrl or ⇧ on Windows) on the curve does what a plain press does;
+on a Mac, a Ctrl-click opens the clip menu instead. Fade in and
 Fade out set a 1 s ramp at either end of the part of the clip that is heard
 (at most half of it), and Flat clears the curve.
 
@@ -1415,8 +1418,10 @@ its average speed): 4 s of source lasts 2 s at 2× and 8 s at 0.5×. Its box,
 the ruler and the total follow, and in Track so do the clips after it. A
 trim keeps the speed, and a ramp stretches over the new range, so the
 length is still the range over the speed. A reversed clip starts on its
-Out, so its left edge trims its Out and its right edge its In. A clip keeps
-at least 0.1 s on the timeline. A clip slower than 1× never plays for more
+Out, so its left edge trims its Out and its right edge its In. A trim keeps
+at least 0.1 s on the timeline. A slowed clip trimmed that short and then
+made faster, up to 1× (Reset speed, the 1× preset, a typed 1), lasts less,
+as a source that short does. A clip slower than 1× never plays for more
 than 10 minutes: no speed, trim, typed In or Out, I or O takes it past
 that. Reset trim on such a clip grows its end first, then its start,
 keeping the frame the clip starts on, and stops at 10 minutes; a clip
@@ -1432,7 +1437,9 @@ step until the well is left. The presets are 0.25×, 0.5×, 1×, 2× and 4×.
 No speed may make the clip last under 0.1 s or play for more than 10
 minutes: the slider stops there, a typed speed past it is set to the limit,
 and a preset past it is off, with "It would last under 0.1 s" or "It would
-play for more than 10 minutes" as its title. 1× is always in reach. Under
+play for more than 10 minutes" as its title. 1× is always in reach, and
+on a clip that holds under 0.1 s of source so is every speed up to it
+(see Length). Under
 the presets the rail notes "Lasts 8.00 s on the timeline." at any speed
 other than 1×, "No sound above 4× or below 0.25×." on a constant speed
 outside those, and, at a limit, "Can't be slower: it would play for more
@@ -1479,9 +1486,10 @@ loading, as the clip menu's Reverse does.
 **Blend frames** mixes the two source frames around each output frame by
 their distance where the clip plays below 1×, instead of holding the
 nearer one. It is on only in slow motion: a speed under 1×, or a ramp
-(otherwise its title says "Only in slow motion"). A slider drag that passes
-1× keeps it; a preset or a typed 1× on a forward clip with no ramp drops
-it. Only the render and Frame to canvas show it.
+(otherwise its title says "Only in slow motion"). A slider drag, or a run
+of ↑ and ↓ in the well, that passes 1× keeps it; the 1× preset or a typed
+1× on a forward clip with no ramp drops it. Only the render and Frame to
+canvas show it.
 
 **Reset speed** sets 1× and no ramp; Reverse stays. The rail shows it at
 its foot while the clip plays at another speed or on a ramp, not for
@@ -1577,8 +1585,10 @@ is paused and stepped by seeks. A ramp starts playing only once it reaches
 a quarter speed; before that it is stepped by seeks. A reversed clip is
 always stepped by seeks, prepared on its first frame so a cut into it does
 not hold. A clip stepped by seeks is silent. A constant speed whose sound
-the render drops is silent in the preview too, and a ramp's sound fades
-below a quarter speed, as in the render. At a retimed clip's Out the
+the render drops is silent in the preview too. A playing ramp's sound
+fades below a quarter speed as the render's does, but its slow start
+(until it first reaches a quarter speed) and any stretch below 1/16× are
+silent, where the render keeps their sound, faded. At a retimed clip's Out the
 preview holds its last frame, never a trimmed-off one. Text layers and
 audio clips run on the clock, as before.
 
@@ -2033,7 +2043,8 @@ snaps its start only.
   and the ones coming up load ahead; the others load their metadata until
   they are needed. Where clips overlap they all play at once, hidden ones
   too.
-- Every `<video>` and each audio clip's `<audio>` follow the clock. Within
+- Every `<video>` of a clip at its own speed (a retimed clip: see Speed and
+  ramps › Preview) and each audio clip's `<audio>` follow the clock. Within
   a frame (a video) or 0.03 s (an audio clip) one is left alone; up to
   0.25 s off it plays 2 % faster or slower (5 % past 0.12 s) until it is
   back within 0.01 s, so its sound never jumps; only past 0.25 s is it
@@ -2080,7 +2091,10 @@ snaps its start only.
   loop. A clip shown again after a cutaway, or hidden in the middle by a
   higher row and shown again (with Crossfade on or off), decodes its lead
   again, from its last key frame. Every clip that shows at once holds a
-  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. Above 4 at once the
+  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. A reversed clip
+  also keeps up to 192 MB of decoded frames while it shows (about 64 frames
+  at 1080p), on top of its decoder, and several reversed clips shown at
+  once add up. Above 4 clips at once the
   encoder logs a warning ("[VideoStitch] 5 clips blend at once; this takes
   about 250 MB at 1080p"). When a decoder fails while 3 or more clips blend,
   the run stops with "Could not decode 3 clips at once at 0:12. Move some
@@ -2135,8 +2149,8 @@ snaps its start only.
   speed. Any write 2.2.0 makes to the edit drops the speeds, as it drops
   text layers. On a node, 2.2.0 reads no speeds either, and drops them
   whenever it writes the node's timeline: a Done or Save in its editor
-  that changes the edit, a reorder or ✕ on the card, or connecting or
-  disconnecting a video.
+  that changes the edit, a reorder or a Remove clip ✕ on the card, or
+  connecting a video. Disconnecting a video keeps them.
 - This build drops overlay kinds it does not know (a later build's) when it
   writes an edit file. On a node they survive a Done that leaves the text
   layers alone.
@@ -2161,8 +2175,10 @@ snaps its start only.
   piece fades in over what is left before the cut and the right one starts
   at full; split in a fade out, the left piece stays at full to the cut and
   the right one fades out over what is left.
-- **The preview of a retimed clip.** Blend frames and a reversed clip's
-  sound are only in the render (Blend frames in Frame to canvas too). A
+- **The preview of a retimed clip.** Blend frames, a reversed clip's
+  sound and the sound of a ramp's slow start (until it first reaches a
+  quarter speed) or of a stretch below 1/16× are only in the render (Blend
+  frames in Frame to canvas too). A
   reversed clip, stepped by seeks, shows about 17 to 30 pictures a second
   (measured on the H.264 files of a real edit: 17 to 21 on files with one
   key frame, 23 to 30 on one with eight). At a cut into a slow clip, its
@@ -2191,8 +2207,9 @@ snaps its start only.
   Points cannot follow a very steep stretch or a vertical tangent. The
   largest measured gap from the curve they replace, as a share of the
   source range: about 2 % for the Expo and Quint presets and the two
-  hybrids, about 7 % for the Circ presets, and up to about 19 % for a
-  bezier with a vertical tangent. About one random bezier in ten ends
+  hybrids, about 7 % for the Circ presets, and up to about 30 % for a
+  bezier with a vertical tangent (a handle on the plot's left or right
+  edge). About one random bezier in ten ends
   more than 3 source frames off on a 10 s clip at 24 fps. The speed row
   draws the new line, and Undo puts the ramp back.
 - Frame to canvas stays off in a gap, so text the render shows over black

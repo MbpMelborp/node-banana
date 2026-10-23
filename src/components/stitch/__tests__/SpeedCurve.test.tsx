@@ -890,6 +890,29 @@ describe("The speed curve row", () => {
     expect(at(0)).toBeGreaterThan(at(1));
   });
 
+  it("moves the frames under the line while a knot is dragged, as its release leaves them", () => {
+    seed();
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, frames });
+    openEditor();
+    seedWarp(0, W(1, { curve: RAMP }));
+    openCurve();
+    const shown = () => Array.from(box1().querySelectorAll("img"), (img) => img.getAttribute("src"));
+    const before = shown();
+    down(box1(), X(0.3), Y(0.1));
+    pointer("pointermove", X(0.4), Y(0.6));
+    // The draft has not moved yet; the cells follow the line
+    expect(warpOf()?.curve).toEqual(RAMP);
+    const during = shown();
+    const live = normalizeWarp(W(1, { curve: points([0, 0], [0.4, 0.6], [0.7, 0.9], [1, 1]) }))!;
+    const at = (k: number) => warpMap({ inSec: 0, outSec: 5 }, live).sourceTimeAt((k * 105 + 52.5) / PPS);
+    const info = { frames, duration: 5 };
+    expect(during).toEqual(during.map((_, k) => nearestFrame(info, at(k))));
+    expect(during).not.toEqual(before);
+    pointer("pointerup", X(0.4), Y(0.6));
+    expect(shown()).toEqual(during);
+  });
+
   it("lets a knot under the In handle be dragged, while a press on the handle away from it trims", () => {
     seed();
     openEditor();

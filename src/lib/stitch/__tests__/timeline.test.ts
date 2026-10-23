@@ -63,7 +63,6 @@ import {
   updateClipAudio,
   updateClipsAudio,
   updateClipsWarp,
-  updateClipWarp,
   type ClipSpan,
   type SourceDurations,
   type SourceKey,
@@ -1669,29 +1668,30 @@ describe("speedLimits", () => {
 describe("updateClipsWarp", () => {
   const d = durations({ "edge:e1": 10, "edge:e2": 120, "edge:e3": 0.3 });
   const timeline = () => [edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")];
+  const only = (id: string) => new Set([id]);
 
   it("writes the patched fields through normalizeWarp, the same array for an equal patch", () => {
     const base = timeline();
-    const once = updateClipWarp(base, "a", d, { speed: 2 });
+    const once = updateClipsWarp(base, only("a"), d, { speed: 2 });
     expect(once[0].warp).toEqual({ speed: 2, curve: null, reverse: false, blend: false });
     expect(Object.keys(once[0])).toEqual([...Object.keys(base[0]), "warp"]);
     expect(once[1]).toBe(base[1]);
-    expect(updateClipWarp(once, "a", d, { speed: 2 })).toBe(once);
-    expect(updateClipWarp(once, "a", d, { reverse: false })).toBe(once);
+    expect(updateClipsWarp(once, only("a"), d, { speed: 2 })).toBe(once);
+    expect(updateClipsWarp(once, only("a"), d, { reverse: false })).toBe(once);
     // An unknown clip, or no field at all, changes nothing
-    expect(updateClipWarp(once, "x", d, { speed: 3 })).toBe(once);
-    expect(updateClipWarp(once, "a", d, {})).toBe(once);
+    expect(updateClipsWarp(once, only("x"), d, { speed: 3 })).toBe(once);
+    expect(updateClipsWarp(once, only("a"), d, {})).toBe(once);
   });
 
   it("removes the key when the patch makes the identity", () => {
-    const fast = updateClipWarp(timeline(), "a", d, { speed: 2, blend: true });
-    const back = updateClipWarp(fast, "a", d, { speed: 1 });
+    const fast = updateClipsWarp(timeline(), only("a"), d, { speed: 2, blend: true });
+    const back = updateClipsWarp(fast, only("a"), d, { speed: 1 });
     expect("warp" in back[0]).toBe(false);
     // A ramp taken away at 1× forward goes too
-    const ramp = updateClipWarp(timeline(), "a", d, { curve: QUAD });
-    expect("warp" in updateClipWarp(ramp, "a", d, { curve: null })[0]).toBe(false);
+    const ramp = updateClipsWarp(timeline(), only("a"), d, { curve: QUAD });
+    expect("warp" in updateClipsWarp(ramp, only("a"), d, { curve: null })[0]).toBe(false);
     // Not a number keeps the speed
-    expect(updateClipWarp(fast, "a", d, { speed: Number.NaN })).toBe(fast);
+    expect(updateClipsWarp(fast, only("a"), d, { speed: Number.NaN })).toBe(fast);
   });
 
   it("clamps a patched speed to each clip's own limits, and keeps a stored one outside them", () => {
@@ -1701,9 +1701,9 @@ describe("updateClipsWarp", () => {
     const fast = updateClipsWarp(timeline(), all, d, { speed: 10 });
     expect(fast.map((c) => c.warp?.speed)).toEqual([10, 10, 3]);
     // Unknown length: the rail's range
-    expect(updateClipWarp([edgeClip("u", "e9")], "u", d, { speed: 50 })[0].warp?.speed).toBe(10);
+    expect(updateClipsWarp([edgeClip("u", "e9")], only("u"), d, { speed: 50 })[0].warp?.speed).toBe(10);
     const piece = retimed(edgeClip("p", "e1"), W(0.04, { curve: QUAD, window: [0, 0.3] }));
-    const reversed = updateClipWarp([piece], "p", d, { reverse: true })[0];
+    const reversed = updateClipsWarp([piece], only("p"), d, { reverse: true })[0];
     expect(reversed.warp).toEqual({ speed: 0.04, curve: QUAD, window: [0, 0.3], reverse: true, blend: false });
   });
 
@@ -1723,7 +1723,7 @@ describe("updateClipsWarp", () => {
 
   it("drops a split piece's window with a new curve, and keeps it with a new speed", () => {
     const piece = retimed(edgeClip("p", "e1"), W(1.5, { curve: QUAD, window: [0.2, 0.7] }));
-    expect(updateClipWarp([piece], "p", d, { curve: QUAD })[0].warp).toEqual(W(1.5, { curve: QUAD }));
-    expect(updateClipWarp([piece], "p", d, { speed: 2 })[0].warp).toEqual(W(2, { curve: QUAD, window: [0.2, 0.7] }));
+    expect(updateClipsWarp([piece], only("p"), d, { curve: QUAD })[0].warp).toEqual(W(1.5, { curve: QUAD }));
+    expect(updateClipsWarp([piece], only("p"), d, { speed: 2 })[0].warp).toEqual(W(2, { curve: QUAD, window: [0.2, 0.7] }));
   });
 });

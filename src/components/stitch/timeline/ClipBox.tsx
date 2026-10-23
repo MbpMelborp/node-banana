@@ -247,7 +247,9 @@ export function ClipBox({
     blockRef,
     editable: curveEditable,
   });
-  const shownWarp = drag.live?.curve ?? clip.warp ?? IDENTITY_WARP;
+  // A drag's curve is the hook's until its release: the frames follow it as the line does
+  const liveWarp = drag.live?.curve ?? clip.warp;
+  const shownWarp = liveWarp ?? IDENTITY_WARP;
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (drag.onPointerDown(event)) return;
     onBodyPointerDown(event);
@@ -305,7 +307,7 @@ export function ClipBox({
           duration={view?.duration ?? null}
           inSec={inSec}
           lengthSec={lengthSec}
-          warp={clip.warp}
+          warp={liveWarp}
           pxPerSec={pxPerSec}
           width={width}
           boxX={x}

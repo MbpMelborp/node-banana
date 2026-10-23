@@ -9,7 +9,7 @@ import type { OverlaySize } from "@/lib/stitch/overlayDraw";
 import { draftOverlays } from "@/lib/stitch/overlays";
 import { clipIdsOf } from "@/lib/stitch/selection";
 import { rampModeOf } from "@/lib/stitch/rampModes";
-import { canResetTrim, clipLength, clipSourceOut, sourceKey, type SourceDurations } from "@/lib/stitch/timeline";
+import { canResetTrim, clipLength, clipSourceOut, sourceKey } from "@/lib/stitch/timeline";
 import { activeWarp, isRetimed, trimField } from "@/lib/stitch/warp";
 import type { StitchTimelineClip } from "@/types";
 import {
@@ -130,16 +130,23 @@ export function EditorRail({
   }, [selection, draft]);
   const overlaySelected = selectedOverlays.length > 0;
   const overlayMulti = selectedOverlays.length > 1;
+  // Reset trim and Reset speed show only while they would change a selected clip
+  const canResetTrims = selectedIndices.some((i) => {
+    const c = draft!.timeline[i];
+    return canResetTrim(c, durations.get(sourceKey(c.source)));
+  });
+  const retimed = selectedIndices.some((i) => isRetimed(draft!.timeline[i].warp));
 
   // A swap of the rail's body (the last clip removed, the track for a clip or back, one text layer for several, Start or
   // Crossfade coming or going with the layout, the ramp picker's body with its kind, the Speed section, keyed by clip,
-  // with another clip) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
+  // with another clip), or an undo that leaves nothing for Reset trim or Reset speed to do, unmounts a focused control:
+  // focus the dialog, not <body>, so Tab stays inside
   useEffect(() => {
     const active = document.activeElement;
     if (active === null || active === document.body) {
       railRef.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
     }
-  }, [hasClip, clipId, audioSelected, overlaySelected, overlayMulti, stacked, multi, rampMode]);
+  }, [hasClip, clipId, audioSelected, overlaySelected, overlayMulti, stacked, multi, rampMode, canResetTrims, retimed]);
 
   return (
     <aside
@@ -156,7 +163,8 @@ export function EditorRail({
           <MultiClipRail
             timeline={draft.timeline}
             indices={selectedIndices}
-            durations={durations}
+            canResetTrims={canResetTrims}
+            retimed={retimed}
             canSplit={canSplit}
             splitBlocked={splitBlocked}
           />
@@ -247,7 +255,7 @@ export function EditorRail({
                 title={canSplit ? undefined : (splitBlocked ?? undefined)}
                 onClick={splitAtPlayhead}
               />
-              {canResetTrim(clip, durations.get(sourceKey(clip.source))) && (
+              {canResetTrims && (
                 <RailAction
                   icon={<RotateCcw size={16} strokeWidth={1.5} />}
                   label="Reset trim"
@@ -255,7 +263,7 @@ export function EditorRail({
                   onClick={resetSelectedTrim}
                 />
               )}
-              {isRetimed(clip.warp) && (
+              {retimed && (
                 <RailAction
                   icon={<TimerReset size={16} strokeWidth={1.5} />}
                   label="Reset speed"
@@ -294,14 +302,17 @@ export function EditorRail({
 function MultiClipRail({
   timeline,
   indices,
-  durations,
+  canResetTrims,
+  retimed,
   canSplit,
   splitBlocked,
 }: {
   timeline: readonly StitchTimelineClip[];
   /** The selected clips' timeline indices, in order. */
   indices: readonly number[];
-  durations: SourceDurations;
+  /** Whether Reset trim, and Reset speed, would change any of them. */
+  canResetTrims: boolean;
+  retimed: boolean;
   canSplit: boolean;
   splitBlocked: string | null;
 }) {
@@ -340,7 +351,7 @@ function MultiClipRail({
           title={canSplit ? undefined : (splitBlocked ?? undefined)}
           onClick={splitAtPlayhead}
         />
-        {clips.some((c) => canResetTrim(c, durations.get(sourceKey(c.source)))) && (
+        {canResetTrims && (
           <RailAction
             icon={<RotateCcw size={16} strokeWidth={1.5} />}
             label="Reset trim"
@@ -348,7 +359,7 @@ function MultiClipRail({
             onClick={resetSelectedTrim}
           />
         )}
-        {clips.some((c) => isRetimed(c.warp)) && (
+        {retimed && (
           <RailAction
             icon={<TimerReset size={16} strokeWidth={1.5} />}
             label="Reset speed"

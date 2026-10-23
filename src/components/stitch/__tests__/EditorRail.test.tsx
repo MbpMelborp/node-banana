@@ -321,6 +321,22 @@ describe("EditorRail, a clip's speed", () => {
     expect(clip().warp?.blend).toBe(false);
   });
 
+  it("keeps Blend through 1× in a run of ↑/↓ in the well, as a drag does, and a typed 1× drops it", () => {
+    // 0.955× is the slider's step under 1×
+    renderRail(open([[edgeClip("a", "e1", {}, W(0.955, { blend: true })), 10]]));
+    act(() => well().focus());
+    fireEvent.keyDown(well(), { key: "ArrowUp" });
+    expect("warp" in clip()).toBe(false);
+    fireEvent.keyDown(well(), { key: "ArrowDown" });
+    expect(clip().warp).toEqual(W(0.955, { blend: true }));
+    expect(steps()).toBe(1);
+    commit("1");
+    expect("warp" in clip()).toBe(false);
+    act(() => well().focus());
+    fireEvent.keyDown(well(), { key: "ArrowDown" });
+    expect(clip().warp).toEqual(W(0.955));
+  });
+
   it("keeps a bezier drag's Blend through the diagonal, where the warp itself goes", () => {
     renderRail(open([[edgeClip("a", "e1", {}, W(1, { curve: { kind: "bezier", handles: [0, 0, 0.58, 1] }, blend: true })), 10]]));
     const second = screen.getByLabelText("Adjust control point 2");
@@ -395,6 +411,7 @@ describe("EditorRail, a clip's speed", () => {
     for (const b of within(group("Ramp")).getAllByRole("button")) expect(b).toBeDisabled();
     expect(toggle("Blend frames")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Show speed curve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Show speed curve" })).toHaveAttribute("title", "Waiting for the clip's length");
     act(() => editor().openMenu({ kind: "clip", clipId: "a", x: 10, y: 10 }));
     expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Show speed curve/ })).toBeDisabled();
     act(() => editor().openMenu(null));
@@ -419,6 +436,23 @@ describe("EditorRail, a clip's speed", () => {
     renderRail(open([[edgeClip("a", "e1", {}, W(2)), 10]]));
     fireEvent.click(screen.getByRole("button", { name: "Reset speed" }));
     expect("warp" in clip()).toBe(false);
+  });
+
+  it("hands focus to the panel when an undo takes the focused Reset speed or Reset trim away", () => {
+    renderRail(open([[edgeClip("a", "e1"), 10]]));
+    fireEvent.click(preset("2×"));
+    act(() => screen.getByRole("button", { name: "Reset speed" }).focus());
+    act(() => editor().undo());
+    expect(screen.queryByRole("button", { name: "Reset speed" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("panel"));
+    const inField = screen.getByRole("textbox", { name: "In" });
+    act(() => inField.focus());
+    fireEvent.change(inField, { target: { value: "1" } });
+    fireEvent.keyDown(inField, { key: "Enter" });
+    act(() => screen.getByRole("button", { name: "Reset trim" }).focus());
+    act(() => editor().undo());
+    expect(screen.queryByRole("button", { name: "Reset trim" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("panel"));
   });
 
   it("hands focus to the panel when an undo takes the focused preset away", () => {

@@ -37,6 +37,7 @@ import {
   speedGestureKey,
   speedWaitsReason,
   toggleClipCurveExpanded,
+  WAITING_FOR_LENGTH,
 } from "./speedActions";
 import { TimecodeField } from "./TimecodeField";
 
@@ -74,7 +75,7 @@ export const ClipSpeed = memo(function ClipSpeed({
   const pos = Math.round(speedToSlider(speed));
   // A drag on the timeline's line edits points: a preset, a bezier or a split piece's part of a ramp turns into them
   const asPoints = warp?.curve != null && editablePoints(warp) === null;
-  // A drag keeps the Blend it started with across 1×, where the warp itself goes
+  // A drag, or a run of ↑/↓ in the well, keeps the Blend it started with across 1×, where the warp itself goes
   const carried = useRef<boolean | null>(null);
   const blend = () => (carried.current ??= warp?.blend ?? false);
   const release = () => {
@@ -135,15 +136,19 @@ export const ClipSpeed = memo(function ClipSpeed({
             />
           </div>
           {/* Leaving the well ends a run of ↑/↓ steps; outside the slider's key-up wrapper, which would end every step */}
-          <div className={SPEED_WELL} title={waiting ?? undefined} onBlur={endGesture}>
+          <div className={SPEED_WELL} title={waiting ?? undefined} onBlur={release}>
             <TimecodeField
               label="Speed"
               value={speed}
               format={formatSpeed}
               parse={parseSpeed}
               disabled={speedOff}
-              onCommit={(value) => setClipSpeed(clip.id, value)}
-              onNudge={(dir, big) => nudgeClipSpeed(clip.id, dir, big)}
+              onCommit={(value) => {
+                // A typed speed ends the run: a typed 1× drops Blend, and the next ↑/↓ carries the clip's own
+                carried.current = null;
+                setClipSpeed(clip.id, value);
+              }}
+              onNudge={(dir, big) => nudgeClipSpeed(clip.id, dir, big, blend())}
             />
           </div>
         </div>
@@ -197,6 +202,7 @@ export const ClipSpeed = memo(function ClipSpeed({
             type="button"
             aria-expanded={curveOpen}
             disabled={off}
+            title={off ? WAITING_FOR_LENGTH : undefined}
             onClick={() => toggleClipCurveExpanded(clip.id)}
             className={cn(TEXT_GHOST, "-ml-1.5 mt-2 aria-expanded:bg-edit-pressed aria-expanded:text-neutral-100")}
           >
@@ -222,7 +228,7 @@ export const ClipSpeed = memo(function ClipSpeed({
             label="Blend frames"
             checked={warp?.blend ?? false}
             disabled={off || !canBlend(warp)}
-            title={!off && !canBlend(warp) ? "Only in slow motion" : undefined}
+            title={off ? WAITING_FOR_LENGTH : !canBlend(warp) ? "Only in slow motion" : undefined}
             onChange={(on) => setClipBlend(clip.id, on)}
           />
         </RailRow>
@@ -240,6 +246,7 @@ export function ClipsSpeed({ clips }: { clips: readonly StitchTimelineClip[] }) 
   const ids = clips.map((c) => c.id);
   const on = useStitchEditorStore((s) => canSetSpeed(s, ids));
   const waiting = useStitchEditorStore(speedWaitsReason);
+  const offReason = on ? undefined : (waiting ?? WAITING_FOR_LENGTH);
   const speeds = clips.map((c) => c.warp?.speed ?? 1);
   const same = speeds.every((v) => v === speeds[0]);
   const reverse = clips.every((c) => c.warp?.reverse)
@@ -252,7 +259,7 @@ export function ClipsSpeed({ clips }: { clips: readonly StitchTimelineClip[] }) 
       <RailRow label="Speed">
         <div className="flex items-center gap-2">
           {!same && <span className="text-xs text-ink-3">Mixed</span>}
-          <div className={SPEED_WELL} title={waiting ?? undefined}>
+          <div className={SPEED_WELL} title={offReason}>
             <TimecodeField
               label="Speed"
               value={speeds[0]}
@@ -271,7 +278,7 @@ export function ClipsSpeed({ clips }: { clips: readonly StitchTimelineClip[] }) 
           label: formatSpeed(value),
           pressed: speeds.every((s) => s === value),
           disabled: !on,
-          title: waiting ?? undefined,
+          title: offReason,
           onClick: () => setSelectedClipsSpeed(value),
         }))}
       />

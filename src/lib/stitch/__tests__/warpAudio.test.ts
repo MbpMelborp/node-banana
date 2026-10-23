@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { ClipWarp, ClipWarpCurve } from "@/types";
 import type { Pcm } from "../audioMix";
 import { normalizeWarp, splitWarp, warpMap, type WarpMap } from "../warp";
@@ -53,6 +53,34 @@ function goertzel(y: Float32Array, hz: number, sr: number): number {
     s1 = s0;
   }
   return (2 * Math.sqrt(s1 * s1 + s2 * s2 - coefficient * s1 * s2)) / y.length;
+}
+
+/**
+ * Runs `run` with a clock that moves `ms` at each read, `onYield` called as the resampler hands the page a turn; the
+ * number of turns.
+ */
+async function paced(ms: number, run: () => Promise<unknown>, onYield: () => void = () => {}): Promise<number> {
+  let now = 0;
+  let turns = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => (now += ms));
+  const Channel = MessageChannel;
+  vi.stubGlobal(
+    "MessageChannel",
+    class extends Channel {
+      constructor() {
+        super();
+        turns++;
+        onYield();
+      }
+    },
+  );
+  try {
+    await run();
+  } finally {
+    clock.mockRestore();
+    vi.unstubAllGlobals();
+  }
+  return turns;
 }
 
 const rms = (y: ArrayLike<number>) => Math.sqrt(Array.from(y).reduce((sum, x) => sum + x * x, 0) / y.length);
@@ -160,6 +188,32 @@ describe("warpResample", () => {
     await expect(
       warpResample({ pcm, firstSample, sourceAt: (o) => o, speedAt: () => 1, length: 1, sampleRate: SR, signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("gives the page a turn once 20 ms have passed, however few samples a fast ramp has done, changing no sample", async () => {
+    // 1 s of a ramp at 10× on average, up to 30×, where a sample reads about a thousand source samples
+    const m = warpMap({ inSec: 1, outSec: 11 }, normalizeWarp(W(10, { curve: EASE_IN_OUT }))!);
+    let still: Float32Array = new Float32Array();
+    expect(await paced(0, async () => (still = await render(tone(440), m)))).toBe(0);
+    // Each 4096 of its 16000 samples take 25 ms by this clock: a turn after each
+    let turned: Float32Array = new Float32Array();
+    expect(await paced(25, async () => (turned = await render(tone(440), m)))).toBe(3);
+    expect(turned).toEqual(still);
+  });
+
+  it("stops right after the turn Stop was pressed in", async () => {
+    const controller = new AbortController();
+    const { pcm, firstSample } = decoded(() => 0.5, 0, 1, SR);
+    const run = () =>
+      warpResample({ pcm, firstSample, sourceAt: (o) => o, speedAt: () => 1, length: 1, sampleRate: SR, signal: controller.signal });
+    let stopped: unknown = null;
+    const turns = await paced(
+      25,
+      () => run().catch((error) => (stopped = error)),
+      () => controller.abort(),
+    );
+    expect(turns).toBe(1);
+    expect(stopped).toMatchObject({ name: "AbortError" });
   });
 
   it("is silent while the picture holds, and finite through an exponential ramp", async () => {

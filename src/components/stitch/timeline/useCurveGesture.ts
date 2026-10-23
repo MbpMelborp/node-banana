@@ -24,10 +24,11 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * press that hits neither a point nor the line, or the line where the model
  * adds no point (the speed curve's pinned ends), is not the curve's
  * (onPointerDown says false), and the box takes it, as it takes a Mac's
- * Ctrl-press (the clip menu's) and a toggle or range click anywhere. Where
- * a line press drags a point near it instead (the model's `takes`), the
- * hover shows that point, not a point added. The pointer is read against
- * the lane's content, so a scroll during the drag keeps the point under it.
+ * Ctrl-press (the clip menu's) and, on a model with modifiersSelect (the
+ * speed curve), a toggle or range click anywhere. Where a line press drags
+ * a point near it instead (the model's `takes`), the hover shows that
+ * point, not a point added. The pointer is read against the lane's
+ * content, so a scroll during the drag keeps the point under it.
  */
 
 /** Travel before a press moves anything, so a click that selects a point (or starts a double-click) leaves it put. */
@@ -125,8 +126,10 @@ export function useCurveGesture<C>(options: CurveGestureOptions<C>) {
       };
       lastPress.current = press;
       if (curveAtStart === undefined || !canEdit) return false;
-      // A Mac's Ctrl-press opens the clip menu, and a toggle or range click selects, here as anywhere on the box
-      if (isContextClick(event) || isToggleClick(event) || event.shiftKey) return false;
+      // A Mac's Ctrl-press opens the clip menu, here as anywhere on the box; a toggle or range click selects where the
+      // model leaves it to the box
+      if (isContextClick(event)) return false;
+      if (model.modifiersSelect && (isToggleClick(event) || event.shiftKey)) return false;
       const at = position(event.clientX, event.clientY);
       const lineMove = event.altKey && model.shift !== undefined;
       const hit = lineMove ? null : hitCurve(model, curveAtStart, at.x, at.y);

@@ -223,7 +223,8 @@ export type WarpBlend = (a: VideoSample, b: VideoSample, alpha: number, timestam
 
 /**
  * Blends a retimed clip's two frames as a frame of the clip: at its own size, with its own rotation, so mediabunny fits
- * it into the file as it fits the clip's other frames. One blender per clip, made at its first blended frame.
+ * it into the file as it fits the clip's other frames. Its blender comes from makeBlender at its first blended frame,
+ * at that frame's coded size (the engine shares one per size).
  */
 export function clipBlend(makeBlender: (ref: BlenderRef) => FrameBlender): WarpBlend {
   let blender: FrameBlender | null = null;
@@ -248,7 +249,7 @@ export interface WarpedReaderDeps {
    * copies' own size.
    */
   frameBytes: number;
-  /** Null when the clip does not blend; the engine passes clipBlend(createFrameBlender). */
+  /** Null when the clip does not blend; the engine passes clipBlend over its blenders shared by frame size. */
   blend: WarpBlend | null;
   signal?: AbortSignal;
 }
