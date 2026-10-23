@@ -183,6 +183,8 @@ describe("EditorStage", () => {
     expect(column.firstElementChild).toBe(frame);
     expect(column.lastElementChild).toContainElement(screen.getByTestId("row"));
     expect(frame.querySelectorAll("video")).toHaveLength(1);
+    // Named by the clip it plays, for a measure that reads the page
+    expect(frame.querySelector("video")).toHaveAttribute("data-layer-key", "c1");
   });
 
   it("shows an empty frame that says why, with the row still under it", () => {
