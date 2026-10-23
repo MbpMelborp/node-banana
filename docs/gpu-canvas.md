@@ -135,6 +135,10 @@ deflated, with the node's height and handle anchors (with each handle's
 box and whether a connection may start or end on it). Images are read back
 from the GPU without stalling (a pixel buffer and a fence) and stored once
 the GPU is done; the cache is trimmed to 512 MB, least recently used first.
+A hit marks its entry used only when its last use is a day old: marking
+rewrites the entry, and doing it on every hit held up the next batch's
+reads (a reopen ran slower than the first open). A batch's hits are
+inflated together.
 The key includes the app version and display scale, so an update or a
 different screen paints afresh. A node's file refs (`imageRef`, `inputImageRefs`, …) are left out of
 its key: they name the file its media was saved as, so a save that records
@@ -527,7 +531,10 @@ The scene takes every press and asks the editor what it starts:
   `fitView` (10% padding); a minimap click glides the view there over 250
   ms. The minimap pans from the first move and zooms by React Flow's
   minimap step (line and pixel deltas, a Mac pinch ten times over). While
-  the tutorial locks the navigator it takes no gestures, as classic's.
+  the tutorial locks the navigator it takes no gestures, as classic's. Its
+  nodes sit on a canvas of their own, drawn again (one fill per colour) only
+  when the layout, its size or its fit changes; a pan redraws only the mask
+  over them. Drawing every node per frame held a 5,000-node pan to 37 fps.
 - The dot grid is React Flow's `<Background gap={20} size={1}>`: the same
   offset, one dot every 20 flow units at every zoom, dots of half a flow unit's radius that grow and shrink with the
   zoom, at 30% while the tutorial locks the canvas. A move the page asks of the flow (`setCenter` or `fitView` with a

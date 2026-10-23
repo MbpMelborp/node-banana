@@ -257,9 +257,12 @@ async function main() {
       let sawLoading = false;
       await page.waitFor(() => { const s = window.__gpuCanvas.painter(); return s && s.screenfulDone && s.painted >= s.total; }, null, { timeout: Number(option('--paint-timeout', 300000)), interval: 100,
         message: `${label}: every node painted` }).catch(error => { throw error; });
-      sawLoading = await page.evaluate(() => !!document.querySelector('[data-gpu-canvas] [role="status"]'));
+      const paintedMs = Date.now() - loaded;
       const status = await page.evaluate(() => window.__gpuCanvas.painter());
-      const result = { loadMs: loaded - t0, paintedMs: Date.now() - loaded, loadingScreenStillUp: sawLoading, status, stats: await page.evaluate(() => window.__gpuCanvas.stats.summary()) };
+      // The loading screen goes with the render after the last paint: give it a moment before calling it stuck.
+      const shownAfter = Date.now();
+      sawLoading = await page.waitFor(() => !document.querySelector('[data-gpu-canvas] [role="status"]'), null, { timeout: 2000, interval: 50, message: 'the loading screen to go' }).then(() => false, () => true);
+      const result = { loadMs: loaded - t0, paintedMs, loadingScreenStillUp: sawLoading, loadingScreenGoneMs: sawLoading ? null : Date.now() - shownAfter, status, stats: await page.evaluate(() => window.__gpuCanvas.stats.summary()) };
       log(`${label}: in the scene after ${result.loadMs} ms; screenful ${status.screenfulMs} ms, every node ${status.allMs} ms; ${status.cacheHits} cache hits, ${status.batches} batches`);
       return result;
     }
