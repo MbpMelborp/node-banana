@@ -13,8 +13,8 @@ const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["500", "600", 
 const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-jetbrains-mono", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Node Banana - AI Image Workflow",
-  description: "Node-based image annotation and generation workflow using Nano Banana Pro",
+  title: "Creativo Melborp",
+  description: "Flujos de generación creativa de Melborp",
 };
 
 export default function RootLayout({

@@ -930,9 +930,9 @@ export function DialogWordmark({ size = 46, className }: { size?: number; classN
       className={cn("font-display font-bold uppercase text-neutral-200 leading-[0.9] tracking-[-0.05em]", className)}
       style={{ fontSize: size }}
     >
-      Node
+      Creativo
       <br />
-      Banana
+      Melborp
     </div>
   );
 }

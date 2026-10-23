@@ -230,7 +230,7 @@ function Editor() {
           <CoveringView
             label="Edit video"
             title="The Edit video view hit an unexpected error"
-            note="Your edits are saved in your Node Banana folder."
+            note="Your edits are saved in your Creativo Melborp folder."
           >
             <EditVideoView />
           </CoveringView>

@@ -44,7 +44,7 @@ export function QuickstartInitialView({
           {APP_VERSION && <DialogEyebrow className="text-neutral-500">{APP_VERSION}</DialogEyebrow>}
         </div>
         <div>
-          <h1 className="sr-only">Node Banana</h1>
+          <h1 className="sr-only">Creativo Melborp</h1>
           <DialogWordmark />
           <ul className="mt-[18px] flex flex-col gap-1 font-mono text-[11px] leading-4 tracking-eyebrow uppercase text-ink-3">
             <li>Free</li>
@@ -66,7 +66,7 @@ export function QuickstartInitialView({
           <OptionRow
             onClick={onSelectLoad}
             title="Open project"
-            description="From your Node Banana folder"
+            description="From your Creativo Melborp folder"
           />
           <OptionRow
             onClick={onSelectTemplates}
@@ -86,7 +86,7 @@ export function QuickstartInitialView({
               className="group mt-auto flex items-center gap-2 h-11 px-1 border-t border-card text-left text-[13px] leading-[18px] transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04]"
             >
               <History size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
-              <span className="text-neutral-500">Used Node Banana before?</span>
+              <span className="text-neutral-500">Used Creativo Melborp before?</span>
               <span className="font-display font-semibold tracking-[-0.01em] text-neutral-200 group-hover:text-white transition-colors">
                 Bring in your projects
               </span>
