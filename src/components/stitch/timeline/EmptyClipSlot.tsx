@@ -21,7 +21,8 @@ export function emptyReason(
   if (view?.status === "error") return "error";
   if (view?.status === "ready" && view.duration !== null) {
     if (span.clip.inSec >= view.duration) return "past-end";
-    // A source generated again shorter can leave a trim under one output frame, which the encode drops
+    // A source generated again shorter can leave a trim under one output frame (at its speed, for a retimed clip),
+    // which the encode drops
     if (view.duration > 0 && clipLength(span.clip, view.duration) === 0) return "under-frame";
   }
   return "empty";

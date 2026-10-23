@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { createClip, type SourceKey } from "@/lib/stitch/timeline";
-import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge } from "@/types";
+import type { StitchAudioClip, StitchOverlay, StitchTimelineClip, WorkflowEdge } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
 import {
   canPaste,
@@ -49,7 +50,13 @@ const OTHER_NODE = "1 clip not pasted: clips from connected videos paste only in
 
 function open(
   timeline: StitchTimelineClip[],
-  opts: { nodeId?: string; stacked?: boolean; generation?: number; audioClips?: StitchAudioClip[] } = {},
+  opts: {
+    nodeId?: string;
+    stacked?: boolean;
+    generation?: number;
+    audioClips?: StitchAudioClip[];
+    overlays?: StitchOverlay[];
+  } = {},
 ) {
   const draft: StitchDraft = {
     timeline,
@@ -57,6 +64,7 @@ function open(
     legacyAudio: { curve: [], muted: false },
     loopCount: 1,
     sequenceLayout: opts.stacked ? STACKED : DEFAULT_SEQUENCE_LAYOUT,
+    ...(opts.overlays ? { overlays: opts.overlays } : {}),
   };
   editor().close();
   editor().open({ nodeId: opts.nodeId ?? "n1", draft, canvasGeneration: opts.generation ?? 1 });
@@ -203,6 +211,21 @@ describe("copy and paste", () => {
     expect(copy).toMatchObject({ source: { kind: "edge", edgeId: "e2" }, inSec: 1, outSec: 4 });
     expect(editor().clipOrigins.get(copy.id)).toBe("duplicated");
     expect(editor().selection).toEqual({ kind: "clip", clipId: copy.id });
+  });
+
+  it("duplicates and pastes a clip's warp, a copy of it", () => {
+    const warp = { speed: 0.5, curve: { kind: "preset" as const, name: "easeInOutSine" }, reverse: true, blend: true };
+    open([edgeClip("a", "e1", { warp }), edgeClip("b", "e2")]);
+    select("a");
+    duplicateSelection();
+    const copy = editor().draft!.timeline[1];
+    expect(copy.warp).toEqual(warp);
+    expect(copy.warp).not.toBe(warp);
+    copySelection();
+    select("b");
+    pasteClipboard();
+    expect(editor().draft!.timeline[3].warp).toEqual(warp);
+    expect("warp" in editor().draft!.timeline[2]).toBe(false);
   });
 
   it("waits in a lined-up stack while a clip is still loading: paste and duplicate would pin it at 0 s", () => {
@@ -500,5 +523,132 @@ describe("audio clips", () => {
     pasteClipboard();
     expect(ids()).toHaveLength(4);
     expect(audio()).toHaveLength(3);
+  });
+});
+
+describe("overlays", () => {
+  const overlays = () => [
+    createTextOverlay({ id: "o1", startSec: 1, endSec: 3, text: "One" }),
+    createTextOverlay({ id: "o2", row: 1, startSec: 2, endSec: 6, text: "Two", font: { family: "Inter", file: "Inter.ttf" } }),
+    createTextOverlay({ id: "o3", row: 2, startSec: 0, endSec: 2, text: "Three" }),
+  ];
+  const layers = () => editor().draft!.overlays ?? [];
+  const layer = (id: string) => layers().find((o) => o.id === id)!;
+  const fresh = () => layers().filter((o) => !["o1", "o2", "o3", "o4"].includes(o.id));
+  const selectOverlay = (...ids: string[]) =>
+    editor().select(overlaySelectionOf({ clipId: ids[0], ...(ids.length > 1 ? { clipIds: ids } : {}) }));
+
+  beforeEach(() => open(track(), { overlays: overlays() }));
+
+  it("copies the selected overlays as overlay items, with their lengths and their time and row offsets", () => {
+    selectOverlay("o2", "o1");
+    expect(copySelection()).toBe(true);
+    const copied = clipboard()!;
+    expect(copied.origin).toEqual({ kind: "node", nodeId: "n1", tabId: "t1", workflowId: "w1" });
+    expect(copied.items.map((item) => item.track === "overlay" && [item.overlay.text, item.lengthSec, item.offsetSec, item.rowOffset])).toEqual([
+      ["One", 2, 0, 0],
+      ["Two", 4, 1, 1],
+    ]);
+  });
+
+  it("pastes overlays on new rows in front of the others, the first at the playhead, whatever is selected, as one step", () => {
+    selectOverlay("o1", "o2");
+    copySelection();
+    select("a");
+    editor().setPlayhead(5);
+    pasteClipboard();
+    expect(steps()).toBe(1);
+    expect(ids()).toEqual(["a", "b", "c"]);
+    const pasted = fresh();
+    expect(pasted.map((o) => [o.text, o.row, o.startSec, o.endSec, o.font])).toEqual([
+      ["One", 3, 5, 7, overlays()[0].font],
+      ["Two", 4, 6, 10, { family: "Inter", file: "Inter.ttf" }],
+    ]);
+    expect(editor().selection).toEqual({ kind: "overlay", clipId: pasted[0].id, clipIds: pasted.map((o) => o.id) });
+    expect(pasted.every((o) => editor().clipOrigins.get(o.id) === "pasted")).toBe(true);
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it("pastes at the playhead as drawn: one past the sequence's end pastes at the end", () => {
+    selectOverlay("o3");
+    copySelection();
+    editor().setPlayhead(50);
+    pasteClipboard();
+    // a 5 s, b 3 s, c 4 s
+    expect(fresh()[0].startSec).toBe(12);
+  });
+
+  it("pastes overlays into another node and into an edit, with nothing skipped", () => {
+    selectOverlay("o2");
+    copySelection();
+    open(track(), { nodeId: "n2" });
+    pasteClipboard();
+    expect(layers().map((o) => [o.text, o.row])).toEqual([["Two", 0]]);
+
+    editor().close();
+    editor().openEdit({
+      editId: "ed0000000000000001",
+      draft: { timeline: [], audioClips: [], legacyAudio: { curve: [], muted: false }, loopCount: 1, sequenceLayout: DEFAULT_SEQUENCE_LAYOUT, media: [] },
+    });
+    pasteClipboard();
+    expect(layers().map((o) => [o.text, o.startSec])).toEqual([["Two", 0]]);
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it("cuts overlays in one step: the rows close up, the next overlay is selected, the cut ones are tagged", () => {
+    selectOverlay("o2");
+    cutSelection();
+    expect(steps()).toBe(1);
+    expect(layers().map((o) => [o.id, o.row])).toEqual([
+      ["o1", 0],
+      ["o3", 1],
+    ]);
+    expect(editor().selection).toEqual({ kind: "overlay", clipId: "o3" });
+    expect(editor().clipOrigins.get("o2")).toBe("cut");
+    expect(clipboard()!.items).toHaveLength(1);
+  });
+
+  it("selects the overlay before the last one cut, and none once none is left", () => {
+    selectOverlay("o3");
+    cutSelection();
+    expect(editor().selection).toEqual({ kind: "overlay", clipId: "o2" });
+    selectOverlay("o1", "o2");
+    cutSelection();
+    expect(layers()).toEqual([]);
+    expect(editor().selection).toBeNull();
+    expect(steps()).toBe(2);
+  });
+
+  it("duplicates from where the selection ends, on its own row when it fits, the clipboard kept", () => {
+    selectOverlay("o1");
+    duplicateSelection();
+    expect(steps()).toBe(1);
+    const [copy] = fresh();
+    expect(copy).toMatchObject({ row: 0, startSec: 3, endSec: 5, text: "One" });
+    expect(editor().clipOrigins.get(copy.id)).toBe("duplicated");
+    expect(editor().selection).toEqual({ kind: "overlay", clipId: copy.id });
+    expect(clipboard()).toBeNull();
+  });
+
+  it("duplicates onto a new row in front of the selection when a copy would overlap, the rows above moving up", () => {
+    editor().apply((d) => ({ ...d, overlays: [...d.overlays!, createTextOverlay({ id: "o4", row: 1, startSec: 7, endSec: 8 })] }));
+    selectOverlay("o2");
+    duplicateSelection();
+    expect(fresh()[0]).toMatchObject({ row: 2, startSec: 6, endSec: 10 });
+    expect(layer("o3").row).toBe(3);
+    expect(steps()).toBe(2);
+  });
+
+  it("copies video again once a video clip is selected, and nothing with no overlay left to copy", () => {
+    selectOverlay("o1");
+    copySelection();
+    select("a");
+    copySelection();
+    expect(clipboard()!.items.map((item) => item.track)).toEqual(["video"]);
+    pasteClipboard();
+    expect(ids()).toHaveLength(4);
+    expect(layers()).toHaveLength(3);
+    selectOverlay("gone");
+    expect(copySelection()).toBe(false);
   });
 });

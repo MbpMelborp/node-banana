@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, type Mock } from "vitest";
 import { checkEncoderSupport, stitchVideosAsync } from "../useStitchVideos";
-import type { StitchAudioClip } from "@/types";
+import type { ClipWarp, StitchAudioClip } from "@/types";
 import { splitAudioClipAt } from "@/lib/stitch/audioClips";
-import type { StitchAudioClipInput } from "@/lib/stitch/engineTypes";
+import type { StitchAudioClipInput, StitchOverlayInput } from "@/lib/stitch/engineTypes";
+import { createTextOverlay } from "@/lib/stitch/overlays";
+import { buildEnvelope } from "@/lib/stitch/placement";
+import { pictureSegments, unitSlots, visibilityRuns } from "@/lib/stitch/placedSchedule";
+import { normalizeWarp, SOUND_MIN_SPEED, splitWarp, warpMap, type WarpMap } from "@/lib/stitch/warp";
+import { warpSoundMargin } from "@/lib/stitch/warpAudio";
+import { pickFrame, reverseChunkFrames, warpSlotTime } from "@/lib/stitch/warpFrames";
 
 /** The mixer as it is, with its two format choices watched. */
 const mix = vi.hoisted(() => ({ chooseMasterFormat: vi.fn(), chooseLayerMasterFormat: vi.fn() }));
@@ -56,6 +62,7 @@ const mockGetFirstEncodableAudioCodec = vi.fn();
 const mockOutputCancel = vi.fn().mockResolvedValue(undefined);
 /** The stacked engine's frame blending, mocked: jsdom has no VideoFrame or canvas. */
 const mockEncodeDissolve = vi.fn().mockResolvedValue(undefined);
+const mockEncodeDissolveFrames = vi.fn().mockResolvedValue(undefined);
 const mockCreateFrameBlender = vi.fn(() => ({ blend: vi.fn() }));
 const mockBufferTargetBuffer = new ArrayBuffer(100);
 
@@ -82,6 +89,10 @@ const sampleCalls: Array<{
 let frameTimestamps: (track: unknown, start: number, end: number) => number[] = (_track, start) => [start];
 /** Each `buffers(start, end)` call on an audio track. */
 const bufferCalls: Array<{ track: unknown; start: number; end: number }> = [];
+/** Every VideoSample made from bytes (a retimed clip's kept frames), to check that each is closed. */
+const byteSamples: Array<{ init: Record<string, unknown>; close: ReturnType<typeof vi.fn> }> = [];
+/** Each packet lookup on a video track that lists its frames: the method and the track. */
+const packetCalls: Array<{ method: string; track: unknown }> = [];
 
 type Fn = (...args: unknown[]) => unknown;
 
@@ -146,9 +157,28 @@ vi.mock("mediabunny", () => {
                 const clone = () => {
                   const record = { sourceTimestamp: timestamp, setTimestamp: vi.fn(), close: vi.fn() };
                   call.clones.push(record);
-                  return { timestamp, codedWidth, codedHeight, format, colorSpace, setDuration: vi.fn(), ...record };
+                  return { timestamp, codedWidth, codedHeight, format, colorSpace, rotation: 0, setDuration: vi.fn(), ...record };
                 };
-                yield { timestamp, codedWidth, codedHeight, format, colorSpace, setTimestamp, setDuration: vi.fn(), close, clone };
+                const size = (codedWidth ?? 0) * (codedHeight ?? 0);
+                yield {
+                  timestamp,
+                  codedWidth,
+                  codedHeight,
+                  format,
+                  colorSpace,
+                  rotation: 0,
+                  duration: 1 / 24,
+                  allocationSize: () => size * 1.5,
+                  // Not a spy: a spy per decoded frame makes every encode here a fifth slower, and nothing asserts on it
+                  copyTo: async () => [
+                    { offset: 0, stride: codedWidth },
+                    { offset: size, stride: codedWidth },
+                  ],
+                  setTimestamp,
+                  setDuration: vi.fn(),
+                  close,
+                  clone,
+                };
               }
             } finally {
               call.stopped = true;
@@ -160,15 +190,16 @@ vi.mock("mediabunny", () => {
   }
   /**
    * Yields one buffer from `start` to 0.1 s past `end` (a real decoder returns whole frames, so its last buffer
-   * runs past the range asked for), every sample at the track's `level`, in the track's decoded format (its
-   * container's unless `decoded` says otherwise); throws when `fails`.
+   * runs past the range asked for), every sample at the track's `level` (or, given a function, its level at that
+   * sample's source time), in the track's decoded format (its container's unless `decoded` says otherwise); throws
+   * when `fails`.
    */
   class AudioBufferSinkMock {
     buffers: (start: number, end: number) => AsyncIterable<unknown>;
     constructor(track: {
       sampleRate: number;
       numberOfChannels: number;
-      level: number;
+      level: number | ((t: number) => number);
       fails?: boolean;
       decoded?: { sampleRate: number; numberOfChannels: number };
     }) {
@@ -181,22 +212,85 @@ vi.mock("mediabunny", () => {
             const timestamp = Math.max(0, start);
             const length = Math.round((end + 0.1 - timestamp) * sampleRate);
             const buffer = new MockAudioBuffer({ length, numberOfChannels, sampleRate });
-            for (let c = 0; c < numberOfChannels; c++) buffer.getChannelData(c).fill(track.level);
+            const { level } = track;
+            for (let c = 0; c < numberOfChannels; c++) {
+              const data = buffer.getChannelData(c);
+              if (typeof level === "number") data.fill(level);
+              else for (let j = 0; j < length; j++) data[j] = level(timestamp + j / sampleRate);
+            }
             yield { buffer, timestamp, duration: length / sampleRate };
           },
         };
       };
     }
   }
-  /** The track's `lastPacket` for getPacket(Infinity), or none; at a time, the packet in effect among `packetTimes`. */
+  /**
+   * The track's `lastPacket` for getPacket(Infinity), or none; at a time, the packet in effect among `packetTimes`.
+   * A track that lists its `frames` (presentation times, decode order the same) and `keys` (frame indices) answers
+   * the frame list's lookups from them.
+   */
   class EncodedPacketSinkMock {
     getPacket: (timestamp: number) => Promise<unknown>;
-    constructor(track: { lastPacket?: unknown; packetTimes?: number[] }) {
+    getKeyPacket: (timestamp: number) => Promise<unknown>;
+    getFirstPacket: () => Promise<unknown>;
+    getNextPacket: (packet: { sequenceNumber: number }) => Promise<unknown>;
+    constructor(track: { lastPacket?: unknown; packetTimes?: number[]; frames?: number[]; keys?: number[] }) {
+      const packet = (j: number) =>
+        track.frames && j >= 0 && j < track.frames.length
+          ? { timestamp: track.frames[j], duration: 1 / 24, type: (track.keys ?? [0]).includes(j) ? "key" : "delta", sequenceNumber: j }
+          : null;
+      const lastAtOrBefore = (timestamp: number, keysOnly: boolean) =>
+        packet((track.frames ?? []).findLastIndex((t, j) => t <= timestamp && (!keysOnly || (track.keys ?? [0]).includes(j))));
       this.getPacket = async (timestamp: number) => {
         if (timestamp === Infinity) return track.lastPacket ?? null;
+        if (track.frames) {
+          packetCalls.push({ method: "getPacket", track });
+          return lastAtOrBefore(timestamp, false);
+        }
         const at = track.packetTimes?.filter((t) => t <= timestamp).pop();
         return at === undefined ? null : { timestamp: at, duration: 0 };
       };
+      this.getKeyPacket = async (timestamp: number) => {
+        packetCalls.push({ method: "getKeyPacket", track });
+        return lastAtOrBefore(timestamp, true);
+      };
+      this.getFirstPacket = async () => packet(0);
+      this.getNextPacket = async (previous) => packet(previous.sequenceNumber + 1);
+    }
+  }
+  /** A frame made from bytes or a canvas: its init, with the spies the encode calls. */
+  class VideoSampleMock {
+    init: Record<string, unknown>;
+    timestamp: number;
+    sourceTimestamp: number;
+    codedWidth: unknown;
+    codedHeight: unknown;
+    format: unknown;
+    rotation: unknown;
+    colorSpace: unknown;
+    setTimestamp = vi.fn();
+    setDuration = vi.fn();
+    setRotation = vi.fn();
+    close = vi.fn();
+    constructor(_data: unknown, init: Record<string, unknown>) {
+      this.init = init;
+      this.timestamp = init.timestamp as number;
+      this.sourceTimestamp = init.timestamp as number;
+      this.codedWidth = init.codedWidth;
+      this.codedHeight = init.codedHeight;
+      this.format = init.format;
+      this.rotation = init.rotation ?? 0;
+      this.colorSpace = init.colorSpace;
+      byteSamples.push(this);
+    }
+    clone() {
+      return new VideoSampleMock(null, this.init);
+    }
+    allocationSize() {
+      return (this.codedWidth as number) * (this.codedHeight as number) * 1.5;
+    }
+    async copyTo() {
+      return [];
     }
   }
   class VideoSampleSourceMock {
@@ -220,6 +314,7 @@ vi.mock("mediabunny", () => {
     VideoSampleSource: VideoSampleSourceMock,
     AudioBufferSink: AudioBufferSinkMock,
     EncodedPacketSink: EncodedPacketSinkMock,
+    VideoSample: VideoSampleMock,
     AudioBufferSource: AudioBufferSourceMock,
     BufferTarget: BufferTargetMock,
     Mp4OutputFormat: Mp4OutputFormatMock,
@@ -229,9 +324,25 @@ vi.mock("mediabunny", () => {
   };
 });
 
-vi.mock("@/lib/stitch/crossfadeFrames", () => ({
+/** The real module (warpReader takes its packedSize) with its frame work mocked; a times side records its times. */
+vi.mock("@/lib/stitch/crossfadeFrames", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/stitch/crossfadeFrames")>()),
   encodeDissolve: (...args: unknown[]) => mockEncodeDissolve(...args),
+  encodeDissolveFrames: (...args: unknown[]) => mockEncodeDissolveFrames(...args),
   createFrameBlender: (...args: unknown[]) => mockCreateFrameBlender(...(args as [])),
+  timesSide: (track: unknown, times: number[]) => ({
+    kind: "times",
+    track,
+    times,
+    frameOn: vi.fn(async () => null),
+    close: vi.fn(async () => {}),
+  }),
+}));
+
+/** The overlay pass, mocked: jsdom has no canvas. Each test that renders overlays gives it a recording writer. */
+const mockCreateOverlayWriter = vi.fn();
+vi.mock("@/lib/stitch/overlayFrames", () => ({
+  createOverlayWriter: (...args: unknown[]) => mockCreateOverlayWriter(...args),
 }));
 
 vi.mock("@/lib/video-encoding", () => ({
@@ -245,6 +356,8 @@ describe("useStitchVideos", () => {
     vi.clearAllMocks();
     sampleCalls.length = 0;
     bufferCalls.length = 0;
+    byteSamples.length = 0;
+    packetCalls.length = 0;
     frameTimestamps = (_track, start) => [start];
     mockGetAudioTracks.mockResolvedValue([]);
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -390,9 +503,16 @@ describe("useStitchVideos", () => {
           firstTimestamp?: number;
           /** The track's average packet rate; unknown by default. */
           frameRate?: number;
+          /**
+           * Lists the track's frames (j / fps) and key frames for a retimed clip's frame list, its frames 4 × 2 NV12
+           * unless sized, so they are kept as bytes.
+           */
+          fps?: number;
+          keys?: number[];
           width?: number;
           height?: number;
-          level?: number | null;
+          /** The sound's level, or its level at a source time; null for no sound. */
+          level?: number | ((t: number) => number) | null;
           sampleRate?: number;
           fails?: boolean;
           decoded?: { sampleRate: number; numberOfChannels: number };
@@ -403,6 +523,16 @@ describe("useStitchVideos", () => {
         const video = createMockVideoTrack(opts.width ?? 1920, opts.height ?? 1080, 0, opts.duration ?? 1, opts.firstTimestamp ?? 0);
         if (opts.frameRate !== undefined) {
           video.computePacketStats.mockResolvedValue({ averageBitrate: 8_000_000, averagePacketRate: opts.frameRate });
+        }
+        if (opts.fps !== undefined) {
+          const count = Math.round((opts.duration ?? 1) * opts.fps);
+          Object.assign(video, {
+            frames: Array.from({ length: count }, (_, j) => j / opts.fps!),
+            keys: opts.keys ?? [0],
+            format: "NV12",
+            codedWidth: opts.width ?? 4,
+            codedHeight: opts.height ?? 2,
+          });
         }
         sources.set(blob, {
           video,
@@ -428,7 +558,7 @@ describe("useStitchVideos", () => {
 
       const clip = (
         blob: Blob,
-        overrides: Partial<{ inSec: number; outSec: number | null; muted: boolean; volume: number; source: string }> = {},
+        overrides: Partial<{ inSec: number; outSec: number | null; muted: boolean; volume: number; source: string; warp: ClipWarp }> = {},
       ) => ({
         blob,
         inSec: 0,
@@ -1488,6 +1618,613 @@ describe("useStitchVideos", () => {
           const warnings = warn.mock.calls.filter((call) => String(call[0]).includes("blend at once"));
           expect(warnings).toEqual([["[VideoStitch] 5 clips blend at once; this takes about 250 MB at 1080p"]]);
           expect(composites.some((f) => f.layers.length === 5)).toBe(true);
+        });
+      });
+
+      describe("warps", () => {
+        const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({ speed, curve: null, reverse: false, blend: false, ...extra });
+        const ramp = (speed: number, name = "easeInOutCubic") => normalizeWarp(W(speed, { curve: { kind: "preset", name } }))!;
+        const stacked = (overlapSec: number, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade });
+        const placedOptions = (overlapSec = 1, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade, placed: true });
+        /** A source whose 24 fps frames are listed, without sound unless given a level. */
+        const listed = (name: string, duration: number, level: number | ((t: number) => number) | null = null) =>
+          source(name, { duration, fps: 24, level });
+        const videoOf = (blob: Blob) => sources.get(blob)!.video;
+        const at24 = (count: number) => Array.from({ length: count }, (_, j) => j / 24);
+        /** Every frame the encoder took: the slot it went in at, its duration, the source time it came from. */
+        const written = () =>
+          mockVideoSourceAdd.mock.calls.map((call: unknown[]) => {
+            const sample = call[0] as { timestamp: number; sourceTimestamp?: number; setTimestamp?: Mock; setDuration?: Mock };
+            const at = (sample.setTimestamp?.mock.calls.at(-1)?.[0] as number | undefined) ?? sample.timestamp;
+            return {
+              slot: Math.round(at * 60),
+              duration: sample.setDuration?.mock.calls.at(-1)?.[0] as number | undefined,
+              from: sample.sourceTimestamp ?? sample.timestamp,
+            };
+          });
+        /** A clip's frame changes over its slots [0, end) anchored at 0, brute force: the slot and the frame's time. */
+        const changes = (times: number[], map: WarpMap, end: number) => {
+          const out: Array<{ slot: number; from: number }> = [];
+          for (let n = 0; n < end; n++) {
+            const from = times[pickFrame(times, warpSlotTime(map, n, 0), false).a];
+            if (out.at(-1)?.from !== from) out.push({ slot: n, from });
+          }
+          return out;
+        };
+        /** The frame shown on each slot of [0, end): the last one written on it or before. */
+        const perSlot = (out: ReturnType<typeof written>, end: number) =>
+          Array.from({ length: end }, (_, n) => out.filter((w) => w.slot <= n).at(-1)?.from ?? null);
+        const blends: Array<{ a: number; b: number; alpha: number; timestamp: number; result: { setRotation: Mock } }> = [];
+        const composites: Array<{ slot: number; layers: Array<{ timestamp: number } | null> }> = [];
+
+        beforeEach(() => {
+          blends.length = 0;
+          composites.length = 0;
+          mockEncodeDissolve.mockImplementation(
+            async (job: { timestamps: number[] }, _blenderFor: unknown, add: (sample: unknown) => Promise<void>) => {
+              for (const timestamp of job.timestamps) await add({ timestamp, codedWidth: 0, codedHeight: 0 });
+            },
+          );
+          (mockCreateFrameBlender as unknown as Mock).mockImplementation(() => ({
+            blend: vi.fn(async (a: { timestamp: number }, b: { timestamp: number }, alpha: number, timestamp: number) => {
+              const result = {
+                timestamp,
+                setRotation: vi.fn(),
+                close: vi.fn(),
+                clone: () => ({ timestamp, sourceTimestamp: -1, setTimestamp: vi.fn(), setDuration: vi.fn(), close: vi.fn() }),
+              };
+              blends.push({ a: a.timestamp, b: b.timestamp, alpha, timestamp, result });
+              return result;
+            }),
+            composite: vi.fn(async (layers: Array<{ sample: { timestamp: number } | null }>, timestamp: number) => {
+              composites.push({ slot: Math.round(timestamp * 60), layers: layers.map((layer) => layer.sample) });
+              return { timestamp, close: vi.fn() };
+            }),
+            black: vi.fn((timestamp: number) => ({ timestamp, close: vi.fn() })),
+          }));
+        });
+
+        afterEach(() => {
+          mockCreateFrameBlender.mockImplementation(() => ({ blend: vi.fn() }));
+          mockVideoSourceAdd.mockResolvedValue(undefined);
+        });
+
+        it("Track: writes a 2× clip's frame changes on their slots, decoding it once, and the next clip from where it ends", async () => {
+          const a = listed("a", 4);
+          const b = source("b", { duration: 2, level: null });
+          await stitchVideosAsync([clip(a, { warp: W(2) }), clip(b)]);
+          const out = written();
+          expect(out.filter((w) => w.slot < 120).map(({ slot, from }) => ({ slot, from }))).toEqual(
+            changes(at24(96), warpMap({ inSec: 0, outSec: 4 }, W(2)), 120),
+          );
+          expect(out.find((w) => w.slot >= 120)?.slot).toBe(120);
+          expect(sampleCalls.filter((call) => call.track === videoOf(a)).map(({ start, end }) => [start, end])).toEqual([[0, 4]]);
+        });
+
+        it("Track: holds a 0.5× clip's frames for their slots, its last until the next clip starts", async () => {
+          const a = listed("a", 2);
+          const b = source("b", { duration: 1, level: null });
+          await stitchVideosAsync([clip(a, { warp: W(0.5) }), clip(b)]);
+          const out = written();
+          const own = out.filter((w) => w.slot < 240);
+          expect(own.slice(0, 5).map((w) => w.slot)).toEqual([0, 3, 8, 13, 18]);
+          own.forEach((w, i) => expect(w.duration).toBeCloseTo(((own[i + 1]?.slot ?? 240) - w.slot) / 60, 12));
+          expect(out[own.length].slot).toBe(240);
+          expect(new Set(out.map((w) => w.slot)).size).toBe(out.length);
+        });
+
+        it("Track: blends a slow clip's frames between them, at its own size and rotation, without the stack's blender", async () => {
+          const a = listed("a", 2);
+          await stitchVideosAsync([clip(a, { warp: W(0.5, { blend: true }) })]);
+          expect(mockCreateFrameBlender).toHaveBeenCalledTimes(1);
+          expect(mockCreateFrameBlender).toHaveBeenCalledWith({ width: 4, height: 2 });
+          // Frames every 5 slots; past the last one (47, slot 235) it holds
+          const between = Array.from({ length: 235 }, (_, n) => n).filter((n) => n % 5 !== 0);
+          expect(blends.map((blend) => Math.round(blend.timestamp * 60))).toEqual(between);
+          blends.forEach((blend, i) => {
+            expect(blend.alpha).toBeCloseTo((between[i] % 5) / 5, 9);
+            expect([blend.a, blend.b]).toEqual([Math.floor(between[i] / 5) / 24, (Math.floor(between[i] / 5) + 1) / 24]);
+            expect(blend.result.setRotation).toHaveBeenCalledWith(0);
+          });
+          expect(written().filter((w) => w.from === -1)).toHaveLength(between.length);
+        });
+
+        it("Track: writes a reversed clip from its last frame before Out down to In's, closing every frame it kept", async () => {
+          const a = listed("a", 2);
+          await stitchVideosAsync([clip(a, { inSec: 0.5, outSec: 1.5, warp: W(1, { reverse: true }) })]);
+          const out = written();
+          expect(out).toHaveLength(24);
+          expect(out[0].from).toBeCloseTo(35 / 24, 12);
+          out.forEach((w, i) => i > 0 && expect(w.from).toBeCloseTo(out[i - 1].from - 1 / 24, 12));
+          expect(out.at(-1)!.from).toBe(0.5);
+          expect(byteSamples.length).toBeGreaterThan(24);
+          expect(byteSamples.every((sample) => sample.close.mock.calls.length > 0)).toBe(true);
+        });
+
+        it("Track: spaces a ramp's frames by its momentary speed, and starts the next clip at its warped length", async () => {
+          const a = listed("a", 4);
+          const b = source("b", { duration: 1, level: null });
+          const warp = ramp(1);
+          await stitchVideosAsync([clip(a, { warp }), clip(b)]);
+          const map = warpMap({ inSec: 0, outSec: 4 }, warp);
+          const own = written().filter((w) => w.slot < 240);
+          const gaps = own.slice(1).map((w, i) => ({ gap: w.slot - own[i].slot, mid: (w.slot + own[i].slot) / 120 }));
+          for (const { gap, mid } of gaps) {
+            const speed = map.speedAt(mid);
+            if (speed >= 0.75) expect(Math.abs(gap - 60 / (24 * speed))).toBeLessThanOrEqual(1);
+          }
+          const middle = gaps.filter(({ mid }) => Math.abs(mid - 2) < 0.5).map(({ gap }) => gap);
+          expect(Math.max(...middle)).toBeLessThan(Math.min(gaps[0].gap, gaps.at(-1)!.gap));
+          expect(written().find((w) => w.slot >= 240)?.slot).toBe(240);
+        });
+
+        it("Track: a ramp split on a slot shows the same frame on every slot as the whole", async () => {
+          const warp = ramp(1, "easeInOutSine");
+          const a = listed("a", 4);
+          await stitchVideosAsync([clip(a, { warp })]);
+          const whole = perSlot(written(), 240);
+          mockVideoSourceAdd.mockClear();
+          const { first, second } = splitWarp({ inSec: 0, outSec: 4 }, warp, 1.5)!;
+          await stitchVideosAsync([
+            clip(a, { source: "a", outSec: first.range.outSec, warp: first.warp }),
+            clip(a, { source: "a", inSec: second.range.inSec, warp: second.warp }),
+          ]);
+          expect(perSlot(written(), 240)).toEqual(whole);
+        });
+
+        it("Track: a slow clip split on a slot shows the same frame on every slot as the whole, both ways", async () => {
+          // At 0.5× each source frame holds 5 slots: these cuts fall where the whole already shows the frame past them
+          const a = listed("a", 4);
+          for (const reverse of [false, true]) {
+            const warp = W(0.5, { reverse });
+            mockVideoSourceAdd.mockClear();
+            await stitchVideosAsync([clip(a, { source: "a", warp })]);
+            const whole = perSlot(written(), 480);
+            for (const k of [29, 40, 84, 95]) {
+              mockVideoSourceAdd.mockClear();
+              const { first, second } = splitWarp({ inSec: 0, outSec: 4 }, warp, k / 60)!;
+              await stitchVideosAsync([
+                clip(a, { source: "a", inSec: first.range.inSec, outSec: first.range.outSec, warp: first.warp }),
+                clip(a, { source: "a", inSec: second.range.inSec, outSec: second.range.outSec, warp: second.warp }),
+              ]);
+              expect(perSlot(written(), 480), `${reverse ? "reversed, " : ""}split on slot ${k}`).toEqual(whole);
+            }
+          }
+        });
+
+        it("Track: sizes a reversed clip's first chunk for frames kept on the canvas, the next by the copies it kept", async () => {
+          // 1080p NV12, one GOP: 24 frames at 4 bytes a pixel, then 64 at the copies' 1.5
+          const a = source("a", { duration: 10, fps: 24, width: 1920, height: 1080, level: null });
+          await stitchVideosAsync([clip(a, { warp: W(1, { reverse: true }) })]);
+          const first = reverseChunkFrames(1920 * 1080 * 4);
+          const starts = sampleCalls.filter((call) => call.track === videoOf(a)).map((call) => Math.round(call.start * 24));
+          expect(starts.slice(0, 2)).toEqual([240 - first, 240 - first - reverseChunkFrames(1920 * 1080 * 1.5)]);
+        });
+
+        it("decodes a retimed clip's sound around its range and plays it for its warped length; a constant speed outside 0.25–4× is silent", async () => {
+          const a = listed("a", 6, 0.5);
+          const b = source("b", { duration: 1, level: 0.25 });
+          await stitchVideosAsync([clip(a, { inSec: 1.5, warp: W(2) }), clip(b)]);
+          const margin = warpSoundMargin(SR);
+          expect(margin).toBeCloseTo(1.028, 12);
+          const call = bufferCalls.find((c) => c.track === sources.get(a)!.audio[0])!;
+          expect(call.start).toBeCloseTo(1.5 - margin, 12);
+          expect(call.end).toBeCloseTo(6 + margin, 12);
+          const sound = encodedSound();
+          // 4.5 s at 2×, then b at its start
+          expect(sound).toHaveLength(3250);
+          expect(Math.max(...sound.slice(0, 2250).map((x) => Math.abs(x - 0.5)))).toBeLessThanOrEqual(1e-6);
+          expect(sound[2250]).toBeCloseTo(0.25, 6);
+
+          for (const [warp, sounds] of [
+            [W(5), false],
+            [W(4), true],
+            [ramp(5), true],
+          ] as const) {
+            bufferCalls.length = 0;
+            sources.clear();
+            const c = listed("c", 8, 0.5);
+            await stitchVideosAsync([clip(c, { warp })]);
+            expect(bufferCalls.some((buffers) => buffers.track === sources.get(c)!.audio[0])).toBe(sounds);
+          }
+        });
+
+        it("reads a retimed clip's sound through its warp map, and remixes it to the master's channels", async () => {
+          // Source sound 0.1 · t: at 2× from In 1.5, output sample i is source second 1.5 + 2i / SR
+          const a = listed("a", 6, (t) => 0.1 * t);
+          await stitchVideosAsync([clip(a, { inSec: 1.5, warp: W(2) })]);
+          const sound = encodedSound();
+          expect(sound).toHaveLength(2250);
+          expect(Math.max(...sound.map((x, i) => Math.abs(x - 0.1 * (1.5 + (2 * i) / SR))))).toBeLessThan(1e-4);
+
+          // A mono retimed clip beside a stereo one sounds in both channels
+          mockAudioSourceAdd.mockClear();
+          const mono = listed("m", 6, 0.5);
+          const stereo = source("s", { duration: 1, level: 0.25, decoded: { sampleRate: SR, numberOfChannels: 2 } });
+          await stitchVideosAsync([clip(mono, { inSec: 1.5, warp: W(2) }), clip(stereo)]);
+          const right = mockAudioSourceAdd.mock.calls.flatMap((call: unknown[]) => [...(call[0] as MockAudioBuffer).getChannelData(1)]);
+          expect(right).toHaveLength(3250);
+          expect(Math.max(...right.slice(0, 2250).map((x) => Math.abs(x - 0.5)))).toBeLessThanOrEqual(1e-6);
+        });
+
+        it("plays a reversed clip's sound backwards, a ramp's along its curve, and an Expo ramp's start at the fade's gain", async () => {
+          const level = (t: number) => 0.1 * t;
+          const soundOf = async (inSec: number, outSec: number, warp: ClipWarp) => {
+            mockAudioSourceAdd.mockClear();
+            sources.clear();
+            await stitchVideosAsync([clip(listed("a", 6, level), { inSec, outSec, warp })]);
+            return { sound: encodedSound(), map: warpMap({ inSec, outSec }, warp) };
+          };
+
+          const back = await soundOf(1.5, 6, W(2, { reverse: true }));
+          expect(back.sound).toHaveLength(2250);
+          expect(back.sound[0]).toBeCloseTo(0.6, 3);
+          expect(Math.max(...back.sound.map((x, i) => Math.abs(x - level(back.map.sourceTimeAt(i / SR)))))).toBeLessThan(1e-4);
+
+          // Where it plays from half speed up (below a quarter it fades out)
+          const glide = await soundOf(1, 5, ramp(1));
+          const full = glide.sound.flatMap((x, i) => (glide.map.speedAt(i / SR) >= 0.5 ? [x - level(glide.map.sourceTimeAt(i / SR))] : []));
+          expect(full.length).toBeGreaterThan(glide.sound.length / 2);
+          expect(Math.max(...full.map(Math.abs))).toBeLessThan(1e-3);
+
+          // The curve jumps at its start: a skip, not a millisecond at full level
+          const expo = await soundOf(1, 5, ramp(1, "easeInExpo"));
+          const gain = (o: number) => Math.min(1, expo.map.speedAt(o) / SOUND_MIN_SPEED);
+          expo.sound.slice(0, 5).forEach((x, i) => expect(Math.abs(x - gain(i / SR) * level(expo.map.sourceTimeAt(i / SR)))).toBeLessThan(0.02));
+        });
+
+        it("lined up: dissolves out of a retimed clip through its own reader on every slot, its solo frames and the dissolve tiling", async () => {
+          const outgoing: Array<number | null> = [];
+          // Whether A's decoders were all stopped and their frames closed when the first frame after the dissolve came
+          let dissolved = false;
+          let closedBeforeB: boolean | null = null;
+          mockEncodeDissolveFrames.mockImplementation(
+            async (
+              job: {
+                outgoing: { frameOn: (slot: number) => Promise<{ timestamp: number } | null>; close: () => Promise<void> };
+                incoming: { frameOn: (slot: number) => Promise<unknown>; close: () => Promise<void> };
+                slots: number[];
+                timestamps: number[];
+              },
+              _blenderFor: unknown,
+              add: (sample: unknown) => Promise<void>,
+            ) => {
+              for (let i = 0; i < job.timestamps.length; i++) {
+                outgoing.push((await job.outgoing.frameOn(job.slots[i]))?.timestamp ?? null);
+                await job.incoming.frameOn(job.slots[i]);
+                await add({ timestamp: job.timestamps[i], codedWidth: 0, codedHeight: 0 });
+              }
+              await job.outgoing.close();
+              await job.incoming.close();
+              dissolved = true;
+            },
+          );
+          // Both files 24 fps, so only the retimed side keeps the dissolve off a shared cadence
+          const a = source("a", { duration: 8, fps: 24, frameRate: 24, level: null });
+          const b = source("b", { duration: 5, frameRate: 24, level: null });
+          mockVideoSourceAdd.mockImplementation(async () => {
+            if (!dissolved || closedBeforeB !== null) return;
+            closedBeforeB = sampleCalls
+              .filter((call) => call.track === videoOf(a))
+              .every((call) => call.stopped && call.closes.every((close) => close.mock.calls.length > 0));
+          });
+          await stitchVideosAsync([clip(a, { source: "a", warp: W(2) }), clip(b, { source: "b" })], null, undefined, undefined, stacked(1));
+          expect(mockEncodeDissolve).not.toHaveBeenCalled();
+          expect(mockEncodeDissolveFrames).toHaveBeenCalledTimes(1);
+          const [job] = mockEncodeDissolveFrames.mock.calls[0] as [{ slots: number[]; incoming: { kind: string; times: number[] } }];
+          const overlap = Array.from({ length: 60 }, (_, i) => 180 + i);
+          expect(job.slots).toEqual(overlap);
+          const times = at24(192);
+          const map = warpMap({ inSec: 0, outSec: 8 }, W(2));
+          expect(outgoing).toEqual(overlap.map((n) => times[pickFrame(times, warpSlotTime(map, n, 0), false).a]));
+          // B looks its frames up by its own solo mapping (from 1 s, its solo window starting on slot 240)
+          expect(job.incoming.kind).toBe("times");
+          job.incoming.times.forEach((t, i) => expect(t).toBeCloseTo(Math.max(0, 1 + (180 + i - 240 + 0.5 - 1e-6) / 60), 12));
+          const out = written();
+          out.forEach((w, i) => i > 0 && expect(w.slot).toBeGreaterThan(out[i - 1].slot));
+          const solo = out.filter((w) => w.slot < 180);
+          expect(solo.at(-1)!.slot + solo.at(-1)!.duration! * 60).toBeCloseTo(180, 9);
+          expect(out.filter((w) => w.slot >= 180 && w.slot < 240).map((w) => w.slot)).toEqual(overlap);
+          expect(out.find((w) => w.slot >= 240)?.slot).toBe(240);
+          // A's reader is stopped once its dissolve out is written, before B's solo, every frame it decoded closed
+          const decodes = sampleCalls.filter((call) => call.track === videoOf(a));
+          expect(decodes.length).toBeGreaterThan(0);
+          expect(closedBeforeB).toBe(true);
+        });
+
+        it("lined up: dissolves into a retimed clip through its own reader, anchored at its own start", async () => {
+          const incoming: Array<number | null> = [];
+          mockEncodeDissolveFrames.mockImplementation(
+            async (
+              job: {
+                outgoing: { frameOn: (slot: number) => Promise<unknown>; close: () => Promise<void> };
+                incoming: { frameOn: (slot: number) => Promise<{ timestamp: number } | null>; close: () => Promise<void> };
+                slots: number[];
+                timestamps: number[];
+              },
+              _blenderFor: unknown,
+              add: (sample: unknown) => Promise<void>,
+            ) => {
+              for (let i = 0; i < job.timestamps.length; i++) {
+                await job.outgoing.frameOn(job.slots[i]);
+                incoming.push((await job.incoming.frameOn(job.slots[i]))?.timestamp ?? null);
+                await add({ timestamp: job.timestamps[i], codedWidth: 0, codedHeight: 0 });
+              }
+              await job.outgoing.close();
+              await job.incoming.close();
+            },
+          );
+          // A (5 s) then B at 2× (8 s of source in 4 s), overlapping by 1 s: the dissolve is slots 240–299, B starts on 240
+          const a = source("a", { duration: 5, frameRate: 24, level: null });
+          const b = listed("b", 8);
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b", warp: W(2) })], null, undefined, undefined, stacked(1));
+          const times = at24(192);
+          const map = warpMap({ inSec: 0, outSec: 8 }, W(2));
+          const frameAt = (n: number) => times[pickFrame(times, warpSlotTime(map, n, 240), false).a];
+          expect(incoming).toEqual(Array.from({ length: 60 }, (_, i) => frameAt(240 + i)));
+          // B's solo frames go on along the same map, from the same anchor
+          const solo = written().filter((w) => w.slot >= 300);
+          expect(solo.length).toBeGreaterThan(0);
+          for (const w of solo) expect(w.from).toBe(frameAt(w.slot));
+        });
+
+        it("placed: opens a retimed clip's reader per visibility run, from the run's first slot, and blends its schedule's frames", async () => {
+          const f = source("f", { duration: 6, frameRate: 24, level: null });
+          const l = listed("l", 20);
+          await stitchVideosAsync(
+            [
+              { ...clip(f, { source: "f" }), startSec: 2 },
+              { ...clip(l, { source: "l", warp: W(2) }), startSec: 0 },
+            ],
+            null,
+            undefined,
+            undefined,
+            placedOptions(1),
+          );
+          // l (10 s at 2×) under f [2, 8): hidden in the middle, so read twice
+          const env = buildEnvelope(
+            [
+              { start: 2, length: 6, row: 0, source: "f", inSec: 0 },
+              { start: 0, length: 10, row: 1, source: "l", inSec: 0, sourceEnds: [0, 20] },
+            ],
+            true,
+          );
+          const runs = visibilityRuns(pictureSegments(env), 2, 0)[1];
+          expect(runs).toHaveLength(2);
+          const times = at24(480);
+          const map = warpMap({ inSec: 0, outSec: 20 }, W(2));
+          const anchor = unitSlots(env, 1, 0).anchor;
+          const frameAt = (n: number) => times[pickFrame(times, warpSlotTime(map, n, anchor), false).a];
+          expect(sampleCalls.filter((call) => call.track === videoOf(l)).map((call) => call.start)).toEqual(runs.map((run) => frameAt(run.n0)));
+          // l is the bottom layer of every blend
+          expect(composites.length).toBeGreaterThan(30);
+          for (const { slot, layers } of composites) expect(layers[0]?.timestamp).toBe(frameAt(slot));
+        });
+
+        it("plays a retimed clip again each loop, reading its frame list once", async () => {
+          const a = listed("a", 4);
+          const b = source("b", { duration: 2, level: null });
+          await stitchVideosAsync([clip(a, { warp: W(2) }), clip(b)], null, undefined, undefined, { loopCount: 2 });
+          const out = written();
+          const first = out.filter((w) => w.slot < 120);
+          const second = out.filter((w) => w.slot >= 240 && w.slot < 360);
+          expect(second.map((w) => [w.slot, w.from])).toEqual(first.map((w) => [w.slot + 240, w.from]));
+          expect(packetCalls.filter((call) => call.method === "getKeyPacket" && call.track === videoOf(a))).toHaveLength(1);
+        });
+
+        it("renders as before without warps: no warp, warp undefined and an identity warp reach the engine as none, giving the same decodes, frames, dissolves and sound", async () => {
+          for (const options of [{ loopCount: 2 }, stacked(1, true, 2), placedOptions(0, true, 2)]) {
+            const run = async (extra: { warp?: ClipWarp }) => {
+              sampleCalls.length = 0;
+              bufferCalls.length = 0;
+              mockVideoSourceAdd.mockClear();
+              mockAudioSourceAdd.mockClear();
+              mockEncodeDissolve.mockClear();
+              sources.clear();
+              const a = source("a", { duration: 3, frameRate: 24, level: 0.5 });
+              const b = source("b", { duration: 3, frameRate: 24, level: 0.5 });
+              await stitchVideosAsync(
+                [
+                  { ...clip(a, { source: "a", ...extra }), startSec: 0 },
+                  // Placed: b over the last second of a, a blend
+                  { ...clip(b, { source: "b", ...extra }), startSec: 2 },
+                ],
+                null,
+                undefined,
+                undefined,
+                options,
+              );
+              return {
+                decodes: sampleCalls.map(({ start, end, setTimestamp }) => [start, end, setTimestamp.map((spy) => spy.mock.calls)]),
+                frames: mockVideoSourceAdd.mock.calls.map((call: unknown[]) => {
+                  const sample = call[0] as { timestamp: number; setTimestamp?: Mock };
+                  return sample.setTimestamp?.mock.calls ?? sample.timestamp;
+                }),
+                dissolves: mockEncodeDissolve.mock.calls.map((call: unknown[]) => {
+                  const { timestamps, outgoingTimes, incomingTimes, alphas, frameDuration } = call[0] as Record<string, unknown>;
+                  return { timestamps, outgoingTimes, incomingTimes, alphas, frameDuration };
+                }),
+                buffers: bufferCalls.map(({ start, end }) => [start, end]),
+                sound: encodedSound(),
+              };
+            };
+            const plain = await run({});
+            expect(plain.frames.length).toBeGreaterThan(0);
+            expect(await run({ warp: undefined })).toEqual(plain);
+            expect(await run({ warp: { speed: 1, curve: null, reverse: false, blend: true } })).toEqual(plain);
+          }
+          expect(mockEncodeDissolveFrames).not.toHaveBeenCalled();
+        });
+      });
+
+      describe("overlays", () => {
+        interface Writer {
+          job: { add: (sample: unknown) => Promise<void> } & Record<string, unknown>;
+          written: unknown[];
+          write: Mock;
+          flush: Mock;
+          close: Mock;
+        }
+        /** Each overlay writer made: its job, every frame written through it (handed on as it is), its flush and close. */
+        const writers: Writer[] = [];
+        const overlay = (init: Parameters<typeof createTextOverlay>[0] = {}): StitchOverlayInput => ({
+          ...createTextOverlay({ id: "o", startSec: 1, endSec: 3, ...init }),
+          fontList: '"Space Grotesk", sans-serif',
+        });
+        const placedOptions = (overlapSec = 1, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade, placed: true });
+        const stacked = (overlapSec: number, crossfade = true, loopCount = 1) => ({ loopCount, overlapSec, crossfade });
+        const at = (blob: Blob, name: string, startSec: number) => ({ ...clip(blob, { source: name }), startSec });
+        const videoOf = (blob: Blob) => sources.get(blob)!.video;
+        /** Every frame the encoder took, in order: the time it went in at, the source time it came from, its layers. */
+        const encoded = () =>
+          mockVideoSourceAdd.mock.calls.map((call: unknown[]) => {
+            const sample = call[0] as { timestamp: number; setTimestamp?: Mock; layers?: unknown[] };
+            return {
+              at: sample.setTimestamp?.mock.calls[0]?.[0] ?? sample.timestamp,
+              from: sample.timestamp,
+              layers: sample.layers?.length ?? null,
+            };
+          });
+
+        beforeEach(() => {
+          writers.length = 0;
+          mockCreateOverlayWriter.mockImplementation((job: Writer["job"]) => {
+            const writer: Writer = {
+              job,
+              written: [],
+              write: vi.fn(async (sample: unknown) => {
+                writer.written.push(sample);
+                await job.add(sample);
+              }),
+              flush: vi.fn(async () => undefined),
+              close: vi.fn(),
+            };
+            writers.push(writer);
+            return writer;
+          });
+          mockEncodeDissolve.mockImplementation(
+            async (job: { timestamps: number[] }, _blenderFor: unknown, add: (sample: unknown) => Promise<void>) => {
+              for (const timestamp of job.timestamps) await add({ timestamp, codedWidth: 0, codedHeight: 0 });
+            },
+          );
+          (mockCreateFrameBlender as unknown as Mock).mockImplementation(() => ({
+            blend: vi.fn(),
+            composite: vi.fn(async (layers: unknown[], timestamp: number) => ({ timestamp, layers, close: vi.fn() })),
+            black: vi.fn((timestamp: number) => ({ timestamp, kind: "black", close: vi.fn() })),
+          }));
+        });
+
+        afterEach(() => {
+          mockCreateFrameBlender.mockImplementation(() => ({ blend: vi.fn() }));
+        });
+
+        it("renders as before without overlays: the same frames to the encoder in the same order, and no overlay pass", async () => {
+          for (const options of [{ loopCount: 2 }, stacked(1, true, 2), placedOptions(0, true, 2)]) {
+            const run = async (extra: Record<string, unknown>) => {
+              mockVideoSourceAdd.mockClear();
+              sampleCalls.length = 0;
+              sources.clear();
+              const a = source("a", { duration: 3, frameRate: 24, level: null });
+              const b = source("b", { duration: 3, frameRate: 24, level: null });
+              await stitchVideosAsync([at(a, "a", 0), at(b, "b", 4)], null, undefined, undefined, { ...options, ...extra });
+              return encoded();
+            };
+            const plain = await run({});
+            expect(plain.length).toBeGreaterThan(0);
+            expect(await run({ overlays: [] })).toEqual(plain);
+            // A layer with no wash and no text draws nothing
+            expect(await run({ overlays: [overlay({ text: "", wash: { opacity: 0 } })] })).toEqual(plain);
+          }
+          expect(mockCreateOverlayWriter).not.toHaveBeenCalled();
+        });
+
+        it("hands a Track sequence's own decoded frames to the encoder without overlays: nothing cloned, nothing added", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, level: null });
+          const b = source("b", { duration: 2, frameRate: 24, level: null });
+          await stitchVideosAsync([clip(a), clip(b)], null, undefined, undefined, { loopCount: 2 });
+          const decoded = sampleCalls.flatMap((call) => call.setTimestamp);
+          expect(mockVideoSourceAdd.mock.calls.map((call: unknown[]) => (call[0] as { setTimestamp: Mock }).setTimestamp)).toEqual(decoded);
+          expect(sampleCalls.every((call) => call.clones.length === 0)).toBe(true);
+        });
+
+        it("sends every frame of a Track sequence through the overlay writer, and flushes it before the encoder closes", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          const b = source("b", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          const overlays = [overlay()];
+          await stitchVideosAsync([clip(a), clip(b)], null, undefined, undefined, { loopCount: 2, overlays });
+          expect(writers).toHaveLength(1);
+          const [writer] = writers;
+          expect(writer.job).toMatchObject({ overlays, loopLength: 4, loopCount: 2, layout: { width: 1280, height: 720 }, rotation: 0 });
+          expect(writer.written).toHaveLength(sampleCalls.reduce((n, call) => n + call.setTimestamp.length, 0));
+          expect(writer.written).toEqual(mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0]));
+          expect(writer.flush).toHaveBeenCalledTimes(1);
+          expect(writer.flush.mock.invocationCallOrder[0]).toBeGreaterThan(writer.write.mock.invocationCallOrder.at(-1)!);
+          expect(writer.flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+          expect(writer.close).toHaveBeenCalledTimes(1);
+        });
+
+        it("lays the overlays out in a rotated file's display size, to be turned into its coded pixels", async () => {
+          const a = source("a", { duration: 2, frameRate: 24, width: 1280, height: 720, level: null });
+          Object.assign(videoOf(a), { rotation: 90 });
+          await stitchVideosAsync([clip(a)], null, undefined, undefined, { overlays: [overlay()] });
+          expect(writers[0].job).toMatchObject({ layout: { width: 720, height: 1280 }, rotation: 90 });
+        });
+
+        it("sends a lined-up stack's solo frames and its dissolve's through the writer", async () => {
+          const a = source("a", { duration: 5, frameRate: 24, level: null });
+          const b = source("b", { duration: 5, frameRate: 24, level: null });
+          await stitchVideosAsync([clip(a, { source: "a" }), clip(b, { source: "b" })], null, undefined, undefined, { ...stacked(1), overlays: [overlay()] });
+          expect(mockEncodeDissolve).toHaveBeenCalledTimes(1);
+          const sent = mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0]);
+          expect(sent.some((sample) => (sample as { codedWidth?: number }).codedWidth === 0)).toBe(true);
+          expect(writers[0].written).toEqual(sent);
+          expect(writers[0].flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+        });
+
+        it("sends a placed stack's black, solo and blended frames through the writer", async () => {
+          const a = source("a", { duration: 3, frameRate: 24, level: null });
+          const b = source("b", { duration: 3, frameRate: 24, level: null });
+          const c = source("c", { duration: 1, frameRate: 24, level: null });
+          // B blends over A on [2, 3); black on [5, 6)
+          await stitchVideosAsync([at(a, "a", 0), at(b, "b", 2), at(c, "c", 6)], null, undefined, undefined, {
+            ...placedOptions(0),
+            overlays: [overlay()],
+          });
+          const sent = mockVideoSourceAdd.mock.calls.map((call: unknown[]) => call[0] as { kind?: string; layers?: unknown[] });
+          expect(sent.some((sample) => sample.kind === "black")).toBe(true);
+          expect(sent.some((sample) => sample.layers?.length === 2)).toBe(true);
+          expect(writers[0].written).toEqual(sent);
+          expect(writers[0].job).toMatchObject({ loopLength: 7, loopCount: 1 });
+          expect(writers[0].flush.mock.invocationCallOrder[0]).toBeLessThan(mockVideoSourceClose.mock.invocationCallOrder[0]);
+          expect(writers[0].close).toHaveBeenCalledTimes(1);
+        });
+
+        it("closes the writer, without flushing it, when the encode stops or fails", async () => {
+          const controller = new AbortController();
+          const a = source("a", { duration: 2, frameRate: 24, level: null });
+          mockCreateOverlayWriter.mockImplementationOnce((job: Writer["job"]) => {
+            const writer: Writer = {
+              job,
+              written: [],
+              write: vi.fn(async () => controller.abort()),
+              flush: vi.fn(async () => undefined),
+              close: vi.fn(),
+            };
+            writers.push(writer);
+            return writer;
+          });
+          await expect(
+            stitchVideosAsync([clip(a)], null, undefined, controller.signal, { overlays: [overlay()] }),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(writers[0].flush).not.toHaveBeenCalled();
+          expect(writers[0].close).toHaveBeenCalledTimes(1);
+
+          const b = source("b", { duration: 2, frameRate: 24, level: null });
+          Object.assign(videoOf(b), { failAt: 1 });
+          await expect(stitchVideosAsync([clip(b)], null, undefined, undefined, { overlays: [overlay()] })).rejects.toThrow("decoder broke");
+          expect(writers[1].flush).not.toHaveBeenCalled();
+          expect(writers[1].close).toHaveBeenCalledTimes(1);
+          expect(mockOutputCancel).toHaveBeenCalledTimes(2);
         });
       });
     });

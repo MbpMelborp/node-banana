@@ -4,6 +4,7 @@ import { audioRowCount, hasMusicClip, type AudioDurations } from "@/lib/stitch/a
 import { sameCurve } from "@/lib/stitch/curve";
 import { sameDraft, type ClipOrigin, type StitchDraft } from "@/lib/stitch/draft";
 import type { LibraryKind } from "@/lib/stitch/libraryRequest";
+import { draftOverlays, sameOverlayRows } from "@/lib/stitch/overlays";
 import { clipIdsOf, makeSelection, type ClipSelection, type SelectionIds } from "@/lib/stitch/selection";
 import { edgeIdsInOrder, type SourceDurations, type SourceKey } from "@/lib/stitch/timeline";
 
@@ -35,8 +36,13 @@ export interface AudioSelection extends SelectionIds {
   onCurve: boolean;
 }
 
-/** Video clips or audio clips, never both. */
-export type StitchSelection = ClipSelection | AudioSelection | null;
+/** Several overlays selected; shaped like ClipSelection so its pure maths (selection.ts) apply. */
+export interface OverlaySelection extends SelectionIds {
+  kind: "overlay";
+}
+
+/** Video clips, audio clips or overlays: one kind at a time. */
+export type StitchSelection = ClipSelection | AudioSelection | OverlaySelection | null;
 
 /** An audio selection of the ids selection.ts's maths gave (they come back as a video selection). */
 export function audioSelectionOf(ids: SelectionIds, point: number | null = null, onCurve = false): AudioSelection {
@@ -50,9 +56,19 @@ export function audioSelectionOf(ids: SelectionIds, point: number | null = null,
   };
 }
 
+/** An overlay selection of the ids selection.ts's maths gave (they come back as a video selection). */
+export function overlaySelectionOf(ids: SelectionIds): OverlaySelection {
+  return {
+    kind: "overlay",
+    clipId: ids.clipId,
+    ...(ids.clipIds !== undefined ? { clipIds: ids.clipIds } : {}),
+    ...(ids.anchorId !== undefined ? { anchorId: ids.anchorId } : {}),
+  };
+}
+
 export interface StitchContextMenu {
-  /** A video clip's menu or an audio clip's. */
-  kind: "clip" | "audio";
+  /** A video clip's menu, an audio clip's or an overlay's. */
+  kind: "clip" | "audio" | "overlay";
   clipId: string;
   x: number;
   y: number;
@@ -83,6 +99,11 @@ export interface StitchEditorState {
   clipsLoading: ReadonlySet<SourceKey>;
   /** The one audio row grown to edit its volume lines, by its header's toggle only; not undoable, never written. */
   audioExpandedRow: number | null;
+  /**
+   * The clip whose speed curve is open on the timeline (its row in Stacked, the clips row in Track), by the rail's or
+   * the menu's toggle only; not undoable, never written. Closed when its clip goes.
+   */
+  videoExpandedClip: string | null;
   /**
    * The non-loop edge into the node's audio socket at open (dimmed or not), or as of the last Save; null with none.
    * Done and Save drop the draft's music clips when it is gone by then (the music was disconnected on the canvas).
@@ -158,6 +179,7 @@ export interface StitchEditorState {
   /** Kept when the keys are the same. */
   setClipsLoading(keys: ReadonlySet<SourceKey>): void;
   setAudioExpandedRow(row: number | null): void;
+  setVideoExpandedClip(clipId: string | null): void;
   /** Clamped to >= 0. */
   setPlayhead(t: number): void;
   setPlaying(playing: boolean): void;
@@ -197,6 +219,7 @@ type SessionState = Pick<
   | "audioDurations"
   | "clipsLoading"
   | "audioExpandedRow"
+  | "videoExpandedClip"
   | "musicEdgeIdAtOpen"
   | "musicHeld"
   | "edgeIdsAtOpen"
@@ -226,6 +249,7 @@ const closedSession = (): SessionState => ({
   audioDurations: EMPTY_AUDIO_DURATIONS,
   clipsLoading: NO_LOADING,
   audioExpandedRow: null,
+  videoExpandedClip: null,
   musicEdgeIdAtOpen: null,
   musicHeld: false,
   edgeIdsAtOpen: [],
@@ -250,6 +274,7 @@ export const PARKED_KEYS = [
   "durations",
   "audioDurations",
   "audioExpandedRow",
+  "videoExpandedClip",
   "playhead",
   "pxPerSec",
   "clipOrigins",
@@ -294,10 +319,10 @@ const sameIds = (a: SelectionIds, b: SelectionIds) =>
   a.clipId === b.clipId && a.anchorId === b.anchorId && (a.clipIds ?? []).join("\n") === (b.clipIds ?? []).join("\n");
 
 /**
- * After a history move: a selection drops the clips that are gone (the first
- * that remains leads when the lead went; none left, none selected), and an
- * audio selection forgets its point, so ⌫ never removes a point by a stale
- * index.
+ * After a history move: a selection drops the clips (or overlays) that are
+ * gone (the first that remains leads when the lead went; none left, none
+ * selected), and an audio selection forgets its point, so ⌫ never removes a
+ * point by a stale index.
  */
 export function pruneSelection(selection: StitchSelection, draft: StitchDraft): StitchSelection {
   if (selection?.kind === "clip") {
@@ -312,6 +337,12 @@ export function pruneSelection(selection: StitchSelection, draft: StitchDraft): 
     if (sameIds(next, selection) && selection.point === null) return selection;
     return audioSelectionOf(next, null, selection.onCurve);
   }
+  if (selection?.kind === "overlay") {
+    const order = draftOverlays(draft).map((o) => o.id);
+    const next = makeSelection(order, clipIdsOf(selection, order), selection.clipId, selection.anchorId);
+    if (next === null) return null;
+    return sameIds(next, selection) ? selection : overlaySelectionOf(next);
+  }
   return selection;
 }
 
@@ -319,12 +350,17 @@ export function pruneSelection(selection: StitchSelection, draft: StitchDraft): 
 const clampExpandedRow = (row: number | null, draft: StitchDraft) =>
   row !== null && row >= audioRowCount(draft.audioClips) ? null : row;
 
+/** A clip's open speed curve closes when the clip goes (an undo that brings it back brings it back closed). */
+const keepExpandedClip = (id: string | null, draft: StitchDraft) =>
+  id !== null && !draft.timeline.some((c) => c.id === id) ? null : id;
+
 /**
- * sameDraft compares the audio with its rows compacted (a row a move emptied is no change to save), but the editor
- * draws that row until a removal: a move that empties one is still an edit.
+ * sameDraft compares the audio and the overlays with their rows compacted (a row a move emptied is no change to save),
+ * but the editor draws that row until a removal: a move that empties one is still an edit.
  */
-const sameAudioRows = (a: StitchDraft, b: StitchDraft) =>
-  a.audioClips.every((clip) => b.audioClips.find((other) => other.id === clip.id)?.row === clip.row);
+const sameRows = (a: StitchDraft, b: StitchDraft) =>
+  a.audioClips.every((clip) => b.audioClips.find((other) => other.id === clip.id)?.row === clip.row) &&
+  sameOverlayRows(draftOverlays(a), draftOverlays(b));
 
 /** The audio clip's curve, or undefined for a clip that is not there. */
 const curveOf = (draft: StitchDraft, clipId: string) => draft.audioClips.find((c) => c.id === clipId)?.curve;
@@ -404,12 +440,12 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
       set(musicEdgeId === undefined ? { initial: saved } : { initial: saved, musicEdgeIdAtOpen: musicEdgeId }),
 
     apply: (recipe, opts) => {
-      const { draft, gestureKey, past, selection, musicHeld } = get();
+      const { draft, gestureKey, past, selection, musicHeld, videoExpandedClip } = get();
       if (!draft) return;
       // An edit's media holds every asset its clips use, so a clip added any way brings its asset in, in the same step
       const next = coverEditMedia(recipe(draft));
       // Most recipes rebuild the draft object, so an unchanged value is told apart by content
-      if (next === draft || (sameDraft(next, draft) && sameAudioRows(next, draft))) return;
+      if (next === draft || (sameDraft(next, draft) && sameRows(next, draft))) return;
       // A point index means nothing once the lead's curve has changed under it
       let nextSelection: StitchSelection = selection;
       if (selection?.kind === "audio" && selection.point !== null) {
@@ -420,8 +456,9 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         }
       }
       const held = musicHeld || hasMusicClip(next.audioClips);
+      const expandedClip = keepExpandedClip(videoExpandedClip, next);
       if (opts?.gestureKey !== undefined && opts.gestureKey === gestureKey) {
-        set({ draft: next, future: [], selection: nextSelection, musicHeld: held });
+        set({ draft: next, future: [], selection: nextSelection, musicHeld: held, videoExpandedClip: expandedClip });
         return;
       }
       set({
@@ -431,13 +468,14 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: opts?.gestureKey ?? null,
         selection: nextSelection,
         musicHeld: held,
+        videoExpandedClip: expandedClip,
       });
     },
 
     endGesture: () => set({ gestureKey: null }),
 
     undo: () => {
-      const { draft, past, future, selection, audioExpandedRow } = get();
+      const { draft, past, future, selection, audioExpandedRow, videoExpandedClip } = get();
       if (!draft || past.length === 0) return;
       const previous = past[past.length - 1];
       set({
@@ -447,11 +485,12 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: null,
         selection: pruneSelection(selection, previous),
         audioExpandedRow: clampExpandedRow(audioExpandedRow, previous),
+        videoExpandedClip: keepExpandedClip(videoExpandedClip, previous),
       });
     },
 
     redo: () => {
-      const { draft, past, future, selection, audioExpandedRow } = get();
+      const { draft, past, future, selection, audioExpandedRow, videoExpandedClip } = get();
       if (!draft || future.length === 0) return;
       const [next, ...rest] = future;
       set({
@@ -461,6 +500,7 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: null,
         selection: pruneSelection(selection, next),
         audioExpandedRow: clampExpandedRow(audioExpandedRow, next),
+        videoExpandedClip: keepExpandedClip(videoExpandedClip, next),
       });
     },
 
@@ -472,6 +512,7 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     },
     setAudioDurations: (audioDurations) => set({ audioDurations }),
     setAudioExpandedRow: (audioExpandedRow) => set({ audioExpandedRow }),
+    setVideoExpandedClip: (videoExpandedClip) => set({ videoExpandedClip }),
     setPlayhead: (t) => set({ playhead: Number.isFinite(t) ? Math.max(0, t) : 0 }),
     // A pause lands the playhead where the frame loop's clock is, in the same change, so what follows the pause sees it
     setPlaying: (playing) => set(playing || !get().playing ? { playing } : { playing, playhead: live.playhead }),
@@ -512,8 +553,8 @@ export const selectCanUndo = (s: StitchEditorState): boolean => s.past.length > 
 export const selectCanRedo = (s: StitchEditorState): boolean => s.future.length > 0;
 
 /**
- * The selected clips' ids in timeline order ([] for an audio selection or none). A new array per call: components
- * subscribe to s.selection and derive this in a useMemo, never through a selector.
+ * The selected clips' ids in timeline order ([] for another kind of selection or none). A new array per call:
+ * components subscribe to s.selection and derive this in a useMemo, never through a selector.
  */
 export function selectedClipIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
   if (s.selection?.kind !== "clip" || !s.draft) return [];
@@ -521,12 +562,21 @@ export function selectedClipIds(s: Pick<StitchEditorState, "selection" | "draft"
 }
 
 /**
- * The selected audio clips' ids in audio order (row, start, id; [] for a video selection or none). A new array per
- * call: derive it in a useMemo, never through a selector.
+ * The selected audio clips' ids in audio order (row, start, id; [] for another kind of selection or none). A new array
+ * per call: derive it in a useMemo, never through a selector.
  */
 export function selectedAudioIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
   if (s.selection?.kind !== "audio" || !s.draft) return [];
   return clipIdsOf(s.selection, s.draft.audioClips.map((c) => c.id));
+}
+
+/**
+ * The selected overlays' ids in overlay order (row, start, id; [] for another kind of selection or none). A new array
+ * per call: derive it in a useMemo, never through a selector.
+ */
+export function selectedOverlayIds(s: Pick<StitchEditorState, "selection" | "draft">): string[] {
+  if (s.selection?.kind !== "overlay" || !s.draft) return [];
+  return clipIdsOf(s.selection, draftOverlays(s.draft).map((o) => o.id));
 }
 
 /** Several clips selected: group actions act on all of them, single-clip ones (trims, Start, In, Out) do nothing. */

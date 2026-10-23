@@ -9,8 +9,11 @@ import {
   selectIsDirty,
   selectIsMulti,
   audioSelectionOf,
+  overlaySelectionOf,
+  pruneSelection,
   selectedAudioIds,
   selectedClipIds,
+  selectedOverlayIds,
   useStitchEditorStore,
 } from "@/store/stitchEditorStore";
 import { draftSpans, type StitchDraft } from "@/lib/stitch/draft";
@@ -25,6 +28,7 @@ import {
 } from "@/lib/stitch/timeline";
 import { addPoint, fadeOut, flat } from "@/lib/stitch/curve";
 import { createAudioClip, legacyMusicClip, setAudioClipCurve, type AudioSourceKey } from "@/lib/stitch/audioClips";
+import { createTextOverlay, moveOverlays, updateOverlay } from "@/lib/stitch/overlays";
 import { DEFAULT_SEQUENCE_LAYOUT as TRACK_LAYOUT } from "@/lib/stitch/stack";
 import {
   addLibraryClips,
@@ -58,9 +62,11 @@ import {
   trimSelected,
 } from "@/components/stitch/editorActions";
 import { clearStarts, placeClips } from "@/lib/stitch/timeline";
+import { makeSelection } from "@/lib/stitch/selection";
+import { normalizeWarp, withWarp } from "@/lib/stitch/warp";
 import { liveFitZoom } from "@/components/stitch/liveFitZoom";
 import type { AssetView } from "@/lib/assets/types";
-import type { StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchTimelineClip } from "@/types";
 
 vi.mock("@/components/Toast", () => ({ useToast: { getState: () => ({ show: vi.fn() }) } }));
 
@@ -199,6 +205,42 @@ describe("stitchEditorStore", () => {
     expect(store().audioExpandedRow).toBe(0);
   });
 
+  it("closes a clip's open speed curve when the clip goes, and an undo brings the clip back closed", () => {
+    openOn();
+    store().setVideoExpandedClip("b");
+    expect(store().past).toHaveLength(0);
+    // Not undoable, and kept by edits and history moves that keep the clip
+    store().apply((d) => ({ ...d, loopCount: 2 }));
+    store().undo();
+    store().redo();
+    expect(store().videoExpandedClip).toBe("b");
+    store().apply((d) => ({ ...d, timeline: removeClip(d.timeline, "b").timeline }));
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    expect(store().draft!.timeline.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(store().videoExpandedClip).toBeNull();
+    // A redo that takes it away closes it too; a gesture's later frames as well
+    store().setVideoExpandedClip("b");
+    store().redo();
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    // An undo that takes it away (of an add) closes it, and the redo brings the clip back closed
+    store().apply((d) => ({ ...d, timeline: [...d.timeline, { ...d.timeline[0], id: "c" }] }));
+    store().setVideoExpandedClip("c");
+    store().undo();
+    expect(store().videoExpandedClip).toBeNull();
+    store().redo();
+    expect(store().draft!.timeline.map((c) => c.id)).toEqual(["a", "b", "c"]);
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    store().setVideoExpandedClip("a");
+    store().apply((d) => ({ ...d, loopCount: 3 }), { gestureKey: "g" });
+    store().apply((d) => ({ ...d, timeline: removeClip(d.timeline, "a").timeline }), { gestureKey: "g" });
+    expect(store().videoExpandedClip).toBeNull();
+    store().close();
+    expect(store().videoExpandedClip).toBeNull();
+  });
+
   it("keeps the music edge from open, updates it on markSaved when given, and resets the audio session on close", () => {
     store().open({ nodeId: "s1", draft: makeDraft(), canvasGeneration: 3, musicEdgeIdAtOpen: "eM" });
     expect(store().musicEdgeIdAtOpen).toBe("eM");
@@ -221,6 +263,106 @@ describe("stitchEditorStore", () => {
     expect(s.pickerOpen).toBe(false);
     openOn();
     expect(store().musicEdgeIdAtOpen).toBeNull();
+  });
+
+  it("pushes a step for an overlay change and none for an equal copy, and the change makes the editor dirty", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    openOn(makeDraft({ overlays: [o1] }));
+    store().apply((d) => ({ ...d, overlays: [{ ...o1 }] }));
+    store().apply((d) => ({ ...d, overlays: updateOverlay(d.overlays!, "o1", { size: 0.08 }) }));
+    expect(store().past).toHaveLength(0);
+    store().apply((d) => ({ ...d, overlays: updateOverlay(d.overlays!, "o1", { text: "Hello" }) }));
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+    store().undo();
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("pushes a step for a warp change and none for an equal copy, and the change makes the editor dirty", () => {
+    const warp = { speed: 2, curve: { kind: "preset" as const, name: "easeInQuad" }, reverse: false, blend: false };
+    const setWarp = (w: typeof warp) => (d: StitchDraft) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === "a" ? { ...c, warp: w } : c)),
+    });
+    openOn();
+    store().apply(setWarp(warp));
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+    store().apply(setWarp(structuredClone(warp)));
+    expect(store().past).toHaveLength(1);
+    store().undo();
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("reads a draft with no overlays and one with an empty list as the same", () => {
+    openOn();
+    store().apply((d) => ({ ...d, overlays: [] }));
+    expect(store().past).toHaveLength(0);
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("drops overlays an undo takes away from the selection, the first left leading", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    const o3 = createTextOverlay({ id: "o3", row: 2 });
+    openOn(makeDraft({ overlays: [o1] }));
+    store().apply((d) => ({ ...d, overlays: [o1, o2, o3] }));
+    store().select(overlaySelectionOf({ clipId: "o3", clipIds: ["o1", "o2", "o3"], anchorId: "o2" }));
+    store().undo();
+    expect(store().selection).toEqual({ kind: "overlay", clipId: "o1" });
+    store().select(overlaySelectionOf({ clipId: "o1" }));
+    const before = store().selection;
+    store().redo();
+    // Nothing went: the same selection object
+    expect(store().selection).toBe(before);
+    store().select(overlaySelectionOf({ clipId: "o2" }));
+    store().undo();
+    expect(store().selection).toBeNull();
+  });
+
+  it("prunes an overlay selection against a draft without overlays to none", () => {
+    expect(pruneSelection(overlaySelectionOf({ clipId: "o1" }), makeDraft())).toBeNull();
+    const selection = overlaySelectionOf({ clipId: "o1" });
+    expect(pruneSelection(selection, makeDraft({ overlays: [createTextOverlay({ id: "o1" })] }))).toBe(selection);
+  });
+
+  it("takes a move that empties an overlay row as an edit, though the draft still reads as unchanged", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    openOn(makeDraft({ overlays: [o1, o2] }));
+    store().apply((d) => ({ ...d, overlays: moveOverlays(d.overlays!, ["o2"], 0, 1).overlays }));
+    expect(store().past).toHaveLength(1);
+    expect(store().draft!.overlays![1].row).toBe(2);
+    expect(selectIsDirty(store())).toBe(false);
+  });
+
+  it("takes a move onto a row with room as a change to save, though the overlay order stays the same", () => {
+    const a = createTextOverlay({ id: "a", endSec: 1 });
+    const b = createTextOverlay({ id: "b", row: 1, startSec: 2, endSec: 3 });
+    const c = createTextOverlay({ id: "c", row: 2, endSec: 1 });
+    openOn(makeDraft({ overlays: [a, b, c] }));
+    store().apply((d) => ({ ...d, overlays: moveOverlays(d.overlays!, ["b"], 0, -1).overlays }));
+    expect(store().draft!.overlays!.map((o) => [o.id, o.row])).toEqual([
+      ["a", 0],
+      ["b", 0],
+      ["c", 2],
+    ]);
+    expect(store().past).toHaveLength(1);
+    expect(selectIsDirty(store())).toBe(true);
+  });
+
+  it("selectedOverlayIds gives the overlay selection's ids in overlay order, and nothing for another kind", () => {
+    const o1 = createTextOverlay({ id: "o1" });
+    const o2 = createTextOverlay({ id: "o2", row: 1 });
+    openOn(makeDraft({ overlays: [o1, o2] }));
+    store().select(overlaySelectionOf({ clipId: "o2", clipIds: ["o2", "o1", "gone"] }));
+    expect(selectedOverlayIds(store())).toEqual(["o1", "o2"]);
+    expect(selectedClipIds(store())).toEqual([]);
+    expect(selectedAudioIds(store())).toEqual([]);
+    store().select({ kind: "clip", clipId: "a" });
+    expect(selectedOverlayIds(store())).toEqual([]);
+    store().select(audioSelectionOf({ clipId: "o1" }));
+    expect(selectedOverlayIds(store())).toEqual([]);
   });
 
   it("selectedAudioIds gives the audio selection's ids in audio order, and nothing for a clip selection", () => {
@@ -696,6 +838,143 @@ describe("stitchEditorStore: placing clips in Stacked", () => {
     expect(steps()).toBe(0);
   });
 
+  const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+    speed,
+    curve: null,
+    reverse: false,
+    blend: false,
+    ...extra,
+  });
+  const QUAD = { kind: "preset", name: "easeInQuad" } as const;
+  /** One undo step that gives a clip this warp. */
+  const retime = (clipId: string, warp: ClipWarp) =>
+    store().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === clipId ? withWarp(c, normalizeWarp(warp)) : c)),
+    }));
+
+  it.each([true, false])("splits a placed ramp inside an overlap and changes no weight (Crossfade %s)", (crossfade) => {
+    retime("b", W(1, { curve: QUAD }));
+    setCrossfade(crossfade);
+    setClipStart("c", 7);
+    selectClip("b");
+    store().setPlayhead(8);
+    expect(splitBlockedReason(store())).toBeNull();
+    const instants = Array.from({ length: 50 }, (_, i) => (i * 11) / 50 + 0.013);
+    const before = instants.map((t) => weightsById(t));
+
+    splitAtPlayhead();
+    const timeline = store().draft!.timeline;
+    expect(timeline).toHaveLength(4);
+    const right = timeline[2];
+    expect(right.startSec).toBe(8);
+    expect(right.warp?.window).toEqual([0.8, 1]);
+    const after = instants.map((t) => weightsById(t, { [right.id]: "b" }));
+    after.forEach((weights, i) => {
+      for (const id of new Set([...Object.keys(weights), ...Object.keys(before[i])])) {
+        expect(weights[id] ?? 0).toBeCloseTo(before[i][id] ?? 0, 9);
+      }
+    });
+  });
+
+  it("refuses a split the speed cannot make, and says why", () => {
+    // b eases in from a standstill at 0.25×: 5 s of source over 20 s, 5–25 in Track
+    openStack(undefined, TRACK_LAYOUT);
+    retime("b", W(0.25, { curve: QUAD }));
+    selectClip("b");
+    store().setPlayhead(5.15);
+    expect(splitBlockedReason(store())).toBe("Move the playhead: the speed here is too slow to split");
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    const before = steps();
+    splitAtPlayhead();
+    expect(steps()).toBe(before);
+    store().setPlayhead(7);
+    expect(splitBlockedReason(store())).toBeNull();
+    splitAtPlayhead();
+    expect(steps()).toBe(before + 1);
+
+    // Several selected: a clip that can split there, so no reason, and S splits only it
+    openStack();
+    retime("b", W(0.25, { curve: QUAD }));
+    setClipStart("a", 5);
+    setClipStart("b", 5);
+    store().select(makeSelection(ids(), ["a", "b"], "a"));
+    store().setPlayhead(5.15);
+    expect(splitBlockedReason(store())).toBeNull();
+    const b = store().draft!.timeline.find((c) => c.id === "b");
+    splitAtPlayhead();
+    expect(store().draft!.timeline).toHaveLength(4);
+    expect(store().draft!.timeline.find((c) => c.id === "b")).toBe(b);
+    expect(selectedClipIds(store())).toHaveLength(1);
+
+    // Several selected, every one refused by its speed: Split is off and says why
+    openStack();
+    retime("a", W(0.25, { curve: QUAD }));
+    retime("b", W(0.25, { curve: QUAD }));
+    setClipStart("a", 5);
+    setClipStart("b", 5);
+    store().select(makeSelection(ids(), ["a", "b"], "a"));
+    store().setPlayhead(5.15);
+    expect(canSplitAtPlayhead(store())).toBe(false);
+    expect(splitBlockedReason(store())).toBe("Move the playhead: the speed here is too slow to split");
+    const group = steps();
+    splitAtPlayhead();
+    expect(steps()).toBe(group);
+  });
+
+  it.each([
+    ["Track", TRACK_LAYOUT],
+    ["Stacked", STACKED],
+  ] as const)("sets I and O on a reversed clip from its head, its Out (%s)", (_, layout) => {
+    openStack(undefined, layout);
+    retime("b", W(1, { reverse: true }));
+    selectClip("b");
+    const b = () => store().draft!.timeline[1];
+    const head = spans()[1].start;
+    store().setPlayhead(head + 2);
+    setEdgeAtPlayheadForSelection("in");
+    expect(b()).toMatchObject({ inSec: 1, outSec: 4 });
+    if (layout === STACKED) expect(spans()[1].start).toBeCloseTo(head + 2, 9);
+    store().setPlayhead(spans()[1].start + 1);
+    setEdgeAtPlayheadForSelection("out");
+    expect(b()).toMatchObject({ inSec: 3, outSec: 4 });
+  });
+
+  it.each([
+    ["Track", TRACK_LAYOUT],
+    ["Stacked", STACKED],
+  ] as const)("resets a slow clip's trim to 600 s of output, in one step (%s)", (_, layout) => {
+    openStack(undefined, layout);
+    store().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c) => (c.id === "b" ? withWarp({ ...c, inSec: 100, outSec: 106 }, normalizeWarp(W(0.1))) : c)),
+    }));
+    selectClip("b");
+    const before = steps();
+    // Until its source's length is read there is nothing to give back: the cap needs it
+    store().setDurations(new Map([...DURATIONS].filter(([key]) => key !== "asset:x")));
+    resetSelectedTrim();
+    expect(steps()).toBe(before);
+    expect(store().draft!.timeline[1]).toMatchObject({ inSec: 100, outSec: 106 });
+    store().setDurations(new Map<SourceKey, number>([...DURATIONS, ["asset:x", 600]]));
+    resetSelectedTrim();
+    expect(steps()).toBe(before + 1);
+    expect(store().draft!.timeline[1]).toMatchObject({ inSec: 100, outSec: 160 });
+  });
+
+  it("starts a ramp at the playhead with I in Stacked, and a second I changes nothing", () => {
+    retime("b", W(1, { curve: QUAD }));
+    selectClip("b");
+    expect([spans()[1].start, spans()[1].end]).toEqual([4, 9]);
+    store().setPlayhead(6);
+    const before = steps();
+    setEdgeAtPlayheadForSelection("in");
+    expect(steps()).toBe(before + 1);
+    expect([spans()[1].start, spans()[1].end]).toEqual([6, 9]);
+    setEdgeAtPlayheadForSelection("in");
+    expect(steps()).toBe(before + 1);
+  });
+
   it.each([true, false])("splits a placed clip inside an overlap and changes no weight (Crossfade %s)", (crossfade) => {
     setCrossfade(crossfade);
     setClipStart("c", 7);
@@ -1086,6 +1365,7 @@ describe("stitchEditorStore: edit project sessions", () => {
     store().setZoom(80);
     store().setDurations(new Map<SourceKey, number>([["asset:a1", 5]]));
     store().setAudioExpandedRow(0);
+    store().setVideoExpandedClip("v2");
     store().setAudioDurations(new Map<AudioSourceKey, number>([["asset:m1", 7]]));
     store().tagClips(["v2"], "pasted");
     const before = store();
@@ -1107,6 +1387,7 @@ describe("stitchEditorStore: edit project sessions", () => {
     expect(s.durations.get("asset:a1")).toBe(5);
     expect(s.audioDurations.get("asset:m1")).toBe(7);
     expect(s.audioExpandedRow).toBe(0);
+    expect(s.videoExpandedClip).toBe("v2");
     expect(s.past).toHaveLength(1);
     expect(s.future).toHaveLength(1);
     expect(s.initial).toBe(before.initial);

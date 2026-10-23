@@ -12,6 +12,8 @@ export const GENERATIONS_DIR = "Generations";
 export const DATA_DIR = ".nodebanana";
 /** The Edit video view's edit files (`<name>.nbedit`), outside any workflow project. */
 export const EDITS_DIR = "Edits";
+/** Font files text layers use, shared by every edit (see `src/lib/edits/fontServer.ts`). */
+export const FONTS_DIR = "Fonts";
 /** In the data folder: one file per process with writes in flight. Not library data — see {@link LibraryLayout.writers}. */
 export const WRITERS_DIR = "writers";
 

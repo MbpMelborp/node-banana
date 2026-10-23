@@ -3,13 +3,16 @@ import {
   isMusicInput,
   normalizeAudioClips,
   normalizeLoopCount,
+  normalizeOverlays,
   normalizePlacement,
   normalizeStack,
   normalizeStitchArgs,
   type StitchAudioClipInput,
   type StitchAudioData,
   type StitchClipInput,
+  type StitchOverlayInput,
 } from "../engineTypes";
+import { createTextOverlay } from "../overlays";
 
 const audio = { buffer: { sampleRate: 48000 } as unknown as AudioBuffer, duration: 2 } satisfies StitchAudioData;
 const a = new Blob(["a"], { type: "video/mp4" });
@@ -62,6 +65,30 @@ describe("normalizeStitchArgs", () => {
     expect(read("edge:e1").source).toBe("edge:e1");
     for (const junk of ["", 7, null, {}]) expect(read(junk)).not.toHaveProperty("source");
     expect(normalizeStitchArgs([a], null).clips[0]).not.toHaveProperty("source");
+  });
+
+  it("passes a clip's warp sanitized, last, and drops one that changes nothing", () => {
+    const base = { blob: a, inSec: 0, outSec: null, muted: false, volume: 1, source: "edge:e1", startSec: 2 };
+    const read = (warp: unknown) =>
+      normalizeStitchArgs([{ ...base, warp } as unknown as StitchClipInput], null).clips[0];
+    const ramp = {
+      speed: 0.5,
+      curve: { kind: "preset", name: "easeInQuad" },
+      window: [0.2, 0.8],
+      reverse: true,
+      blend: true,
+    };
+    expect(read(ramp).warp).toEqual(ramp);
+    expect(Object.keys(read(ramp)).at(-1)).toBe("warp");
+    expect(read({ speed: 1e12, curve: null, reverse: false, blend: false }).warp).toEqual({
+      speed: 1e9,
+      curve: null,
+      reverse: false,
+      blend: false,
+    });
+    expect(read({ speed: 1, curve: null, reverse: false, blend: true })).not.toHaveProperty("warp");
+    expect(read("2x")).not.toHaveProperty("warp");
+    expect(normalizeStitchArgs([a], null).clips[0]).not.toHaveProperty("warp");
   });
 
   it("tells music from a bare buffer", () => {
@@ -153,5 +180,35 @@ describe("normalizeAudioClips", () => {
     expect(first.curve).toEqual([{ t: 1, gain: 1 }, { t: 2, gain: 1 }]);
     expect(first.audio).toBe(audio);
     expect(rest).toEqual([]);
+  });
+});
+
+describe("normalizeOverlays", () => {
+  const input = (init: Record<string, unknown> = {}) =>
+    ({ ...createTextOverlay({ id: "o" }), fontList: '"Space Grotesk", sans-serif', ...init }) as unknown as StitchOverlayInput;
+
+  it("is empty when the options carry no overlays", () => {
+    expect(normalizeOverlays(undefined)).toEqual([]);
+    expect(normalizeOverlays({ loopCount: 2 })).toEqual([]);
+    expect(normalizeOverlays({ overlays: [] })).toEqual([]);
+  });
+
+  it("keeps each text layer as clampOverlay reads it, with its family list", () => {
+    const [layer] = normalizeOverlays({ overlays: [input({ row: 2, startSec: -1, size: 9, color: "#ABCDEF", fadeInSec: 9 })] });
+    expect(layer).toEqual({
+      ...createTextOverlay({ id: "o", row: 2, startSec: 0, endSec: 4, size: 0.5, color: "#abcdef", fadeInSec: 9 }),
+      fontList: '"Space Grotesk", sans-serif',
+    });
+  });
+
+  it("drops what is not a text layer, and a layer with no wash and no text, which draws nothing", () => {
+    const kept = input({ id: "kept", text: "", wash: { opacity: 0.2 } });
+    const overlays = [null, { kind: "image" }, input({ font: null }), input({ text: " \n ", wash: { opacity: 0 } }), kept];
+    expect(normalizeOverlays({ overlays: overlays as unknown as StitchOverlayInput[] }).map((o) => o.id)).toEqual(["kept"]);
+  });
+
+  it("draws a layer without a family list in sans-serif", () => {
+    expect(normalizeOverlays({ overlays: [input({ fontList: undefined })] })[0].fontList).toBe("sans-serif");
+    expect(normalizeOverlays({ overlays: [input({ fontList: " " })] })[0].fontList).toBe("sans-serif");
   });
 });

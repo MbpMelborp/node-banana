@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAssetLibraryForTests, beginRecord, completeUpload } from "@/lib/assets/server";
 import { installBridge, meta, sha256, streamOf, tempDir, TINY_MP4 } from "@/lib/assets/server/__tests__/helpers";
 import { AssetLibrary } from "@/lib/assets/server/library";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import { createClip } from "@/lib/stitch/timeline";
+import { normalizeWarp } from "@/lib/stitch/warp";
 import { emptyEditSequence } from "../document";
 import {
   __resetEditsForTests,
@@ -254,6 +256,77 @@ describe("saving (T-SRV-3, T-SRV-4, T-SRV-5, T-SRV-14)", () => {
     await expect(saveEdit(edit.id, saveOf(edit), deps)).rejects.toMatchObject({ status: 404, code: "not_found" });
     await expect(saveEdit(edit.id, saveOf(edit, { force: true }), deps)).rejects.toMatchObject({ status: 404 });
     expect(files()).toEqual([]);
+  });
+});
+
+describe("overlays", () => {
+  const overlays = [
+    createTextOverlay({ id: "o1", startSec: 1, endSec: 5, text: "data:,hello", font: { family: "Inter", file: "Inter.ttf" } }),
+    createTextOverlay({ id: "o2", row: 1, startSec: 2 }),
+  ];
+  const withOverlays = (...assetIds: string[]): EditSequence => ({ ...sequenceOf(...assetIds), overlays });
+
+  it("keeps them through a save, a duplicate and a rename, in the file as sent", async () => {
+    const edit = await createEdit({ name: "Titles" }, deps);
+    now += 1;
+    const saved = await saveEdit(edit.id, saveOf(edit, { sequence: withOverlays(A) }), deps);
+    expect(saved.sequence.overlays).toEqual(overlays);
+    expect(stored("Titles.nbedit").sequence).toEqual(withOverlays(A));
+
+    const copy = await createEdit({ from: edit.id }, deps);
+    expect(copy.sequence.overlays).toEqual(overlays);
+    expect(stored("Titles copy.nbedit").sequence.overlays).toEqual(overlays);
+
+    now += 1;
+    const renamed = await patchEdit(edit.id, { op: "rename", name: "Opening titles" }, deps);
+    expect(renamed.document.sequence.overlays).toEqual(overlays);
+    expect(stored("Opening titles.nbedit").sequence.overlays).toEqual(overlays);
+    expect((await readEdit(edit.id)).sequence.overlays).toEqual(overlays);
+  });
+
+  it("saves as a new edit with them, and drops what a save sent that this build does not read", async () => {
+    const fresh = await createEdit({ name: "Fresh", sequence: withOverlays(A) }, deps);
+    expect(fresh.sequence.overlays).toEqual(overlays);
+    now += 1;
+    const sent = { ...withOverlays(A), overlays: [...overlays, { id: "i1", kind: "image", row: 0 }] } as EditSequence;
+    const saved = await saveEdit(fresh.id, saveOf(fresh, { sequence: sent }), deps);
+    expect(saved.sequence.overlays).toEqual(overlays);
+    now += 1;
+    const cleared = await saveEdit(fresh.id, saveOf(saved, { sequence: sequenceOf(A) }), deps);
+    expect(cleared.sequence).not.toHaveProperty("overlays");
+    expect(stored("Fresh.nbedit").sequence).not.toHaveProperty("overlays");
+  });
+});
+
+describe("warps", () => {
+  const warped = (): EditSequence => {
+    const sequence = sequenceOf(A, B);
+    const warp = normalizeWarp({
+      speed: 0.4,
+      curve: { kind: "bezier", handles: [0.42, 0, 0.58, 1] },
+      window: [0.1, 0.6],
+      reverse: true,
+      blend: true,
+    });
+    return { ...sequence, timeline: [{ ...sequence.timeline[0], warp }, sequence.timeline[1]] };
+  };
+  const timelineText = (fileName: string) => JSON.stringify(stored(fileName).sequence.timeline);
+
+  it("keeps a warped clip byte for byte through a save, a duplicate and a rename", async () => {
+    const sent = JSON.stringify(warped().timeline);
+    const edit = await createEdit({ name: "Ramps" }, deps);
+    now += 1;
+    const saved = await saveEdit(edit.id, saveOf(edit, { sequence: warped() }), deps);
+    expect(JSON.stringify(saved.sequence.timeline)).toBe(sent);
+    expect(timelineText("Ramps.nbedit")).toBe(sent);
+
+    await createEdit({ from: edit.id }, deps);
+    expect(timelineText("Ramps copy.nbedit")).toBe(sent);
+
+    now += 1;
+    await patchEdit(edit.id, { op: "rename", name: "Speed ramps" }, deps);
+    expect(timelineText("Speed ramps.nbedit")).toBe(sent);
+    expect(JSON.stringify((await readEdit(edit.id)).sequence.timeline)).toBe(sent);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import { AudioLines, LayoutGrid, List, MoreHorizontal, Music, PanelLeftClose, Plus } from "lucide-react";
+import { AudioLines, LayoutGrid, List, MoreHorizontal, Music, PanelLeftClose, Plus, Type } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { DialogButton } from "@/components/ui/Dialog";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -39,6 +39,7 @@ import {
   openLibraryPicker,
   removeMediaItem,
 } from "@/components/stitch/editorActions";
+import { addTextOverlay } from "@/components/stitch/overlayActions";
 import {
   CONTROL_BUTTON,
   DIALOG_BUTTON_RING,
@@ -165,8 +166,8 @@ interface ItemActions {
  * on a name, or ⋯ › Rename, renames it in place: the asset's display name, so
  * the library and every edit see it. ⋯ also shows it in Assets and removes it
  * from the edit, with its clips (asking first when it has any). Add media
- * opens the library picker. An item the library has lost says so and can no
- * longer be placed.
+ * opens the library picker; Add text puts a text layer at the playhead. An
+ * item the library has lost says so and can no longer be placed.
  *
  * Video and audio files dropped on the pane from the computer (its empty
  * state too) are recorded into the library and join the media; each shows
@@ -361,6 +362,12 @@ export function MediaPane() {
             <Plus size={16} strokeWidth={1.5} />
           </button>
           <Tooltip label="Add media" placement="bottom" />
+        </div>
+        <div className="group relative flex shrink-0">
+          <button type="button" aria-label="Add text" className={HEADER_ICON_BUTTON} onClick={() => addTextOverlay()}>
+            <Type size={16} strokeWidth={1.5} />
+          </button>
+          <Tooltip label="Add text" placement="bottom" />
         </div>
         <div className="group relative flex shrink-0">
           <button

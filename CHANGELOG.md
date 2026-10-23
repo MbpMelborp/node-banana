@@ -4,6 +4,36 @@ All notable changes to Node Banana will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.3.0] - 2026-10-24
+
+Text layers and clip speed come to Edit Video: words in a font of your choice
+over a dark wash, fading in and out, and clips that play faster, slower,
+along a ramp or in reverse. The toolbar of a noodle jumps to either end of
+it.
+
+### Added
+
+- Text layers: + Text under the audio rows, or Add text in the Edit video view, puts words over the video on a dark wash, fading in and out. Text layers have rows of their own above the video.
+- Fonts for text layers: the app's own fonts, font files in the Fonts folder of your Node Banana folder, or the fonts installed on your computer once you allow it.
+- Render and Frame to canvas burn the text layers in as the preview shows them.
+- Clip speed: a video clip can play from 0.1× to 10×, ramp its speed along a curve, play in reverse, and blend frames in slow motion. The rail's Speed section and the clip's open row on the timeline set it.
+- Render burns in each clip's speed, ramp and reverse, and Frame to canvas grabs the frame they show. A clip's sound changes pitch with its speed. Above 4× or below 0.25× it has none.
+
+### Changed
+
+- The toolbar of any noodle has Jump to start and Jump to end, which move the view to that end of the noodle. The crosshair is gone.
+- The noodle toolbar has no label field. Rename a noodle by double-clicking its label while it is hidden.
+- Ease Curve node: the arrow keys move a focused handle, and the plot sits on neutral black instead of navy.
+
+### Fixed
+
+- Ease Curve node: a click on a curve handle keeps the chosen preset, and a steep custom curve follows its handles.
+
+### Notes
+
+Node Banana 2.2.0 still opens an edit with text layers or clip speeds. It
+shows neither, and drops both when it saves the edit.
+
 ## [2.2.0] - 2026-10-22
 
 The Video Stitch node becomes Edit Video, with an editor on a timeline and a

@@ -32,7 +32,10 @@ export interface LaneTrim {
 export interface LaneBox {
   x: number;
   width: number;
-  /** Source seconds at the box's left edge, and the length it shows (live while trimming). */
+  /**
+   * The clip's In (source seconds) and the output length it shows (live while trimming); with the clip's warp, what its
+   * filmstrip maps.
+   */
   inSec: number;
   lengthSec: number;
 }

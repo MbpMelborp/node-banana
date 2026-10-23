@@ -5,6 +5,7 @@ import {
   BaseEdge,
   EdgeProps,
   getBezierPath,
+  useReactFlow,
 } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { getSharedGradientId } from "./SharedEdgeGradients";
@@ -40,6 +41,7 @@ function VisibleReferenceEdge({
 }: EdgeProps) {
   const appearance = useWorkflowStore((state) => state.edgeAppearance);
   const carriesToolbar = useIsToolbarEdge(id);
+  const { setCenter, getZoom } = useReactFlow();
 
   // Narrow selector: returns boolean, only re-renders when selection relevance changes
   const isConnectedToSelection = useWorkflowStore((state) => {
@@ -84,7 +86,17 @@ function VisibleReferenceEdge({
         } as React.CSSProperties}
       />
 
-      {selected && carriesToolbar && <EdgeToolbar edgeId={id} x={labelX} y={labelY} />}
+      {selected && carriesToolbar && (
+        <EdgeToolbar
+          edgeId={id}
+          x={labelX}
+          y={labelY}
+          onJump={(end) => {
+            const [x, y] = end === "source" ? [sourceX, sourceY] : [targetX, targetY];
+            void setCenter(x, y, { zoom: getZoom(), duration: 300 });
+          }}
+        />
+      )}
 
       {/* Invisible wider path for easier selection */}
       <path

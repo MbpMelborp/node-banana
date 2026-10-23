@@ -85,41 +85,6 @@ export const easing = {
   ...hybridEasing,
 } as const;
 
-export function createBezierEasing(
-  p1x: number, p1y: number, p2x: number, p2y: number
-): EasingFunction {
-  const clamp = (value: number) => Math.min(1, Math.max(0, value));
-  const x1 = clamp(p1x); const y1 = clamp(p1y);
-  const x2 = clamp(p2x); const y2 = clamp(p2y);
-  const cx = 3 * x1; const bx = 3 * (x2 - x1) - cx; const ax = 1 - cx - bx;
-  const cy = 3 * y1; const by = 3 * (y2 - y1) - cy; const ay = 1 - cy - by;
-  const sampleCurveX = (t: number) => ((ax * t + bx) * t + cx) * t;
-  const sampleCurveY = (t: number) => ((ay * t + by) * t + cy) * t;
-  const sampleDerivativeX = (t: number) => (3 * ax * t + 2 * bx) * t + cx;
-  const solveCurveX = (x: number) => {
-    let t2 = x; const epsilon = 1e-6;
-    for (let i = 0; i < 8; i++) {
-      const x2 = sampleCurveX(t2) - x;
-      if (Math.abs(x2) < epsilon) return t2;
-      const d2 = sampleDerivativeX(t2);
-      if (Math.abs(d2) < epsilon) break;
-      t2 -= x2 / d2;
-    }
-    let t0 = 0; let t1 = 1; t2 = x;
-    while (t0 < t1) {
-      const x2 = sampleCurveX(t2);
-      if (Math.abs(x2 - x) < epsilon) return t2;
-      if (x > x2) t0 = t2; else t1 = t2;
-      t2 = (t1 + t0) / 2;
-    }
-    return t2;
-  };
-  return (t: number) => {
-    const clamped = clamp(t);
-    return sampleCurveY(solveCurveX(clamped));
-  };
-}
-
 export function getEasingFunction(name: string): EasingFunction {
   const func = easing[name as keyof typeof easing];
   if (!func) { console.warn(`Easing function "${name}" not found, using linear`); return easing.linear; }

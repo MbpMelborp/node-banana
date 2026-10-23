@@ -11,8 +11,7 @@ import { checkEncoderSupport } from "@/hooks/useStitchVideos";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { CubicBezierEditor } from "@/components/CubicBezierEditor";
-import { EASING_PRESETS, getEasingBezier } from "@/lib/easing-presets";
-import { getAllEasingNames, getEasingFunction } from "@/lib/easing-functions";
+import { EASING_PRESETS, easingPolyline, getAllEasingNames, getEasingBezier } from "@/lib/easing";
 import {
   ControlsCard,
   EmptyState,
@@ -44,16 +43,6 @@ const PRESET_NAMES = new Set<string>(EASING_PRESETS);
  * stroke and any overshoot (the back/elastic families) inside the box. */
 const THUMB = 64;
 const THUMB_PAD = 10;
-
-/** SVG polyline points for an easing function's preview. */
-function generateEasingPolyline(easingName: string, width: number, height: number, samples = 20): string {
-  const fn = getEasingFunction(easingName);
-  return Array.from({ length: samples + 1 }, (_, i) => {
-    const t = i / samples;
-    const y = fn(t);
-    return `${(t * width).toFixed(1)},${((1 - y) * height).toFixed(1)}`;
-  }).join(" ");
-}
 
 export function EaseCurveNode({ id, data, selected }: NodeProps<EaseCurveNodeType>) {
   const nodeData = data;
@@ -128,14 +117,14 @@ export function EaseCurveNode({ id, data, selected }: NodeProps<EaseCurveNodeTyp
 
   const editorEasingCurve = useMemo(() => {
     if (!nodeData.easingPreset) return undefined;
-    return generateEasingPolyline(nodeData.easingPreset, 100, 100, 50);
+    return easingPolyline(nodeData.easingPreset, 100, 100, 50);
   }, [nodeData.easingPreset]);
 
   const presetThumbnails = useMemo(
     () =>
       ALL_EASING_NAMES.map((name) => ({
         name,
-        polyline: generateEasingPolyline(name, THUMB, THUMB),
+        polyline: easingPolyline(name, THUMB, THUMB),
         isPreset: PRESET_NAMES.has(name),
       })),
     []

@@ -11,11 +11,14 @@ import {
 } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { MenuDivider, MenuItem, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { clipName } from "@/lib/stitch/labels";
+import { NO_OVERLAYS } from "@/lib/stitch/overlays";
 import { clipIdsOf } from "@/lib/stitch/selection";
-import { isTrimmed } from "@/lib/stitch/timeline";
+import { canResetTrim, sourceKey } from "@/lib/stitch/timeline";
+import { isRetimed } from "@/lib/stitch/warp";
+import type { StitchTimelineClip } from "@/types";
 import { canPaste, copySelection, cutSelection, duplicateSelection, pasteClipboard } from "../clipboardActions";
 import {
   canEndAtPlayhead,
@@ -43,8 +46,30 @@ import {
   toggleSelectedAudioMute,
   toggleSelectedClipMute,
 } from "../editorActions";
+import {
+  canEndOverlayAtPlayhead,
+  canMoveOverlayRow,
+  canSplitOverlaysAtPlayhead,
+  canStartOverlayAtPlayhead,
+  endSelectedOverlayAtPlayhead,
+  moveSelectedOverlayRow,
+  removeOverlaysById,
+  splitSelectedOverlaysAtPlayhead,
+  startSelectedOverlayAtPlayhead,
+} from "../overlayActions";
+import {
+  canSetSpeed,
+  focusSpeedWell,
+  isClipCurveExpanded,
+  resetSelectedSpeed,
+  speedWaitsReason,
+  toggleClipCurveExpanded,
+  toggleSelectedReverse,
+  WAITING_FOR_LENGTH,
+} from "../speedActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
+import { overlayName, overlayRowName } from "./OverlayLane";
 import {
   EDIT_MENU_DIVIDER,
   EDIT_MENU_MUTED,
@@ -149,18 +174,20 @@ function menuItem(act: (run: () => void) => () => void) {
 }
 
 /**
- * A clip's right-click menu (an audio clip's is AudioMenu), on the edit menus' skin (the headers' ⋯): a muted
+ * A clip's right-click menu (an audio clip's is AudioMenu, a text layer's OverlayMenu), on the edit menus' skin (the headers' ⋯): a muted
  * heading, then its rows with their keys, no icons. Its sound, a split at
  * the playhead, in Stacked its place (start or end at the playhead, a row up
- * or down), its trim, copy, cut, paste and duplicate, its source node, and
- * removing it. The clip is the selection (the right-click selected it), so
- * each item is the same action as its key; an item selects it again before
- * it runs, so the label and the action never part. Opened on one of several
- * selected clips it acts on all of them ("3 clips"); the place items that
- * are one clip's are off then. Any press outside closes it, even one that cancels its
- * pointerdown (a trim handle, the ruler). Escape belongs to the editor's key
- * handler, which closes it. However it closes, focus that was in it goes
- * back to the panel, so the editor's keys and its Tab trap keep working.
+ * or down), its trim, its speed (Speed… goes to the rail's well, Reverse,
+ * Reset speed, its speed curve shown on the timeline), copy, cut, paste and
+ * duplicate, its source node, and removing it. The clip is the selection (the
+ * right-click selected it), so each item is the same action as its key; an
+ * item selects it again before it runs, so the label and the action never
+ * part. Opened on one of several selected clips it acts on all of them
+ * ("3 clips"); the place items that are one clip's are off then. Any press
+ * outside closes it, even one that cancels its pointerdown (a trim handle, the
+ * ruler). Escape belongs to the editor's key handler, which closes it. However
+ * it closes, focus that was in it goes back to the panel, so the editor's keys
+ * and its Tab trap keep working.
  */
 export function ClipContextMenu({
   media,
@@ -173,6 +200,7 @@ export function ClipContextMenu({
   if (!menu) return null;
   const key = `${menu.kind}:${menu.clipId}:${menu.x}:${menu.y}`;
   if (menu.kind === "audio") return <AudioMenu key={key} views={audio} clipId={menu.clipId} x={menu.x} y={menu.y} />;
+  if (menu.kind === "overlay") return <OverlayMenu key={key} id={menu.clipId} x={menu.x} y={menu.y} />;
   return <OpenMenu key={key} media={media} clipId={menu.clipId} x={menu.x} y={menu.y} />;
 }
 
@@ -200,6 +228,7 @@ function OpenMenu({
   const canRowDown = useStitchEditorStore((s) => canMoveRow(s, 1));
   const selection = useStitchEditorStore((s) => s.selection);
   const timeline = useStitchEditorStore((s) => s.draft?.timeline);
+  const durations = useStitchEditorStore((s) => s.durations);
   // Its own subscription: a copy made elsewhere turns Paste on with no change to the editor's store
   const hasClipboard = useStitchClipboard((c) => c.clipboard !== null);
   const pasteOn = useStitchEditorStore((s) => canPaste(hasClipboard, s));
@@ -212,6 +241,10 @@ function OpenMenu({
     return timeline.filter((c) => ids.has(c.id));
   }, [selection, timeline]);
   const multi = group.length > 1 && group.some((c) => c.id === clipId);
+  const speedIds = useMemo(() => (multi ? group.map((c) => c.id) : [clipId]), [multi, group, clipId]);
+  const speedOn = useStitchEditorStore((s) => canSetSpeed(s, speedIds));
+  const waiting = useStitchEditorStore(speedWaitsReason);
+  const curveOpen = useStitchEditorStore((s) => isClipCurveExpanded(s, clipId));
 
   const act = (run: () => void) => () =>
     close(() => {
@@ -229,7 +262,12 @@ function OpenMenu({
   const name = clipName(index);
   const source = view?.sourceLabel;
   const muted = multi ? group.every((c) => c.muted) : clip.muted;
-  const trimmed = multi ? group.some(isTrimmed) : isTrimmed(clip);
+  // Whether Reset trim would change anything: a slow clip at its 10 minutes, or of unknown length, has nothing to reset
+  const resettable = (c: StitchTimelineClip) => canResetTrim(c, durations.get(sourceKey(c.source)));
+  const trimmed = multi ? group.some(resettable) : resettable(clip);
+  const reversed = multi ? group.every((c) => c.warp?.reverse) : !!clip.warp?.reverse;
+  const retimed = multi ? group.some((c) => isRetimed(c.warp)) : isRetimed(clip.warp);
+  const lengthKnown = durations.has(sourceKey(clip.source));
   const header = multi ? `${group.length} clips` : source ? `${name} · ${source}` : name;
   const item = menuItem(act);
 
@@ -241,7 +279,14 @@ function OpenMenu({
       onKeyDown={onKeyDown}
       onContextMenu={(event) => event.preventDefault()}
       className={EDIT_MENU_SURFACE}
-      style={{ left: position.left, top: position.top, width: MENU_WIDTH }}
+      // The tallest menu: a short window scrolls it rather than push Remove clip past the edge
+      style={{
+        left: position.left,
+        top: position.top,
+        width: MENU_WIDTH,
+        maxHeight: window.innerHeight - 2 * EDGE,
+        overflowY: "auto",
+      }}
     >
       <div className={cn(HEADING, "truncate")}>{header}</div>
       {muted
@@ -272,6 +317,17 @@ function OpenMenu({
         </>
       )}
       {item("Reset trim", resetSelectedTrim, { disabled: !trimmed })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item("Speed…", focusSpeedWell, {
+        disabled: !speedOn,
+        title: speedOn ? undefined : (waiting ?? WAITING_FOR_LENGTH),
+      })}
+      {item(reversed ? "Play forward" : "Reverse", toggleSelectedReverse)}
+      {item("Reset speed", resetSelectedSpeed, { disabled: !retimed })}
+      {item(curveOpen ? "Hide speed curve" : "Show speed curve", () => toggleClipCurveExpanded(clipId), {
+        disabled: multi || !lengthKnown,
+        title: multi ? "Select one clip" : lengthKnown ? undefined : WAITING_FOR_LENGTH,
+      })}
       <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
       {item("Copy", copySelection, { shortcut: "⌘C" })}
       {item("Cut", cutSelection, { shortcut: "⌘X" })}
@@ -406,6 +462,103 @@ function AudioMenu({
         () => {
           const s = useStitchEditorStore.getState();
           s.untagCut(removeAudioClipsById(multi ? group.map((c) => c.id) : [clipId]));
+        },
+        { shortcut: "⌫" },
+      )}
+    </MenuSurface>
+  );
+}
+
+/**
+ * A text layer's right-click menu: a split at the playhead, its place (start
+ * or end at the playhead, a row up or down: up is in front), copy, cut,
+ * paste and duplicate, and removing it. Opened on one of several selected
+ * layers it acts on all of them ("3 text layers"); Start and End are one
+ * layer's.
+ */
+function OverlayMenu({ id, x, y }: { id: string; x: number; y: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { position, close, onKeyDown } = useMenuChrome(ref, x, y);
+  const overlays = useStitchEditorStore((s) => s.draft?.overlays ?? NO_OVERLAYS);
+  const selection = useStitchEditorStore((s) => s.selection);
+  const canSplit = useStitchEditorStore(canSplitOverlaysAtPlayhead);
+  const canStart = useStitchEditorStore(canStartOverlayAtPlayhead);
+  const canEnd = useStitchEditorStore(canEndOverlayAtPlayhead);
+  const canRowUp = useStitchEditorStore((s) => canMoveOverlayRow(s, 1));
+  const canRowDown = useStitchEditorStore((s) => canMoveOverlayRow(s, -1));
+  const hasClipboard = useStitchClipboard((c) => c.clipboard !== null);
+  const pasteOn = useStitchEditorStore((s) => canPaste(hasClipboard, s));
+  const overlay = overlays.find((o) => o.id === id) ?? null;
+  const group = useMemo(() => {
+    if (selection?.kind !== "overlay") return [];
+    const ids = new Set(clipIdsOf(selection, overlays.map((o) => o.id)));
+    return overlays.filter((o) => ids.has(o.id));
+  }, [selection, overlays]);
+  const multi = group.length > 1 && group.some((o) => o.id === id);
+
+  const act = (run: () => void) => () =>
+    close(() => {
+      if (!multi) useStitchEditorStore.getState().select(overlaySelectionOf({ clipId: id }));
+      run();
+    });
+
+  // A layer removed by undo while the menu was up: nothing to act on
+  useEffect(() => {
+    if (!overlay) useStitchEditorStore.getState().openMenu(null);
+  }, [overlay]);
+
+  if (!overlay) return null;
+  const name = overlayName(overlay);
+  const header = multi ? `${group.length} text layers` : `${name} · ${overlayRowName(overlay.row)}`;
+  const item = menuItem(act);
+  const oneLayer = multi ? { disabled: true, title: "Select one text layer" } : null;
+
+  return (
+    <MenuSurface
+      ref={ref}
+      role="menu"
+      aria-label={header}
+      onKeyDown={onKeyDown}
+      onContextMenu={(event) => event.preventDefault()}
+      className={EDIT_MENU_SURFACE}
+      style={{ left: position.left, top: position.top, width: MENU_WIDTH }}
+    >
+      {/* The text gives way, the row's name stays whole */}
+      <div className={cn(HEADING, "flex min-w-0 whitespace-nowrap")} title={multi ? undefined : overlay.text}>
+        {multi ? (
+          header
+        ) : (
+          <>
+            <span className="min-w-0 truncate">{name}</span>
+            <span className="shrink-0">&nbsp;· {overlayRowName(overlay.row)}</span>
+          </>
+        )}
+      </div>
+      {item("Split at playhead", splitSelectedOverlaysAtPlayhead, { shortcut: "S", disabled: !canSplit })}
+      {item("Start at playhead", startSelectedOverlayAtPlayhead, {
+        shortcut: "[",
+        ...(oneLayer ?? { disabled: !canStart }),
+      })}
+      {item("End at playhead", endSelectedOverlayAtPlayhead, {
+        shortcut: "]",
+        ...(oneLayer ?? {
+          disabled: !canEnd,
+          title: canEnd ? undefined : "The text is longer than the time before the playhead",
+        }),
+      })}
+      {item("Move up a row", () => moveSelectedOverlayRow(1), { shortcut: "⌥↑", disabled: !canRowUp })}
+      {item("Move down a row", () => moveSelectedOverlayRow(-1), { shortcut: "⌥↓", disabled: !canRowDown })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item("Copy", copySelection, { shortcut: "⌘C" })}
+      {item("Cut", cutSelection, { shortcut: "⌘X" })}
+      {item("Paste", pasteClipboard, { shortcut: "⌘V", disabled: !pasteOn })}
+      {item("Duplicate", duplicateSelection, { shortcut: "⌘D" })}
+      <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
+      {item(
+        multi ? `Remove ${group.length} text layers` : "Remove text",
+        () => {
+          const s = useStitchEditorStore.getState();
+          s.untagCut(removeOverlaysById(multi ? group.map((o) => o.id) : [id]));
         },
         { shortcut: "⌫" },
       )}

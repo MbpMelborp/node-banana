@@ -1,4 +1,12 @@
-import type { StitchAudioClip, StitchSequenceLayout, StitchTimelineClip, VideoStitchNodeData, VolumePoint } from "@/types";
+import type {
+  ClipWarp,
+  StitchAudioClip,
+  StitchOverlay,
+  StitchSequenceLayout,
+  StitchTimelineClip,
+  VideoStitchNodeData,
+  VolumePoint,
+} from "@/types";
 import {
   compactAudioRows,
   describeAudioChanges,
@@ -13,8 +21,16 @@ import {
 import { sameCurve, sortCurve } from "./curve";
 import { counted } from "./labels";
 import { isLegacyStitch, migrateStitchTimeline, reconcileTimelineWithEdges, sanitizeTimeline } from "./migrate";
+import {
+  compactOverlayRows,
+  describeOverlayChanges,
+  draftOverlays,
+  sameOverlays,
+  sanitizeOverlays,
+} from "./overlays";
 import { clampOverlapSec, DEFAULT_SEQUENCE_LAYOUT } from "./stack";
 import {
+  clipSourceOut,
   edgeIdsInOrder,
   isPlaced,
   layoutSpans,
@@ -23,6 +39,7 @@ import {
   type ClipSpan,
   type SourceDurations,
 } from "./timeline";
+import { activeWarp, isPieceOfWarp, sameWarp } from "./warp";
 
 /**
  * Everything the Stitch editor edits, read from a node the same way by the
@@ -40,6 +57,8 @@ export interface StitchDraft {
   legacyAudio: { curve: VolumePoint[]; muted: boolean };
   loopCount: 1 | 2 | 3;
   sequenceLayout: StitchSequenceLayout;
+  /** Overlay layers above the video. Absent = none, as [] is: read it with draftOverlays. */
+  overlays?: StitchOverlay[];
   /**
    * An edit project's media: the asset ids that belong to the edit, in the order they were added, every one its clips
    * use among them. Undefined in a node's draft, which never writes it.
@@ -101,11 +120,12 @@ export function draftDuration(d: Pick<StitchDraft, "timeline" | "sequenceLayout"
  *   (a video connected later to a node whose clips are all muted under music follows them, so the mix stays uniform).
  * Audio: without audioClips, the music (when connected) as one clip with audioCurve and audioMuted; with them, the
  * stored clips with a music clip added on row 0 when music is connected and none is stored.
+ * Overlays, legacy or not: sanitizeOverlays, the key only when there are some.
  */
 export function readStitchDraft(
   data: Pick<
     VideoStitchNodeData,
-    "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "audioClips" | "loopCount" | "sequenceLayout"
+    "timeline" | "clipOrder" | "audioCurve" | "audioMuted" | "audioClips" | "loopCount" | "sequenceLayout" | "overlays"
   >,
   ctx: StitchReadContext,
 ): StitchDraft {
@@ -129,12 +149,14 @@ export function readStitchDraft(
     legacyAudio = { curve: [], muted: false };
     audioClips = reconcileMusicClip(sanitizeAudioClips(data.audioClips), ctx.hasMusic);
   }
+  const overlays = sanitizeOverlays(data.overlays);
   return {
     timeline,
     audioClips,
     legacyAudio,
     loopCount: readLoopCount(data.loopCount),
     sequenceLayout: readSequenceLayout(data.sequenceLayout, legacy),
+    ...(overlays.length > 0 ? { overlays } : {}),
   };
 }
 
@@ -156,7 +178,8 @@ function sameClip(a: StitchTimelineClip, b: StitchTimelineClip): boolean {
     a.outSec === b.outSec &&
     a.muted === b.muted &&
     a.volume === b.volume &&
-    a.startSec === b.startSec
+    a.startSec === b.startSec &&
+    sameWarp(a.warp, b.warp)
   );
 }
 
@@ -181,23 +204,30 @@ export function sameDraft(a: StitchDraft, b: StitchDraft): boolean {
     a.timeline.length === b.timeline.length &&
     a.timeline.every((clip, i) => sameClip(clip, b.timeline[i])) &&
     sameAudioClips(a.audioClips, b.audioClips) &&
+    sameOverlays(draftOverlays(a), draftOverlays(b)) &&
     (!legacyAudioCounts(a, b) ||
       (a.legacyAudio.muted === b.legacyAudio.muted && sameCurve(a.legacyAudio.curve, b.legacyAudio.curve)))
   );
 }
 
 /**
- * What Done writes: timeline, the audio, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline).
- * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it.
+ * What Done writes: timeline, the audio, loopCount, sequenceLayout, clipOrder = edgeIdsInOrder(timeline), overlays.
+ * commitStitchEdit leaves sequenceLayout out when the node's stored value already reads as it, and overlays when the
+ * session did not change them.
  *
  * Audio, rows compacted: legacy-shaped (none, or one untouched music clip) → audioClips undefined (the node keeps or
  * goes back to no audioClips), audioCurve and audioMuted from the music clip, else from legacyAudio. Otherwise
  * audioClips, with audioCurve and audioMuted as legacyCopy gives them for older builds.
+ *
+ * Overlays, rows compacted; undefined when there are none.
  */
 export function draftPatch(
   d: StitchDraft,
 ): Required<Pick<VideoStitchNodeData, "timeline" | "audioCurve" | "audioMuted" | "sequenceLayout">> &
-  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> & { audioClips: StitchAudioClip[] | undefined } {
+  Pick<VideoStitchNodeData, "loopCount" | "clipOrder"> & {
+    audioClips: StitchAudioClip[] | undefined;
+    overlays: StitchOverlay[] | undefined;
+  } {
   const audioClips = compactAudioRows(d.audioClips).clips;
   const audio = isLegacyAudioShape(audioClips)
     ? {
@@ -206,12 +236,14 @@ export function draftPatch(
         audioMuted: audioClips[0]?.muted ?? d.legacyAudio.muted,
       }
     : { audioClips, ...legacyCopy(audioClips) };
+  const overlays = draftOverlays(d);
   return {
     timeline: d.timeline,
     ...audio,
     loopCount: d.loopCount,
     sequenceLayout: { ...d.sequenceLayout },
     clipOrder: edgeIdsInOrder(d.timeline),
+    overlays: overlays.length > 0 ? compactOverlayRows(overlays).overlays : undefined,
   };
 }
 
@@ -222,9 +254,26 @@ function joinWithAnd(items: string[]): string {
 /**
  * Whether a clip's only trim change is the cut its split pieces start at: In
  * unchanged, and pieces of the same source chained from its new Out to its
- * old one (a split keeps the id on the left piece and moves its Out).
+ * old one (a split keeps the id on the left piece and moves its Out); or,
+ * mirrored, Out unchanged and pieces chained from the old In to the new one (a
+ * reversed clip's split keeps the id on the piece that plays first, which
+ * keeps the Out). The mirror is read only when a warp is involved (the clip
+ * had or has one, or a piece of its source does), whatever its reverse flag:
+ * a clip split and then reversed, or the other way round, is still split, and
+ * an edit without warps reads as it always has.
  */
 function onlySplit(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: readonly StitchTimelineClip[]): boolean {
+  if (chainedOut(was, clip, pieces)) return true;
+  const key = sourceKey(clip.source);
+  const warped =
+    activeWarp(was) !== null ||
+    activeWarp(clip) !== null ||
+    pieces.some((p) => sourceKey(p.source) === key && activeWarp(p) !== null);
+  return warped && chainedIn(was, clip, pieces);
+}
+
+/** A split: In unchanged, and pieces of the same source chained from its new Out to its old one. */
+function chainedOut(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: readonly StitchTimelineClip[]): boolean {
   if (was.inSec !== clip.inSec || clip.outSec === was.outSec || clip.outSec === null) return false;
   const key = sourceKey(clip.source);
   const left = pieces.filter((p) => sourceKey(p.source) === key);
@@ -240,13 +289,51 @@ function onlySplit(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: re
   return true;
 }
 
-/** Clips with a start in the draft whose frames' anchor (start − In) differs from the one they had in `initial`. */
+/** A reversed clip's split: Out unchanged, and pieces of the same source chained from its old In up to its new In. */
+function chainedIn(was: StitchTimelineClip, clip: StitchTimelineClip, pieces: readonly StitchTimelineClip[]): boolean {
+  if (was.outSec !== clip.outSec || clip.inSec === was.inSec) return false;
+  const key = sourceKey(clip.source);
+  const left = pieces.filter((p) => sourceKey(p.source) === key);
+  let cursor = was.inSec;
+  while (cursor !== clip.inSec) {
+    const at = cursor;
+    const index = left.findIndex((p) => p.inSec === at);
+    if (index === -1) return false;
+    const next = left[index].outSec;
+    // A piece "to the end" cannot lie under the new In
+    if (next === null) return false;
+    cursor = next;
+    left.splice(index, 1);
+  }
+  return true;
+}
+
+/**
+ * Clips with a start in the draft whose frames' anchor differs from the one they had in `initial`: where source
+ * second 0 sits in sequence time (start − In; under a warp start − In/speed, or start + Out/speed reversed). A head
+ * trim in place moves the start by the head's change over the speed it was made at, so both anchors are read through
+ * the warp the clip has now and through the one it had, and the clip moved only when neither reading keeps them
+ * together: a retime alone (a split piece's included) moves nothing, nor does a head trim in place, whether it came
+ * before the speed change or after. Read from the two states alone, a drag that exactly undoes such a trim's shift
+ * reads as no move.
+ */
 function movedClips(initial: StitchDraft, draft: StitchDraft, durations: SourceDurations): number {
   const spans = layoutSpans(initial.timeline, durations, { ...initial.sequenceLayout, mode: "stacked" });
-  const anchorBefore = new Map(spans.map((span) => [span.clip.id, span.start - span.clip.inSec]));
+  const before = new Map(spans.map((span) => [span.clip.id, span]));
   return draft.timeline.filter((clip) => {
-    const was = anchorBefore.get(clip.id);
-    return clip.startSec !== undefined && was !== undefined && Math.abs(clip.startSec - clip.inSec - was) > 1e-9;
+    const span = before.get(clip.id);
+    const start = clip.startSec;
+    if (start === undefined || span === undefined) return false;
+    const d = durations.get(sourceKey(clip.source));
+    const moves = (warp: ClipWarp | null) => {
+      if (!warp) return Math.abs(start - clip.inSec - (span.start - span.clip.inSec)) > 1e-9;
+      const anchor = (at: number, c: StitchTimelineClip) =>
+        warp.reverse ? at + clipSourceOut(c, d) / warp.speed : at - c.inSec / warp.speed;
+      return Math.abs(anchor(start, clip) - anchor(span.start, span.clip)) > 1e-9;
+    };
+    const now = activeWarp(clip);
+    const was = activeWarp(span.clip);
+    return moves(now) && (sameWarp(was, now) || moves(was));
   }).length;
 }
 
@@ -266,18 +353,22 @@ function layoutChanges(was: StitchSequenceLayout, now: StitchSequenceLayout): st
  * the sequence is a split; one of a new source was added. The Out a split
  * gives its left piece is part of the split, not a trim.
  *
- * A clip placed in the draft whose frames moved (its start less its In, the
- * stored start in `initial` or else where the stacked layout put it, with
- * these durations) is a moved clip: pinning alone, and an In trim that keeps
- * the frames where they were, are not. Dropping every placement is "lining up
- * the clips" instead.
+ * A clip placed in the draft whose frames moved (its start less its In,
+ * through its speed under a warp; the stored start in `initial` or else where
+ * the stacked layout put it, with these durations) is a moved clip: pinning
+ * alone, a retime alone, and a head trim that keeps the frames where they were,
+ * before a retime or after one, are not. Dropping every placement is "lining
+ * up the clips" instead.
+ *
+ * A clip whose speed, ramp, reverse or blend changed is a speed change; the
+ * warps Split gives its pieces are part of the split.
  *
  * `origins` names clips by what made them: an added clip tagged "pasted" or
  * "duplicated" is a pasted or duplicated clip (never a split, though its
  * source is in the sequence), and a removed clip tagged "cut" is a cut clip.
  *
- * Audio clips are named by describeAudioChanges; a legacy node's music curve and mute without music connected, as
- * "the volume curve" and "the music mute".
+ * Audio clips are named by describeAudioChanges, then overlays by describeOverlayChanges; a legacy node's music curve
+ * and mute without music connected, as "the volume curve" and "the music mute".
  */
 export function describeDraftChanges(
   initial: StitchDraft,
@@ -298,6 +389,7 @@ export function describeDraftChanges(
   let muted = 0;
   let unmuted = 0;
   let volumes = 0;
+  let retimed = 0;
   for (const clip of draft.timeline) {
     const was = before.get(clip.id);
     if (!was) continue;
@@ -305,6 +397,7 @@ export function describeDraftChanges(
     if (!was.muted && clip.muted) muted++;
     if (was.muted && !clip.muted) unmuted++;
     if (was.volume !== clip.volume) volumes++;
+    if (!isPieceOfWarp(was.warp, clip.warp)) retimed++;
   }
   const splits = pieces.length;
   const gone = initial.timeline.filter((c) => !after.has(c.id));
@@ -324,12 +417,14 @@ export function describeDraftChanges(
     counted(muted, "a muted clip", "muted clips"),
     counted(unmuted, "an unmuted clip", "unmuted clips"),
     counted(volumes, "a clip volume", "clip volumes"),
+    counted(retimed, "a speed change", "speed changes"),
     counted(added.length - splits, "an added clip", "added clips"),
     counted(pasted, "a pasted clip", "pasted clips"),
     counted(duplicated, "a duplicated clip", "duplicated clips"),
     counted(removed, "a removed clip", "removed clips"),
     counted(cut, "a cut clip", "cut clips"),
     ...describeAudioChanges(initial.audioClips, draft.audioClips, origins),
+    ...describeOverlayChanges(draftOverlays(initial), draftOverlays(draft), origins),
     !legacyAudioCounts(initial, draft) || sameCurve(initial.legacyAudio.curve, draft.legacyAudio.curve)
       ? null
       : "the volume curve",

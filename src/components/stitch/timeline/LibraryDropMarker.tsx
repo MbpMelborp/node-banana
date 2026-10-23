@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { AudioSectionLayout } from "@/lib/stitch/audioLayout";
+import { STACK_BOX_PX, STACK_BOX_TOP_PX, type StackedRowsLayout } from "@/lib/stitch/stackedLayout";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { GEOMETRY } from "../editorStyles";
 import { libraryDrop } from "./libraryDrop";
@@ -25,6 +26,9 @@ export function LibraryDropMarker({
   audioLayout,
   audioScroll,
   sectionContentTop,
+  videoTop = GEOMETRY.ruler,
+  rows,
+  trackClipHeight,
 }: {
   axis: TimeAxis;
   /** The clip boxes at rest (Track's lane boxes). */
@@ -34,6 +38,12 @@ export function LibraryDropMarker({
   audioScroll: number;
   /** The audio section's top in the lanes' content, now. */
   sectionContentTop: () => number;
+  /** Where the video starts in the lanes' content: under the ruler and the text layers' rows. */
+  videoTop?: number;
+  /** Stacked's rows as drawn: a row open for its speed curve is taller. */
+  rows: StackedRowsLayout;
+  /** Track's clips' height as drawn: taller on a row open for its speed curve. */
+  trackClipHeight: number;
 }) {
   const target = useSyncExternalStore(libraryDrop.subscribe, libraryDrop.get, () => null);
   const item = useSyncExternalStore(libraryDrop.subscribe, libraryDrop.item, () => null);
@@ -48,18 +58,18 @@ export function LibraryDropMarker({
         <div
           data-testid="library-drop-marker"
           className={`${BAR} w-0.5`}
-          style={{ left: x - 1, top: GEOMETRY.ruler + GEOMETRY.clipTop, height: GEOMETRY.clipHeight }}
+          style={{ left: x - 1, top: videoTop + GEOMETRY.clipTop, height: trackClipHeight }}
         />
       );
     }
     if (target.mode !== "stacked") return null;
-    const y = GEOMETRY.ruler + target.row * GEOMETRY.stackRow;
+    const y = videoTop + rows.rowTops[Math.min(target.row, rows.rowTops.length - 1)];
     return (
       <div data-testid="library-drop-marker">
         <div className={`${BAR} h-0.5`} style={{ left: 0, width: contentWidth, top: y - 1 }} />
         <div
           className={GHOST}
-          style={{ left: axis.timeToX(target.startSec), width, top: y + GEOMETRY.stackClipTop, height: GEOMETRY.stackClipHeight }}
+          style={{ left: axis.timeToX(target.startSec), width, top: y + STACK_BOX_TOP_PX, height: STACK_BOX_PX }}
         />
       </div>
     );

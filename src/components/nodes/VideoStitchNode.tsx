@@ -26,6 +26,7 @@ import { isLegacyStitch, stitchOrderPatch } from "@/lib/stitch/migrate";
 import { edgeClipSourceTuple, edgeClipSourcesFromTuple, stitchReadContext } from "@/lib/stitch/sources";
 import {
   clipLength,
+  clipSourceOut,
   edgeIdsInOrder,
   isPlaced,
   moveClip,
@@ -35,6 +36,7 @@ import {
   type SourceKey,
 } from "@/lib/stitch/timeline";
 import { placedCardItems } from "@/lib/stitch/placement";
+import { activeWarp, warpMap } from "@/lib/stitch/warp";
 import { formatSeconds, formatTileSeconds } from "@/lib/stitch/timecode";
 import { assetMediaKey, mediaKeyOf, nearestFrame, type StitchMediaInfo } from "@/lib/stitch/mediaInfo";
 import { assetFileUrl } from "@/lib/assets/client/api";
@@ -175,13 +177,14 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
   );
 
   // Lengths and posters from the cache the editor shares (never node data).
-  // A trimmed clip (a split piece is one) needs frames inside its own range,
-  // which the single poster frame is not, so its source gets the filmstrip.
+  // A trimmed or retimed clip (a split piece is one) needs frames inside its
+  // own range, which the single poster frame is not, so its source gets the
+  // filmstrip.
   const mediaEntries = useMemo(() => {
     const seen = new Map<string, StitchMediaEntry>();
     for (const { clip, src, mediaKey } of cardClips) {
       if (!src || !mediaKey) continue;
-      const trimmed = clip.inSec > 0 || clip.outSec !== null;
+      const trimmed = clip.inSec > 0 || clip.outSec !== null || activeWarp(clip) !== null;
       const entry = seen.get(mediaKey);
       if (!entry) seen.set(mediaKey, { key: mediaKey, src, level: trimmed ? "filmstrip" : "poster" });
       else if (trimmed) entry.level = "filmstrip";
@@ -556,7 +559,12 @@ function ClipTileFace({
 
   const length = clipLength(clip, info.duration);
   if (length === 0 && info.duration > 0) return alert("Trim is shorter than a frame");
-  const poster = nearestFrame(info, clip.inSec + 0.25 * length);
+  // A quarter of the way into what it plays: through its warp, so a reversed or ramped clip shows its own frame
+  const warp = activeWarp(clip);
+  const posterAt = warp
+    ? warpMap({ inSec: clip.inSec, outSec: clipSourceOut(clip, info.duration) }, warp).sourceTimeAt(0.25 * length)
+    : clip.inSec + 0.25 * length;
+  const poster = nearestFrame(info, posterAt);
   return (
     <>
       {poster ? (

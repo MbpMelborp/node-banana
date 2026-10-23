@@ -1,4 +1,4 @@
-import type { StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { ClipWarp, ClipWarpCurve, StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import {
   buildEnvelope,
   domOpacities,
@@ -7,10 +7,29 @@ import {
   resolveStarts,
   SLOT_SEC,
   TIME_EPS,
+  warpedUnitEnds,
   type StackEnvelope,
 } from "./placement";
 import { FRAME_RATE } from "./sequencePlan";
 import { crossfadeGain, joinOverlaps } from "./stack";
+import {
+  activeWarp,
+  canSplitWarp,
+  IDENTITY_WARP,
+  MAX_SPEED,
+  maxSourceLength,
+  MIN_SPEED,
+  minSourceLength,
+  normalizeWarp,
+  sameWarp,
+  splitWarp,
+  trimField,
+  warpedLength,
+  warpMap,
+  withWarp,
+  type SourceRange,
+  type WarpMap,
+} from "./warp";
 
 export { MAX_START_SEC } from "./placement";
 
@@ -19,16 +38,17 @@ export { MAX_START_SEC } from "./placement";
  *
  * Pure: no React, no DOM, no mediabunny. Times are seconds. A clip's In and
  * Out are in its source's time; a span's start and end are in sequence time
- * (one loop). In Track clips are butted together, so a span starts where
- * the one before it ends. A Stacked stack is lined up until some clip has a
- * startSec: then each clip starts where it was placed (placement.ts), and
- * until then each starts joinOverlaps' overlap before the end of the one
- * above.
+ * (one loop). A clip's warp (warp.ts) maps between them: its span lasts its
+ * source range over its average speed. In Track clips are butted together,
+ * so a span starts where the one before it ends. A Stacked stack is lined up
+ * until some clip has a startSec: then each clip starts where it was placed
+ * (placement.ts), and until then each starts joinOverlaps' overlap before the
+ * end of the one above.
  */
 
-/** The shortest a trimmed clip can be. */
+/** The shortest a trimmed clip can be, in output seconds (clampTrim). */
 export const MIN_CLIP_SEC = 0.1;
-/** An Out this close to the source's end is stored as null ("to the end"). */
+/** An Out this close to the source's end is stored as null ("to the end"); under a warp this much output at most. */
 export const END_EPSILON_SEC = 0.005;
 
 export type SourceKey = `edge:${string}` | `asset:${string}`;
@@ -46,7 +66,15 @@ export function newClipId(): string {
 
 export function createClip(
   source: StitchClipSource,
-  init: { id?: string; inSec?: number; outSec?: number | null; muted?: boolean; volume?: number; startSec?: number } = {},
+  init: {
+    id?: string;
+    inSec?: number;
+    outSec?: number | null;
+    muted?: boolean;
+    volume?: number;
+    startSec?: number;
+    warp?: ClipWarp;
+  } = {},
 ): StitchTimelineClip {
   return {
     id: init.id ?? newClipId(),
@@ -57,20 +85,36 @@ export function createClip(
     volume: init.volume ?? 1,
     // Kept as given: sanitising is migrate's
     ...(init.startSec !== undefined ? { startSec: init.startSec } : {}),
+    ...(init.warp !== undefined ? { warp: init.warp } : {}),
   };
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 /**
- * The trimmed length. An unknown source duration counts 0, and so does a length under one output frame: the encode
- * drops such a clip (planSequence), so the editor gives it no time either.
+ * The trimmed length in output seconds: the source range over the warp's average speed. An unknown source duration
+ * counts 0, and so does a length under one output frame: the encode drops such a clip (planSequence), so the editor
+ * gives it no time either.
  */
 export function clipLength(clip: StitchTimelineClip, sourceDuration: number | undefined): number {
   if (sourceDuration === undefined || !Number.isFinite(sourceDuration)) return 0;
   const end = Math.min(clip.outSec ?? sourceDuration, sourceDuration);
-  const length = Math.max(0, end - Math.min(clip.inSec, sourceDuration));
+  const source = Math.max(0, end - Math.min(clip.inSec, sourceDuration));
+  const warp = activeWarp(clip);
+  const length = warp ? warpedLength(source, warp) : source;
   return length < 1 / FRAME_RATE ? 0 : length;
+}
+
+/**
+ * The clip's resolved Out: its Out (the source's end when null) clamped to the source's duration, never before its In;
+ * its In while the duration is unknown. With clip.inSec, the source range a warp map reads (planSequence clamps alike).
+ */
+export function clipSourceOut(
+  clip: Pick<StitchTimelineClip, "inSec" | "outSec">,
+  sourceDuration: number | undefined,
+): number {
+  if (sourceDuration === undefined || !Number.isFinite(sourceDuration)) return clip.inSec;
+  return Math.max(clip.inSec, Math.min(clip.outSec ?? sourceDuration, sourceDuration));
 }
 
 export interface ClipSpan {
@@ -79,6 +123,8 @@ export interface ClipSpan {
   start: number;
   end: number;
   length: number;
+  /** The clip's resolved Out (clipSourceOut, its In while the duration is unknown): with clip.inSec, what it plays. */
+  sourceOut: number;
   /** Seconds this clip shares with the previous / next non-empty clip (0 in Track, at cuts and for empty clips). */
   overlapIn: number;
   overlapOut: number;
@@ -94,7 +140,8 @@ export function clipSpans(
   durations: SourceDurations,
   overlapSec: number,
 ): ClipSpan[] {
-  const lengths = timeline.map((clip) => clipLength(clip, durations.get(sourceKey(clip.source))));
+  const sourceDurations = timeline.map((clip) => durations.get(sourceKey(clip.source)));
+  const lengths = timeline.map((clip, i) => clipLength(clip, sourceDurations[i]));
   const overlaps = joinOverlaps(
     timeline.map((clip, i) => ({ length: lengths[i], source: sourceKey(clip.source) })),
     overlapSec,
@@ -102,10 +149,13 @@ export function clipSpans(
   let cursor = 0;
   const spans = timeline.map((clip, index): ClipSpan => {
     const length = lengths[index];
-    if (!(length > 0)) return { clip, index, start: cursor, end: cursor, length, overlapIn: 0, overlapOut: 0 };
+    const sourceOut = clipSourceOut(clip, sourceDurations[index]);
+    if (!(length > 0)) {
+      return { clip, index, start: cursor, end: cursor, length, sourceOut, overlapIn: 0, overlapOut: 0 };
+    }
     const start = cursor - overlaps[index];
     cursor = start + length;
-    return { clip, index, start, end: cursor, length, overlapIn: overlaps[index], overlapOut: 0 };
+    return { clip, index, start, end: cursor, length, sourceOut, overlapIn: overlaps[index], overlapOut: 0 };
   });
   let next: ClipSpan | null = null;
   for (let i = spans.length - 1; i >= 0; i--) {
@@ -149,7 +199,8 @@ export function placedSpans(
   durations: SourceDurations,
   overlapSec: number,
 ): ClipSpan[] {
-  const lengths = timeline.map((clip) => clipLength(clip, durations.get(sourceKey(clip.source))));
+  const sourceDurations = timeline.map((clip) => durations.get(sourceKey(clip.source)));
+  const lengths = timeline.map((clip, i) => clipLength(clip, sourceDurations[i]));
   const starts = resolveStarts(
     timeline.map((clip, i) => ({ start: clip.startSec, length: lengths[i], source: sourceKey(clip.source) })),
     overlapSec,
@@ -157,7 +208,8 @@ export function placedSpans(
   return timeline.map((clip, index): ClipSpan => {
     const length = lengths[index] > 0 ? lengths[index] : 0;
     const start = starts[index];
-    return { clip, index, start, end: start + length, length, overlapIn: 0, overlapOut: 0 };
+    const sourceOut = clipSourceOut(clip, sourceDurations[index]);
+    return { clip, index, start, end: start + length, length, sourceOut, overlapIn: 0, overlapOut: 0 };
   });
 }
 
@@ -177,8 +229,8 @@ const envelopes = new WeakMap<readonly ClipSpan[], { on?: StackEnvelope; off?: S
 
 /**
  * The envelope of these spans: units are the spans with length > 0, row = span.index, source = sourceKey(clip.source),
- * inSec = clip.inSec. Cached per spans array and flag. The lane, the gap bands, the summary, the card, the modal and
- * placedLayersAt all call this; none builds units itself.
+ * inSec = clip.inSec, and a retimed clip's sourceEnds (warpedUnitEnds). Cached per spans array and flag. The lane, the
+ * gap bands, the summary, the card, the modal and placedLayersAt all call this; none builds units itself.
  */
 export function spansEnvelope(spans: readonly ClipSpan[], crossfade: boolean): StackEnvelope {
   let cached = envelopes.get(spans);
@@ -192,13 +244,17 @@ export function spansEnvelope(spans: readonly ClipSpan[], crossfade: boolean): S
   const env = buildEnvelope(
     spans
       .filter((span) => span.length > 0)
-      .map((span) => ({
-        start: span.start,
-        length: span.length,
-        row: span.index,
-        source: sourceKey(span.clip.source),
-        inSec: span.clip.inSec,
-      })),
+      .map((span) => {
+        const warp = activeWarp(span.clip);
+        return {
+          start: span.start,
+          length: span.length,
+          row: span.index,
+          source: sourceKey(span.clip.source),
+          inSec: span.clip.inSec,
+          ...(warp ? { sourceEnds: warpedUnitEnds(span.clip.inSec, span.sourceOut, warp.reverse) } : {}),
+        };
+      }),
     crossfade,
   );
   cached[key] = env;
@@ -309,18 +365,65 @@ export function clipAtTime(
   return topSpanAt(clipSpans(timeline, durations, overlapSec), t, preferClipId);
 }
 
-/** Source seconds shown at sequence time t: clip.inSec + clamp(t − start, 0, length). */
+/** The span's source range, as warp.ts reads it: the clip's In and its resolved Out (sourceOut). */
+export function spanRange(span: ClipSpan): SourceRange {
+  return { inSec: span.clip.inSec, outSec: span.sourceOut };
+}
+
+const warpMaps = new WeakMap<ClipSpan, WarpMap>();
+
+/**
+ * The span's warp map, compiled once per span (a span never changes after clipSpans or placedSpans returns it); null
+ * for a clip at its own speed or a span with no length.
+ */
+export function spanWarpMap(span: ClipSpan): WarpMap | null {
+  const warp = activeWarp(span.clip);
+  if (!warp || !(span.length > 0)) return null;
+  let map = warpMaps.get(span);
+  if (!map) {
+    map = warpMap(spanRange(span), warp);
+    warpMaps.set(span, map);
+  }
+  return map;
+}
+
+/**
+ * Source seconds shown at sequence time t: clip.inSec + clamp(t − start, 0, length), through the clip's warp when it
+ * has one (a reversed clip shows its Out at its start).
+ */
 export function sourceTimeAt(span: ClipSpan, t: number): number {
+  const map = spanWarpMap(span);
+  if (map) return map.sourceTimeAt(clamp(t - span.start, 0, span.length));
   return span.clip.inSec + clamp(t - span.start, 0, span.length);
 }
 
 const finiteOr = (value: number | undefined, fallback: number) =>
   value !== undefined && Number.isFinite(value) ? value : fallback;
 
+/** Where a clip's frames end in its source: its Out, or the source's end when the Out is null or past it. */
+const playedOut = (clip: Pick<StitchTimelineClip, "outSec">, sourceDuration: number) =>
+  Math.min(clip.outSec ?? sourceDuration, sourceDuration);
+
+/** The source a clip plays now; with no known duration a null Out counts as no end. */
+function heldSource(clip: StitchTimelineClip, sourceDuration: number | undefined): number {
+  const known = sourceDuration !== undefined && Number.isFinite(sourceDuration);
+  return (known ? playedOut(clip, sourceDuration) : (clip.outSec ?? Infinity)) - clip.inSec;
+}
+
+/** The most source a retimed clip may play: MAX_START_SEC of output below 1×, or what it plays now when more. */
+const sourceCap = (warp: ClipWarp, held: number) => Math.max(maxSourceLength(warp, MAX_START_SEC), held);
+
+/** How near the source's end an Out is stored as null: END_EPSILON_SEC, and never more than that of output. */
+const endSnap = (warp: ClipWarp | null) => (warp ? END_EPSILON_SEC * Math.min(1, warp.speed) : END_EPSILON_SEC);
+
 /**
  * Trim rules. With D known: 0 <= in <= effOut − MIN, in + MIN <= out <= D, and out >= D − EPS becomes null.
  * With D unknown: in >= 0, a numeric out >= in + MIN. If D < MIN: { inSec: 0, outSec: null }.
  * patch.outSec === null means "to the end". The edge the patch moves gives way; the other one holds.
+ * MIN is MIN_CLIP_SEC and EPS END_EPSILON_SEC; under a warp they are output time: MIN = MIN_CLIP_SEC × speed of source
+ * (never more than the clip holds when that is at least MIN_CLIP_SEC), EPS = END_EPSILON_SEC × min(1, speed). Slower
+ * than 1× a trim never gives the clip more than MAX_START_SEC of output; one that already plays longer may only
+ * shrink.
  */
 export function clampTrim(
   clip: StitchTimelineClip,
@@ -329,30 +432,45 @@ export function clampTrim(
 ): { inSec: number; outSec: number | null } {
   const movesOut = patch.outSec !== undefined && (patch.outSec === null || Number.isFinite(patch.outSec));
   const nextIn = Math.max(0, finiteOr(patch.inSec, clip.inSec));
+  const warp = activeWarp(clip);
+  const held = warp ? heldSource(clip, sourceDuration) : 0;
+  const min = warp ? Math.min(minSourceLength(warp, MIN_CLIP_SEC), Math.max(MIN_CLIP_SEC, held)) : MIN_CLIP_SEC;
+  const cap = warp ? sourceCap(warp, held) : Infinity;
+  // At or over the cap the clip may only shrink: the edge it would grow keeps its stored value, never one rebuilt from
+  // the cap an ulp away
+  const full = Number.isFinite(cap) && cap === held;
+  const endEpsilon = endSnap(warp);
 
   if (sourceDuration === undefined || !Number.isFinite(sourceDuration)) {
     const out = movesOut ? (patch.outSec ?? null) : clip.outSec;
     if (out === null) return { inSec: nextIn, outSec: null };
-    if (movesOut) return { inSec: nextIn, outSec: Math.max(out, nextIn + MIN_CLIP_SEC) };
+    if (movesOut) {
+      const most = full && nextIn === clip.inSec && clip.outSec !== null ? clip.outSec : nextIn + cap;
+      return { inSec: nextIn, outSec: Math.min(Math.max(out, nextIn + min), most) };
+    }
     // Only In moved: it stops short of the Out, unless the Out itself is under the minimum.
-    if (out - MIN_CLIP_SEC < 0) return { inSec: 0, outSec: MIN_CLIP_SEC };
-    return { inSec: Math.min(nextIn, out - MIN_CLIP_SEC), outSec: out };
+    if (out - min < 0) return { inSec: 0, outSec: min };
+    return { inSec: Math.max(Math.min(nextIn, out - min), full ? clip.inSec : out - cap), outSec: out };
   }
 
   const d = sourceDuration;
-  if (d < MIN_CLIP_SEC) return { inSec: 0, outSec: null };
+  if (d < min) return { inSec: 0, outSec: null };
 
   let inSec: number;
   let outSec: number;
   if (movesOut) {
-    inSec = clamp(nextIn, 0, d - MIN_CLIP_SEC);
-    outSec = clamp(patch.outSec ?? d, inSec + MIN_CLIP_SEC, d);
+    inSec = clamp(nextIn, 0, d - min);
+    outSec = clamp(patch.outSec ?? d, inSec + min, d);
   } else {
-    const baseIn = clamp(clip.inSec, 0, d - MIN_CLIP_SEC);
-    outSec = clamp(clip.outSec ?? d, baseIn + MIN_CLIP_SEC, d);
-    inSec = clamp(nextIn, 0, outSec - MIN_CLIP_SEC);
+    const baseIn = clamp(clip.inSec, 0, d - min);
+    outSec = clamp(clip.outSec ?? d, baseIn + min, d);
+    inSec = clamp(nextIn, 0, outSec - min);
   }
-  return { inSec, outSec: outSec >= d - END_EPSILON_SEC ? null : outSec };
+  if (outSec - inSec > cap) {
+    if (movesOut) outSec = full && inSec === clip.inSec ? playedOut(clip, d) : inSec + cap;
+    else inSec = full && outSec === playedOut(clip, d) ? clip.inSec : outSec - cap;
+  }
+  return { inSec, outSec: outSec >= d - endEpsilon ? null : outSec };
 }
 
 // Timeline operations. Each returns the SAME array reference when nothing
@@ -377,12 +495,56 @@ export function isTrimmed(clip: Pick<StitchTimelineClip, "inSec" | "outSec">): b
   return clip.inSec !== 0 || clip.outSec !== null;
 }
 
-export function resetTrim(timeline: StitchTimelineClip[], clipId: string): StitchTimelineClip[] {
+/**
+ * The range Reset trim gives a clip: the whole source (In 0, Out null), unless the clip is slower than 1× and that
+ * would play past MAX_START_SEC. Then the tail grows to that first and the head after it, so the clip keeps the frame
+ * it starts on as long as it can; an Out in the end snap is null. A slow clip already at or past the cap keeps its
+ * range (it may only shrink), and one whose source length is not known yet keeps it too: the cap needs that length.
+ */
+function resetRange(
+  clip: StitchTimelineClip,
+  sourceDuration: number | undefined,
+): { inSec: number; outSec: number | null } {
+  const warp = activeWarp(clip);
+  const cap = maxSourceLength(warp, MAX_START_SEC);
+  if (!warp || cap === Infinity) return { inSec: 0, outSec: null };
+  const d = sourceDuration;
+  if (d === undefined || !Number.isFinite(d)) return { inSec: clip.inSec, outSec: clip.outSec };
+  const toEnd = (outSec: number) => (outSec >= d - endSnap(warp) ? null : outSec);
+  if (heldSource(clip, d) >= cap) return { inSec: clip.inSec, outSec: toEnd(playedOut(clip, d)) };
+  if (!(d > cap)) return { inSec: 0, outSec: null };
+  if (!warp.reverse) {
+    // The tail is the Out
+    if (clip.inSec + cap <= d) return { inSec: clip.inSec, outSec: toEnd(clip.inSec + cap) };
+    return { inSec: d - cap, outSec: null };
+  }
+  // Reversed, the tail is the In and the Out is shown first
+  const out = playedOut(clip, d);
+  return out - cap >= 0 ? { inSec: out - cap, outSec: toEnd(out) } : { inSec: 0, outSec: toEnd(cap) };
+}
+
+/**
+ * Whether Reset trim would change the clip: isTrimmed, but false for a clip slower than 1× that already has the range
+ * resetRange gives it (MAX_START_SEC of output, or more), which has nothing left to reset, and for one whose source
+ * length is not known yet.
+ */
+export function canResetTrim(clip: StitchTimelineClip, sourceDuration: number | undefined): boolean {
+  const range = resetRange(clip, sourceDuration);
+  return clip.inSec !== range.inSec || clip.outSec !== range.outSec;
+}
+
+/** In 0 and Out null; with the durations, resetRange's range (a slow clip keeps to MAX_START_SEC of output). */
+export function resetTrim(
+  timeline: StitchTimelineClip[],
+  clipId: string,
+  durations?: SourceDurations,
+): StitchTimelineClip[] {
   const index = timeline.findIndex((c) => c.id === clipId);
   if (index === -1) return timeline;
   const clip = timeline[index];
-  if (clip.inSec === 0 && clip.outSec === null) return timeline;
-  return timeline.map((c, i) => (i === index ? { ...c, inSec: 0, outSec: null } : c));
+  const range = resetRange(clip, durations?.get(sourceKey(clip.source)));
+  if (clip.inSec === range.inSec && clip.outSec === range.outSec) return timeline;
+  return timeline.map((c, i) => (i === index ? { ...c, ...range } : c));
 }
 
 /** The clip's own sound; volume is clamped to 0..1. */
@@ -398,6 +560,80 @@ export function updateClipAudio(
   const volume = clamp(finiteOr(patch.volume, clip.volume), 0, 1);
   if (muted === clip.muted && volume === clip.volume) return timeline;
   return timeline.map((c, i) => (i === index ? { ...c, muted, volume } : c));
+}
+
+/** A positive value to three significant figures, rounded down or up with a 1e-9 give, so 0.3 / 0.1 gives 3, not 2.99. */
+function sig3(value: number, dir: "down" | "up"): number {
+  const unit = 10 ** (Math.floor(Math.log10(value)) - 2);
+  const scaled = dir === "down" ? Math.floor(value / unit + 1e-9) : Math.ceil(value / unit - 1e-9);
+  return Number((scaled * unit).toPrecision(3));
+}
+
+/**
+ * The speeds the rail offers a clip with this much source (seconds; undefined while unknown): MIN_SPEED–MAX_SPEED,
+ * never so slow that it plays past MAX_START_SEC, never so fast that it lasts under MIN_CLIP_SEC, the bounds rounded
+ * inward to three significant figures; but 1× always, so "1×" and Reset speed reach it: at 1× a long source plays past
+ * 10 minutes and a clip holding under 0.1 s of source lasts under 0.1 s, as unwarped clips do.
+ */
+export function speedLimits(sourceLength: number | undefined): { min: number; max: number } {
+  if (sourceLength === undefined || !(sourceLength > 0) || !Number.isFinite(sourceLength)) {
+    return { min: MIN_SPEED, max: MAX_SPEED };
+  }
+  const max = Math.max(1, Math.min(MAX_SPEED, sig3(sourceLength / MIN_CLIP_SEC, "down")));
+  const min = Math.min(1, Math.max(MIN_SPEED, sig3(sourceLength / MAX_START_SEC, "up")));
+  return { min, max };
+}
+
+/** speedLimits of the source a clip holds (MIN_SPEED–MAX_SPEED while the source's length is unknown). */
+export function clipSpeedLimits(
+  clip: StitchTimelineClip,
+  sourceDuration: number | undefined,
+): { min: number; max: number } {
+  return speedLimits(sourceDuration === undefined ? undefined : clipSourceOut(clip, sourceDuration) - clip.inSec);
+}
+
+/** A change to clips' warps: each given field replaces the clip's; a curve (null included) replaces the ramp and drops its window. */
+export interface WarpPatch {
+  speed?: number;
+  curve?: ClipWarpCurve | null;
+  reverse?: boolean;
+  blend?: boolean;
+}
+
+/**
+ * The patch on every clip in ids. A patched speed is clamped to the clip's clipSpeedLimits (its source length from
+ * durations); a stored speed outside them (a split piece's) is kept when the patch has none. Each result is canonical
+ * (normalizeWarp, withWarp), so an identity warp is removed. A clip whose warp comes out the same keeps its object; the
+ * same array when nothing changes.
+ */
+export function updateClipsWarp(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+  durations: SourceDurations,
+  patch: WarpPatch,
+): StitchTimelineClip[] {
+  const newCurve = "curve" in patch;
+  let changed = false;
+  const next = timeline.map((clip) => {
+    if (!ids.has(clip.id)) return clip;
+    const was = clip.warp ?? IDENTITY_WARP;
+    let speed = was.speed;
+    if (patch.speed !== undefined && Number.isFinite(patch.speed)) {
+      const { min, max } = clipSpeedLimits(clip, durations.get(sourceKey(clip.source)));
+      speed = clamp(patch.speed, min, max);
+    }
+    const warp = normalizeWarp({
+      speed,
+      curve: newCurve ? (patch.curve ?? null) : was.curve,
+      ...(!newCurve && was.window ? { window: was.window } : {}),
+      reverse: patch.reverse ?? was.reverse,
+      blend: patch.blend ?? was.blend,
+    });
+    if (sameWarp(warp, clip.warp)) return clip;
+    changed = true;
+    return withWarp(clip, warp);
+  });
+  return changed ? next : timeline;
 }
 
 /** Final-index semantics: the moved clip ends up at toIndex (truncated). A non-integer fromIndex or non-finite toIndex moves nothing. */
@@ -433,13 +669,36 @@ export function appendClips(timeline: StitchTimelineClip[], clips: StitchTimelin
 }
 
 /**
+ * Why splitClipAt would not split this span at t: "edge" within MIN_CLIP_SEC of its head or tail (its overlaps' edges
+ * in Track and a lined-up stack, its own ends when placed); "warp" where its warp cannot be cut (warp.ts canSplitWarp:
+ * a piece would stand still or lie inside a freeze) or a piece would hold under END_EPSILON_SEC of source (its
+ * neighbour's Out would then sit in clampTrim's end snap); null when it can. t must be finite.
+ */
+export function splitRefusal(span: ClipSpan, t: number, placed: boolean): "edge" | "warp" | null {
+  const head = placed ? span.start : span.start + span.overlapIn;
+  const tail = placed ? span.end : span.end - span.overlapOut;
+  if (t - head < MIN_CLIP_SEC || tail - t < MIN_CLIP_SEC) return "edge";
+  const warp = activeWarp(span.clip);
+  if (!warp) return null;
+  const map = spanWarpMap(span);
+  const offset = t - span.start;
+  if (!map || !canSplitWarp(spanRange(span), warp, offset)) return "warp";
+  const at = map.sourceTimeAt(offset);
+  return Math.min(at - span.clip.inSec, span.sourceOut - at) < END_EPSILON_SEC ? "warp" : null;
+}
+
+/**
  * Split the non-empty span containing t (opts.preferClipId's when t is inside it, else topSpanAt's), else null.
  * Spans: layoutSpans(…, opts.layout) when given, else clipSpans(…, opts.overlapSec ?? 0).
  * Track and lined-up stacks: only when t is at least MIN_CLIP_SEC inside the clip's solo part (its edges less its
  * overlaps); never inside an overlap. A placed stack: anywhere at least MIN_CLIP_SEC from the clip's ends, overlaps
- * included (the pieces form one run, so the picture and sound do not change); never in a gap.
+ * included (the pieces form one run, so the picture and sound do not change); never in a gap. A cut splitRefusal
+ * refuses splits nothing.
  * The left piece keeps its id and in, and its out = sourceTimeAt(t). The right piece gets a new id, in = sourceTimeAt(t)
  * and the original out, and when the clip has a startSec, startSec + (cut − in): where its frames already were.
+ * Under a warp the warp is cut too (warp.ts splitWarp): the pieces' lengths are t − start and the rest, the right
+ * piece's startSec is startSec + (t − start), and every instant shows the frame it showed; a reversed clip's left piece
+ * keeps its Out and gets In = the cut.
  * muted and volume are copied to both. A non-finite t splits nothing. Pieces of one source meet with a cut, so a
  * split outside an overlap moves nothing.
  */
@@ -457,23 +716,61 @@ export function splitClipAt(
   const placed = opts.layout?.mode === "stacked" && isPlaced(timeline);
   if (!placed && inOverlap(spans, t)) return null;
   const span = topSpanAt(spans, t, opts.preferClipId);
-  if (!span) return null;
-  const head = placed ? span.start : span.start + span.overlapIn;
-  const tail = placed ? span.end : span.end - span.overlapOut;
-  if (t - head < MIN_CLIP_SEC || tail - t < MIN_CLIP_SEC) return null;
-  const cut = sourceTimeAt(span, t);
-  const left: StitchTimelineClip = { ...span.clip, outSec: cut };
-  const right: StitchTimelineClip = { ...span.clip, id: makeId(), inSec: cut, outSec: span.clip.outSec };
-  if (span.clip.startSec !== undefined) right.startSec = span.clip.startSec + (cut - span.clip.inSec);
+  if (!span || splitRefusal(span, t, placed) !== null) return null;
+  const warp = activeWarp(span.clip);
+  let left: StitchTimelineClip;
+  let right: StitchTimelineClip;
+  if (!warp) {
+    const cut = sourceTimeAt(span, t);
+    left = { ...span.clip, outSec: cut };
+    right = { ...span.clip, id: makeId(), inSec: cut, outSec: span.clip.outSec };
+    if (span.clip.startSec !== undefined) right.startSec = span.clip.startSec + (cut - span.clip.inSec);
+  } else {
+    // Each piece keeps its frames; stored edges are the cut and the clip's own, so a null Out stays "to the end"
+    const offset = t - span.start;
+    const cut = splitWarp(spanRange(span), warp, offset);
+    if (!cut) return null;
+    // The left piece plays first and keeps the id; reversed, it is the source's end part, so its In moves
+    left = withWarp({ ...span.clip, ...(warp.reverse ? { inSec: cut.at } : { outSec: cut.at }) }, cut.first.warp);
+    right = withWarp(
+      { ...span.clip, id: makeId(), ...(warp.reverse ? { outSec: cut.at } : { inSec: cut.at }) },
+      cut.second.warp,
+    );
+    if (span.clip.startSec !== undefined) right.startSec = span.clip.startSec + offset;
+  }
   const next = timeline.slice();
   next.splice(span.index, 1, left, right);
   return { timeline: next, leftId: left.id, rightId: right.id };
 }
 
 /**
- * I / O keys: set the clip's in or out to the source time under the playhead. null if the playhead is not inside
- * that clip (or not finite). The far boundary is outside: O at the clip's start, or I at its end, does nothing.
- * Track and lined-up stacks only (a number overlap); a placed stack uses layoutSpans and topSpanAt.
+ * The trim I or O makes with the playhead at t inside the span: the edge moves as a trim drag of that edge snapped to
+ * t would. At the clip's own speed (and at any constant one) the In or Out becomes the source time under t. Under a
+ * warp the edge's field moves by t's distance from the clip's head times the average speed (a reversed clip's head is
+ * its Out); on a ramp, which re-stretches over the new range, the edge still lands where the drag would and the far
+ * edge stays.
+ */
+export function edgeAtPlayheadPatch(
+  span: ClipSpan,
+  edge: "in" | "out",
+  t: number,
+): { inSec: number } | { outSec: number } {
+  const warp = activeWarp(span.clip);
+  if (!warp) {
+    const at = sourceTimeAt(span, t);
+    return edge === "in" ? { inSec: at } : { outSec: at };
+  }
+  const into = clamp(t - span.start, 0, span.length) * warp.speed;
+  const at = warp.reverse ? span.sourceOut - into : span.clip.inSec + into;
+  return trimField(span.clip, edge) === "inSec" ? { inSec: at } : { outSec: at };
+}
+
+/**
+ * I / O keys: trim the clip's head up to the playhead, or its tail back to it, as a drag of that edge snapped there
+ * would (edgeAtPlayheadPatch): at the clip's own speed its In or Out becomes the source time under the playhead. null
+ * if the playhead is not inside that clip (or not finite). The far boundary is outside: O at the clip's start, or I at
+ * its end, does nothing. Track and lined-up stacks only (a number overlap); a placed stack uses layoutSpans and
+ * topSpanAt.
  */
 export function setEdgeAtPlayhead(
   timeline: StitchTimelineClip[],
@@ -487,8 +784,7 @@ export function setEdgeAtPlayhead(
   const span = clipSpans(timeline, durations, overlapSec).find((s) => s.clip.id === clipId);
   if (!span || span.length === 0 || playhead < span.start || playhead > span.end) return null;
   if (edge === "out" ? playhead <= span.start : playhead >= span.end) return null;
-  const at = sourceTimeAt(span, playhead);
-  return trimClip(timeline, clipId, durations, edge === "in" ? { inSec: at } : { outSec: at });
+  return trimClip(timeline, clipId, durations, edgeAtPlayheadPatch(span, edge, playhead));
 }
 
 // Placing clips in Stacked. A pinning edit first writes every clip's current start as startSec, so no clip it does not
@@ -569,9 +865,11 @@ export function placeClip(
 }
 
 /**
- * Stacked trim with the frames fixed in time: pinStarts, then trimClip with patch.inSec raised to at least
- * inSec − start (the clip cannot start before 0); the clip's startSec moves by the In's change. Out keeps the start.
- * The same array when the trim changes nothing (then nothing is pinned either).
+ * Stacked trim with the frames fixed in time: pinStarts, then trimClip with the head bounded so the clip cannot start
+ * before 0:00 (patch.inSec raised to at least inSec − start, through the speed); the clip's startSec moves by the
+ * head's change over its speed (the head is the In, or a reversed clip's Out), and a tail change keeps the start. On a
+ * ramp the frames between re-time; only the far edge stays where it was. The same array when the trim changes nothing
+ * (then nothing is pinned either).
  */
 export function trimClipInPlace(
   timeline: StitchTimelineClip[],
@@ -584,18 +882,37 @@ export function trimClipInPlace(
   if (index === -1) return timeline;
   const clip = timeline[index];
   const start = stackedStartOf(timeline, durations, index, overlapSec);
-  const bounded =
-    patch.inSec !== undefined && Number.isFinite(patch.inSec)
-      ? { ...patch, inSec: Math.max(patch.inSec, clip.inSec - start) }
-      : patch;
+  const warp = activeWarp(clip);
+  const d = durations.get(sourceKey(clip.source));
+  const known = d !== undefined && Number.isFinite(d);
+  let bounded = patch;
+  if (!warp || !warp.reverse) {
+    if (patch.inSec !== undefined && Number.isFinite(patch.inSec)) {
+      bounded = { ...patch, inSec: Math.max(patch.inSec, warp ? clip.inSec - start * warp.speed : clip.inSec - start) };
+    }
+  } else if (known && (patch.outSec === null || (patch.outSec !== undefined && Number.isFinite(patch.outSec)))) {
+    // Reversed, the head is the Out: it may reach out by the clip's start in output time
+    const limit = playedOut(clip, d) + start * warp.speed;
+    if ((patch.outSec ?? d) > limit) bounded = { ...patch, outSec: limit };
+  }
   const trimmed = trimClip(timeline, clipId, durations, bounded);
   if (trimmed === timeline) return timeline;
   const next = trimmed[index];
-  const startSec = clampStart(start + (next.inSec - clip.inSec));
+  const startSec = clampStart(
+    !warp
+      ? start + (next.inSec - clip.inSec)
+      : warp.reverse
+        ? start + (known ? (playedOut(clip, d) - playedOut(next, d)) / warp.speed : 0)
+        : start + (next.inSec - clip.inSec) / warp.speed,
+  );
   return pinStarts(timeline, durations, overlapSec).map((c, i) => (i === index ? { ...next, startSec } : c));
 }
 
-/** Reset trim in Stacked: pinStarts; startSec = max(0, start − inSec); In 0, Out null. The same array when untrimmed. */
+/**
+ * Reset trim in Stacked: pinStarts; resetRange's range (In 0, Out null but for a slow clip); the start moves back by
+ * what the head gains over the clip's speed (the In, or a reversed clip's Out), never before 0:00. The same array when
+ * nothing changes.
+ */
 export function resetTrimInPlace(
   timeline: StitchTimelineClip[],
   clipId: string,
@@ -603,12 +920,20 @@ export function resetTrimInPlace(
   overlapSec: number,
 ): StitchTimelineClip[] {
   const index = timeline.findIndex((c) => c.id === clipId);
-  if (index === -1 || !isTrimmed(timeline[index])) return timeline;
+  if (index === -1) return timeline;
   const clip = timeline[index];
-  const startSec = clampStart(stackedStartOf(timeline, durations, index, overlapSec) - clip.inSec);
-  return pinStarts(timeline, durations, overlapSec).map((c, i) =>
-    i === index ? { ...c, inSec: 0, outSec: null, startSec } : c,
-  );
+  const d = durations.get(sourceKey(clip.source));
+  const range = resetRange(clip, d);
+  if (clip.inSec === range.inSec && clip.outSec === range.outSec) return timeline;
+  const warp = activeWarp(clip);
+  const known = d !== undefined && Number.isFinite(d);
+  const gained = !warp
+    ? clip.inSec
+    : warp.reverse
+      ? (known ? playedOut(range, d) - playedOut(clip, d) : 0) / warp.speed
+      : (clip.inSec - range.inSec) / warp.speed;
+  const startSec = clampStart(stackedStartOf(timeline, durations, index, overlapSec) - gained);
+  return pinStarts(timeline, durations, overlapSec).map((c, i) => (i === index ? { ...c, ...range, startSec } : c));
 }
 
 // Group operations: the same edits on several selected clips at once, each one undo step for the caller. Like the
@@ -765,7 +1090,7 @@ export function resetTrims(
     current =
       layout.mode === "stacked"
         ? resetTrimInPlace(current, clip.id, durations, layout.overlapSec)
-        : resetTrim(current, clip.id);
+        : resetTrim(current, clip.id, durations);
   }
   return current;
 }
@@ -786,7 +1111,8 @@ export function runEndIndex(spans: readonly ClipSpan[], index: number): number {
 /**
  * Whether splitClipsAt would split one of these clips now, without copying the timeline (the rail and the menu ask
  * on every playhead change): t finite; not inside an overlap unless placed; and some listed span live at t (spansAt's
- * rule) with t at least MIN_CLIP_SEC from its head and tail, read as splitClipAt reads them.
+ * rule) with t at least MIN_CLIP_SEC from its head and tail and a cut its warp allows (splitRefusal), read as
+ * splitClipAt reads them.
  */
 export function canSplitClipsAt(
   spans: readonly ClipSpan[],
@@ -798,9 +1124,7 @@ export function canSplitClipsAt(
   if (!placed && inOverlap(spans, t)) return false;
   return spans.some((span) => {
     if (!ids.has(span.clip.id) || !(span.length > 0) || !(span.start <= t && t < span.end)) return false;
-    const head = placed ? span.start : span.start + span.overlapIn;
-    const tail = placed ? span.end : span.end - span.overlapOut;
-    return !(t - head < MIN_CLIP_SEC || tail - t < MIN_CLIP_SEC);
+    return splitRefusal(span, t, placed) === null;
   });
 }
 

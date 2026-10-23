@@ -5,8 +5,9 @@ The Edit Video node (`videoStitch`, called Video Stitch before) joins the videos
 `audio` socket and audio from the library, each a clip on an audio row.
 The editor is where that sequence is finished: the clips' order, a trim
 for each clip, each clip's own sound, the audio clips and their volume
-over time, and the layout (Track, clips end to end, or Stacked, one row per clip,
-placed anywhere). What the editor shows is what Render encodes.
+over time, the text layers over the picture, and the layout (Track, clips
+end to end, or Stacked, one row per clip, placed anywhere). What the editor
+shows is what Render encodes.
 
 ## What the editor does
 
@@ -24,7 +25,8 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   Off", no chevron, as the boards draw it; off with no clips) and opens Off,
   2× and 3× as radios beside the menu on a hover, a click, → or Enter,
   and, in a muted last line, "N clips · W × H · F fps" (the frame rate only
-  when the clips agree); then Cancel, Save and Done.
+  when the clips agree and none plays at another speed or on a ramp); then
+  Cancel, Save and Done.
   The control row shows the length (in Stacked it runs to the end of the
   clip that ends last).
 - **Stage**: the sequence previewed at the playhead, on black in a frame
@@ -32,7 +34,8 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   control row under it. In Stacked it blends or covers clips where they
   overlap, by row, and shows black in a gap. While you drag a clip, the
   preview keeps showing the clips where they were; it updates when you let
-  go. With no clips the frame is empty and says how to add some.
+  go. With no clips the frame is empty and says how to add some; with text
+  layers and no clips it is black, with the text (see Text layers).
 - **Control row**, under the video and as wide as it (never narrower than
   576 px, for a portrait clip): at the left the playhead's time and the
   length; in the middle Go to start, Play (a white circle) and Go to end;
@@ -46,32 +49,43 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   clips.
 - **Rail**, 280 px beside the stage. It keeps its column whatever is
   selected, so the video never changes size on a click; with nothing
-  selected it says "Select a clip to edit it." One clip: "Clip 2 of 4", then
+  selected it says "Select a clip to edit it." (with text layers and no
+  clips, "Select a text layer to edit it."). One clip: "Clip 2 of 4", then
   where it comes from and how long it is ("Veo 3.1 · 5.00 s", or "4.20 s of
   5.00 s" once trimmed); its In and Out side by side (in Stacked Start first,
-  where it starts on the timeline); its Sound switch and Volume; and at the
-  foot Split at playhead, Reset trim (only while it is trimmed), Reveal
-  source node and Remove clip. An audio clip: its row ("Audio 1"), its file,
+  where it starts on the timeline); its Sound switch and Volume; its Speed,
+  Ramp, Reverse and Blend frames (see Speed and ramps); and at the foot
+  Split at playhead, Reset trim (only while there is a trim to reset), Reset
+  speed (only while it plays at another speed or on a ramp), Reveal source
+  node and Remove clip. An audio clip: its row ("Audio 1"), its file,
   source and length; Start, In and Out; Sound; and Volume's shapes, Flat,
   Fade in and Fade out, pressed by what the curve does; then Split at
   playhead, Reset trim and Remove clip. With several clips selected the
   rail shows how many and which, and what applies to all of them: Sound (On
-  or Off, with neither pressed while some are muted and some not), Split at
-  playhead, Reset trim and Remove; several audio clips: Mute 2 clips (or
-  Unmute, M), Split at playhead and Remove. The keys are in hover labels: a
+  or Off, with neither pressed while some are muted and some not), Speed
+  and Reverse, Split at playhead, Reset trim, Reset speed and Remove;
+  several audio clips: Mute 2 clips (or Unmute, M), Split at playhead and
+  Remove. A text layer: its first line, its
+  row and length, then its Text, Font, Size, Weight, Colour, Align,
+  Position, Wash, fades, Start and Length, and Split at playhead and Remove
+  text (see Text layers). The keys are in hover labels: a
   field's (I, O, and [ or ]) and an action's (shown at its right on hover or
   focus); ? lists them all, with the mouse modifiers.
 - **Timeline**: on the pane colour under a hairline, with no track headers:
   the lanes run its full width, 0:00 sitting 20 px in. A ruler (a label in
   11 px ink-3, tabular, at each tall tick, and one short mark half-way
-  between), the Clips lane (filmstrips 2 px apart that you drag to reorder
+  between), the text layers' rows when there are any (see Text layers), the
+  Clips lane (filmstrips 2 px apart that you drag to reorder
   and trim by their edges, a context menu, and a quiet `+` slot after the
   last clip that opens Add media) and the audio rows (each
-  audio clip's waveform in grey) and, under them, a quiet **+ Audio**. A
+  audio clip's waveform in grey) and, under them, a quiet **+ Audio** and
+  **+ Text**. A
   clip shows only its frames (or its waveform) at rest; its length shows on
   hover or keyboard focus, and on hover its trim handles and, on a video
-  clip, its sound button; an audio clip's file name is its tooltip. A muted clip keeps its muted badge
-  (an icon). Selected clips, video or audio, are ringed in white; a selected
+  clip, its sound button; an audio clip's file name is its tooltip. A
+  muted clip keeps its muted badge (an icon), and a retimed or reversed
+  clip its speed badge (see Speed and ramps). Selected clips, video or
+  audio, and selected text layers are ringed in white; a selected
   audio clip's waveform lightens and its volume curve is drawn in white. The
   playhead's line ends above "+ Audio". What the track headers held floats
   in the timeline's 20 px left padding, 2 px clear of its edge and of
@@ -110,7 +124,7 @@ source node. It is off for library clips.
 
 ## How the timeline is stored
 
-Four optional fields sit on `VideoStitchNodeData` (`src/types/nodes.ts`),
+These optional fields sit on `VideoStitchNodeData` (`src/types/nodes.ts`),
 beside the fields the node always had:
 
 ```ts
@@ -119,6 +133,7 @@ audioCurve?: VolumePoint[];        // the music's volume over one loop; empty = 
 audioMuted?: boolean;              // the music is off; the clips' own sound still plays; read only while audioClips is absent
 sequenceLayout?: StitchSequenceLayout;   // Track or Stacked; absent = Track
 audioClips?: StitchAudioClip[];   // the audio clips; absent = the music alone, read from audioCurve and audioMuted
+overlays?: StitchOverlay[];       // the text layers; absent = none (see Text layers)
 
 interface StitchSequenceLayout {
   mode: "track" | "stacked";
@@ -133,7 +148,19 @@ interface StitchTimelineClip {
   muted: boolean;                               // the clip's own sound
   volume: number;                               // 0..1, linear, on the clip's own sound
   startSec?: number;                            // Stacked: where the trimmed clip starts, 0..600 s; absent = laid out from Overlap
+  warp?: ClipWarp;                              // its speed, ramp and reverse; absent = its own speed (see Speed and ramps)
 }
+interface ClipWarp {
+  speed: number;                                // the average speed: the clip lasts (Out − In) / speed; the rail sets 0.1..10
+  curve: ClipWarpCurve | null;                  // the ramp; null = constant speed
+  window?: [number, number];                    // a split piece's part of the curve, 0 ≤ a < b ≤ 1; absent = all of it
+  reverse: boolean;                             // plays In..Out backwards
+  blend: boolean;                               // Blend frames
+}
+type ClipWarpCurve =
+  | { kind: "preset"; name: string }                                // a monotone easing from src/lib/easing
+  | { kind: "bezier"; handles: [number, number, number, number] }   // CSS cubic-bezier, every handle in 0..1
+  | { kind: "points"; points: Array<[number, number]> };            // a monotone cubic through the points
 interface StitchAudioClip {
   id: string;
   source: { kind: "music" } | { kind: "asset"; assetId: string };   // the node's audio socket, or a library file
@@ -202,6 +229,19 @@ Done writes it with the rest of the timeline, in the same single
 `updateNodeData`. It travels with its clip: the card's reorder and ✕,
 paste and the agent's edits keep it. A build from before clips could be
 placed drops it on its next card write.
+
+**`warp` retimes a clip.** Its curve maps the clip's progress on the
+timeline (0 to 1) to its progress through the source from In to Out (0 to
+1), and never falls, so time never runs backwards inside a clip; Reverse is
+the flag alone. A clip that plays at its own speed has no `warp`: 1× with no
+ramp, played forward, is never stored, Blend frames with it. It is read like
+the other fields (`sanitizeWarp` in `src/lib/stitch/warp.ts`): a speed that
+is not a number reads as 1, any speed is clamped to 1e-9–1e9, a curve the
+editor could not have made reads as no ramp (another kind, a preset that is
+not a monotone easing, handles that are not numbers, more than 64 points),
+as does the straight line, and a warp left changing nothing is dropped.
+It travels with its clip through split, copy, paste and the Edits file. A
+build from before clip speeds drops it (see Limits).
 
 **Clips are muted under music on a legacy node.** The node has always
 replaced the clips' sound with the music when music was connected. To keep
@@ -321,18 +361,20 @@ then on an edit moves only the clip it edits.
 
 - Always placing, in Stacked: dragging a clip's box (in time, to another
   row, or both), a nudge, a typed Start, [ and ], every trim (a drag,
-  I, O, a typed In or Out, Reset trim), a paste, a duplicate, and a drag
-  or nudge of several clips.
+  I, O, a typed In or Out, Reset trim), every change of a clip's speed
+  (Speed's slider, well or presets, for one clip or several, or Reset
+  speed), a paste, a duplicate, and a drag or nudge of several clips.
 - Placing only in a stack that is already placed: a row move by a row's
   grip, ⌥↑ / ⌥↓ or the clip menu, a split, a removal and a cut. In a
   lined-up stack these work as before: a row move or a removal
   re-sequences the clips, and a split is refused inside an overlap.
 - Never placing: adding from the library, Crossfade, the layout switch,
-  loops, clip sound and the curve. Edits in Track, and the card's reorder
+  loops, clip sound, the volume curve, and Ramp, Reverse and Blend frames
+  (the speed row's edits included). Edits in Track, and the card's reorder
   and ✕, keep every stored start.
 
-**Line up**, in Stacked a quiet text button after **+ Audio** under the
-audio rows, puts every clip back where Overlap
+**Line up**, in Stacked a quiet text button after **+ Audio** and
+**+ Text** under the audio rows, puts every clip back where Overlap
 lays it out, as one undo step: it drops every stored start, moves a fade
 out that ends at the end along with the end, and keeps the playhead on the
 same frame of the same clip. It is on once some clip has been placed, with
@@ -625,7 +667,8 @@ asset's id; a clip whose file is gone is drawn "Not in the library" and
 stops a render until it is removed.
 
 **Editing a clip.** Click a clip to select it (⌘-click and ⇧-click add to
-the selection; a selection holds either video clips or audio clips; ⌘A
+the selection; a selection holds one kind: video clips, audio clips or text
+layers; ⌘A
 selects every clip of the kind selected; a drag on empty audio-row space
 draws a selection box). Drag it sideways to move it in time, and up or down
 to another row; one drag can do both. Drop it under the last row, on the
@@ -700,31 +743,304 @@ so while it applies.
 **Clip sound** stays with each video clip (Sound and Volume in the
 rail), as before.
 
-**The timeline's height** is what its rows need: the 28 px ruler, Track's
+**The timeline's height** is what its rows need: the 28 px ruler, the text
+layers' rows (52 px each, up to two; none without text layers), Track's
 80 px clips row or Stacked's 52 px rows (up to three and a half), the
 audio rows (52 px, the taller one 128 px) and the 28 px line with
-"+ Audio", plus the room of a horizontal scrollbar where the system draws
+"+ Audio" and "+ Text", plus the room of a horizontal scrollbar where the system draws
 one beside the content (none where it is drawn over it), kept whether the
 scrollbar shows or not: the scrollbar never covers a row, and zooming in
 past Fit moves nothing. Clicking a clip never changes it. In Track with one
-audio row it is 189 px. A switch of Track | Stacked changes it; while the
+audio row it is 189 px (241 px with one text row, 293 px with two or more).
+A switch of Track | Stacked changes it; while the
 pointer is over the control row it keeps the height it had, so
 the toggle stays under the pointer, and it settles once the pointer leaves
 (see Stacked). Two audio rows show at once; more scroll with the wheel
 over them (over Stacked's rows, only those scroll). In a short window
 Stacked's rows give way first, down to one and a half, then the audio
-rows, down to one; the stage keeps at least 344 px, its control row
-included (a 240 px video).
+rows, down to one, then the text rows, down to one; the stage keeps at
+least 344 px, its control row included (a 240 px video).
 
 **Resizing it.** The timeline's top edge is a handle: drag it up for a
 taller timeline (the stage gives up the room, down to its 344 px) or down
-for a shorter one (down to 189 px). With the handle focused, ↑ and ↓ move
-it 8 px, ⇧↑ and ⇧↓ 64 px. In the extra room Stacked's rows show past three
-and a half, then the audio rows past two; what is left stays empty between
-the video and the audio. Under what the rows need, they give way as in a
+for a shorter one (down to 189 px, 241 px with text layers). With the
+handle focused, ↑ and ↓ move it 8 px, ⇧↑ and ⇧↓ 64 px. In the extra room
+Stacked's rows show past three and a half, then the audio rows past two,
+then the text rows past two; what is left stays empty between the video
+and the audio. Under what the rows need, they give way as in a
 short window. The height chosen stays through a switch of Track | Stacked
 while the editor is open, and a double-click on the edge lets the timeline
 fit its rows again.
+
+## Text layers
+
+A text layer puts words over the picture: lines of text in a font, size,
+weight and colour, over a black **wash** across the whole frame. The text
+and its wash fade in from the layer's start and out to its end, together.
+Text layers sit on rows of their own above the video, as they sit above it
+in the picture. The stage shows them as Render burns them in, and Frame to
+canvas draws them too. They work the same in the node's dialog and in the
+Edit video view.
+
+**Adding text.** **+ Text**, after + Audio under the audio rows, adds a
+layer, and so does **Add text** in the media pane's head in the Edit video
+view; neither needs the asset library. The preview pauses. The new layer
+reads "Title" in Space Grotesk at 8 % of the frame's height, weight 600,
+white, centred, over a 50 % wash; it fades in and out over 0.5 s and is
+4 s long. It starts at the playhead, or at 0:00 when the playhead is at the
+end or there is no video. A second press makes a subtitle: while the
+playhead is where the selected layer's fade in ends (where the first press
+left it), the new layer starts where that one starts. It goes on the first
+row from the bottom with room for its 4 s, else on a new row on top, and is
+selected. With video, the playhead then moves to where its fade in ends (a
+frame before the end at most), so the stage shows it whole. The rail's Text
+takes focus with "Title" selected, so typing replaces it. The add is one
+undo step.
+
+**The rows.** The text layers' rows sit between the ruler and the video, in
+Track and in Stacked, 52 px each. Row 0 is the one next to the video; each
+row above it draws in front of the rows below. Without text layers there
+are no rows, and the timeline is laid out as before. Two rows show, row 0
+and the one above it at first; more scroll with the wheel over them, and
+the line under the audio rows counts the rows out of view (its hover label
+says "2 text rows above"). A row added on top moves nothing on screen. In
+Stacked the text rows stay under the ruler while the clips' rows scroll
+under them. A box shows the first line of its text ("Empty text" when it
+has none) and its fades as ramps at its ends; on hover, its length and its
+edge handles. The part of a box past the sequence's last frame is hatched
+("After the last frame: not shown"); with no video nothing is hatched. A
+library item dropped on the text rows lands nowhere.
+
+**Editing a layer.** Text layers are edited as audio clips are. Click a box
+to select it; ⌘-click and ⇧-click add to the selection, a drag on empty
+text-row space draws a selection box, and ⌘A selects every text layer once
+one is selected. Drag a box sideways to move the layer in time and up or
+down to another row; one drag does both, and the other selected layers go
+with it. Above the top row is a new row. A drop where a layer would overlap
+another on its row puts the layers moved on new rows above that row instead
+(a line shows where). A row a move empties stays until a removal, or until the
+editor opens again. The chip beside the box says where it will show and how
+far it moved ("0:03.00–0:07.00 · +1.00 s"). Moves snap within 8 px to the
+playhead, 0:00, the sequence's end, every video clip's start and end and
+every other text layer's start and end; ⇧ turns snapping off, as Snap
+does. Escape puts the layers back. Drag an edge to move the start or the
+end alone ("Start 0:01.20"): the other edge stays, the fades are kept, an
+edge stops at the next layer on its row, and a layer is at least 0.1 s and
+at most 10 minutes long.
+
+S splits every selected layer the playhead is inside by at least 0.1 s,
+never the video under it; the pieces stay on their row, and the right
+pieces are selected. The left piece keeps its fade in and has no fade out;
+the right one has no fade in and keeps its fade out, so outside the fades a
+split changes nothing (see Limits for a split inside a fade). ⌥← and ⌥→
+move the selected layers a frame (1/60 s), ⇧ ten frames, in Track too; a
+held key's repeats are one undo step. ⌥↑ moves them a row up, in front
+(from the top row, onto a new row), ⌥↓ a row down (not below row 0). [
+starts the selected layer at the playhead and ] ends it there (off while it
+is longer than the time before the playhead); I and O move its start or its
+end to the playhead, the other edge kept, when the playhead is at least
+0.1 s inside it. ⌫ removes the selected layers; the rows close up, and the
+layer now in the first one's place is selected. ← → ↑ ↓, Home and End move
+the selection between layers (↑ to the nearest on the row above). ⌘C, ⌘X,
+⌘V and ⌘D work on text layers: pasted layers go on new rows in front of the
+others, the first at the playhead and the rest at their distances; a
+duplicate starts where the selection ends, on the same rows when there is
+room, else on new rows above them. Text layers hold no media, so they paste
+into any node or edit. The menu (right-click, the context-menu key or
+⇧F10) is headed by the first line and the row ("“Title” · Text 1", or
+"3 text layers") and has Split at playhead, Start at playhead, End at
+playhead, Move up a row, Move down a row, Copy, Cut, Paste, Duplicate and
+Remove text ("Remove 3 text layers"); opened on one of several selected
+layers it acts on all of them, Start and End aside. Cancel's discard sheet
+names text layer changes ("An added text layer and an edited text layer
+will be lost.").
+
+**The rail.** With one text layer selected, the rail's title is its first
+line ("Empty text" when it has none), with its row and length under it
+("Text 1 · 4.00 s"). Its fields, top to bottom:
+
+- **Text**: the words. Enter starts a new line; up to 2000 characters. The
+  stage follows each key, and one visit to the field is one undo step.
+  Escape leaves the field.
+- **Font**: see Fonts below. A note under it says when the font cannot be
+  had.
+- **Size**: the font size as a percentage of the frame's height, 1–50 %.
+- **Weight**: the weights the font has: Space Grotesk 500, 600 and 700,
+  JetBrains Mono 400 and 500, any other family 400 to 700. Picking an app
+  font moves the weight to the nearest it has. A font file draws at its own
+  weight, so Weight is off for it ("A font file draws at its own weight"),
+  and picking a file sets the weight to 400.
+- **Colour**: a swatch that opens the system's colour picker (a drag in it
+  is one undo step), and a hex well that takes "#ff8800", "ff8800" or
+  "#f80".
+- **Align**: Left, Centre and Right align the lines inside the text block;
+  the block stays where it is.
+- **Position**: Centre (50 %, 50 %), Lower third (50 %, 82 %) and Top
+  (50 %, 14 %), pressed while X and Y match one; then **X** and **Y**, where
+  the centre of the text block is, as percentages of the frame's width and
+  height. The block keeps 5 % of the frame clear at each edge, so a position
+  nearer an edge stops there.
+- **Wash**: 0–100 %, black over the whole frame behind the text, fading
+  with it; 0 is none. The washes of layers that show at once add up, each
+  darkening what is under it.
+- **Fade in** and **Fade out**, in seconds; 0 is a cut. They are never cut
+  to the layer's length: fades longer together than the layer meet below
+  full opacity, and the box's ramps show where.
+- **Start** and **Length**: where the layer starts on the timeline (0:00 to
+  10:00) and how long it lasts. A new Start keeps the length, and puts the
+  layer on a new row above when it would overlap another on its row. A new
+  Length keeps the start and stops at the next layer on its row. Start's
+  hover label names [ and ], Length's I and O.
+
+Size, X and Y step 1 % with ↑ and ↓ (⇧: 10 %), the fades, Start and Length
+0.1 s (⇧: 1 s); a run of steps is one undo step until the well is left, and
+a typed value is one step on Enter or on leaving the well. Every other
+change in the rail is one undo step. When the text is too big for the frame
+inside its margins, a note says "The text doesn't fit the frame: some of it
+falls outside.": the block is then centred and runs off the frame, never
+cut short. At the rail's foot are Split at playhead (S) and Remove text
+(⌫). With several layers selected the rail says how many ("3 text layers")
+and which, with Split at playhead and Remove 3 text layers.
+
+**Fonts.** The Font field lists three kinds of font, each in a section of
+its own:
+
+- **In the app**: Space Grotesk (the app's own, and every new layer's),
+  JetBrains Mono, and the browser's Sans serif, Serif and Monospace.
+- **Font files**: `.ttf`, `.otf`, `.woff` and `.woff2` files in
+  `<Node Banana folder>/Fonts/`, shared by every edit. **Add font file…**,
+  at the list's foot, copies a file from the computer there (at most 32 MB)
+  and gives the layer its font. A file whose name does not end in one of
+  those extensions, a `.ttc` included, is refused ("A font file must end in
+  .ttf, .otf, .woff or .woff2."). The bytes must then be a font of one of
+  those kinds: a font collection under such a name is refused ("Font
+  collections (.ttc) can't be used: add a single .ttf or .otf."), and so is
+  anything else ("That file is not a font."). A name the folder already
+  holds with other bytes gets a number ("Inter 2.ttf"); the same bytes
+  again use the file that is there.
+  Files put in the folder in Finder are listed too. A layer names a file by
+  its file name and shows it by the name less its extension. `/api/fonts`
+  lists the folder and adds to it, and `/api/fonts/<name>` serves a file,
+  behind the asset library's guard; with no library (a hosted server) the
+  list has no font files and no Add font file…. A library move carries the
+  Fonts folder; switching to another library folder leaves it behind, as it
+  leaves Edits.
+- **On this computer**: the families installed on the computer, through the
+  browser's Local Font Access (Chromium browsers, and the desktop app). In
+  a browser, **Show fonts on this computer** at the list's foot asks first,
+  with the browser's own prompt; once allowed, the families are listed each
+  time the list opens. The desktop app allows it, so it lists them without
+  asking. Where the browser cannot list them (Firefox, Safari), or the
+  prompt was refused, the section and the button are not there.
+
+Typing in the field filters the list and lights the best match. A name no
+listed font has is offered on a first row as **Use “name”**: a family of
+its own, drawn in when this computer has it. ↑ and ↓ move the light, and
+Enter or a click takes a row. Leaving the field puts its text back; Escape
+closes the list, and a second Escape leaves the field.
+
+A font that cannot be had is never an error. The layer is drawn in Space
+Grotesk, on the stage, in the render and in Frame to canvas, and the rail
+says so under Font: "Inter isn't on this computer: Space Grotesk stands
+in." for a file not in the Fonts folder or a family this computer lacks,
+"Inter couldn't be read: Space Grotesk stands in." for a file that would
+not load. Whether a family is on this computer is told by measuring a few
+Latin letters, and the layer's own text, in it against the browser's
+generic families: the layer's text is what finds a font made for one
+script only, such as an Arabic font, which draws no Latin letter. A family
+stays first in the list the layer is drawn in whatever that check says, so
+a font the computer has is always drawn, and the check changes only the
+note. A font file is registered in the page under a made-up family
+name, so it never takes the place of an app font or an installed font of
+the same name, and for every weight, so it draws at its own weight with no
+faked bold.
+
+**How it is drawn.** One function, `drawOverlays` in
+`src/lib/stitch/overlayDraw.ts`, draws the text layers on the stage, in the
+render and in Frame to canvas. A layer is laid out at the output's size
+(each side rounded down to even, as the render's): the font size is Size
+times the frame's height; the lines are 1.2 font sizes apart and wrap at
+spaces to the frame's width less 5 % at each side (a word longer than a
+line breaks between letters); the block is centred on X and Y and kept 5 %
+inside the frame. The layout is then scaled to whatever it is drawn on, so
+the lines break in the same places on a small stage and in the render. At
+any time every visible layer's wash is painted first, then every visible
+layer's text, each by row: a wash is always behind all text. A layer's
+opacity is 0 before its start and from its end on, rises in a straight line
+over its fade in, falls over its fade out, and is the lower of the two
+where they meet (`overlayOpacityAt` in `src/lib/stitch/overlays.ts`; the
+box's ramps take their corners from `overlayFadeKnees` beside it, which
+must follow the same curve). The wash is drawn at Wash times that opacity,
+the text at that opacity. The stage, the render and Frame to canvas read
+it on the render's 60 fps grid, with the layer's start and end moved to the
+slots they round to, as a clip's first frame is (`overlayOpacityAtSlot`):
+a layer that starts on a cut shows from the first frame of the clip after
+the cut, and one that ends there is gone from that frame, wherever in its
+slot the cut falls.
+
+On the stage the layers have a canvas of their own over the picture, sized
+to the frame at the screen's pixel ratio and laid out at the output's size
+(1920 × 1080 until a clip has a size). It is drawn every frame while the
+preview plays, on every move of the playhead while paused, and on an edit
+to the layers, an undo, a font that loads or a resize, with no React
+render. It draws the slot the playhead is in on the render's 60 fps grid
+(the nearest 1/60 s), never past the last slot, so a paused frame
+shows the text and the wash as that frame of the render holds them. With no video the stage shows a black frame with the
+layers instead of the empty card, drawn where the selected layer (else the
+one that starts first) has faded in; there is no render to match then.
+
+**What is stored.** A node keeps its text layers in `overlays` on its data,
+and an edit file in `sequence.overlays`, the sequence's last key. Either is
+written only when there are some, with the rows numbered with no gaps, so
+a node or an edit without text layers is stored exactly as before. One
+layer:
+
+```json
+{
+  "id": "ovl_3f2a9c1e",
+  "kind": "text",
+  "row": 0,
+  "startSec": 3,
+  "endSec": 9,
+  "fadeInSec": 1,
+  "fadeOutSec": 1,
+  "text": "Night Raid\nPlate and Mail",
+  "font": { "family": "Geist-Regular", "file": "Geist-Regular.ttf" },
+  "size": 0.08,
+  "weight": 400,
+  "color": "#ffffff",
+  "align": "center",
+  "x": 0.5,
+  "y": 0.82,
+  "wash": { "opacity": 0.5 }
+}
+```
+
+Times are sequence seconds of one loop, and the layers repeat with each
+loop. `size`, `x` and `y` are fractions of the frame (its height, width and
+height), so a layer looks the same at any output size; `x` and `y` are the
+centre of the text block. `font.file` is there only for a font file, and
+then `family` is the file's name less its extension, which the rail shows.
+The list is read leniently, as the audio clips are (`sanitizeOverlays`): an
+entry that is not an object, of a kind this build does not know, or without
+an id is dropped, and a repeated id gets "~2". Each value is held to its
+range: the start 0–600 s, the end after it and at most 600 s later, the
+fades 0–600 s, the text up to 2000 characters, the family up to 200
+characters (else Space Grotesk), the size 0.01–0.5, the weight 100–900, the
+colour `#rrggbb` (else white), `x`, `y` and the wash 0–1. `font.file` is
+kept only when it is a bare font file name, since the Fonts route reads
+files by it. A text layer's words are never taken for media: edit files
+refuse `data:` and `blob:` URLs everywhere else, but a title may read
+"data:,hello".
+
+Done writes `overlays` only when the editor changed the text layers since
+it opened (or since Save), so layers of a kind this build does not know
+survive a Done that left the layers alone; removing the last layer removes
+the key. In the node's dialog Done is on while the editor has text layers,
+or opened with some, clips or not. The edit file's version stays 1, so
+Node Banana 2.2.0 opens it (see Limits for what 2.2.0 does to the layers
+when it writes). The agent does not see text layers; its edits to the node
+merge, so they keep them.
 
 ## Several clips
 
@@ -760,7 +1076,7 @@ is one undo step. Trims, Start, In and Out stay one clip's: the rail hides
 them, and their keys do nothing.
 
 **Copy and paste.** ⌘C copies the selected clips: each one's video, trim,
-sound and volume, and where it starts relative to the first. ⌘X does the
+speed, sound and volume, and where it starts relative to the first. ⌘X does the
 same and removes them, as one undo step. ⌘V pastes. In Track the clips go
 after the last selected clip, or at the end. In Stacked they go on new rows
 below the lowest selected row (after the last piece, when that row is a
@@ -794,19 +1110,24 @@ lost."
 ## How it is encoded
 
 `stitchVideosAsync` (`src/hooks/useStitchVideos.ts`) takes one input per
-clip (`{ blob, inSec, outSec, muted, volume }`, and on a node the editor
-wrote the clip's `source` key, so pieces of one video are known), the music
-with its curve, and the options: `{ loopCount }`, `audioClips` (each unmuted
-audio clip with its decoded file, start, In, Out and curve) when the node's
-audio is more than the untouched music, plus `overlapSec` and
-`crossfade` when the node is a lined-up stack with an overlap above 0, or
-`overlapSec`, `crossfade` and `placed: true` when some clip is placed (each
-placed clip's input then carries its `startSec`). A Track node passes
-`{ loopCount }` alone, as before. `gatherStitchInputs`
-(`src/store/execution/stitchInputs.ts`) builds them from the node: connected
-videos are fetched as before, library clips through
+clip (`{ blob, inSec, outSec, muted, volume }`, a retimed clip's `warp`,
+and on a node the editor wrote the clip's `source` key, so pieces of one
+video are known), the music with its curve, and the options:
+`{ loopCount }`, `audioClips` (each unmuted audio clip with its decoded
+file, start, In, Out and curve) when the node's audio is more than the
+untouched music, plus `overlapSec` and `crossfade` when the node is a
+lined-up stack with an overlap above 0, or `overlapSec`, `crossfade` and
+`placed: true` when some clip is placed (each placed clip's input then
+carries its `startSec`), and `overlays` (each text layer with the CSS
+family list its font resolved to) when there are text layers. A Track
+node without text layers passes `{ loopCount }` alone, as before.
+`gatherStitchInputs` (`src/store/execution/stitchInputs.ts`) builds them
+from the node: connected videos are fetched as before, library clips through
 `/api/assets/<id>/file`. If a library clip's asset is gone, the run stops
-with "Clip N's library video is no longer in the library".
+with "Clip N's library video is no longer in the library". It and the
+view's `gatherDraftInputs` load the text layers' fonts first
+(`gatherOverlayInputs`), so the first frame is drawn in them; a font that
+cannot be had is drawn in Space Grotesk, and the run goes on.
 
 **Video.** Only each clip's range is decoded. A clip's length is measured
 the same way in the editor and the encoder: the end of the video track's
@@ -826,6 +1147,11 @@ Every clip's sound is converted into one master format: the music's rate
 when the music plays alone, otherwise the highest rate that plays, at most
 stereo (5.1 and quad are downmixed; centre kept, LFE dropped). Resampling is
 linear. A clip whose sound fails to decode is silence in its own place.
+
+**Retimed clips.** A clip with a warp does not pass through: each of its
+slots shows the frame its warp names, and its sound is resampled along the
+warp (see Speed and ramps). It takes the length the editor gives it in
+every layout, loop, overlap and dissolve.
 
 **Audio.** On a node without `audioClips`, the music plays once,
 continuously across loops (as before; see Loops in Audio clips). The curve
@@ -863,9 +1189,10 @@ or formats, or 10-bit video) they are drawn on a canvas at that size, each
 scaled to cover it, with no rotation. The blended frames come at the
 earlier clip's own frame times when the two clips report the same frame
 rate (within 1 %, from 10 to 60 fps), so a 24 fps sequence stays 24 fps
-through its dissolves; otherwise one comes every 1/60 s. Below 10 fps (a
-slideshow, a one-frame still) too few frames fall inside an overlap to
-blend, so those dissolves also use every 1/60 s. The rate is measured from
+through its dissolves; otherwise one comes every 1/60 s, as it does when
+either clip is retimed. Below 10 fps (a slideshow, a one-frame still) too
+few frames fall inside an overlap to blend, so those dissolves also use
+every 1/60 s. The rate is measured from
 the gaps between frames, so a WebM whose last frame was stored without a
 duration reads as its real rate. Each clip's sound
 starts at the clip's own start, a hidden head included. With Crossfade on
@@ -904,6 +1231,65 @@ shaped, sample by sample, by its share of the sound, so a hidden clip is
 silent; with it off it plays in full. Clip sound is silent in a gap, and the
 music plays across the whole loop. The progress line says "Processing video
 N/M...", "Blending video N into M..." or "Blending N videos...".
+
+**Text layers.** Every frame the encoder takes, in Track and in both stacks,
+passes one hook in slot order (`createOverlayWriter` in
+`src/lib/stitch/overlayFrames.ts`). A frame on a slot where a text layer
+shows gets the layers over it; any other goes on untouched. In each loop a
+layer starts and ends on the slots that the loop's start plus its own start
+and end round to, as the clips' windows do, so the layers repeat with each
+loop and a layer on a cut changes on the cut's frame in every loop (each
+loop's start rounds on its own). The part of a layer past the loop's end is
+never drawn.
+
+A fade steps on every 60 fps slot. A slot is *forced* when some layer's
+opacity there differs from the slot before: every slot of a fade, the slot
+a start or an end with no fade rounds to, and a loop's first slot
+when the loop before ends on other text. The engine writes a frame only
+where the picture changes: one black frame for a gap, a clip's frames at
+its own rate (every 2 or 3 slots at 24 fps, once for a still). So before
+each frame it is handed, the hook fills every forced slot since the last
+frame: that last frame again, with the layers as they are on that slot. It holds that frame
+(a clone) only while a forced slot is still to come. While every layer is
+fully shown or gone, nothing changes from slot to slot, and frames come at
+the clips' own rate, each with the text.
+
+The layers of one state (each layer's opacity) are drawn once, on a
+transparent canvas the size of the encoder's box (the first frame's coded
+size), laid out at the file's display size and turned back by the file's
+rotation, so the text is upright when a player turns the picture. That one
+picture is kept until the state changes, so the frames of a fully shown
+layer reuse it. An 8-bit I420, I420A or NV12 frame at the box's size takes
+the picture in its own planes: luma per pixel, each chroma sample from the
+2 × 2 pixels it covers, in the frame's own matrix and range, I420A's alpha
+plane untouched. The result keeps the frame's own format and colour space,
+and every byte the text and the wash leave clear is the frame's own. A blend
+in Y'CbCr is the same as one in R'G'B', which is how the browser lays the
+stage's canvas over the video, so the text and the wash match the
+preview's, and the frames under them keep the colour of the frames passed
+straight through. Any other frame (another size, 10-bit, RGB, padded
+planes, and every frame after a copy of the planes fails) is drawn on a
+canvas as mediabunny's own resize would have drawn it
+without the text (a frame at the box's size as it is, any other covered to
+the box at its own rotation), with the picture over it, and handed on as
+the canvas frame mediabunny would have made. So the frames under the text
+take the same colour path as the frames beside them. The encode's first
+frame is the exception: it is read back into the box's own Y'CbCr, as a
+blend made on the canvas is, so the file keeps the first clip's colour
+tags. The progress line says nothing more.
+
+Measured in the desktop app on a copy of a real edit (eight 24 fps clips, a
+1284 × 720 file) with one text layer drawn in a font file: at the middle of
+its fade-in, fully shown and at the middle of its fade-out, the stage's wash
+and the render's differ by at most 0.21 of one luma level (out of 255), and
+the text's box by at most 1.55 px. Every 60 fps slot of each fade has a frame
+of its own, over 24 fps footage, over a gap's black frame and over a clip at
+4 fps, and the text's opacity read back from those frames moves on every
+slot, by 0.5 to 1.6 times one slot's step. There is no colour step where the
+text starts: up to its first frame the two renders' frames are the same, and
+from it on, a band of the picture the text never covers moves by the wash
+alone, to within 0.4 of a luma level and 0.1 of a chroma level, so a clip
+that a text layer covers in part needs no canvas pass of its own.
 
 **Loops.** `loopCount` repeats the sequence: the encoded length is the
 sequence length times the loop count. In Stacked one loop runs to the end
@@ -965,6 +1351,29 @@ exactly as they did before Stacked was added. Nor does placing clips: a
 node in Track, a stacked node with no positions, and a node the editor
 never wrote encode exactly as they did before clips could be placed.
 
+**Text layers change none of this.** An edit with no text layers, or only
+layers that draw nothing (no text and no wash), hands every frame to the
+encoder as before: the hook is the encoder's own add, with no copy, no
+extra frame and no progress text. The options and the recorded parameters
+carry `overlays` (the number of layers, in the parameters) only when the
+edit has text layers, layers that draw nothing included: the engine drops
+those itself. Measured in the desktop app's encoder (Apple VideoToolbox) on
+a placed Stacked edit of eight clips from six H.264 files (903 video
+packets), and on the same clips in Track (915), without text layers: the
+video track is the one Node Banana 2.2.0 renders, apart from the encoder's
+own user-data SEI, one or two bytes in each of three packets (the first and
+two later ones). Two renders by the same build differ in those bytes too;
+with the SEI left out, the streams hash the same.
+
+**Clip speeds change none of this.** An edit with no retimed clip hands the
+encoder the same inputs and takes the same path as before; in an edit with
+some, an unretimed clip outside a dissolve with a retimed one does too.
+Measured with the engine on Track, a lined-up stack, a placed
+stack, a loop and text layers, and in the desktop app on a Track copy of a
+real edit (915 video packets): with the SEI left out, the video stream and
+its packet timing are the same as the build's before clip speeds, and in
+the engine runs so are the audio packets.
+
 ## The volume curve
 
 Each audio clip's line is drawn on a square-root scale: a point's height is
@@ -975,7 +1384,9 @@ An empty curve is flat at 0 dB. Before the first point the line holds the
 first point's level, and after the last point the last one's.
 
 Click the line to add a point; drag a point (up and down, and along);
-double-click a point to remove it; ⌥-drag moves the whole line. Fade in and
+double-click a point to remove it; ⌥-drag moves the whole line. A ⌘- or
+⇧-press (Ctrl or ⇧ on Windows) on the curve does what a plain press does;
+on a Mac, a Ctrl-click opens the clip menu instead. Fade in and
 Fade out set a 1 s ramp at either end of the part of the clip that is heard
 (at most half of it), and Flat clears the curve.
 
@@ -993,6 +1404,196 @@ so the curve returns as it was. Other points keep their times, and a move
 that would take the point before the last below 0 or past the point ahead of
 it leaves the curve as it is. Moving or trimming a clip in Stacked does not
 move the curve: press Fade out again after a move that changes the end.
+
+## Speed and ramps
+
+A video clip can play slower or faster than its source, speed up and slow
+down along a ramp, and play backwards. Together these are the clip's warp:
+its speed, its ramp, Reverse and Blend frames (`src/lib/stitch/warp.ts`). In
+and Out keep their meaning: the part of the source the clip plays. Audio
+clips and text layers have no speed; they stay in sequence time.
+
+**Length.** A clip lasts its source range divided by its speed (on a ramp,
+its average speed): 4 s of source lasts 2 s at 2× and 8 s at 0.5×. Its box,
+the ruler and the total follow, and in Track so do the clips after it. A
+trim keeps the speed, and a ramp stretches over the new range, so the
+length is still the range over the speed. A reversed clip starts on its
+Out, so its left edge trims its Out and its right edge its In. A trim keeps
+at least 0.1 s on the timeline. A slowed clip trimmed that short and then
+made faster, up to 1× (Reset speed, the 1× preset, a typed 1), lasts less,
+as a source that short does. A clip slower than 1× never plays for more
+than 10 minutes: no speed, trim, typed In or Out, I or O takes it past
+that. Reset trim on such a clip grows its end first, then its start,
+keeping the frame the clip starts on, and stops at 10 minutes; a clip
+already there has nothing to reset. The filmstrip shows the frame the warp
+plays at each cell, so a reversed clip's runs backwards.
+
+**Speed**, in the rail under Volume. The slider runs from 0.1× at its left
+to 10× at its right on a log scale, with 1× in the middle, and snaps to the
+presets. A drag is one undo step. The well beside it shows the speed to
+three figures ("2×", "0.75×") and takes a typed one ("2", "2x", "0,5"). ↑
+and ↓ in the well move a slider step (about 5 %; ⇧: ten steps), one undo
+step until the well is left. The presets are 0.25×, 0.5×, 1×, 2× and 4×.
+No speed may make the clip last under 0.1 s or play for more than 10
+minutes: the slider stops there, a typed speed past it is set to the limit,
+and a preset past it is off, with "It would last under 0.1 s" or "It would
+play for more than 10 minutes" as its title. 1× is always in reach, and
+on a clip that holds under 0.1 s of source so is every speed up to it
+(see Length). Under
+the presets the rail notes "Lasts 8.00 s on the timeline." at any speed
+other than 1×, "No sound above 4× or below 0.25×." on a constant speed
+outside those, and, at a limit, "Can't be slower: it would play for more
+than 10 minutes." or "Can't be faster: it would last under 0.1 s.". Speed,
+Ramp and Blend frames wait for the clip's length to load, as In and Out do.
+A piece of a split ramp can average a speed outside 0.1–10×: the well shows
+it as it is ("0.0412×", "< 0.001×"), and ↑, ↓ and the slider only move it
+towards the range. The rail's title line gives a clip with a warp its
+source range ("4.20 s of 5.00 s"); its length on the timeline is the Speed
+note.
+
+**A speed change in Stacked** places the stack, as a trim does (see Lined
+up and placed): it first writes every clip's start, so the clip keeps its
+start and no other clip moves. While some clip has no start of its own yet
+and a clip is still loading, it waits ("Waiting for the clips to load"),
+and the rail's Speed controls are off with that as their title. Ramp,
+Reverse and Blend frames keep the length and never place the stack.
+
+**Ramp**, under Speed, has four modes: None (a constant speed), Preset,
+Bezier and Points. A ramp maps the clip's time to its source: where the
+curve is steep the clip rushes, where it is flat the clip slows or holds.
+The speed stays the average, so a ramp never changes the length.
+
+- **Preset** shows the easings that never run time backwards as a grid of
+  curve thumbnails (the arrows, Home and End move in it). From None it
+  starts on a sine ease in and out, the Ease Curve node's default.
+- **Bezier** shows the bezier editor: two handles, each kept inside the
+  plot. A focused handle moves with the arrow keys (0.01; ⇧: 0.1). From a
+  preset it starts on the bezier the Ease Curve node keeps for it, which
+  only comes close to the easing: the ramp shifts a little, and for the
+  two hybrids it visibly changes. A handle's drag is one undo step.
+- **Points** draws the curve in the rail, read-only. Its points are edited
+  on the timeline, and pressing Points opens the clip's speed row (below).
+  A switch to Points redraws the ramp as points (see Limits).
+
+A piece of a split ramp shows as Points with its part of the ramp drawn,
+and the note "Part of a ramp, cut by a split.". Preset or Bezier then gives
+the piece a whole new ramp.
+
+**Reverse** plays the clip's range backwards, at its speed and along its
+ramp. It keeps the length. It works while the clip's length is still
+loading, as the clip menu's Reverse does.
+
+**Blend frames** mixes the two source frames around each output frame by
+their distance where the clip plays below 1×, instead of holding the
+nearer one. It is on only in slow motion: a speed under 1×, or a ramp
+(otherwise its title says "Only in slow motion"). A slider drag, or a run
+of ↑ and ↓ in the well, that passes 1× keeps it; the 1× preset or a typed
+1× on a forward clip with no ramp drops it. Only the render and Frame to
+canvas show it.
+
+**Reset speed** sets 1× and no ramp; Reverse stays. The rail shows it at
+its foot while the clip plays at another speed or on a ramp, not for
+Reverse alone. The clip menu always lists it, and it is off there
+otherwise.
+
+**Several clips.** With several selected, the rail shows Speed (the well
+and the presets, "Mixed" while the speeds differ) and Reverse (On or Off,
+"Mixed" while they differ), and Reset speed while any plays at another
+speed or on a ramp. Each clip
+keeps to its own limits. Speed is off while any selected clip's length is
+unknown. Ramp and Blend frames are one clip's.
+
+**On the timeline** a retimed clip's box shows a badge: its speed ("2×",
+"0.5×") or "Ramp", and a rewind icon when it is reversed, where the box has
+room. The clip menu has Speed… (the rail's Speed well, focused), Reverse
+(Play forward when every selected clip is reversed), Reset speed (off
+unless a clip plays at another speed or on a ramp) and Show speed curve
+(Hide speed curve while open; one clip only). Reverse and Reset speed act
+on every selected clip. Cancel's discard sheet counts a clip whose speed,
+ramp, Reverse or Blend frames changed as "a speed change".
+
+**I and O on a reversed clip.** I sets the clip's start on the timeline and
+O its end. A reversed clip starts on its Out, so there I sets the Out and O
+the In; the rail's In and Out hints name the keys that way round. Under a
+speed or a ramp the edge lands where a drag of it to the playhead would.
+
+**Split** through a retimed clip keeps the picture: each piece plays its
+part of the ramp, and every moment shows the frame it showed. Each piece's
+speed is its own average. A reversed clip's left piece is the end of its
+range. Where a piece would stand still or hold almost no source, Split is
+off and says "Move the playhead: the speed here is too slow to split".
+
+**The speed row.** Show speed curve, under Ramp in the rail or in the clip
+menu, opens the clip's row on the timeline for its speed curve; pressing
+Points opens it too. Selecting a clip does not. One clip's speed row is
+open at a time; an audio row open for its volume curve stays open beside
+it.
+In Track the clips row grows to 136 px and draws every clip's curve; it is
+the first row to give way in a short window, down to its closed 80 px. In
+Stacked the clip's own row grows to 132 px and scrolls into view. The curve
+lies over the clip's frames under a dark wash: the clip's time across, its
+progress through the source up, so the slope is the speed. A dashed
+diagonal is the clip at its average speed. A reversed clip's line rises
+too; its filmstrip runs backwards.
+
+Only the single selected clip, at rest, takes edits on its curve. Its line
+is white, with a dot on each point of a points ramp; the two ends are fixed
+and have none. Drag on the line to add a point and move it; a click adds
+nothing. On a preset, a bezier, a piece of a split ramp or the straight
+line of a constant speed, that first drag turns the line into points, with
+a point where you pressed (see Limits). Drag a point to move it between its
+neighbours; double-click it to remove it. A press within 2 % of the clip's
+length of a point takes that point. The line takes no press that close to
+either end, so a drag there reorders the clip in Track and moves it in
+Stacked, as on the rest of its box. A ramp holds at most 64 points, its
+ends included. While a point moves, its momentary speed and its time on
+the timeline show beside it; over the line, a hint says "Drag to add
+point". Escape cancels a drag. Each drag or removal is one undo step.
+Points are never selected: ⌫ removes the clip, as always. A point under a
+trim handle still takes a press, and the box's hover sound button hides
+while its curve can be edited. A straight line left after removing points
+is no ramp: a forward clip at 1× goes back to its own speed. While the row
+is open, the rail says "Drag the line to add a point. Double-click a point
+to remove it.", or "Dragging the line turns the ramp into points." on a
+ramp that is not points yet.
+
+**Render.** Each 60 fps slot inside a retimed clip shows the source frame
+nearest the time its warp names (a tie goes to the earlier frame). Fast
+motion skips frames; slow motion holds them. With Blend frames on, a slot
+where the clip plays below 1× blends the two frames around that time by
+their distance. A frame is written on each slot where the picture changes,
+so the file keeps its variable frame rate. A reversed clip is decoded
+forward in chunks, each from the key frame before it, and written
+backwards. Frame to canvas shows the frame the render shows on that slot,
+blend included.
+
+The clip's own sound follows its picture, like tape: its pitch rises with
+its speed and falls in slow motion, a ramp glides, and a reversed clip
+plays backwards. It is resampled with a windowed sinc that filters out
+what fast motion would fold back (measured: a 440 Hz tone at 2× renders at
+880.00 Hz, with aliasing at −96 dB). A constant speed above 4× or below
+0.25× has no sound; 4× and 0.25× keep it. A ramp keeps its sound at any
+average speed: it fades below a quarter speed and is silent where the
+picture holds. Muted clips and clips at volume 0 are left out, as before.
+
+**Preview.** Each retimed clip's `<video>` plays at the speed its warp gives;
+on a ramp the rate is set again every frame. Its pitch follows its speed,
+as in the render; a clip at its own speed keeps its pitch. Chromium plays
+an element between 1/16× and 16×. Faster, the element plays at 16× and is
+seeked on. Slower (a hold, the flat end of an ease, a very slow speed), it
+is paused and stepped by seeks. A ramp starts playing only once it reaches
+a quarter speed; before that it is stepped by seeks. A reversed clip is
+always stepped by seeks, prepared on its first frame so a cut into it does
+not hold. A clip stepped by seeks is silent. A constant speed whose sound
+the render drops is silent in the preview too. A playing ramp's sound
+fades below a quarter speed as the render's does, but its slow start
+(until it first reaches a quarter speed) and any stretch below 1/16× are
+silent, where the render keeps their sound, faded. At a retimed clip's Out the
+preview holds its last frame, never a trimmed-off one. Text layers and
+audio clips run on the clock, as before.
+
+**Without a warp** nothing changes: an edit with no retimed clip saves,
+loads and renders as before (see "Renders as before").
 
 ## Library clips
 
@@ -1090,7 +1691,7 @@ canvas, Assets or the chat; Escape never leaves it.
 
 **Edit projects.** Each is one file, `<Node Banana folder>/Edits/<name>.nbedit`
 (JSON): a stable id, the name, when it was made and last changed, the
-sequence (video clips, audio clips, loop count, Track or Stacked), its
+sequence (video clips, audio clips, text layers, loop count, Track or Stacked), its
 media, what the library said about each of them (name, kind, project,
 length, so a clip the library lost can still be named), a summary for the
 list, and the renders made from it. Media are referenced by asset id only. A
@@ -1155,7 +1756,8 @@ an edit's clips come from the library.
 **The media pane** (`src/components/edit/MediaPane.tsx`) holds the edit's
 media, not the whole library. Its head reads "Media", then List and Grid
 (the pressed one filled, as Snap is; the choice is kept in
-`node-banana-edit-pane-layout`, List by default), Add media, and Hide
+`node-banana-edit-pane-layout`, List by default), Add media, Add text
+(a text layer at the playhead; see Text layers), and Hide
 media. A hidden pane stays hidden until the header's first button, Show
 media, shows it again, or Add media's Add puts something in it
 (`node-banana-edit-library-pane`, named for the library pane it
@@ -1282,11 +1884,12 @@ asset its video is: the output the source node shows, from its carousel
 (`videoHistory`, `audioHistory`) or a Comfy app's selected run, read past
 a router or switch to the node the edge comes from. The music clip becomes
 an audio clip of the connected audio's asset, with its row, trim, mute and
-curve; library clips pass through. A clip whose media the library does
+curve; library clips pass through, and so do the text layers. A clip
+whose media the library does
 not hold (an upload in a Video Input, a Trim or Ease Curve output, a node
 that has not run) is left out, and the toast says how many ("Saved to
-Edits without one clip that is not in the library."). When nothing is in
-the library, nothing is written. The measured lengths of the socket clips
+Edits without one clip that is not in the library."). When no clip is in
+the library, nothing is written, text layers or not. The measured lengths of the socket clips
 carry over to their assets for the summary's length; the asset snapshot is
 read from the editor's cache or the library at the write.
 
@@ -1299,20 +1902,27 @@ is off (that reason is also its description for assistive tech).
 
 - It shows the clips the preview shows at the playhead, with the same
   source frames and blend as Render: in Stacked, the same mix of the clips
-  that overlap there.
+  that overlap there. A retimed clip gives the frame its warp names on that
+  slot, with Blend frames as Render blends it (see Speed and ramps).
+- It draws the text layers over them as Render draws them on that frame's
+  60 fps slot, with the same drawing function, laid out at the image's
+  size, once their fonts have loaded.
 - The image is the sequence's frame size (the largest clip, as the header's
   ⋯ menu shows), as PNG.
 - The new image node goes to the right of the Edit Video node, selected.
   More frames from the same node go in a column under it.
 - The frame is kept in the asset library as an edited image ("Frame grab"),
-  with the playhead time and the clips it shows. The workflow kept with it
+  with the playhead time, the clips it shows and, when the edit has text
+  layers, how many (`overlays`). The workflow kept with it
   is the canvas as it was, not the unsaved edit.
 - One undo on the canvas removes the node. The editor stays open, and its
   own undo history is not touched.
 - While the preview plays, the button pauses it and takes the frame where it
   stopped.
-- The button is off when there are no clips, while clips are still loading,
-  when no clip has a video yet, and when the playhead is in a gap (black).
+- The button is off when there are no clips (text layers alone are not
+  enough), while clips are still loading, when no clip has a video yet, and
+  when the playhead is in a gap (black), even where Render shows a text
+  layer over that black.
 
 The frame is decoded from the clips' files, not copied from the preview, so
 it is exact even while the preview is still seeking. A clip whose site does
@@ -1322,44 +1932,45 @@ that takes more than 30 seconds to read is given up.
 
 ## Keys
 
-None of these fire while a timecode field has focus, apart from the Overlap
-and Start wells' own ↑ and ↓. While a handle, clip or
+None of these fire while a timecode field, a text layer's Text or its Font
+field has focus, apart from the wells' own ↑ and ↓. While a handle, clip or
 point is being dragged, only Escape (cancels the drag) and K work.
 
 | Key | Action |
 |---|---|
 | Space | Play or pause |
-| I / O | Set the selected clip's or audio clip's In / Out at the playhead (the playhead must be inside it) |
-| S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play); or the selected audio clips |
-| ⌫ / Delete | Remove the selected clips or audio clips, or the selected curve point |
-| M | Mute or unmute the selected audio clips; with none selected, the music |
-| ⌥M | Mute or unmute the selected video clips' own sound, or the selected audio clips |
-| ⌥← / ⌥→ | Stacked: the selected video clips; any layout: the selected audio clips. A frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
-| ⌥↑ / ⌥↓ | Stacked: move the selected clips up / down a row; or the selected audio clips a row |
-| [ / ] | Stacked: start / end the selected clip at the playhead, or the selected audio clip in any layout (also ⌥5 / ⌥6 and AltGr+8 / AltGr+9 where the keyboard types brackets that way) |
+| I / O | Set the selected clip's or audio clip's In / Out at the playhead (the playhead must be inside it; on a reversed clip I sets the Out and O the In); with a text layer selected, move its start / end to the playhead, the other edge kept (the playhead must be at least 0.1 s inside it) |
+| S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play); or the selected audio clips; or the selected text layers the playhead is at least 0.1 s inside, never the video under them |
+| ⌫ / Delete | Remove the selected clips, audio clips or text layers, or the selected curve point |
+| M | Mute or unmute the selected audio clips; with none selected, or with text layers selected, the music |
+| ⌥M | Mute or unmute the selected video clips' own sound, or the selected audio clips; nothing with text layers selected |
+| ⌥← / ⌥→ | Stacked: the selected video clips; any layout: the selected audio clips or text layers. A frame (1/60 s) earlier / later; ⇧ for 10 frames. A held key's repeats are one undo step |
+| ⌥↑ / ⌥↓ | Stacked: move the selected clips up / down a row; or the selected audio clips a row; or the selected text layers a row up (in front; from the top row, onto a new row) / down |
+| [ / ] | Stacked: start / end the selected clip at the playhead, or the selected audio clip or text layer in any layout (also ⌥5 / ⌥6 and AltGr+8 / AltGr+9 where the keyboard types brackets that way) |
 | ⌘Z / Ctrl+Z | Undo, in the editor only |
 | ⇧⌘Z / Ctrl+Y | Redo |
 | J / K / L | Back 1 s / pause / play |
-| ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too), or along the audio clips with one focused (↑ / ↓ too) |
+| ← / → / Home / End | Move the selection along the clips (with a clip focused; in Stacked ↑ / ↓ too), or along the audio clips with one focused (↑ / ↓ too), or along the text layers with one focused (↑ / ↓: the nearest on the row above or below) |
 | ↑ / ↓ in the Start well | 0.1 s later or earlier (⇧: 1 s), one undo step until the well is left |
+| ↑ / ↓ in a text layer's wells | Size, X and Y: 1 % (⇧: 10 %); Fade in, Fade out, Start and Length: 0.1 s (⇧: 1 s); one undo step until the well is left |
 | Context menu key / ⇧F10 | Open the clip menu |
-| Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel (in the Edit video view, nothing) |
+| Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel (in the Edit video view, nothing). In a text layer's Text, leave the field; in its Font field, close the list, then leave the field |
 | ⇧ while dragging a clip or an edge | No snapping (in Stacked, pressing or releasing ⇧ while the pointer rests takes effect at once) |
-| ⌥ while dragging the curve | Move the whole line |
+| ⌥ while dragging the volume curve | Move the whole line |
 | − / = (or +) | Zoom the timeline out / in, as the control row's − and + do |
 | ⇧Z | Fit the timeline, as the control row's Fit does |
 | ? | The keyboard shortcuts, the editor's first (in the node's dialog too) |
 | ⇧ + wheel | Scroll along the timeline (in Stacked with more rows than fit, where a plain wheel scrolls the rows) |
 | ⌘S | Save: writes the edit to the node and saves the workflow, keeping the editor open; in the Edit video view, saves the edit |
 | E (in the Edit video view) | Back to the canvas (A: Assets, C: Chat, ?: the shortcuts) |
-| ⌘C / ⌘X / ⌘V | Copy, cut, paste clips or audio clips |
-| ⌘D | Duplicate the selected clips or audio clips |
-| ⌘A | Select every clip, or every audio clip when audio is selected |
+| ⌘C / ⌘X / ⌘V | Copy, cut, paste clips, audio clips or text layers |
+| ⌘D | Duplicate the selected clips, audio clips or text layers |
+| ⌘A | Select every clip, or every audio clip when audio is selected, or every text layer when a text layer is |
 | ⌘-click / ⇧-click | Add or remove a clip / select a range |
 | Drag on empty lane space | Select with a box (⇧ or ⌘ adds) |
 
 In Track, ⌥ with an arrow, [ and ] do nothing to video clips (they work on
-selected audio clips), and ⌥← never reaches the
+selected audio clips and text layers), and ⌥← never reaches the
 browser (on Windows it would go Back). Keys the canvas or the browser
 would act on (⌘Z, ⌘C, ⌘V, ⌘X, ⌘A, ⌘D, Shift+letters, ⌘↵ and so on) never
 reach them while the editor is open, except in a text field.
@@ -1407,7 +2018,12 @@ snaps its start only.
   Under 500 px it shows the playhead's time without the length, and Play
   moves off centre rather than the buttons overlapping.
 - A project made by name before Edit video existed and called "Edits"
-  shares its folder with the edit files; both keep working.
+  shares its folder with the edit files; both keep working. So does one
+  called "Fonts", made before text layers, with the font files: Add font
+  file writes into it, and a library move takes the font files in it to the
+  new folder's Fonts folder and leaves the project's other files. A project
+  saved by name, or moved into the Node Banana folder, is never given that
+  folder now ("Fonts 2" instead).
 - **The preview is an approximation.** Clip volume and the curve are
   applied to the elements once a frame; it plays one loop. A video served
   without CORS shows no filmstrip frames (it still plays, and still blends
@@ -1420,12 +2036,15 @@ snaps its start only.
   nothing of its file has started yet (a tenth of a second at most while a
   fresh frame is decoded, half a second at most while it is still seeking).
   Either clip can run up to a frame off the clock, so a clip's last frame
-  can stay a frame longer than in the encode.
+  can stay a frame longer than in the encode. The text layers follow the
+  clock, not the picture: while the clip before stays on screen, a fade
+  goes on over it.
 - The preview has one `<video>` per clip. Only the clips under the playhead
   and the ones coming up load ahead; the others load their metadata until
   they are needed. Where clips overlap they all play at once, hidden ones
   too.
-- Every `<video>` and each audio clip's `<audio>` follow the clock. Within
+- Every `<video>` of a clip at its own speed (a retimed clip: see Speed and
+  ramps › Preview) and each audio clip's `<audio>` follow the clock. Within
   a frame (a video) or 0.03 s (an audio clip) one is left alone; up to
   0.25 s off it plays 2 % faster or slower (5 % past 0.12 s) until it is
   back within 0.01 s, so its sound never jumps; only past 0.25 s is it
@@ -1453,7 +2072,8 @@ snaps its start only.
   frames and blend are Render's too, so at the very start of a lined-up
   dissolve it can show the outgoing clip alone where the preview has begun
   to fade the next one in.
-- Clip sound is resampled linearly, and a mix of clip sound and music above
+- Clip sound is resampled linearly (a retimed clip's with a windowed sinc,
+  see Speed and ramps), and a mix of clip sound and music above
   full scale is hard-clipped. So is clip sound where stacked clips overlap,
   which adds up: with Crossfade off every clip that plays is heard at its
   own volume, so two loud ones can clip for the whole overlap and three or
@@ -1471,7 +2091,10 @@ snaps its start only.
   loop. A clip shown again after a cutaway, or hidden in the middle by a
   higher row and shown again (with Crossfade on or off), decodes its lead
   again, from its last key frame. Every clip that shows at once holds a
-  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. Above 4 at once the
+  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. A reversed clip
+  also keeps up to 192 MB of decoded frames while it shows (about 64 frames
+  at 1080p), on top of its decoder, and several reversed clips shown at
+  once add up. Above 4 clips at once the
   encoder logs a warning ("[VideoStitch] 5 clips blend at once; this takes
   about 250 MB at 1080p"). When a decoder fails while 3 or more clips blend,
   the run stops with "Could not decode 3 clips at once at 0:12. Move some
@@ -1480,7 +2103,7 @@ snaps its start only.
   decoded.
 - A placed blend writes a frame whenever one of its clips' frames changes:
   up to 60 a second for clips at different rates, so each frame gets fewer
-  bits.
+  bits. So does a text layer's fade, which writes a frame on every slot.
 - Blended frames drawn on the canvas (clips of different sizes or formats,
   or 10-bit video) can differ slightly in colour from the frames on either
   side, and HDR is tone-mapped there. Frames whose decoder pads their coded
@@ -1488,8 +2111,9 @@ snaps its start only.
   about 0.7 % larger than the frames beside them; lined-up dissolves already
   did this.
 - The timeline grows to 291 px for four or more clips in Stacked (189 px in
-  Track) with one audio row, by 52 px for a second audio row and by 76 px
-  while an audio row is taller, taking room from the stage
+  Track) with one audio row, by 52 px for a second audio row, by 76 px
+  while an audio row is taller and by 52 px for each of the first two text
+  rows, taking room from the stage
   down to 344 px (its padding and the control row under the video included:
   a 240 px video). The rail
   scrolls in a short window; its actions sit at its foot while there is
@@ -1512,19 +2136,104 @@ snaps its start only.
 - A Done made while a workflow runs cannot be undone on the canvas unless it
   also disconnects a clip's connection: the store takes no undo snapshot of
   node edits during a run, as for every other edit made then.
+- **Node Banana 2.2.0 and text layers.** 2.2.0 opens an edit with text
+  layers (the file's version is still 1) and ignores them: it neither shows
+  nor renders them. Any write 2.2.0 makes to the edit drops its text
+  layers: a save, a rename, a render, a duplicate, making a Finder copy a
+  separate edit, its automatic save after a library item is renamed, and
+  the Edits copy that the node's Done writes in 2.2.0. The node itself
+  keeps its `overlays` through 2.2.0's Done, since the store merges what
+  Done writes, but 2.2.0 does not render them.
+- **Node Banana 2.2.0 and clip speeds.** 2.2.0 opens an edit with retimed
+  clips (the file's version is still 1) and plays every clip at its own
+  speed. Any write 2.2.0 makes to the edit drops the speeds, as it drops
+  text layers. On a node, 2.2.0 reads no speeds either, and drops them
+  whenever it writes the node's timeline: a Done or Save in its editor
+  that changes the edit, a reorder or a Remove clip ✕ on the card, or
+  connecting a video. Disconnecting a video keeps them.
+- This build drops overlay kinds it does not know (a later build's) when it
+  writes an edit file. On a node they survive a Done that leaves the text
+  layers alone.
+- **Fonts are per computer.** A font file is in one library's Fonts folder,
+  and an installed font on one computer. An edit opened with another
+  library, or on another computer, needs the same file in that library's
+  Fonts folder, or the same family installed; otherwise the rail says so,
+  and Space Grotesk stands in on the stage, in the render and in Frame to
+  canvas. A library move made by Node Banana 2.2.0 leaves the Fonts folder
+  behind. A font file in the Fonts folder that is a symbolic link is listed
+  and used, but a library move does not carry it. A move into a folder
+  whose Fonts folder holds a font of the same name as one of ours is
+  refused (see [asset-library.md](asset-library.md)).
+- **No video, no render.** Text layers alone cannot be rendered: the Edit
+  video view's Render says "Add a clip to render", and the node's Render
+  needs two clips. The stage shows them on black, at a time of their own
+  (see Text layers): with no video the playhead cannot move, Play does
+  nothing, and the timeline draws no playhead.
+- **A split inside a fade.** A split gives the left piece no fade out and
+  the right piece no fade in, which changes nothing outside the fades.
+  Inside a fade it cannot keep the picture: split in a fade in, the left
+  piece fades in over what is left before the cut and the right one starts
+  at full; split in a fade out, the left piece stays at full to the cut and
+  the right one fades out over what is left.
+- **The preview of a retimed clip.** Blend frames, a reversed clip's
+  sound and the sound of a ramp's slow start (until it first reaches a
+  quarter speed) or of a stretch below 1/16× are only in the render (Blend
+  frames in Frame to canvas too). A
+  reversed clip, stepped by seeks, shows about 17 to 30 pictures a second
+  (measured on the H.264 files of a real edit: 17 to 21 on files with one
+  key frame, 23 to 30 on one with eight). At a cut into a slow clip, its
+  first frame can stay about one frame period longer (107–158 ms at 0.5×;
+  at 0.25× a frame is skipped instead). Just after a ramp starts, a frame can
+  hold for 250–325 ms. In some sessions Chromium runs a retimed clip's
+  picture about two source frames ahead for the whole clip. On a 120 Hz
+  display a 0.5× clip is about 0.6 of a source frame off at the median,
+  against 0.3 at 60 Hz. A forward retimed clip's own sound can stop up to
+  one source frame before its Out (42 ms of a 24 fps file at 1×, 167 ms at
+  0.25×).
+- **Reversing a long file with one key frame is slow.** The render decodes
+  a reversed clip forward in chunks, each from the key frame before it. A
+  file with a single key frame is decoded from its start for every chunk,
+  so the work grows with the square of the clip's length.
+- A clip stored to play far longer than 10 minutes (a file edited by hand
+  to 1e-9×, say) can make the render fail.
+- A text layer that fades during the frames held at the very end of an
+  edit (the flat end of an ease out on the last clip) makes the video
+  track end 1/60 s after the fade's last frame, not at the end of the
+  edit.
+- **Points redraw a ramp.** A switch to Points, or the first drag on a
+  ramp's line in the speed row, redraws a preset or a bezier as points, at
+  least 2 % of the clip's length apart. They aim for half a source frame,
+  between 0.2 % and 1 % of the source range, and most presets keep to it.
+  Points cannot follow a very steep stretch or a vertical tangent. The
+  largest measured gap from the curve they replace, as a share of the
+  source range: about 2 % for the Expo and Quint presets and the two
+  hybrids, about 7 % for the Circ presets, and up to about 30 % for a
+  bezier with a vertical tangent (a handle on the plot's left or right
+  edge). About one random bezier in ten ends
+  more than 3 source frames off on a 10 s clip at 24 fps. The speed row
+  draws the new line, and Undo puts the ramp back.
+- Frame to canvas stays off in a gap, so text the render shows over black
+  there can be seen on the stage but not grabbed.
 - The agent sees the node's `clipOrder` and loop count, not its timeline,
-  its layout, where its clips are placed or its audio clips; its edits keep
-  them all.
+  its layout, where its clips are placed, their speeds, its audio clips or
+  its text layers; its edits merge into the node's data, so they keep them
+  all.
 - Not built: ducking the music under clips with sound, roll edits,
   transitions other than the crossfade where stacked clips overlap, a
   crossfade at the loop's restart, an overlap set per join, fade lengths
-  set per clip, selecting or deleting a gap, a slip edit,
-  a start before 0:00, a lock to one axis while dragging a clip, speed
-  changes, titles, a second video track (Stacked's rows are still one
-  sequence and one output track), a second audio socket, audio effects
-  other than the volume curve, selecting video and audio clips together, a
-  volume slider for audio clips, audio that follows a video clip when the
-  video moves, selecting a whole audio row at once, extending a selection with ⇧ and
-  the arrow keys, copying clips to the system clipboard (the copy lives in
-  the app until it reloads), snapping every clip of a group drag (only the
-  clip you hold snaps).
+  set per clip, selecting or deleting a gap, a slip edit, a start before
+  0:00, a lock to one axis while dragging a clip, fade handles on a text
+  layer's box (the fades are set in the rail), editing or dragging text on
+  the stage, a wash behind the text alone (it covers the whole frame),
+  overlays other than text (an image, a shape), a second video track
+  (Stacked's rows are still one sequence and one output track), a second
+  audio socket, audio effects other than the volume curve, selecting video
+  and audio clips together, a volume slider for audio clips, audio that
+  follows a video clip when the video moves, selecting a whole audio row
+  at once, extending a selection with ⇧ and the arrow keys, copying clips
+  to the system clipboard (the copy lives in the app until it reloads),
+  snapping every clip of a group drag (only the clip you hold snaps), a
+  speed that keeps the sound's pitch, speed on audio clips or text layers,
+  a key for speed, selecting a point on a speed curve (⌫ removes the
+  clip), and slow motion with new in-between frames (Blend frames mixes
+  the two frames around each).

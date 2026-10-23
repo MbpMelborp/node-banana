@@ -36,7 +36,7 @@ import {
   MODEL_DISPLAY_NAMES,
 } from "@/types";
 import { loadGenerateImageDefaults, loadNodeDefaults } from "./localStorage";
-import { getEasingBezier } from "@/lib/easing-presets";
+import { getEasingBezier } from "@/lib/easing";
 import { DEFAULT_LLM_MODEL, DEFAULT_LLM_PROVIDER } from "@/lib/llm/catalog";
 
 /**
@@ -354,7 +354,7 @@ export const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
       };
     case "easeCurve":
       return {
-        bezierHandles: getEasingBezier("easeInOutSine"), // [0.37, 0, 0.63, 1] from easing-presets source of truth
+        bezierHandles: getEasingBezier("easeInOutSine"), // [0.37, 0, 0.63, 1] from the easing library
         easingPreset: "easeInOutSine",
         inheritedFrom: null,
         outputDuration: 1.5,

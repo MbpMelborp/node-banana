@@ -1,6 +1,8 @@
 import type {
+  ClipWarp,
   StitchAudioSource,
   StitchClipSource,
+  StitchOverlay,
   StitchSequenceLayout,
   StitchTimelineClip,
   VolumePoint,
@@ -16,6 +18,7 @@ import {
   type ClipSpan,
   type SourceDurations,
 } from "./timeline";
+import { cloneWarp, isWarped, sanitizeWarp } from "./warp";
 
 /**
  * The editor's clipboard: copied clips as plain values (sources are ids, so
@@ -30,6 +33,8 @@ export interface ClipboardVideoItem {
   outSec: number | null;
   muted: boolean;
   volume: number;
+  /** Its retiming, a copy; absent when it plays at its own speed. */
+  warp?: ClipWarp;
   /** Its span's start less the earliest copied start, seconds, in the layout it was copied from (>= 0). */
   offsetSec: number;
 }
@@ -48,8 +53,19 @@ export interface ClipboardAudioItem {
   rowOffset: number;
 }
 
-/** Every kind of copied clip. One copy holds one kind: a selection holds video clips or audio clips, never both. */
-export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem;
+/** One copied overlay: its settings, a copy; its id, row and times are given again on paste. */
+export interface ClipboardOverlayItem {
+  track: "overlay";
+  overlay: Omit<StitchOverlay, "id" | "row" | "startSec" | "endSec">;
+  lengthSec: number;
+  /** Its start less the earliest copied start (>= 0). */
+  offsetSec: number;
+  /** Its row less the lowest copied row (>= 0). */
+  rowOffset: number;
+}
+
+/** Every kind of copied clip. One copy holds one kind: a selection holds one kind (video, audio or overlays). */
+export type ClipboardItem = ClipboardVideoItem | ClipboardAudioItem | ClipboardOverlayItem;
 
 /**
  * Where the clips were copied. A node: tabId is the workflow store's activeTabId, workflowId ensureWorkflowId() at
@@ -100,6 +116,7 @@ export function copyItems(
     outSec: clip.outSec,
     muted: clip.muted,
     volume: clip.volume,
+    ...(isWarped(clip.warp) ? { warp: cloneWarp(clip.warp) } : {}),
     offsetSec: start - earliest,
   }));
 }
@@ -127,6 +144,8 @@ function isOwnNode(origin: ClipboardOrigin, target: Extract<PasteTarget, { kind:
 
 /** Whether an item may be pasted into the target, or why not. */
 function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteTarget): SkipReason | null {
+  // An overlay holds no media (a font file is the library's, not the node's)
+  if (item.track === "overlay") return null;
   if (item.source.kind === "asset") return null;
   // An edit holds only library clips: a connected video or the music has no node there to come from
   if (target.kind === "edit") return "notInEdit";
@@ -147,10 +166,10 @@ function skipReason(item: ClipboardItem, origin: ClipboardOrigin, target: PasteT
 }
 
 /**
- * Asset items always pass. An edge item passes only into its own node (the same node, tab and workflow) while its
- * edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item passes only
- * into its own node, else "music". Into an edit, every item that is not an asset is "notInEdit". Skipped counts come
- * in the order otherNode, disconnected, music, notInEdit, leaving out a reason with no clip.
+ * Asset and overlay items always pass. An edge item passes only into its own node (the same node, tab and workflow)
+ * while its edge is still connected there: "disconnected" when it is not, "otherNode" anywhere else. A music item
+ * passes only into its own node, else "music". Into an edit, every other item is "notInEdit". Skipped counts come in
+ * the order otherNode, disconnected, music, notInEdit, leaving out a reason with no clip.
  */
 export function pastableItems(
   clipboard: StitchClipboard,
@@ -197,8 +216,8 @@ export function skippedMessage(skipped: ReadonlyArray<{ reason: SkipReason; coun
 }
 
 /**
- * New clips from items (makeId each; source, In, Out, muted, volume copied), inserted at index afterIndex + 1
- * (−1 = the top or the start; afterIndex >= length − 1 or non-finite = the end).
+ * New clips from items (makeId each; source, In, Out, muted, volume and the warp copied, the warp sanitized), inserted
+ * at index afterIndex + 1 (−1 = the top or the start; afterIndex >= length − 1 or non-finite = the end).
  * Track: no startSec, the timeline unpinned, afterIndex used as given.
  * Stacked: pinStarts first; then afterIndex moves to the end of the run that row belongs to (runEndIndex), so new
  * rows never land between the pieces of a split; then each new clip starts at clamp(startSec + offsetSec, 0, 10:00).
@@ -217,8 +236,9 @@ export function pasteIntoTimeline(
   const base = stacked ? pinStarts(timeline, durations, layout.overlapSec) : timeline;
   let after = Number.isFinite(at.afterIndex) ? clamp(Math.trunc(at.afterIndex), -1, base.length - 1) : base.length - 1;
   if (stacked && after >= 0) after = runEndIndex(layoutSpans(base, durations, layout), after);
-  const clips = items.map((item) =>
-    createClip(
+  const clips = items.map((item) => {
+    const warp = sanitizeWarp(item.warp);
+    return createClip(
       { ...item.source },
       {
         id: makeId(),
@@ -226,10 +246,11 @@ export function pasteIntoTimeline(
         outSec: item.outSec,
         muted: item.muted,
         volume: item.volume,
+        ...(warp ? { warp } : {}),
         ...(stacked ? { startSec: clamp(at.startSec + item.offsetSec, 0, MAX_START_SEC) } : {}),
       },
-    ),
-  );
+    );
+  });
   return {
     timeline: [...base.slice(0, after + 1), ...clips, ...base.slice(after + 1)],
     ids: clips.map((clip) => clip.id),

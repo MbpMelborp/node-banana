@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import type { ClipWarp } from "@/types";
 import { FRAME_RATE, FrameSlotter, planSequence, secToSlot, videoTrackDuration } from "../sequencePlan";
+import { normalizeWarp, warpedLength } from "../warp";
 
 describe("planSequence", () => {
   it("plays a clip without Out to its video's end", () => {
@@ -53,6 +57,59 @@ describe("planSequence", () => {
 
   it("gives an empty source no time", () => {
     expect(planSequence([{ inSec: 0, outSec: null, sourceDuration: 0 }])).toEqual({ clips: [], loopLength: 0 });
+  });
+
+  describe("a retimed clip", () => {
+    const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({ speed, curve: null, reverse: false, blend: false, ...extra });
+
+    it("plays its source length over its speed, and carries its warp; a clip without one carries no key", () => {
+      const warp = W(2);
+      const { clips, loopLength } = planSequence([
+        { inSec: 0, outSec: null, sourceDuration: 4, warp },
+        { inSec: 1, outSec: null, sourceDuration: 3 },
+      ]);
+      expect(clips[0]).toEqual({ index: 0, inSec: 0, outSec: 4, origin: 0, length: 2, seqStart: 0, warp });
+      expect(clips[1]).toEqual({ index: 1, inSec: 1, outSec: 3, origin: 1, length: 2, seqStart: 2 });
+      expect("warp" in clips[1]).toBe(false);
+      expect(loopLength).toBe(4);
+    });
+
+    it("gives warpedLength's float for any active warp", () => {
+      let seed = 3;
+      const random = () => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return seed / 2147483648;
+      };
+      for (let i = 0; i < 50; i++) {
+        const warp = normalizeWarp(
+          W(Math.exp(Math.log(0.1) + random() * Math.log(100)), {
+            curve: random() < 0.5 ? { kind: "preset", name: "easeInOutSine" } : null,
+            reverse: random() < 0.5,
+          }),
+        );
+        if (!warp) continue;
+        const inSec = random() * 3;
+        const outSec = inSec + 0.5 + random() * 5;
+        const [planned] = planSequence([{ inSec, outSec, sourceDuration: 10, warp }]).clips;
+        expect(Object.is(planned.length, warpedLength(outSec - inSec, warp))).toBe(true);
+      }
+    });
+
+    it("drops a clip sped under one output frame, and the next one closes up", () => {
+      const { clips } = planSequence([
+        { inSec: 0, outSec: 0.02, sourceDuration: 5, warp: W(2) },
+        { inSec: 0, outSec: 1, sourceDuration: 5 },
+      ]);
+      expect(clips.map((c) => [c.index, c.seqStart])).toEqual([[1, 0]]);
+    });
+
+    it("imports nothing at runtime", () => {
+      const imports = readFileSync(join(__dirname, "../sequencePlan.ts"), "utf8")
+        .split("\n")
+        .filter((line) => line.startsWith("import "));
+      expect(imports.length).toBeGreaterThan(0);
+      expect(imports.every((line) => line.startsWith("import type "))).toBe(true);
+    });
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import { Plus } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
@@ -15,13 +16,14 @@ import { insetBox, JOIN_INSET_PX, type LaneBox } from "@/lib/stitch/laneLayout";
 import { blockInsertionX, insertionX } from "@/lib/stitch/reorder";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import type { ClipSpan } from "@/lib/stitch/timeline";
+import { isWarped } from "@/lib/stitch/warp";
 import { openLibraryPicker } from "../editorActions";
 import { GEOMETRY, EDITOR_PANEL_SELECTOR } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
 import { ClipBox, keepFocus, type ClipBoxMode } from "./ClipBox";
 import { EmptyClipSlot } from "./EmptyClipSlot";
-import { Filmstrip } from "./Filmstrip";
+import { Filmstrip, frameCellFor } from "./Filmstrip";
 import { releaseTypingFocus } from "./releaseTypingFocus";
 import type { ReorderLive } from "./useClipReorder";
 import type { TrimLive } from "./useTrimDrag";
@@ -200,9 +202,10 @@ export function AddSlotButton({
 /**
  * The clips row: one box per clip (a fixed slot for a clip with no length),
  * the trim ghost, and the insertion bar while a clip is dragged to a new
- * place. After the last clip a quiet + slot opens Add media; an empty
- * sequence shows a placeholder across the lane that does the same (both off
- * while the library is).
+ * place; open for a clip's speed curve, the row and its boxes are taller,
+ * and each box draws its curve. After the last clip a quiet + slot opens
+ * Add media; an empty sequence shows a placeholder across the lane that
+ * does the same (both off while the library is).
  *
  * It is a listbox: the selected clip (the lead of several) is its one tab
  * stop, the arrows, Home and End select one clip, and the context-menu key
@@ -228,6 +231,12 @@ export function ClipsLane({
   viewLeft,
   viewRight,
   laneWidth,
+  visibleRight,
+  contentRef,
+  top = GEOMETRY.ruler,
+  expanded = false,
+  rowHeight = GEOMETRY.clipRow,
+  clipHeight = GEOMETRY.clipHeight,
   onBodyPointerDown,
   onHandlePointerDown,
   onLanePointerDown,
@@ -247,6 +256,16 @@ export function ClipsLane({
   viewLeft: number;
   viewRight: number;
   laneWidth: number;
+  /** The visible lanes' right, for a curve readout's side. */
+  visibleRight: number;
+  /** The lane content, which a speed curve's presses are measured against. */
+  contentRef: RefObject<HTMLDivElement | null>;
+  /** The clips row's top in the lanes' content: under the ruler and the text layers' rows. */
+  top?: number;
+  /** Open for a clip's speed curve: the row and its clips are as tall as the timeline's layout leaves them. */
+  expanded?: boolean;
+  rowHeight?: number;
+  clipHeight?: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
   onHandlePointerDown: (event: ReactPointerEvent<HTMLElement>, span: ClipSpan, edge: "in" | "out") => void;
   /** A press on the listbox itself: the selection box. */
@@ -257,7 +276,7 @@ export function ClipsLane({
   const tabStop = laneTabStop(spans, selectedId);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => onLaneKeyDown(event, spans, tabStop);
 
-  const rowStyle = { top: GEOMETRY.ruler, height: GEOMETRY.clipRow };
+  const rowStyle = { top, height: rowHeight };
   if (spans.length === 0) {
     return (
       <div ref={rowRef} className="absolute inset-x-0" style={rowStyle}>
@@ -285,10 +304,15 @@ export function ClipsLane({
     const out = trim.edge === "out";
     const left = out ? JOIN_INSET_PX : trimIndex > 0 ? JOIN_INSET_PX : 0;
     const right = out ? (trimIndex < spans.length - 1 ? JOIN_INSET_PX : 0) : JOIN_INSET_PX;
+    const warped = isWarped(span.clip.warp);
     return {
       x: raw.x + left,
       width: Math.max(0, raw.width - left - right),
-      inSec: out ? trim.result.edgeSourceTime : span.clip.inSec,
+      // A retimed clip's ghost shows its own frames where they were: the old clip, from the crossed part's offset
+      inSec: out && !warped ? trim.result.edgeSourceTime : span.clip.inSec,
+      lengthSec: span.length,
+      warp: warped ? span.clip.warp : undefined,
+      offsetSec: warped ? fromSec - span.start : 0,
       view: media.get(span.clip.id),
       out,
     };
@@ -348,6 +372,7 @@ export function ClipsLane({
                 selected={selected}
                 focusable={focusable}
                 mode={mode}
+                height={clipHeight}
                 onBodyPointerDown={onBody}
                 onContextMenu={onMenu}
               />
@@ -369,7 +394,16 @@ export function ClipsLane({
               pxPerSec={axis.pxPerSec}
               viewLeft={viewLeft}
               viewRight={viewRight}
+              height={clipHeight}
               multi={multi}
+              expanded={expanded}
+              curveEditable={expanded && selected && !multi && mode === "rest" && trimIndex === -1}
+              // The join inset only: a lifted box's travel moves its line with it
+              curveOffsetX={box.x - drawn.x}
+              curveWidth={box.width}
+              contentRef={contentRef}
+              visibleRight={visibleRight}
+              contentWidth={laneWidth}
               onBodyPointerDown={onBody}
               onHandlePointerDown={(event, edge) => onHandlePointerDown(event, span, edge)}
               onContextMenu={onMenu}
@@ -382,17 +416,21 @@ export function ClipsLane({
             aria-hidden="true"
             data-testid="stitch-trim-ghost"
             className={ghost.out ? "absolute overflow-hidden rounded-r-md" : "absolute overflow-hidden rounded-l-md"}
-            style={{ left: ghost.x, top: GEOMETRY.clipTop, width: ghost.width, height: GEOMETRY.clipHeight }}
+            style={{ left: ghost.x, top: GEOMETRY.clipTop, width: ghost.width, height: clipHeight }}
           >
             <Filmstrip
               frames={ghost.view?.frames ?? []}
               duration={ghost.view?.duration ?? null}
               inSec={ghost.inSec}
+              lengthSec={ghost.lengthSec}
+              warp={ghost.warp}
+              offsetSec={ghost.offsetSec}
               pxPerSec={axis.pxPerSec}
               width={ghost.width}
               boxX={ghost.x}
               viewLeft={viewLeft}
               viewRight={viewRight}
+              cell={expanded ? frameCellFor(clipHeight) : undefined}
               className="opacity-30"
             />
             <div className="absolute inset-0 editor-ghost-hatch" />
@@ -407,7 +445,7 @@ export function ClipsLane({
             style={{
               left: insertionBarX - 1.5,
               top: GEOMETRY.clipTop - 4,
-              height: GEOMETRY.clipHeight + 8,
+              height: clipHeight + 8,
             }}
           />
         )}
@@ -415,8 +453,8 @@ export function ClipsLane({
       <AddSlotButton
         libraryOn={libraryOn}
         left={slotX}
-        top={GEOMETRY.ruler + GEOMETRY.clipTop}
-        height={GEOMETRY.clipHeight}
+        top={top + GEOMETRY.clipTop}
+        height={clipHeight}
         onFocus={onFocus}
         onBlur={onBlur}
       />

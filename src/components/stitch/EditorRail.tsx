@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Crosshair, RotateCcw, Scissors, Trash } from "lucide-react";
+import { Crosshair, RotateCcw, Scissors, TimerReset, Trash } from "lucide-react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { clipName } from "@/lib/stitch/labels";
+import type { OverlaySize } from "@/lib/stitch/overlayDraw";
+import { draftOverlays } from "@/lib/stitch/overlays";
 import { clipIdsOf } from "@/lib/stitch/selection";
-import { clipLength, isTrimmed } from "@/lib/stitch/timeline";
+import { rampModeOf } from "@/lib/stitch/rampModes";
+import { canResetTrim, clipLength, clipSourceOut, sourceKey } from "@/lib/stitch/timeline";
+import { activeWarp, isRetimed, trimField } from "@/lib/stitch/warp";
 import type { StitchTimelineClip } from "@/types";
 import {
   canRevealSource,
@@ -24,6 +28,8 @@ import {
   trimSelected,
 } from "./editorActions";
 import { AudioClipRail } from "./AudioClipRail";
+import { ClipSpeed, ClipsSpeed } from "./ClipSpeedRail";
+import { TextOverlayRail } from "./TextOverlayRail";
 import {
   RailAction,
   RailActions,
@@ -38,6 +44,7 @@ import {
   railDetail,
   START_KEYS,
 } from "./railParts";
+import { resetSelectedSpeed } from "./speedActions";
 import { TimecodeField } from "./TimecodeField";
 import type { AudioClipView, ClipMediaView } from "./useStitchEditorMedia";
 import { EDITOR_PANEL_SELECTOR } from "./editorStyles";
@@ -55,20 +62,26 @@ function clipNamesLine(indices: readonly number[]): string {
  * edge. It keeps its column whatever is selected, so the video never changes
  * size on a click. One clip: "Clip 2 of 4", its source and length; its In and
  * Out side by side (in Stacked Start first: where it starts on the timeline);
- * its own Sound and Volume; then, at the foot, Split at playhead, Reset trim
- * (only while trimmed), Reveal source node (the dialog's) and Remove clip.
- * With audio clips selected it shows them instead (AudioClipRail), and with
- * several video clips what applies to all of them (MultiClipRail). The keys
- * are in the fields' and the actions' hover labels. Frame to canvas is in the
- * control row under the video; Loop is in the header's ⋯ menu.
+ * its own Sound and Volume; its Speed, Ramp, Reverse and Blend frames
+ * (ClipSpeed); then, at the foot, Split at playhead, Reset trim (only while
+ * there is a trim to reset), Reset speed (only while retimed), Reveal source
+ * node (the dialog's) and Remove clip.
+ * With audio clips selected it shows them instead (AudioClipRail), with text
+ * layers those (TextOverlayRail), and with several video clips what applies
+ * to all of them (MultiClipRail). The keys are in the fields' and the
+ * actions' hover labels. Frame to canvas is in the control row under the
+ * video; Loop is in the header's ⋯ menu.
  */
 export function EditorRail({
   media,
   audio,
+  frameSize,
 }: {
   media: ReadonlyMap<string, ClipMediaView>;
   /** Each audio clip's view. */
   audio: ReadonlyMap<string, AudioClipView>;
+  /** The output's size, which a text layer's fit is measured in; null while no clip has one. */
+  frameSize: OverlaySize | null;
 }) {
   const draft = useStitchEditorStore((s) => s.draft);
   const durations = useStitchEditorStore((s) => s.durations);
@@ -93,6 +106,10 @@ export function EditorRail({
   const view = clip ? media.get(clip.id) : undefined;
   const duration = view?.duration ?? null;
   const hasClip = clip !== null;
+  // The picker's body (the preset grid, the bezier editor, the drawn curve) swaps with the ramp's kind, an undo too
+  const rampMode = clip ? rampModeOf(clip.warp?.curve ?? null, clip.warp?.window) : null;
+  // I sets the clip's head on the timeline and O its tail: a reversed clip's head is its Out
+  const [inKey, outKey] = clip && trimField(clip, "in") === "outSec" ? ["O", "I"] : ["I", "O"];
   // A timeline time, beside the source times In and Out: where the trimmed clip starts (an empty clip's slot too)
   const start = useMemo(() => {
     if (!stacked || !draft || !clipId) return null;
@@ -105,36 +122,60 @@ export function EditorRail({
     return draft.audioClips.filter((c) => ids.has(c.id));
   }, [selection, draft]);
   const audioSelected = selectedAudio.length > 0;
+  const selectedOverlays = useMemo(() => {
+    if (selection?.kind !== "overlay" || !draft) return [];
+    const overlays = draftOverlays(draft);
+    const ids = new Set(clipIdsOf(selection, overlays.map((o) => o.id)));
+    return overlays.filter((o) => ids.has(o.id));
+  }, [selection, draft]);
+  const overlaySelected = selectedOverlays.length > 0;
+  const overlayMulti = selectedOverlays.length > 1;
+  // Reset trim and Reset speed show only while they would change a selected clip
+  const canResetTrims = selectedIndices.some((i) => {
+    const c = draft!.timeline[i];
+    return canResetTrim(c, durations.get(sourceKey(c.source)));
+  });
+  const retimed = selectedIndices.some((i) => isRetimed(draft!.timeline[i].warp));
 
-  // A swap of the rail's body (the last clip removed, the track for a clip or back, Start or Crossfade coming or going
-  // with the layout) unmounts a focused control: focus the dialog, not <body>, so Tab stays inside
+  // A swap of the rail's body (the last clip removed, the track for a clip or back, one text layer for several, Start or
+  // Crossfade coming or going with the layout, the ramp picker's body with its kind, the Speed section, keyed by clip,
+  // with another clip), or an undo that leaves nothing for Reset trim or Reset speed to do, unmounts a focused control:
+  // focus the dialog, not <body>, so Tab stays inside
   useEffect(() => {
     const active = document.activeElement;
     if (active === null || active === document.body) {
       railRef.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
     }
-  }, [hasClip, audioSelected, stacked, multi]);
+  }, [hasClip, clipId, audioSelected, overlaySelected, overlayMulti, stacked, multi, rampMode, canResetTrims, retimed]);
 
   return (
     <aside
       ref={railRef}
-      aria-label={audioSelected ? "Audio clip" : "Clip"}
+      aria-label={audioSelected ? "Audio clip" : overlaySelected ? "Text" : "Clip"}
       className="w-[280px] shrink-0 overflow-y-auto border-l border-edit-line"
     >
       <div className="flex min-h-full flex-col p-5">
         {audioSelected ? (
           <AudioClipRail clips={selectedAudio} views={audio} />
+        ) : overlaySelected ? (
+          <TextOverlayRail overlays={selectedOverlays} frameSize={frameSize} />
         ) : multi && draft ? (
           <MultiClipRail
             timeline={draft.timeline}
             indices={selectedIndices}
+            canResetTrims={canResetTrims}
+            retimed={retimed}
             canSplit={canSplit}
             splitBlocked={splitBlocked}
           />
         ) : !clip ? (
           // An empty editor has nothing to select; the stage says why
           draft &&
-          draft.timeline.length > 0 && <p className="text-[13px] leading-5 text-ink-3">Select a clip to edit it.</p>
+          (draft.timeline.length > 0 || draftOverlays(draft).length > 0) && (
+            <p className="text-[13px] leading-5 text-ink-3">
+              {draft.timeline.length > 0 ? "Select a clip to edit it." : "Select a text layer to edit it."}
+            </p>
+          )
         ) : (
           <>
             <RailTitle
@@ -143,7 +184,12 @@ export function EditorRail({
                 railDetail(
                   view?.railSource,
                   duration,
-                  duration === null ? null : clipLength(clip, duration),
+                  // The source range, as In and Out read: a retimed clip's length on the timeline is the Speed note's
+                  duration === null
+                    ? null
+                    : activeWarp(clip)
+                      ? clipSourceOut(clip, duration) - clip.inSec
+                      : clipLength(clip, duration),
                   inEdit,
                 ),
               ]}
@@ -161,7 +207,7 @@ export function EditorRail({
                   />
                 </RailField>
               )}
-              <RailField label="In" hint="In at the playhead" shortcut="I">
+              <RailField label="In" hint="In at the playhead" shortcut={inKey}>
                 <TimecodeField
                   label="In"
                   value={clip.inSec}
@@ -169,7 +215,7 @@ export function EditorRail({
                   onCommit={(inSec) => trimSelected({ inSec })}
                 />
               </RailField>
-              <RailField label="Out" hint="Out at the playhead" shortcut="O" last>
+              <RailField label="Out" hint="Out at the playhead" shortcut={outKey} last>
                 <TimecodeField
                   label="Out"
                   value={duration !== null ? Math.min(clip.outSec ?? duration, duration) : (clip.outSec ?? 0)}
@@ -198,6 +244,8 @@ export function EditorRail({
               </div>
             </div>
 
+            <ClipSpeed key={clip.id} clip={clip} duration={duration} fps={view?.fps ?? null} />
+
             <RailActions>
               <RailAction
                 icon={<Scissors size={16} strokeWidth={1.5} />}
@@ -207,12 +255,20 @@ export function EditorRail({
                 title={canSplit ? undefined : (splitBlocked ?? undefined)}
                 onClick={splitAtPlayhead}
               />
-              {isTrimmed(clip) && (
+              {canResetTrims && (
                 <RailAction
                   icon={<RotateCcw size={16} strokeWidth={1.5} />}
                   label="Reset trim"
                   vanishes
                   onClick={resetSelectedTrim}
+                />
+              )}
+              {retimed && (
+                <RailAction
+                  icon={<TimerReset size={16} strokeWidth={1.5} />}
+                  label="Reset speed"
+                  vanishes
+                  onClick={resetSelectedSpeed}
                 />
               )}
               {!inEdit && (
@@ -240,18 +296,23 @@ export function EditorRail({
 
 /**
  * The rail with several clips selected: how many and which, their sound as one control (neither On nor Off pressed
- * while some are muted and some not), and the actions that apply to all of them. Trims, Start and Volume are one
- * clip's, so they are not here.
+ * while some are muted and some not), their Speed and Reverse (ClipsSpeed), and the actions that apply to all of
+ * them. Trims, Start, Volume, Ramp and Blend frames are one clip's, so they are not here.
  */
 function MultiClipRail({
   timeline,
   indices,
+  canResetTrims,
+  retimed,
   canSplit,
   splitBlocked,
 }: {
   timeline: readonly StitchTimelineClip[];
   /** The selected clips' timeline indices, in order. */
   indices: readonly number[];
+  /** Whether Reset trim, and Reset speed, would change any of them. */
+  canResetTrims: boolean;
+  retimed: boolean;
   canSplit: boolean;
   splitBlocked: string | null;
 }) {
@@ -279,6 +340,8 @@ function MultiClipRail({
         </RailRow>
       </div>
 
+      <ClipsSpeed clips={clips} />
+
       <RailActions>
         <RailAction
           icon={<Scissors size={16} strokeWidth={1.5} />}
@@ -288,12 +351,20 @@ function MultiClipRail({
           title={canSplit ? undefined : (splitBlocked ?? undefined)}
           onClick={splitAtPlayhead}
         />
-        {clips.some(isTrimmed) && (
+        {canResetTrims && (
           <RailAction
             icon={<RotateCcw size={16} strokeWidth={1.5} />}
             label="Reset trim"
             vanishes
             onClick={resetSelectedTrim}
+          />
+        )}
+        {retimed && (
+          <RailAction
+            icon={<TimerReset size={16} strokeWidth={1.5} />}
+            label="Reset speed"
+            vanishes
+            onClick={resetSelectedSpeed}
           />
         )}
         <RailAction

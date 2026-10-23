@@ -364,4 +364,15 @@ describe("EaseCurveNode", () => {
       expect(container.querySelector("[data-node-shell]")).toBeInTheDocument();
     });
   });
+
+  describe("Bezier editor", () => {
+    it("keeps the chosen preset through a press on a handle that moves nothing", () => {
+      render(<EaseCurveNode {...createNodeProps({ easingPreset: "easeInOutSine", bezierHandles: [0.37, 0, 0.63, 1] })} />);
+      fireEvent.pointerDown(screen.getByLabelText("Adjust control point 1"), { clientX: 40, clientY: 200 });
+      fireEvent.pointerMove(window, { clientX: 40, clientY: 200 });
+      fireEvent.pointerUp(window);
+      expect(mockUpdateNodeData.mock.calls.filter(([, patch]) => "bezierHandles" in patch)).toEqual([]);
+      expect(screen.getByText("Current: easeInOutSine")).toBeInTheDocument();
+    });
+  });
 });

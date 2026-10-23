@@ -3,6 +3,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Film } from "lucide-react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
+import { OverlayCanvas } from "./OverlayCanvas";
 
 /** Room kept at the frame's sides, and above the frame and below its control row. */
 const STAGE_PAD_X = 32;
@@ -71,6 +72,7 @@ function PreviewVideo({
     <video
       ref={ref}
       src={src}
+      data-layer-key={layerKey}
       preload="metadata"
       playsInline
       className="absolute inset-0 h-full w-full object-contain opacity-0"
@@ -85,8 +87,10 @@ function PreviewVideo({
  * order, and the playback works their opacities out in that order (each
  * clip's share of the picture does not depend on which one paints last).
  * Over them a canvas, where the playback draws clips that blend while
- * playing. useSequencePlayback drives them, and each audio clip's hidden
- * <audio>. An editor with no clips shows an empty frame that says why.
+ * playing, and over that the text layers' own (OverlayCanvas).
+ * useSequencePlayback drives the rest, and each audio clip's hidden <audio>.
+ * An editor with no clips shows an empty frame that says why, unless it has
+ * text layers: then the black frame, with them.
  */
 export function EditorStage({
   empty,
@@ -96,8 +100,12 @@ export function EditorStage({
   registerCanvas,
   audioLayers,
   registerAudio,
+  hasOverlays,
+  frameSize,
+  total,
   children,
 }: {
+  /** No video clip. */
   empty: boolean;
   /** width / height of the output; 16:9 when no clip has a size yet. */
   aspect: number;
@@ -108,6 +116,12 @@ export function EditorStage({
   /** One per audio clip with a playable URL, keyed by the clip's id. */
   audioLayers: ReadonlyArray<PreviewLayerSource>;
   registerAudio: (clipId: string, el: HTMLAudioElement | null) => void;
+  /** The draft has overlays: their canvas is mounted only then. */
+  hasOverlays: boolean;
+  /** The output's pixel size, which the overlays are laid out in; null while no clip has one. */
+  frameSize: { width: number; height: number } | null;
+  /** One loop of the video, seconds; 0 while the clips' lengths are still being read. */
+  total: number;
   /** The control row, under the frame. */
   children: ReactNode;
 }) {
@@ -140,7 +154,7 @@ export function EditorStage({
         className="flex flex-col items-center"
         style={layout ? { width: layout.row } : { width: "100%" }}
       >
-        {empty ? (
+        {empty && !hasOverlays ? (
           <div
             className="flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border border-edit-line bg-editor-well px-10 text-center"
             style={frameStyle}
@@ -163,6 +177,9 @@ export function EditorStage({
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
             />
+            {hasOverlays && (
+              <OverlayCanvas frame={layout?.frame ?? null} frameSize={frameSize} total={total} noVideo={empty} />
+            )}
           </div>
         )}
         <div className="mt-2 w-full">{children}</div>

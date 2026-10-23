@@ -38,13 +38,26 @@ interface Counted {
   slot: number;
 }
 
+/** What the placed walk, the passes and the dissolves ask of a clip's reader. ClipReader is one; a retimed clip's is warpReader's. */
+export interface SlotReader {
+  /** The frame on slot n (the reader keeps it until its next frameOn); null before its first frame. */
+  frameOn(n: number): Promise<VideoSample | null>;
+  /** The next slot on which the frame changes; Infinity at the end. */
+  nextChangeSlot(): Promise<number>;
+  /** A source frame without passing it: the encode's reference when a loop opens on black or a blend. */
+  firstFrame(): Promise<VideoSample | null>;
+  /** Writes [n0, n1) through as clones at slot / fps, each closed after write (see each reader for durations). */
+  passThrough(n0: number, n1: number, write: (sample: VideoSample, slot: number) => Promise<void>): Promise<void>;
+  close(): Promise<void>;
+}
+
 /**
  * Frames of one decoder placed on the slot grid by Track's rules, so a clip shown alone writes what Track writes: a
  * frame at source time ts lands on anchorSlot + secToSlot(max(0, ts − origin)); in decode order, a frame on a slot no
  * later than the last one kept is dropped; the last frame before origin is held and takes anchorSlot only when no
  * kept frame lands there. The frame on slot n is the kept frame with the largest slot <= n.
  */
-export class ClipReader {
+export class ClipReader implements SlotReader {
   private readonly fps: number;
   private current: Counted | null = null;
   private lookahead: Counted | null = null;
@@ -239,7 +252,8 @@ export interface PlacedClipSource {
   origin: number;
   /** Frames per second; null when unknown (its blends then write every slot). */
   frameRate: number | null;
-  open(range: { from: number; to: number }, window: ClipReaderWindow): ClipReader;
+  /** A reader for one visibility run: a retimed clip's reads [run.n0, window.endSlot) through its warp and ignores range. */
+  open(range: { from: number; to: number }, window: ClipReaderWindow, run: { n0: number; n1: number }): SlotReader;
 }
 
 /** What one encode keeps across loops. */
@@ -303,29 +317,28 @@ export async function encodePlacedLoop(job: PlacedLoopJob): Promise<void> {
   const { env, segments, state } = job;
   const loopOffset = job.loop * env.loopLength;
   const runs = visibilityRuns(segments, env.units.length, loopOffset);
-  const open = new Map<number, { reader: ClipReader; n1: number }>();
+  const open = new Map<number, { reader: SlotReader; n1: number }>();
 
   const throwIfAborted = () => {
     if (job.signal?.aborted) throw new DOMException("Aborted", "AbortError");
   };
-  const readerFor = (unit: number, n0: number): ClipReader => {
+  const readerFor = (unit: number, n0: number): SlotReader => {
     const held = open.get(unit);
     if (held) return held.reader;
     const run = runs[unit]?.find((r) => r.n0 <= n0 && n0 < r.n1);
     if (!run) throw new Error(`No visibility run for unit ${unit} at slot ${n0}`);
     const source = job.sources[unit];
     const slots = unitSlots(env, unit, loopOffset, fps);
-    const reader = source.open(readerRange(source, slots.anchor, run, fps), {
-      origin: source.origin,
-      anchorSlot: slots.anchor,
-      endSlot: Math.min(run.n1, slots.end),
-      fps,
-    });
+    const reader = source.open(
+      readerRange(source, slots.anchor, run, fps),
+      { origin: source.origin, anchorSlot: slots.anchor, endSlot: Math.min(run.n1, slots.end), fps },
+      run,
+    );
     open.set(unit, { reader, n1: run.n1 });
     return reader;
   };
   /** Runs a reader call, tagging its failure with the unit. */
-  const read = async <T>(unit: number, call: (reader: ClipReader) => Promise<T>, n0: number): Promise<T> => {
+  const read = async <T>(unit: number, call: (reader: SlotReader) => Promise<T>, n0: number): Promise<T> => {
     try {
       return await call(readerFor(unit, n0));
     } catch (error) {

@@ -11,6 +11,7 @@ import { ASSET_ID_PATTERN, type AssetView } from "@/lib/assets/types";
 import { compactAudioRows, sanitizeAudioClips } from "@/lib/stitch/audioClips";
 import { draftDuration, readSequenceLayout, type StitchDraft } from "@/lib/stitch/draft";
 import { sanitizeTimeline } from "@/lib/stitch/migrate";
+import { compactOverlayRows, draftOverlays, sanitizeOverlays } from "@/lib/stitch/overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import type { SourceDurations } from "@/lib/stitch/timeline";
 import {
@@ -72,15 +73,18 @@ export function parseEditDocument(raw: unknown): ParsedEdit {
 
 /**
  * Sanitize a stored or sent sequence: sanitizeTimeline then keep asset sources only; the audio sanitizer without music
- * (rows compacted); loopCount 1|2|3 else 1; the layout as a non-legacy node reads it.
+ * (rows compacted); loopCount 1|2|3 else 1; the layout as a non-legacy node reads it; sanitizeOverlays, the key last
+ * and only when there are some.
  */
 export function sanitizeEditSequence(raw: unknown): EditSequence {
   const fields = isFields(raw) ? raw : {};
+  const overlays = sanitizeOverlays(fields.overlays);
   return {
     timeline: sanitizeTimeline(fields.timeline).filter((clip) => clip.source.kind === "asset"),
     audioClips: sanitizeAudioClips(fields.audioClips, { allowMusic: false }),
     loopCount: fields.loopCount === 2 || fields.loopCount === 3 ? fields.loopCount : 1,
     sequenceLayout: readSequenceLayout(fields.sequenceLayout, false),
+    ...(overlays.length > 0 ? { overlays } : {}),
   };
 }
 
@@ -97,13 +101,18 @@ export function draftFromEditSequence(seq: EditSequence, media?: readonly string
   return { ...clean, legacyAudio: { curve: [], muted: false }, media: sanitizeEditMedia(media, clean) };
 }
 
-/** The inverse. Keeps asset sources only (an edit's draft has no other by construction) and compacts the audio rows. */
+/**
+ * The inverse. Keeps asset sources only (an edit's draft has no other by construction) and compacts the audio and
+ * overlay rows; the overlays key last and only when there are some.
+ */
 export function editSequenceFromDraft(draft: StitchDraft): EditSequence {
+  const overlays = draftOverlays(draft);
   return {
     timeline: draft.timeline.filter((clip) => clip.source.kind === "asset"),
     audioClips: compactAudioRows(draft.audioClips.filter((clip) => clip.source.kind === "asset")).clips,
     loopCount: draft.loopCount,
     sequenceLayout: { ...draft.sequenceLayout },
+    ...(overlays.length > 0 ? { overlays: compactOverlayRows(overlays).overlays } : {}),
   };
 }
 
@@ -289,10 +298,22 @@ export function copyName(name: string): string {
  */
 const MEDIA_URL = /^\s*(data:([a-z]+\/[a-z0-9.+-]+)?[;,]|blob:[a-z][a-z0-9+.-]*:)/i;
 
-/** Any string anywhere in value, keys included, that is a data: or blob: URL (looked for down to 16 levels). */
-export function containsMediaString(value: unknown, depth = 0): boolean {
-  if (typeof value === "string") return MEDIA_URL.test(value);
-  if (depth >= MEDIA_SCAN_DEPTH || !value || typeof value !== "object") return false;
-  const children = Array.isArray(value) ? value : [...Object.keys(value), ...Object.values(value)];
-  return children.some((child) => containsMediaString(child, depth + 1));
+/**
+ * Any string anywhere in value, keys included, that is a data: or blob: URL (looked for down to 16 levels). A text
+ * layer's words (the text of a value.sequence.overlays entry of kind "text") are never media: a title may read
+ * "data:,hello".
+ */
+export function containsMediaString(value: unknown): boolean {
+  const overlays = isFields(value) && isFields(value.sequence) ? value.sequence.overlays : undefined;
+  const textLayers = new Set(Array.isArray(overlays) ? overlays.filter((o) => isFields(o) && o.kind === "text") : []);
+  const scan = (node: unknown, depth: number): boolean => {
+    if (typeof node === "string") return MEDIA_URL.test(node);
+    if (depth >= MEDIA_SCAN_DEPTH || !node || typeof node !== "object") return false;
+    const words = (key: string, child: unknown) => key === "text" && typeof child === "string" && textLayers.has(node);
+    const children = Array.isArray(node)
+      ? node
+      : Object.entries(node).flatMap(([key, child]) => (words(key, child) ? [key] : [key, child]));
+    return children.some((child) => scan(child, depth + 1));
+  };
+  return scan(value, 0);
 }

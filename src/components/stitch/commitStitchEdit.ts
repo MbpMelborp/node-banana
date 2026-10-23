@@ -2,6 +2,7 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { draftPatch, readSequenceLayout, readStitchDraft, sameDraft, sameLayout, type StitchDraft } from "@/lib/stitch/draft";
 import { dropMusicClips, hasMusicClip } from "@/lib/stitch/audioClips";
+import { draftOverlays, sameOverlays } from "@/lib/stitch/overlays";
 import { stitchVideoEdgeIds } from "@/lib/stitch/migrate";
 import { stitchMusicEdge, stitchReadContext } from "@/lib/stitch/sources";
 import { edgeIdsInOrder } from "@/lib/stitch/timeline";
@@ -85,6 +86,8 @@ function musicEdgeGone(nodeId: string, edges: readonly WorkflowEdge[], id: strin
  *   a value from a newer build survives a Done that did not touch it.
  * - audioClips is written only when the audio is not legacy-shaped (draftPatch), or to remove the key from a node
  *   whose audio is legacy-shaped again; a node that never had it gains no key.
+ * - overlays are written only when this session changed them (since it opened or the last Save), so layers of a kind
+ *   this build does not read survive a Done that left the overlays alone; all removed, the key goes by an undefined.
  * - The music edge the editor opened with (or last saved with) is gone: the music was disconnected on the canvas,
  *   which already dropped the node's music clips, so the draft's are dropped too and none is written back.
  * - Otherwise, every music clip removed while music is connected disconnects the music in the same step (any
@@ -127,10 +130,12 @@ function writeStitchEdit(): StitchDraft | "unchanged" | "gone" {
   });
 
   if (orphaned.length > 0) wf.onEdgesChange(orphaned.map((id) => ({ type: "remove" as const, id })));
-  const { sequenceLayout, audioClips, ...rest } = draftPatch(draft);
+  const { sequenceLayout, audioClips, overlays, ...rest } = draftPatch(draft);
   const data = node.data as VideoStitchNodeData;
   // A node without audioClips gains no key; one that had them loses them by an undefined (the store merges)
-  const patch = audioClips !== undefined || "audioClips" in data ? { ...rest, audioClips } : rest;
+  const audio = audioClips !== undefined || "audioClips" in data ? { ...rest, audioClips } : rest;
+  const overlaysChanged = !sameOverlays(draftOverlays(s.initial), draftOverlays(draft));
+  const patch = overlaysChanged && (overlays !== undefined || "overlays" in data) ? { ...audio, overlays } : audio;
   const stored = readSequenceLayout(data.sequenceLayout, false);
   wf.updateNodeData(nodeId, sameLayout(stored, sequenceLayout) ? patch : { ...patch, sequenceLayout });
   return draft;

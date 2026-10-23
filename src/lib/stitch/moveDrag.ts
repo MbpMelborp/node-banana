@@ -1,5 +1,6 @@
 import { clipName } from "./labels";
 import { MAX_START_SEC, pairOverlap } from "./placement";
+import { rowAtY, rowCentreOf, type StackedRowsLayout } from "./stackedLayout";
 import { formatSeconds } from "./timecode";
 import { sourceKey, type ClipSpan, type SnapTarget } from "./timeline";
 import { SNAP_THRESHOLD_PX } from "./trimDrag";
@@ -73,17 +74,20 @@ export const ROW_HYSTERESIS_PX = 4;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 /**
- * The row a body drag lands in. centre = index · rowHeight + dy (the box's centre, relative to row 0's middle).
- * Keeps `current` while |centre − current · rowHeight| <= rowHeight / 2 + ROW_HYSTERESIS_PX; otherwise the row under
- * the centre, round(centre / rowHeight). Clamped to [0, rowCount − 1]. Non-finite dy → current.
+ * The row a body drag lands in. centre = the pressed row's centre + dy (the box's centre in the rows block). Keeps
+ * `current` while the centre is within its band and ROW_HYSTERESIS_PX more on either side (uneven rows, a row open for
+ * its speed curve, behave as even ones); otherwise the row under the centre, clamped to the first and last rows.
+ * Non-finite dy → current.
  */
-export function moveRowAt(index: number, dy: number, current: number, rowCount: number, rowHeight: number): number {
-  const last = Math.max(0, rowCount - 1);
+export function moveRowAt(index: number, dy: number, current: number, rows: StackedRowsLayout): number {
+  const last = Math.max(0, rows.rowHeights.length - 1);
   const kept = clamp(current, 0, last);
-  if (!Number.isFinite(dy) || !(rowHeight > 0)) return kept;
-  const centre = index * rowHeight + dy;
-  if (Math.abs(centre - kept * rowHeight) <= rowHeight / 2 + ROW_HYSTERESIS_PX) return kept;
-  return clamp(Math.round(centre / rowHeight), 0, last);
+  if (!Number.isFinite(dy) || rows.rowHeights.length === 0) return kept;
+  const centre = rowCentreOf(rows, index) + dy;
+  const top = rows.rowTops[kept];
+  const bottom = top + rows.rowHeights[kept];
+  if (centre >= top - ROW_HYSTERESIS_PX && centre <= bottom + ROW_HYSTERESIS_PX) return kept;
+  return rowAtY(rows, centre);
 }
 
 export interface MoveDragStart {

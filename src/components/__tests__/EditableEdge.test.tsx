@@ -600,6 +600,23 @@ describe("EditableEdge toolbar and highlight", () => {
     expect(container.querySelector('[data-testid="edge-toolbar"]')).not.toBeNull();
   });
 
+  it("jumps to the handle at either end, leaving the toolbar where it is", () => {
+    stateWith({ edges: [{ id: "edge-1", selected: true, source: "node-1", target: "node-2", data: {} }] });
+    const { container } = render(
+      <TestWrapper>
+        <EditableEdge {...createDefaultProps({ selected: true })} />
+      </TestWrapper>
+    );
+    const toolbar = () => (container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement).style.transform;
+    const before = toolbar();
+    fireEvent.click(screen.getByRole("button", { name: "Jump to start of noodle" }));
+    // The source handle at the current zoom
+    expect(mockSetCenter).toHaveBeenLastCalledWith(100, 50, { zoom: 1.5, duration: 300 });
+    fireEvent.click(screen.getByRole("button", { name: "Jump to end of noodle" }));
+    expect(mockSetCenter).toHaveBeenLastCalledWith(300, 50, { zoom: 1.5, duration: 300 });
+    expect(toolbar()).toBe(before);
+  });
+
   it("leaves the toolbar to the first selected edge when several are selected", () => {
     stateWith({
       edges: [
@@ -954,7 +971,7 @@ describe("EditableEdge when hidden", () => {
     expect(container.querySelector('[data-testid="hidden-edge-ghost"]')).not.toBeNull();
   });
 
-  it("takes the downstream pill's toolbar to the upstream end", () => {
+  it("opens the toolbar above whichever pill was clicked", () => {
     mockUseWorkflowStore.mockImplementation((selector) =>
       selector(createDefaultState({ edgeAppearance: baseAppearance, edges: [{ ...hiddenEdge, selected: true }] }))
     );
@@ -963,17 +980,32 @@ describe("EditableEdge when hidden", () => {
         <EditableEdge {...createDefaultProps({ data: { hidden: true }, selected: true })} />
       </TestWrapper>
     );
-    // Opened from the upstream pill there is nowhere to go
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
     fireEvent.click(screen.getByTestId("hidden-edge-stub-target").querySelector("button")!);
-    const toolbar = () => container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement;
     // Target stub anchored at x=288, extending left
-    expect(toolbar().style.transform).toBe("translate(288px, 40px)");
-    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
-    // Centres the upstream pill (x=112, unmeasured width) at the current zoom
-    expect(mockSetCenter).toHaveBeenCalledWith(112, 50, { zoom: 1.5, duration: 300 });
-    expect(toolbar().style.transform).toBe("translate(112px, 40px)");
-    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+    expect((container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement).style.transform).toBe("translate(288px, 40px)");
+  });
+
+  it.each([
+    ["upstream", "source"],
+    ["downstream", "target"],
+  ])("jumps from the %s pill to either pill, taking the toolbar along", (_, pill) => {
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(createDefaultState({ edgeAppearance: baseAppearance, edges: [{ ...hiddenEdge, selected: true }] }))
+    );
+    const { container } = render(
+      <TestWrapper>
+        <EditableEdge {...createDefaultProps({ data: { hidden: true }, selected: true })} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId(`hidden-edge-stub-${pill}`).querySelector("button")!);
+    const toolbar = () => (container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement).style.transform;
+    // Pills sit 12px past the handles (x=100 and x=300), unmeasured here
+    fireEvent.click(screen.getByRole("button", { name: "Jump to end of noodle" }));
+    expect(mockSetCenter).toHaveBeenLastCalledWith(288, 50, { zoom: 1.5, duration: 300 });
+    expect(toolbar()).toBe("translate(288px, 40px)");
+    fireEvent.click(screen.getByRole("button", { name: "Jump to start of noodle" }));
+    expect(mockSetCenter).toHaveBeenLastCalledWith(112, 50, { zoom: 1.5, duration: 300 });
+    expect(toolbar()).toBe("translate(112px, 40px)");
   });
 });
 

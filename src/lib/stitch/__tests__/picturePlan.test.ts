@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { ClipWarp, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import type { StitchOptions } from "../engineTypes";
+import { frameClips, frameOptions } from "../framePlan";
 import { pictureSegments } from "../placedSchedule";
 import { planPicture, type PictureClip } from "../picturePlan";
+import { layoutSpans, sourceKey, spansEnvelope, splitClipAt, type SourceKey } from "../timeline";
+import { normalizeWarp, withWarp } from "../warp";
 
 const clip = (sourceDuration: number, init: Partial<PictureClip> = {}): PictureClip => ({
   inSec: 0,
@@ -199,6 +203,63 @@ describe("planPicture", () => {
       segments: null,
     },
   ];
+
+  describe("retimed clips", () => {
+    const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({ speed, curve: null, reverse: false, blend: false, ...extra });
+    const STACKED: StitchSequenceLayout = { mode: "stacked", overlapSec: 1, crossfade: true };
+    const edgeClip = (id: string, extra: Partial<StitchTimelineClip> = {}): StitchTimelineClip => ({
+      id,
+      source: { kind: "edge", edgeId: id },
+      inSec: 0,
+      outSec: null,
+      muted: false,
+      volume: 1,
+      ...extra,
+    });
+    const retimed = (clip: StitchTimelineClip, warp: ClipWarp) => withWarp(clip, normalizeWarp(warp));
+
+    it("overlaps a lined-up stack by the warped lengths", () => {
+      const p = planPicture([clip(4, { source: "a", warp: W(2) }), clip(2, { source: "b", warp: W(0.5) })], stacked);
+      expect(p.planned.map((u) => u.length)).toEqual([2, 4]);
+      expect(p.sp?.dissolves).toEqual([{ outgoing: 0, incoming: 1, fromSec: 1, toSec: 2 }]);
+      expect(p.loopLength).toBe(5);
+    });
+
+    it("builds the editor's envelope: a retimed unit's sourceEnds, and a split ramp as one run", () => {
+      const ramp = W(0.5, { curve: { kind: "preset", name: "easeInOutCubic" } });
+      const lengths: Record<string, number> = { a: 6, b: 4, c: 5 };
+      const durations = (timeline: StitchTimelineClip[]) =>
+        new Map<SourceKey, number>(timeline.map((c) => [sourceKey(c.source), lengths[c.source.kind === "edge" ? c.source.edgeId : ""]]));
+      const base = [
+        retimed(edgeClip("a", { inSec: 1, startSec: 0 }), ramp),
+        retimed(edgeClip("b", { startSec: 8.5 }), W(2, { reverse: true })),
+        edgeClip("c", { startSec: 12 }),
+      ];
+      // The ramp split at 3 s of its 10: its pieces butt on the timeline and continue in the source
+      let id = 0;
+      const split = splitClipAt(base, durations(base), 3, () => `piece${id++}`, { layout: STACKED })!.timeline;
+      expect(split).toHaveLength(4);
+      for (const timeline of [base, split]) {
+        const d = durations(timeline);
+        const spans = layoutSpans(timeline, d, STACKED);
+        const editor = spansEnvelope(spans, true);
+        const clips = frameClips(timeline, d, () => "src", true);
+        const p = planPicture(clips.map((c) => ({ ...c, sourceDuration: c.duration })), frameOptions(STACKED, timeline));
+        expect(p.route.kind).toBe("placed");
+        const units = (env: typeof editor) => env.units.map(({ start, length, source, inSec, sourceEnds }) => ({ start, length, source, inSec, sourceEnds }));
+        expect(units(p.env!)).toEqual(units(editor));
+        expect(p.env!.runOf).toEqual(editor.runOf);
+      }
+      const p = planPicture(
+        frameClips(split, durations(split), () => "src", true).map((c) => ({ ...c, sourceDuration: c.duration })),
+        frameOptions(STACKED, split),
+      );
+      expect(p.env!.units[0].sourceEnds).toEqual([1, expect.any(Number)]);
+      expect(p.env!.units[2].sourceEnds).toEqual([4, 0]);
+      expect("sourceEnds" in p.env!.units[3]).toBe(false);
+      expect(p.env!.runOf[0]).toBe(p.env!.runOf[1]);
+    });
+  });
 
   it.each(pinned)("plans $name as Render did before the move", ({ clips, options, ...expected }) => {
     const p = planPicture(clips, options);

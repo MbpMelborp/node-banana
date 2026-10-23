@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { shallow } from "zustand/shallow";
-import type { WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import {
+  appendConnectedStitchClips,
   edgeClipSourceTuple,
   edgeClipSources,
   edgeClipSourcesFromTuple,
@@ -149,5 +150,26 @@ describe("edge clip sources as selector tuples", () => {
 
   it("gives shallow-equal tuples for the same state, so a selector settles", () => {
     expect(shallow(edgeClipSourceTuple("s", nodes, edges), edgeClipSourceTuple("s", nodes, edges))).toBe(true);
+  });
+});
+
+describe("appendConnectedStitchClips", () => {
+  it("keeps a warped clip's warp when a new video edge adds a clip", () => {
+    const warp: ClipWarp = { speed: 2, curve: { kind: "preset", name: "easeInQuad" }, reverse: true, blend: false };
+    const timeline = [
+      { id: "a", source: { kind: "edge", edgeId: "e1" }, inSec: 0, outSec: null, muted: false, volume: 1, warp },
+    ];
+    const nodes = [
+      node("s", "videoStitch", { clips: [], clipOrder: ["e1"], timeline }),
+      node("g1", "generateVideo", { outputVideo: "blob:one" }),
+      node("g2", "generateVideo", { outputVideo: "blob:two" }),
+    ];
+    const before = [edge("e1", "g1", "s", "video-0")];
+    const after = [...before, edge("e2", "g2", "s", "video-1")];
+    const next = appendConnectedStitchClips(nodes, before, after);
+    const written = (next[0].data as VideoStitchNodeData).timeline!;
+    expect(written.map((c) => c.id)).toEqual(["a", "clip:e2"]);
+    expect(written[0].warp).toEqual(warp);
+    expect("warp" in written[1]).toBe(false);
   });
 });

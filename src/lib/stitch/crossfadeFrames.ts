@@ -57,7 +57,7 @@ export const BYTE_BLEND_FORMATS: ReadonlySet<string> = new Set([
 ]);
 
 /** Bytes of a tightly packed frame, so a frame whose visible area differs from its coded size never takes the bytes path. */
-function packedSize(format: VideoSamplePixelFormat, width: number, height: number): number {
+export function packedSize(format: VideoSamplePixelFormat, width: number, height: number): number {
   const luma = width * height;
   const halfW = Math.ceil(width / 2);
   const halfH = Math.ceil(height / 2);
@@ -162,14 +162,14 @@ function blackPlanes(
  * I420 for a YUV format it does not (10- and 12-bit), or no format with a known colour space, so the frame keeps ref's
  * colour tags whatever its bit depth (the encoder takes 8-bit I420 from any source); null for an RGB or unknown one.
  */
-function madeFormat(ref: BlenderRef): VideoSamplePixelFormat | null {
+export function madeFormat(ref: BlenderRef): VideoSamplePixelFormat | null {
   if (ref.format && blackPlanes(ref.format, 2, 2, 0)) return ref.format;
   if (ref.format ? /^(I4|NV)/.test(ref.format) : ref.colorSpace !== undefined) return "I420";
   return null;
 }
 
 /** (Kr, Kb) of a colour space's Y'CbCr matrix: BT.709 when it names none; null for an RGB one. */
-function lumaCoefficients(matrix: string | null | undefined): [number, number] | null {
+export function lumaCoefficients(matrix: string | null | undefined): [number, number] | null {
   switch (matrix) {
     case "rgb":
       return null;
@@ -577,5 +577,70 @@ export async function encodeDissolve(
     heldA?.close();
     heldB?.close();
     await Promise.all([closeIterator(outgoing), closeIterator(incoming)]);
+  }
+}
+
+/** One side of a dissolve: its frame on each written slot, asked in slot order. It keeps what it returns. */
+export interface DissolveSide {
+  frameOn(slot: number): Promise<VideoSample | null>;
+  close(): Promise<void>;
+}
+
+/** encodeDissolve's lockstep side: samplesAtTimestamps over rising times, one next() per call, the latest non-null held. */
+export function timesSide(track: InputVideoTrack, times: number[]): DissolveSide {
+  const iterator = new VideoSampleSink(track).samplesAtTimestamps(times);
+  let held: VideoSample | null = null;
+  return {
+    async frameOn() {
+      const next = await iterator.next();
+      if (!next.done && next.value) {
+        held?.close();
+        held = next.value;
+      }
+      return held;
+    },
+    async close() {
+      held?.close();
+      held = null;
+      await closeIterator(iterator);
+    },
+  };
+}
+
+/**
+ * encodeDissolve over two sides, for a dissolve with a retimed side: per written slot both sides' frames, blended at
+ * its alpha, added, the result closed. blenderFor gets the first outgoing frame. Abort is checked per frame; both
+ * sides are closed in finally.
+ */
+export async function encodeDissolveFrames(
+  job: {
+    outgoing: DissolveSide;
+    incoming: DissolveSide;
+    /** The written slots, beside their timestamps (slot / 60). */
+    slots: number[];
+    timestamps: number[];
+    alphas: number[];
+    frameDuration: number;
+    signal?: AbortSignal;
+  },
+  blenderFor: (firstOutgoing: VideoSample | null) => FrameBlender,
+  add: (sample: VideoSample) => Promise<void>,
+): Promise<void> {
+  let blender: FrameBlender | null = null;
+  try {
+    for (let i = 0; i < job.timestamps.length; i++) {
+      if (job.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const a = await job.outgoing.frameOn(job.slots[i]);
+      const b = await job.incoming.frameOn(job.slots[i]);
+      blender ??= blenderFor(a);
+      const blended = await blender.blend(a, b, job.alphas[i], job.timestamps[i], job.frameDuration);
+      try {
+        await add(blended);
+      } finally {
+        blended.close();
+      }
+    }
+  } finally {
+    await Promise.all([job.outgoing.close(), job.incoming.close()]);
   }
 }

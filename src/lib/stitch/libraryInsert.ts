@@ -10,6 +10,7 @@ import {
 } from "./audioClips";
 import type { AudioSectionLayout } from "./audioLayout";
 import { draftDuration, type StitchDraft } from "./draft";
+import { nearestBoundary } from "./stackedLayout";
 import {
   appendClips,
   createClip,
@@ -199,10 +200,12 @@ export interface LibraryDropGeometry {
   axis: Pick<TimeAxis, "xToTime" | "pxPerSec">;
   /** Track's clip boxes at rest, in lane content x. */
   boxes: ReadonlyArray<{ x: number; width: number }>;
-  /** Stacked's one row per clip, px. */
-  rowHeight: number;
-  /** The ruler's height: Stacked's rows start under it in the content. */
+  /** Stacked's rows: each one's top in the rows block, then their end (stackedRowsLayout). */
+  rowTops: readonly number[];
+  /** Where the video starts in the content, under the ruler and the text layers' rows: Stacked's rows start there. */
   ruler: number;
+  /** The text layers' rows in the lanes' visible box (y from top to bottom): nothing drops there. None when absent. */
+  overlays?: { top: number; bottom: number };
   /** The audio section's top in the lanes' visible box (it is pinned to their bottom). */
   sectionTop: number;
   audioLayout: AudioSectionLayout;
@@ -237,7 +240,8 @@ function snapStart(t: number, times: readonly number[], pxPerSec: number): numbe
  * Where a library item dropped at this point goes, or null over no lane that takes it: a video over the clip rows
  * (Track: before the first box whose middle is right of the pointer; Stacked: a new row at the row boundary nearest
  * the pointer, starting at the pointer's time), a sound over the audio rows (that row, or a new row under it when the
- * sound would overlap a clip there; the strip under the rows adds a new bottom row). Starts snap when `snap`.
+ * sound would overlap a clip there; the strip under the rows adds a new bottom row). Starts snap when `snap`. The text
+ * layers' rows take no media.
  */
 export function libraryDropAt(
   draft: StitchDraft,
@@ -246,6 +250,7 @@ export function libraryDropAt(
   g: LibraryDropGeometry,
   audioLengthOf: AudioLengthOf,
 ): LibraryDropTarget | null {
+  if (g.overlays && point.viewY >= g.overlays.top && point.viewY < g.overlays.bottom) return null;
   const overAudio = point.viewY >= g.sectionTop;
   const timeAt = () => {
     const raw = clamp(g.axis.xToTime(point.x), 0, MAX_START_SEC);
@@ -273,6 +278,6 @@ export function libraryDropAt(
     const index = g.boxes.findIndex((box) => box.x + box.width / 2 > point.x);
     return { lane: "clips", mode: "track", index: index === -1 ? timeline.length : Math.min(index, timeline.length) };
   }
-  const row = clamp(Math.round((point.contentY - g.ruler) / g.rowHeight), 0, timeline.length);
+  const row = clamp(nearestBoundary({ rowTops: g.rowTops }, point.contentY - g.ruler), 0, timeline.length);
   return { lane: "clips", mode: "stacked", startSec: timeAt(), row };
 }

@@ -16,10 +16,20 @@ import { audioRowCount } from "@/lib/stitch/audioClips";
 import { libraryDropAt } from "@/lib/stitch/libraryInsert";
 import { clampAudioScroll, revealAudioRow, scrollKeepingRowBottom, type AudioSectionLayout } from "@/lib/stitch/audioLayout";
 import { clipName } from "@/lib/stitch/labels";
+import { clampOverlayScroll, overlayScrollTop, revealOverlayRow, scrollOverlayBy } from "@/lib/stitch/overlayLayout";
+import { NO_OVERLAYS, overlayRowCount } from "@/lib/stitch/overlays";
 import { gaps as envelopeGaps, weightPieces, type WeightPiece } from "@/lib/stitch/placement";
 import { stackedInsertionY } from "@/lib/stitch/reorder";
 import { clipIdsOf, type HitBox } from "@/lib/stitch/selection";
 import { DEFAULT_SEQUENCE_LAYOUT, effectiveOverlapSec } from "@/lib/stitch/stack";
+import {
+  boxHeightOf,
+  boxTopOf,
+  revealRowScroll,
+  STACK_BOX_PX,
+  stackedRowsLayout,
+  type StackedRowsLayout,
+} from "@/lib/stitch/stackedLayout";
 import {
   clipSpans,
   isPlaced,
@@ -37,7 +47,7 @@ import { insetBox, laneBoxes, liveSpans, stackedBoxes, trimEdgeX } from "@/lib/s
 import { liveFitZoom } from "../liveFitZoom";
 import { GEOMETRY, LANE_TRAILING_PX, EDITOR_PANEL_SELECTOR, TIMELINE_EDGE_PX } from "../editorStyles";
 import { drawnPlayhead, editorAudioLengthOf } from "../editorActions";
-import { applyAudioBoxSelection, clearClipSelection } from "../selectionActions";
+import { applyAudioBoxSelection, applyOverlayBoxSelection, clearClipSelection } from "../selectionActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { AudioLane, audioBoxes } from "./AudioLane";
 import { keepFocus } from "./ClipBox";
@@ -46,6 +56,7 @@ import { ClipsLane } from "./ClipsLane";
 import { libraryDrop } from "./libraryDrop";
 import { LibraryDropMarker } from "./LibraryDropMarker";
 import { MoveOverlay } from "./MoveOverlay";
+import { OverlayLane, overlayBoxes, overlayName } from "./OverlayLane";
 import { Playhead } from "./Playhead";
 import { AudioRowControls, StackedRowHandles, TimelineFoot, type AudioRowState } from "./RowControls";
 import { Ruler } from "./Ruler";
@@ -55,6 +66,7 @@ import { useClipMove } from "./useClipMove";
 import { useAudioClipDrag } from "./useAudioClipDrag";
 import { useClipReorder } from "./useClipReorder";
 import { useMarqueeSelect } from "./useMarqueeSelect";
+import { useOverlayDrag } from "./useOverlayDrag";
 import type { TimelineZoom } from "./useTimelineZoom";
 import { timelineLayout } from "./timelineLayout";
 import { useTrimDrag } from "./useTrimDrag";
@@ -84,13 +96,14 @@ interface RowsMeasure {
   bar: number;
 }
 
-/** Scrolls Stacked's rows just enough to show row `index` whole in a viewport `viewport` px tall. */
-function revealRow(el: HTMLElement | null, index: number, viewport: number): void {
+/**
+ * Scrolls Stacked's rows just enough to show row `index` whole in a viewport `viewport` px tall, or, for a row open
+ * for its speed curve taller than the view, just enough for it to fill the view.
+ */
+function revealRow(el: HTMLElement | null, rows: StackedRowsLayout, index: number, viewport: number): void {
   if (!el || index < 0) return;
-  const top = index * GEOMETRY.stackRow;
-  const bottom = top + GEOMETRY.stackRow;
-  if (top < el.scrollTop) el.scrollTop = top;
-  else if (bottom > el.scrollTop + viewport) el.scrollTop = bottom - viewport;
+  const next = revealRowScroll(rows, index, el.scrollTop, viewport);
+  if (next !== el.scrollTop) el.scrollTop = next;
 }
 
 /**
@@ -132,24 +145,27 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
 /**
  * The timeline under the stage, on the pane colour under a hairline, with
  * no track headers: the lanes run its full width, 0:00 sitting 20px in. They
- * scroll sideways and hold the ruler, the video (Track's clips row or
+ * scroll sideways and hold the ruler, the text layers' rows under it (only
+ * while there are text layers: OverlayLane), the video (Track's clips row or
  * Stacked's rows), the audio section at the bottom and the playhead. What
  * the headers did floats in the 20px left padding (RowControls): an audio
  * row's mute and volume-curve toggle on the row's hover or keyboard focus,
  * and Stacked's row grips on hover only (from the keys, ⌥↑ / ⌥↓ and the clip
  * menu move rows); scrolled sideways, the lanes pass under that padding,
- * which covers them there. "+ Audio" (with Line up in Stacked) is a
- * quiet line under the last audio row, and the playhead's line ends above it. The zoom comes from useTimelineZoom (shared
- * with the control row); ⌘ wheel or a pinch zooms around the pointer, any
- * other wheel scrolls. Selection is a white ring; the selection box is a
- * faint white rectangle.
+ * which covers them there. "+ Audio" and "+ Text" (with Line up in Stacked)
+ * are a quiet line under the last audio row, and the playhead's line ends
+ * above it. The zoom comes from useTimelineZoom (shared with the control
+ * row); ⌘ wheel or a pinch zooms around the pointer, any other wheel
+ * scrolls. Selection is a white ring; the selection box is a faint white
+ * rectangle.
  *
  * Its height (timelineLayout) is what its rows need for the layout in use:
- * the ruler, Track's clips row or Stacked's rows, the audio rows and the
- * strip, within the room the editor leaves it (maxHeight), plus the room a
- * horizontal scrollbar takes on this system, kept whether it shows or not
- * (none where scrollbars are drawn over the content), so zooming past Fit
- * moves nothing. Selecting anything never changes it. A switch of
+ * the ruler, the text layers' rows, Track's clips row or Stacked's rows, the
+ * audio rows and the strip, within the room the editor leaves it
+ * (maxHeight), plus the room a horizontal scrollbar takes on this system,
+ * kept whether it shows or not (none where scrollbars are drawn over the
+ * content), so zooming past Fit moves nothing. Selecting anything never
+ * changes it. A switch of
  * Track | Stacked does, which would move the control row (the toggle in it)
  * from under the pointer: while the pointer is over that row the editor
  * holds the height the timeline had (heldHeight), and it settles once the
@@ -158,35 +174,46 @@ function revealBox(el: HTMLElement | null, box: { x: number; width: number }): b
  * Stacked's rows first. The audio section is the same in both layouts: its rows
  * scroll inside it by a translate this component owns (audioScroll), shared
  * with their controls. A row's volume-curve toggle expands it upward with
- * the scroll corrected, so the toggle stays under the pointer.
+ * the scroll corrected, so the toggle stays under the pointer. The text
+ * layers' rows scroll the same way inside theirs (overlayScroll, kept from
+ * their bottom, next to the video), and sit sticky under the ruler in
+ * Stacked, so Stacked's rows scroll under both.
  *
  * Stacked has one 52px row per clip, up to three and a half rows high; more
- * scroll vertically between a sticky ruler and the sticky audio section, in
- * the same scroller as the sideways scroll, and the row grips follow the
- * scroll through a transform written straight to them (no render per
- * scroll). The rows fade into the ruler and into the audio section where
+ * scroll vertically between the sticky ruler (with the text layers' rows)
+ * and the sticky audio section, in the same scroller as the sideways
+ * scroll, and the row grips follow the scroll through a transform written
+ * straight to them (no render per scroll). The rows fade into the ruler and into the audio section where
  * more of them are out of view that way, so the half row the view ends on
  * reads as one that scrolls; a view that grows (the height settling after
  * the control row's hold) shows the rows above first. A plain wheel over
  * the audio section scrolls the audio rows (when they overflow) and nothing
- * else; elsewhere it scrolls Stacked's rows when they overflow; ⇧ wheel
- * scrolls along the timeline. The row of the clip
- * that drives the preview, or of a clip selected by a key, is scrolled into
- * view, and so is an audio clip's row.
+ * else, and one over the text layers' rows theirs; elsewhere it scrolls
+ * Stacked's rows when they overflow; ⇧ wheel scrolls along the timeline.
+ * The row of the clip that drives the preview, or of a clip selected by a
+ * key, is scrolled into view, and so is an audio clip's or a text layer's
+ * row.
+ *
+ * A clip's row opens for its speed curve by the rail's or the clip menu's
+ * toggle, never by the selection: Track's clips row grows to 136px (and is
+ * the first to give way to a short window, down to its closed 80px), and
+ * Stacked's row of that clip to 132px, brought into view as it opens. Its
+ * boxes are taller, with the curve drawn over their frames (ClipBox).
  *
  * In Stacked a clip's box drags it in time and across rows (useClipMove),
  * its row's grip across rows only (useClipReorder). A placed stack (some
  * clip placed by hand) marks how each clip layers and where the gaps are;
  * every drag draws them from the timeline its release will leave. Audio
  * boxes drag in time and across audio rows, and trim by their edges, in
- * either layout (useAudioClipDrag). A clip moved out of view by the rail or
- * the keys is scrolled back into view, and so is a new clip that becomes the
- * selection (a paste, a duplicate).
+ * either layout (useAudioClipDrag), and so do text layers' boxes
+ * (useOverlayDrag). A clip moved out of view by the rail or the keys is
+ * scrolled back into view, and so is a new clip that becomes the selection
+ * (a paste, a duplicate).
  *
  * Several clips can be selected (a ⌘- or ⇧-click, the selection box drawn
  * on empty lane space, ⌘A); a drag of one of them carries them all. A
- * selection holds video clips or audio clips: the box selects the kind of
- * lane it starts on.
+ * selection holds video clips, audio clips or text layers: the box selects
+ * the kind of lane it starts on.
  */
 export function Timeline({
   spans,
@@ -226,13 +253,16 @@ export function Timeline({
   const fadeTopRef = useRef<HTMLDivElement>(null);
   const fadeBottomRef = useRef<HTMLDivElement>(null);
   const audioViewRef = useRef<HTMLDivElement>(null);
+  const overlayViewRef = useRef<HTMLDivElement>(null);
   const selectedId = useStitchEditorStore((s) => (s.selection?.kind === "clip" ? s.selection.clipId : null));
   const selection = useStitchEditorStore((s) => s.selection);
   const layout = useStitchEditorStore((s) => s.draft?.sequenceLayout ?? DEFAULT_SEQUENCE_LAYOUT);
   const timeline = useStitchEditorStore((s) => s.draft?.timeline ?? NO_CLIPS);
   const audioClips = useStitchEditorStore((s) => s.draft?.audioClips ?? NO_AUDIO);
+  const overlays = useStitchEditorStore((s) => s.draft?.overlays ?? NO_OVERLAYS);
   const legacyMuted = useStitchEditorStore((s) => s.draft?.legacyAudio.muted ?? false);
   const expandedRow = useStitchEditorStore((s) => s.audioExpandedRow);
+  const videoExpandedClip = useStitchEditorStore((s) => s.videoExpandedClip);
   const durations = useStitchEditorStore((s) => s.durations);
   const audioDurations = useStitchEditorStore((s) => s.audioDurations);
   const overlapSec = effectiveOverlapSec(layout);
@@ -241,6 +271,15 @@ export function Timeline({
   const scrollLeft = useSyncExternalStore(scrollPosition.subscribe, scrollPosition.get, scrollPosition.get);
 
   const placed = stacked && isPlaced(timeline);
+  // The clip row open for its speed curve: Track's clips row while it names any clip, Stacked's own row of that clip
+  const expandedIndex = videoExpandedClip === null ? -1 : spans.findIndex((span) => span.clip.id === videoExpandedClip);
+  const trackExpanded = !stacked && expandedIndex !== -1;
+  // timelineLayout's: Track's clips row by any index, Stacked's row by its own
+  const expandedVideo = expandedIndex === -1 ? null : stacked ? expandedIndex : 0;
+  const stackRows = useMemo(
+    () => stackedRowsLayout(spans.length, stacked ? expandedVideo : null),
+    [spans.length, stacked, expandedVideo],
+  );
   const order = useMemo(() => timeline.map((c) => c.id), [timeline]);
   const selectedIds = useMemo(
     (): ReadonlySet<string> => new Set(selection?.kind === "clip" ? clipIdsOf(selection, order) : []),
@@ -253,6 +292,12 @@ export function Timeline({
   );
   const audioLeadId = selection?.kind === "audio" ? selection.clipId : null;
   const selectedPoint = selection?.kind === "audio" ? selection.point : null;
+  const overlayOrder = useMemo(() => overlays.map((o) => o.id), [overlays]);
+  const selectedOverlays = useMemo(
+    (): ReadonlySet<string> => new Set(selection?.kind === "overlay" ? clipIdsOf(selection, overlayOrder) : []),
+    [selection, overlayOrder],
+  );
+  const overlayLeadId = selection?.kind === "overlay" ? selection.clipId : null;
 
   const { trim, onHandlePointerDown, takeReleased: takeTrimReleased } = useTrimDrag(axisNow, contentRef);
   const restBoxes = useMemo(
@@ -280,6 +325,7 @@ export function Timeline({
   // where the system draws one beside the content (none where it is drawn over it), shown or not: zooming in past Fit
   // then changes no height, and moves nothing above
   const audioRowTotal = audioRowCount(audioClips);
+  const overlayRowTotal = overlayRowCount(overlays);
   const [measured, setMeasured] = useState<RowsMeasure | null>(null);
   const hBar = measured?.hBar ?? 0;
   const reserve = Math.max(measured?.bar ?? 0, hBar);
@@ -293,23 +339,33 @@ export function Timeline({
         stacked,
         room,
         chosenHeight === null ? null : chosenHeight - reserve,
+        overlayRowTotal,
+        expandedVideo,
       ),
-    [spans.length, audioRowTotal, expandedRow, stacked, room, chosenHeight, reserve],
+    [spans.length, audioRowTotal, expandedRow, stacked, room, chosenHeight, reserve, overlayRowTotal, expandedVideo],
   );
   const height = Math.max(sized.height + reserve, heldHeight === null ? 0 : Math.min(heldHeight, maxHeight));
   useLayoutEffect(() => {
     onHeight?.(height);
   }, [onHeight, height]);
+  // Track's open row is what the layout leaves it: 136px down to the closed 80px under the room the editor leaves
+  const trackRowPx = trackExpanded ? sized.videoHeight : GEOMETRY.clipRow;
+  const trackClipPx = trackRowPx - 2 * GEOMETRY.clipTop;
   const audioLayout = sized.audio;
   const [audioScrollState, setAudioScroll] = useState(0);
   const audioScroll = clampAudioScroll(audioScrollState, audioLayout);
+  const overlayLayout = sized.overlay;
+  // Kept from the rows' bottom: row 0 shows first, and a row added on top moves none on screen
+  const [overlayScrollState, setOverlayScroll] = useState(0);
+  const overlayScroll = clampOverlayScroll(overlayScrollState, overlayLayout);
+  // The video's top in the lanes' content: under the ruler and the text layers' rows
+  const videoTop = GEOMETRY.ruler + overlayLayout.sectionHeight;
 
   // Stacked geometry: the rows' viewport is measured from the scroller, so the scrollbars never clip the audio section
-  const rowCount = Math.max(1, spans.length);
-  const rowsHeight = rowCount * GEOMETRY.stackRow;
+  const rowsHeight = stackRows.height;
   // The 1px top edge and the scrollbar's room are all between the timeline's height and the scroller's visible height
   const clientHeight = measured?.client ?? height - TIMELINE_EDGE_PX - reserve;
-  const rowsViewport = clientHeight - GEOMETRY.ruler - audioLayout.sectionHeight;
+  const rowsViewport = clientHeight - videoTop - audioLayout.sectionHeight;
   const rowsOverflow = stacked && rowsHeight > rowsViewport;
   const rowsBlock = Math.max(rowsHeight, rowsViewport);
   // The audio section's top in the lanes' visible box (it is pinned to their bottom in both layouts)
@@ -353,31 +409,26 @@ export function Timeline({
   const rowsView = () => {
     const el = scroller.current;
     if (!el) return null;
-    const top = el.getBoundingClientRect().top + GEOMETRY.ruler;
+    const top = el.getBoundingClientRect().top + latest.current.videoTop;
     return { top, bottom: top + latest.current.rowsViewport };
   };
-  const reorderOptions = { stacked, rowCount: spans.length, rowsView };
+  const reorderOptions = { stacked, rows: stackRows, rowsView };
   // The lanes' content width as last drawn, for a body drag's release
   const drawnWidth = useRef(0);
   // Track: a clip's body reorders it. Stacked: a row's grip does, and a box's body moves it in time and across rows
   const { reorder, onBodyPointerDown, takeReleased: takeRowReleased } = useClipReorder(restBoxes, contentRef, reorderOptions);
   const { move, onMovePointerDown, pressing, takeReleased: takeMoveReleased, releasedWidth } = useClipMove(axisNow, contentRef, {
-    rowCount: spans.length,
+    rows: stackRows,
     rowsView,
     drawnWidth: () => drawnWidth.current,
   });
   // The selection box hits the boxes as drawn: Track's inset at their joins, Stacked's in their rows
   const hitBoxes = (): HitBox[] => {
-    const { stacked: inStacked, restBoxes: rest } = latest.current;
+    const { stacked: inStacked, restBoxes: rest, videoTop: top, stackRows: rows, trackClipPx: clipPx } = latest.current;
     return rest.map((box, i) =>
       inStacked
-        ? {
-            x: box.x,
-            width: box.width,
-            top: GEOMETRY.ruler + i * GEOMETRY.stackRow + GEOMETRY.stackClipTop,
-            height: GEOMETRY.stackClipHeight,
-          }
-        : { ...insetBox(box, i, rest.length), top: GEOMETRY.ruler + GEOMETRY.clipTop, height: GEOMETRY.clipHeight },
+        ? { x: box.x, width: box.width, top: top + boxTopOf(rows, i), height: boxHeightOf(rows, i) }
+        : { ...insetBox(box, i, rest.length), top: top + GEOMETRY.clipTop, height: clipPx },
     );
   };
   const { marquee, onLanePointerDown, pressing: marqueePressing } = useMarqueeSelect(contentRef, {
@@ -386,8 +437,8 @@ export function Timeline({
     order: () => latest.current.spans.map((span) => span.clip.id),
     rowsView: stacked ? rowsView : () => null,
     bounds: () => ({
-      top: GEOMETRY.ruler,
-      bottom: GEOMETRY.ruler + (stacked ? spans.length * GEOMETRY.stackRow : GEOMETRY.clipRow),
+      top: videoTop,
+      bottom: videoTop + (stacked ? stackRows.rowTops[spans.length] : trackRowPx),
     }),
   });
 
@@ -430,9 +481,45 @@ export function Timeline({
     commit: applyAudioBoxSelection,
     clear: clearClipSelection,
   });
+
+  const overlayBoxList = useMemo(() => overlayBoxes(axis, overlays), [axis, overlays]);
+  // The overlay section's top in the lanes' content: sticky under the ruler in Stacked, so it follows Stacked's scroll
+  // (Track never scrolls vertically)
+  const overlayContentTop = () => (scroller.current?.scrollTop ?? 0) + GEOMETRY.ruler;
+  const overlayDrag = useOverlayDrag(axisNow, contentRef, {
+    layout: () => latest.current.overlayLayout,
+    scroll: () => latest.current.overlayScroll,
+    setScroll: setOverlayScroll,
+    viewRect: () => overlayViewRef.current?.getBoundingClientRect() ?? null,
+    videoSpans: () => latest.current.spans,
+    nameOf: overlayName,
+  });
+  const overlayMarquee = useMarqueeSelect(contentRef, {
+    stacked: true,
+    kind: "overlay",
+    hitBoxes: () => {
+      const { overlayBoxList: list, overlayLayout: l, overlayScroll: scroll } = latest.current;
+      const top = overlayContentTop() - overlayScrollTop(scroll, l);
+      return list.map((box) => ({
+        x: box.x,
+        width: box.width,
+        top: top + (l.rowTops[box.overlay.row] ?? 0) + GEOMETRY.overlayBlockTop,
+        height: GEOMETRY.overlayBlock,
+      }));
+    },
+    order: () => latest.current.overlayBoxList.map((box) => box.overlay.id),
+    rowsView: () => null,
+    bounds: () => {
+      const top = overlayContentTop();
+      return { top, bottom: top + latest.current.overlayLayout.viewHeight };
+    },
+    commit: applyOverlayBoxSelection,
+    clear: clearClipSelection,
+  });
   // While a box is drawn, what it would select is drawn selected
   const drawnSelectedIds = marquee ? marquee.selectedIds : selectedIds;
   const drawnAudioIds = audioMarquee.marquee ? audioMarquee.marquee.selectedIds : selectedAudio;
+  const drawnOverlayIds = overlayMarquee.marquee ? overlayMarquee.marquee.selectedIds : selectedOverlays;
   // From what is drawn, so the clips a running box touches already show the group look release gives them.
   const multi = drawnSelectedIds.size > 1;
 
@@ -443,6 +530,8 @@ export function Timeline({
     rowsOverflow,
     rowsHeight,
     rowsViewport,
+    stackRows,
+    trackClipPx,
     spans,
     restBoxes,
     pressing,
@@ -455,6 +544,12 @@ export function Timeline({
     sectionTop,
     audioPressing: audioDrag.pressing,
     audioMarqueePressing: audioMarquee.pressing,
+    videoTop,
+    overlayBoxList,
+    overlayLayout,
+    overlayScroll,
+    overlayPressing: overlayDrag.pressing,
+    overlayMarqueePressing: overlayMarquee.pressing,
   };
   const latest = useRef(latestValues);
   useEffect(() => {
@@ -489,8 +584,9 @@ export function Timeline({
               stacked: live.stacked,
               axis: live.zoom.axis,
               boxes: live.restBoxes,
-              rowHeight: GEOMETRY.stackRow,
-              ruler: GEOMETRY.ruler,
+              rowTops: live.stackRows.rowTops,
+              ruler: live.videoTop,
+              overlays: { top: GEOMETRY.ruler, bottom: live.videoTop },
               sectionTop: live.sectionTop,
               audioLayout: live.audioLayout,
               audioScroll: live.audioScroll,
@@ -590,15 +686,37 @@ export function Timeline({
       if (event.ctrlKey || event.metaKey) {
         // Not mid-drag: a drag measures from the zoom it started at, and a box's press (or the selection box's) from
         // its press
-        const busy = [live.pressing, live.marqueePressing, live.audioPressing, live.audioMarqueePressing].some((p) => p.current);
+        const busy = [
+          live.pressing,
+          live.marqueePressing,
+          live.audioPressing,
+          live.audioMarqueePressing,
+          live.overlayPressing,
+          live.overlayMarqueePressing,
+        ].some((p) => p.current);
         if (useStitchEditorStore.getState().cancelGesture || busy) return;
         const z = live.zoom;
         const viewX = Math.max(0, event.clientX - el.getBoundingClientRect().left);
         z.zoomAround(z.pxPerSec * Math.exp(-event.deltaY / WHEEL_ZOOM_SCALE), viewX);
         return;
       }
-      // Over the audio section a vertical wheel is the audio rows' alone: it scrolls them when they overflow, and
-      // never Stacked's rows behind. The gutter beside them counts as theirs
+      // Over the text layers' rows, as over the audio section below, a vertical wheel is theirs alone: it scrolls them
+      // when they overflow, and never Stacked's rows behind. The gutter beside them counts as theirs
+      const overlayView = overlayViewRef.current?.getBoundingClientRect();
+      const overOverlays =
+        event.target instanceof Element &&
+        (event.target.closest("[data-overlay-section]") !== null ||
+          (event.target.closest("[data-timeline-gutter]") !== null &&
+            overlayView !== undefined &&
+            event.clientY >= overlayView.top &&
+            event.clientY < overlayView.bottom));
+      if (overOverlays && !event.shiftKey) {
+        if (event.deltaY !== 0 && live.overlayLayout.maxScroll > 0) {
+          setOverlayScroll((scroll) => scrollOverlayBy(scroll, event.deltaY, live.overlayLayout));
+        }
+        el.scrollLeft += event.deltaX;
+        return;
+      }
       const view = audioViewRef.current?.getBoundingClientRect();
       const overAudio =
         event.target instanceof Element &&
@@ -642,6 +760,23 @@ export function Timeline({
     if (stacked && before.stacked) showRowsAbove(el, rowsViewport - before.viewport);
   }, [stacked, rowsViewport, scroller]);
 
+  // A row opened for its speed curve keeps its top, the rows under it move down: after the view's growth above, the
+  // open row is brought into view (closing one needs nothing: the browser clamps the scroll). The timeline grows in
+  // the same commit, but its measure reaches rowsViewport a render later, so the growth is read off the scroller
+  // here, and the measure then finds none left to show
+  const shownExpanded = useRef(expandedIndex);
+  useLayoutEffect(() => {
+    const before = shownExpanded.current;
+    shownExpanded.current = expandedIndex;
+    if (!stacked || expandedIndex === -1 || expandedIndex === before) return;
+    const el = scroller.current;
+    const viewport =
+      el && el.clientHeight > 0 ? el.clientHeight - videoTop - audioLayout.sectionHeight : rowsViewport;
+    showRowsAbove(el, viewport - shownRows.current.viewport);
+    shownRows.current = { stacked, viewport };
+    revealRow(el, stackRows, expandedIndex, viewport);
+  }, [stacked, expandedIndex, stackRows, rowsViewport, scroller, videoTop, audioLayout.sectionHeight]);
+
   // The grips are mounted again on a switch to Stacked: they start where the rows are, and so do the rows' fades
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -662,9 +797,18 @@ export function Timeline({
     if (!focusInside.current || (active && active !== document.body && active.isConnected)) return;
     const root = rootRef.current;
     const target =
-      root?.querySelector<HTMLElement>('[role="option"][tabindex="0"]') ?? root?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
+      root?.querySelector<HTMLElement>('[role="listbox"][aria-label="Clips"] [role="option"][tabindex="0"]') ??
+      root?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR);
     target?.focus({ preventScroll: true });
   }, [stacked]);
+
+  // The last text layer gone (⌫, an undo) takes their rows with it: focus on one goes to the panel, never <body>
+  const hasOverlayRows = overlayLayout.sectionHeight > 0;
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (hasOverlayRows || !focusInside.current || (active && active !== document.body && active.isConnected)) return;
+    rootRef.current?.closest<HTMLElement>(EDITOR_PANEL_SELECTOR)?.focus({ preventScroll: true });
+  }, [hasOverlayRows]);
 
   // While the preview plays, the row of the clip it is driven by stays in view (as the playhead does sideways)
   useEffect(
@@ -673,7 +817,7 @@ export function Timeline({
         const live = latest.current;
         if (!s.playing || !live.stacked || !live.rowsOverflow) return;
         const span = topSpanAt(live.spans, s.playhead);
-        if (span) revealRow(scroller.current, span.index, live.rowsViewport);
+        if (span) revealRow(scroller.current, live.stackRows, span.index, live.rowsViewport);
       }),
     [scroller],
   );
@@ -683,7 +827,7 @@ export function Timeline({
   const selectedRow = selectedId === null ? -1 : spans.findIndex((s) => s.clip.id === selectedId);
   useEffect(() => {
     if (!stacked || selectedRow === -1) return;
-    revealRow(scroller.current, selectedRow, latest.current.rowsViewport);
+    revealRow(scroller.current, latest.current.stackRows, selectedRow, latest.current.rowsViewport);
   }, [stacked, selectedId, selectedRow, scroller]);
 
   // From a press anywhere in the timeline to its release. A press lets a focused field go, and a Start typed there
@@ -768,6 +912,33 @@ export function Timeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioLeadId, audioLeadRow, audioOrder]);
 
+  // The same for the lead text layer: its row scrolled into view, a new lead (an add, a paste, a duplicate) brought
+  // into view sideways and given focus from a focused text layer
+  const overlayLead = overlayLeadId === null ? null : (overlayBoxList.find((box) => box.overlay.id === overlayLeadId) ?? null);
+  const overlayLeadRow = overlayLead?.overlay.row ?? -1;
+  const knownOverlays = useRef<ReadonlySet<string> | null>(null);
+  const revealedOverlay = useRef<{ id: string | null; row: number } | null>(null);
+  useEffect(() => {
+    const before = knownOverlays.current;
+    knownOverlays.current = new Set(overlayOrder);
+    const lead = revealedOverlay.current;
+    revealedOverlay.current = { id: overlayLeadId, row: overlayLeadRow };
+    const sameIds = before !== null && before.size === overlayOrder.length && overlayOrder.every((id) => before.has(id));
+    if (sameIds && lead?.id === overlayLeadId && lead.row === overlayLeadRow) return;
+    if (!overlayLead || pressDown.current) return;
+    setOverlayScroll((scroll) => revealOverlayRow(scroll, overlayLeadRow, latest.current.overlayLayout));
+    if (!before || before.has(overlayLead.overlay.id)) return;
+    const root = rootRef.current;
+    const active = document.activeElement;
+    if (root && active instanceof HTMLElement && active.dataset.overlayId !== undefined && root.contains(active)) {
+      root.querySelector<HTMLElement>(`[data-overlay-id="${CSS.escape(overlayLead.overlay.id)}"]`)?.focus({ preventScroll: true });
+    }
+    const el = scroller.current;
+    if (el && revealBox(el, overlayLead)) scrollPosition.set(el.scrollLeft);
+    // The lead and its row; its box is read when they change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayLeadId, overlayLeadRow, overlayOrder]);
+
   const empty = spans.length === 0;
   const stackedRight = stacked
     ? restBoxes.reduce((right, box, i) => (spans[i].length > 0 ? right : Math.max(right, box.x + box.width)), axis.endX)
@@ -786,11 +957,21 @@ export function Timeline({
           .map((box) => box.x + box.width + audioMove.result.deltaSec * axis.pxPerSec),
       )
     : 0;
+  const overlayRight = overlayBoxList.reduce((right, box) => Math.max(right, box.x + box.width), 0);
+  const overlayMove = overlayDrag.drag?.kind === "move" ? overlayDrag.drag : null;
+  const overlayMovedRight = overlayMove
+    ? Math.max(
+        0,
+        ...overlayBoxList
+          .filter((box) => overlayMove.ids.includes(box.overlay.id))
+          .map((box) => axis.timeToX(box.overlay.endSec + overlayMove.result.deltaSec)),
+      )
+    : 0;
   // A body drag that shortens the sequence keeps the width it was drawn at until the lanes scroll back from it: the
   // browser would otherwise pull a scroll at the end back by what was lost, and every box would jump on release
   const heldWidth = releasedWidth && releasedWidth.pxPerSec === axis.pxPerSec ? Math.min(releasedWidth.width, scrollLeft + laneWidth) : 0;
   const contentWidth = Math.max(
-    Math.max(stackedRight, movedRight, audioRight, audioMovedRight) + LANE_TRAILING_PX,
+    Math.max(stackedRight, movedRight, audioRight, audioMovedRight, overlayRight, overlayMovedRight) + LANE_TRAILING_PX,
     laneWidth,
     heldWidth,
   );
@@ -804,17 +985,24 @@ export function Timeline({
   const trimIndex = trim ? spans.findIndex((s) => s.clip.id === trim.clipId) : -1;
   const trimBox = trimIndex === -1 ? null : boxes[trimIndex];
   const edgeX = trim && trimBox ? trimEdgeX(trimBox, trim.edge) : 0;
-  const trimRowTop = GEOMETRY.ruler + trimIndex * GEOMETRY.stackRow + GEOMETRY.stackClipTop;
-  const trimRow = stacked && trimIndex !== -1 ? { top: trimRowTop, bottom: trimRowTop + GEOMETRY.stackClipHeight } : undefined;
+  const trimRow =
+    stacked && trimIndex !== -1
+      ? {
+          top: videoTop + boxTopOf(stackRows, trimIndex),
+          bottom: videoTop + boxTopOf(stackRows, trimIndex) + boxHeightOf(stackRows, trimIndex),
+        }
+      : undefined;
   const rowDrag = stacked ? (reorder ?? move) : null;
-  const insertionY = rowDrag ? stackedInsertionY(rowDrag.dropIndex, rowDrag.index, GEOMETRY.stackRow) : null;
+  const insertionY = rowDrag ? stackedInsertionY(rowDrag.dropIndex, rowDrag.index, stackRows) : null;
   const snappedToPlayhead =
     trim?.result.snapped?.kind === "playhead" ||
     move?.result.snapped?.kind === "playhead" ||
     (audioDrag.drag?.kind === "move" && audioDrag.drag.result.snapped?.kind === "playhead") ||
-    (audioDrag.drag?.kind === "trim" && audioDrag.drag.snapped?.kind === "playhead");
+    (audioDrag.drag?.kind === "trim" && audioDrag.drag.snapped?.kind === "playhead") ||
+    (overlayDrag.drag?.kind === "move" && overlayDrag.drag.result.snapped?.kind === "playhead") ||
+    (overlayDrag.drag?.kind === "trim" && overlayDrag.drag.snapped?.kind === "playhead");
   // The moving box as the lane draws it: its row's top plus the travel (clamped to the rows by useClipMove)
-  const moveTop = move ? move.index * GEOMETRY.stackRow + GEOMETRY.stackClipTop + move.dy : 0;
+  const moveTop = move ? boxTopOf(stackRows, move.index) + move.dy : 0;
   const moveTargetRow = move?.result.snapped?.row ?? null;
   // A group's chip spans every moved clip, read from the timeline release leaves
   const moveGroup = useMemo(() => {
@@ -823,7 +1011,7 @@ export function Timeline({
     if (moved.length === 0) return null;
     return { fromSec: Math.min(...moved.map((s) => s.start)), toSec: Math.max(...moved.map((s) => s.end)) };
   }, [move, markSpans]);
-  const marqueeRect = marquee?.drawn ?? audioMarquee.marquee?.drawn ?? null;
+  const marqueeRect = marquee?.drawn ?? audioMarquee.marquee?.drawn ?? overlayMarquee.marquee?.drawn ?? null;
   const marqueeBox = marqueeRect ? (
     <div
       aria-hidden="true"
@@ -857,6 +1045,38 @@ export function Timeline({
     const layout = latest.current.audioLayout;
     setAudioScroll((scroll) => clampAudioScroll(clampAudioScroll(scroll, layout) + dy, layout));
   }, []);
+
+  // The same for the overlay rows' view, whose scroll is kept from the bottom
+  const onOverlayViewScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const view = event.currentTarget;
+    const dy = view.scrollTop;
+    if (dy === 0) return;
+    view.scrollTop = 0;
+    const layout = latest.current.overlayLayout;
+    setOverlayScroll((scroll) => scrollOverlayBy(scroll, dy, layout));
+  }, []);
+
+  const overlayLane = hasOverlayRows ? (
+    <OverlayLane
+      axis={axis}
+      boxes={overlayBoxList}
+      layout={overlayLayout}
+      scroll={overlayScroll}
+      selectedIds={drawnOverlayIds}
+      leadId={overlayLeadId}
+      drag={overlayDrag.drag}
+      // With no video there is no last frame to be past
+      endX={empty ? null : axis.timeToX(axis.total)}
+      viewRef={overlayViewRef}
+      guideTop={GEOMETRY.playheadHead - GEOMETRY.ruler}
+      scrollLeft={scrollLeft}
+      laneWidth={laneWidth}
+      onBodyPointerDown={overlayDrag.onBodyPointerDown}
+      onHandlePointerDown={overlayDrag.onHandlePointerDown}
+      onLanePointerDown={overlayMarquee.onLanePointerDown}
+      onViewScroll={onOverlayViewScroll}
+    />
+  ) : null;
 
   const audioLane = (
     <AudioLane
@@ -911,7 +1131,7 @@ export function Timeline({
           <div
             ref={contentRef}
             className="relative"
-            style={{ width: contentWidth, height: GEOMETRY.ruler + rowsBlock + audioLayout.sectionHeight }}
+            style={{ width: contentWidth, height: videoTop + rowsBlock + audioLayout.sectionHeight }}
           >
             <div className="sticky top-0 z-4 bg-pane" style={{ height: GEOMETRY.ruler }}>
               <Ruler
@@ -934,13 +1154,19 @@ export function Timeline({
               ))}
               {!empty && <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} part="head" />}
             </div>
-            {/* Under the ruler: shown while rows are scrolled out of view above (paintRowFades) */}
+            {/* Sticky under the ruler: Stacked's rows scroll under it too */}
+            {overlayLane && (
+              <div className="sticky z-2" style={{ top: GEOMETRY.ruler }}>
+                {overlayLane}
+              </div>
+            )}
+            {/* Under the ruler and the text rows: shown while rows are scrolled out of view above (paintRowFades) */}
             <div
               ref={fadeTopRef}
               aria-hidden="true"
               data-testid="stitch-rows-fade-top"
               className={ROWS_FADE}
-              style={{ top: GEOMETRY.ruler }}
+              style={{ top: videoTop }}
             >
               <div className="absolute inset-x-0 top-0 h-4 bg-linear-to-b from-pane to-transparent" />
             </div>
@@ -965,6 +1191,10 @@ export function Timeline({
                 viewLeft={viewLeft}
                 viewRight={viewRight}
                 contentWidth={contentWidth}
+                visibleRight={visibleRight}
+                contentRef={contentRef}
+                rows={stackRows}
+                rowsTop={videoTop}
                 onBodyPointerDown={onMovePointerDown}
                 onHandlePointerDown={onHandlePointerDown}
                 onLanePointerDown={onLanePointerDown}
@@ -1004,11 +1234,12 @@ export function Timeline({
                 lengthSec={spans[move.index]?.length ?? 0}
                 boxWidth={moveBox.width}
                 boxTop={moveTop}
-                targetBoxTop={
-                  moveTargetRow === null ? null : moveTargetRow * GEOMETRY.stackRow + GEOMETRY.stackClipTop
-                }
+                boxHeight={boxHeightOf(stackRows, move.index)}
+                targetBoxTop={moveTargetRow === null ? null : boxTopOf(stackRows, moveTargetRow)}
+                targetBoxHeight={moveTargetRow === null ? STACK_BOX_PX : boxHeightOf(stackRows, moveTargetRow)}
                 scrollLeft={scrollLeft}
                 laneWidth={laneWidth}
+                rowsTop={videoTop}
                 group={moveGroup}
               />
             )}
@@ -1020,6 +1251,9 @@ export function Timeline({
               audioLayout={audioLayout}
               audioScroll={audioScroll}
               sectionContentTop={sectionContentTop}
+              videoTop={videoTop}
+              rows={stackRows}
+              trackClipHeight={trackClipPx}
             />
           </div>
         ) : (
@@ -1033,6 +1267,11 @@ export function Timeline({
               contentRef={contentRef}
               showLabels={!empty}
             />
+            {overlayLane && (
+              <div className="absolute inset-x-0 z-2" style={{ top: GEOMETRY.ruler }}>
+                {overlayLane}
+              </div>
+            )}
             <ClipsLane
               axis={axis}
               spans={spans}
@@ -1046,12 +1285,27 @@ export function Timeline({
               viewLeft={viewLeft}
               viewRight={viewRight}
               laneWidth={contentWidth}
+              visibleRight={visibleRight}
+              contentRef={contentRef}
+              top={videoTop}
+              expanded={trackExpanded}
+              rowHeight={trackRowPx}
+              clipHeight={trackClipPx}
               onBodyPointerDown={onBodyPointerDown}
               onHandlePointerDown={onHandlePointerDown}
               onLanePointerDown={onLanePointerDown}
             />
             <div className="absolute inset-x-0 bottom-0 z-2">{audioLane}</div>
-            {trim && trimBox && <TrimMarks trim={trim} axis={playheadAxis} edgeX={edgeX} scrollLeft={scrollLeft} />}
+            {trim && trimBox && (
+              <TrimMarks
+                trim={trim}
+                axis={playheadAxis}
+                edgeX={edgeX}
+                scrollLeft={scrollLeft}
+                videoTop={videoTop}
+                rowHeight={trackRowPx}
+              />
+            )}
             {/* Snapped to the playhead, the dashed guide stands in for its line, which ends at the strip */}
             {!empty && (
               <Playhead axis={playheadAxis} limit={axis.total} hideLine={snappedToPlayhead} bottom={GEOMETRY.audioStrip} />
@@ -1064,6 +1318,9 @@ export function Timeline({
               audioLayout={audioLayout}
               audioScroll={audioScroll}
               sectionContentTop={sectionContentTop}
+              videoTop={videoTop}
+              rows={stackRows}
+              trackClipHeight={trackClipPx}
             />
           </div>
         )}
@@ -1084,8 +1341,10 @@ export function Timeline({
         <StackedRowHandles
           rootRef={rootRef}
           dragging={reorder !== null}
+          top={videoTop}
           grips={{
             spans,
+            rows: stackRows,
             rowsRef: gripRowsRef,
             scrollTop: () => scroller.current?.scrollTop ?? 0,
             viewport: rowsViewport,
@@ -1106,6 +1365,8 @@ export function Timeline({
       <TimelineFoot
         layout={audioLayout}
         scroll={audioScroll}
+        overlayLayout={overlayLayout}
+        overlayScroll={overlayScroll}
         stacked={stacked}
         bottom={reserve}
         landingNewRow={audioDrag.drag?.kind === "move" && audioDrag.drag.landing?.kind === "append"}
@@ -1117,7 +1378,7 @@ export function Timeline({
           view={trimView}
           src={srcFor(trim.clipId)}
           contentRef={contentRef}
-          rowTop={trimRow?.top}
+          rowTop={trimRow?.top ?? videoTop}
         />
       )}
       <ClipContextMenu media={media} audio={audio} />

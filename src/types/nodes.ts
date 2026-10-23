@@ -427,6 +427,22 @@ export type StitchClipSource =
   | { kind: "edge"; edgeId: string }
   | { kind: "asset"; assetId: string };
 
+/** A time remap: output progress → source progress on [0, 1], monotone non-decreasing, 0 → 0 and 1 → 1. */
+export type ClipWarpCurve =
+  | { kind: "preset"; name: string }                              // A monotone named easing (src/lib/easing)
+  | { kind: "bezier"; handles: [number, number, number, number] } // CSS cubic-bezier, every handle in [0, 1]
+  | { kind: "points"; points: Array<[number, number]> };          // Monotone cubic Hermite through the points
+
+/** A video clip's retiming. See docs/edit-video.md, "Speed and ramps". */
+export interface ClipWarp {
+  speed: number;                 // Average rate: the clip plays (Out − In) / speed seconds. The rail sets 0.1–10,
+                                 // stored 1e-9–1e9 (a split piece of a ramp can be far outside the rail's range)
+  curve: ClipWarpCurve | null;   // The ramp; null = constant speed
+  window?: [number, number];     // The part of the curve this clip plays, 0 ≤ a < b ≤ 1; absent = [0, 1]. Set by Split
+  reverse: boolean;              // Plays the source range backwards
+  blend: boolean;                // Slow motion blends neighbouring frames instead of holding them
+}
+
 /** One clip of the Edit Video sequence. See docs/edit-video.md. */
 export interface StitchTimelineClip {
   id: string;                 // Stable within the node; generated once
@@ -437,6 +453,7 @@ export interface StitchTimelineClip {
   volume: number;             // 0..1 linear gain on the clip's own sound, default 1
   startSec?: number;          // Stacked: where the trimmed clip starts on the timeline, seconds (0–600). Absent = laid out
                               // from Overlap. Track ignores it.
+  warp?: ClipWarp;            // Absent = plays at its own speed; never stored when it changes nothing
 }
 
 /**
@@ -462,6 +479,35 @@ export interface StitchAudioClip {
   muted: boolean;
   curve: VolumePoint[];       // t in the clip's source seconds; empty = flat at 0 dB
 }
+
+/** A text layer's font: a family (shipped, installed or typed) and, for a file in the library's Fonts folder, its name. */
+export interface StitchOverlayFont {
+  family: string;
+  file?: string;
+}
+
+/** A text layer: words over a black wash on an overlay row, above the video. See docs/edit-video.md, "Text layers". */
+export interface StitchTextOverlay {
+  id: string;                 // Stable within the edit; "ovl_xxxxxxxx"
+  kind: "text";
+  row: number;                // 0-based overlay row, 0 nearest the video; a higher row draws in front; stored compacted
+  startSec: number;           // Sequence seconds (one loop), 0–600
+  endSec: number;             // > startSec, at most 600 s after it
+  fadeInSec: number;          // >= 0: opacity 0 at startSec, 1 fadeInSec later
+  fadeOutSec: number;         // >= 0: opacity 1 until fadeOutSec before endSec, 0 at endSec
+  text: string;               // "\n" between lines; at most 2000 UTF-16 units
+  font: StitchOverlayFont;
+  size: number;               // Fraction of the frame's height, 0.01–0.5
+  weight: number;             // CSS weight, 100–900
+  color: string;              // "#rrggbb", lower case
+  align: "left" | "center" | "right";
+  x: number;                  // The text block's centre, 0–1 of the frame's width
+  y: number;                  // The text block's centre, 0–1 of the frame's height
+  wash: { opacity: number };  // 0–1: black over the whole frame, fading with the text; 0 = none
+}
+
+/** Every overlay kind; a later kind (an image, a shape, a wash alone) is one more member. */
+export type StitchOverlay = StitchTextOverlay;
 
 /** How a Stitch sequence is laid out. See docs/edit-video.md. */
 export interface StitchSequenceLayout {
@@ -493,6 +539,8 @@ export interface VideoStitchNodeData extends BaseNodeData {
   audioMuted?: boolean;
   /** Audio clips. Absent = the audio is the connected music alone, read from audioCurve and audioMuted. */
   audioClips?: StitchAudioClip[];
+  /** Overlay layers above the video. Absent = none. Only the editor's Done writes it. */
+  overlays?: StitchOverlay[];
   /** Track or Stacked, with the overlap and crossfade. Absent = Track. Only the editor's Done writes it. */
   sequenceLayout?: StitchSequenceLayout;
   /** The edit project the editor's Save and Done keep in step with this node (see docs/edit-video.md, "Saved to Edits"). */

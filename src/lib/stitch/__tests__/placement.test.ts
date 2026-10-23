@@ -18,6 +18,7 @@ import {
   resolveStarts,
   RUN_TOL_SEC,
   SLOT_SEC,
+  warpedUnitEnds,
   weightPieces,
   type PlacedUnit,
   type StackEnvelope,
@@ -318,6 +319,34 @@ describe("buildEnvelope: runs", () => {
     const n = named([["C", 4, 6, 2], ["A", 0, 5, 0], ["B", 2, 5, 1]]);
     expect(n.env.runs.map((r) => r.row)).toEqual([0, 1, 2]);
     expect(n.env.units.map((u) => u.row)).toEqual([0, 1, 2]);
+  });
+
+  it("continues a retimed clip's pieces when their source times meet", () => {
+    const runs = (units: PlacedUnit[]) => buildEnvelope(units, true).runs.length;
+    const first: PlacedUnit = { start: 0, length: 2, row: 0, source: "a", inSec: 0, sourceEnds: [0, 1] };
+    const piece = (sourceEnds: [number, number]): PlacedUnit => ({
+      start: 2,
+      length: 3,
+      row: 1,
+      source: "a",
+      inSec: 1,
+      sourceEnds,
+    });
+    expect(runs([first, piece([1, 4])])).toBe(1);
+    expect(runs([first, piece([1.02, 4])])).toBe(2);
+    // Reversed: the source runs down from 5 to 3, then from 3 to 1
+    expect(runs([{ ...first, sourceEnds: [5, 3] }, { ...piece([3, 1]), inSec: 1 }])).toBe(1);
+    // An unwarped piece above a retimed one: its frames end at In + length
+    const plain: PlacedUnit = { start: 0, length: 2, row: 0, source: "a", inSec: 0 };
+    expect(runs([plain, piece([2, 6])])).toBe(1);
+    expect(runs([plain, piece([2.02, 6])])).toBe(2);
+    // A retimed piece above an unwarped one: the plain piece's frames start at its In
+    const below = (inSec: number): PlacedUnit => ({ start: 2, length: 3, row: 1, source: "a", inSec });
+    expect(runs([first, below(1)])).toBe(1);
+    expect(runs([first, below(1.02)])).toBe(2);
+    expect(runs([{ ...first, inSec: 1, sourceEnds: [3, 1] }, below(1)])).toBe(1);
+    expect(warpedUnitEnds(1, 4, false)).toEqual([1, 4]);
+    expect(warpedUnitEnds(1, 4, true)).toEqual([4, 1]);
   });
 });
 
@@ -795,6 +824,74 @@ describe("property (b): a split changes nothing", () => {
       const a = buildEnvelope(units, crossfade);
       const b = buildEnvelope(after, crossfade);
       for (let t = 0; t < 14; t += 0.01) expect(differs(byKey(a, units, t), byKey(b, after, t), 1e-9)).toBe(false);
+    }
+  });
+});
+
+describe("property (b′): a split of a retimed clip changes nothing", () => {
+  /** randomStack with sourceEnds on half the units: a retimed clip plays its range at any rate, either way. */
+  function retimedStack(rnd: () => number): Keyed[] {
+    const n = 1 + Math.floor(rnd() * 7);
+    const clips: Array<Omit<Keyed, "row">> = [];
+    for (let i = 0; i < n; i++) {
+      const start = rnd() * 8;
+      const length = 0.3 + rnd() * 6;
+      const source = rnd() < 0.2 && i > 0 ? clips[Math.floor(rnd() * i)].source : `s${i}`;
+      const inSec = rnd() * 2;
+      const rate = 0.1 + rnd() * 5;
+      const reverse = rnd() < 0.5;
+      const sourceEnds = rnd() < 0.5 ? warpedUnitEnds(inSec, inSec + length * rate, reverse) : undefined;
+      clips.push({ start, length, source, inSec, key: `c${i}`, ...(sourceEnds ? { sourceEnds } : {}) });
+    }
+    const order = clips.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order.map((ci, row) => ({ ...clips[ci], row }));
+  }
+
+  /** splitAt for a retimed unit: a ramp's cut lands anywhere between its source ends, and both pieces meet there. */
+  function splitRetimed(units: readonly Keyed[], x: number, t: number, rnd: () => number): Keyed[] {
+    const X = units.find((u) => u.row === x)!;
+    if (!X.sourceEnds) return splitAt(units, x, t);
+    const [from, to] = X.sourceEnds;
+    const cut = from + (to - from) * rnd();
+    const first: Keyed = { ...X, length: t - X.start, inSec: Math.min(from, cut), sourceEnds: [from, cut] };
+    const second: Keyed = {
+      ...X,
+      start: t,
+      length: X.start + X.length - t,
+      row: x + 1,
+      inSec: Math.min(cut, to),
+      sourceEnds: [cut, to],
+    };
+    return units.map((u) => (u === X ? first : { ...u, row: u.row > x ? u.row + 1 : u.row })).concat([second]);
+  }
+
+  it("on 3,000 random placements per mode", () => {
+    for (const crossfade of [true, false]) {
+      const rnd = lcg(11);
+      let changes = 0;
+      let retimedSplits = 0;
+      for (let trial = 0; trial < 3000; trial++) {
+        const units = retimedStack(rnd);
+        const X = units[Math.floor(rnd() * units.length)];
+        if (X.length < 0.25) continue;
+        if (X.sourceEnds) retimedSplits++;
+        const t = X.start + 0.1 + rnd() * (X.length - 0.2);
+        const after = splitRetimed(units, X.row, t, rnd);
+        const before = buildEnvelope(units, crossfade);
+        const split = buildEnvelope(after, crossfade);
+        const end = loopEnd(units);
+        // A run that breaks shows from its edges on: every edge and the cut either side, and a coarse grid
+        const times: number[] = [];
+        for (let g = 0; g < 40; g++) times.push((end * g) / 40 + 1e-7);
+        for (const e of units.flatMap((u) => [u.start, u.start + u.length]).concat([t])) times.push(e - 1e-6, e + 1e-6);
+        if (times.some((tt) => differs(byKey(before, units, tt), byKey(split, after, tt), 1e-9))) changes++;
+      }
+      expect(retimedSplits, `crossfade ${crossfade}`).toBeGreaterThan(1000);
+      expect(changes, `crossfade ${crossfade}`).toBe(0);
     }
   });
 });

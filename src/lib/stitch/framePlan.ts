@@ -1,10 +1,10 @@
-import type { StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import type { ClipReaderWindow } from "./clipReader";
 import type { StitchOptions } from "./engineTypes";
 import { envelopeAt, TIME_EPS, type StackEnvelope } from "./placement";
 import { pictureSegments, readerRange, segmentSlots, unitSlots, visibilityRuns, type Segment } from "./placedSchedule";
 import { planPicture, type PicturePlan } from "./picturePlan";
-import { FRAME_RATE, secToSlot } from "./sequencePlan";
+import { FRAME_RATE, secToSlot, type PlannedClip } from "./sequencePlan";
 import { dissolveFrames, sharedCadence, soloPass } from "./stack";
 import {
   layersAt,
@@ -15,6 +15,8 @@ import {
   type SourceDurations,
   type SourceKey,
 } from "./timeline";
+import { activeWarp, warpMap } from "./warp";
+import { blendsOnSlot, isWarpedPlan, joinOuts, warpSlotTime } from "./warpFrames";
 
 /**
  * Frame to canvas: which output slot the playhead means, and what Render
@@ -34,6 +36,8 @@ export interface FrameClip {
   duration: number;
   /** Only when the stack is placed (stitchInputs' rule). */
   startSec?: number;
+  /** Only an active warp (frameClips). */
+  warp?: ClipWarp;
 }
 
 /** What the encode reads from a source when it opens it (probeClip). */
@@ -67,6 +71,7 @@ export function frameClips(
     const source = sourceKey(clip.source);
     const duration = durations.get(source);
     if (!srcOf(clip.id) || duration === undefined || !(duration > 0)) return [];
+    const warp = activeWarp(clip);
     return [
       {
         clipId: clip.id,
@@ -75,6 +80,7 @@ export function frameClips(
         outSec: clip.outSec,
         duration,
         ...(placed && clip.startSec !== undefined ? { startSec: clip.startSec } : {}),
+        ...(warp ? { warp } : {}),
       },
     ];
   });
@@ -108,7 +114,12 @@ export type FrameRead =
   /** A ClipReader over `range` with `window`, asked for the frame on `slot`. */
   | { by: "slot"; slot: number; range: { from: number; to: number }; window: ClipReaderWindow; inSec: number }
   /** The frame in effect at `time` (a dissolve's lookup). */
-  | { by: "time"; time: number };
+  | { by: "time"; time: number }
+  /**
+   * A retimed clip on its slot: the two frames about `time` (the warp map's), read up to `until` (its Out, or at a split's
+   * join the next piece's: joinOuts); the nearer, or both when `blend`.
+   */
+  | { by: "warp"; time: number; until: number; blend: boolean };
 
 export interface FrameLayer {
   /** The picture plan's unit. */
@@ -155,6 +166,7 @@ function picture(
       firstTimestamp: factsOf(facts, clip.source).firstTimestamp,
       source: clip.source,
       startSec: clip.startSec,
+      ...(clip.warp ? { warp: clip.warp } : {}),
     })),
     options,
   );
@@ -226,10 +238,29 @@ export function planFrameAt(
     const clip = clipOf(unit);
     return { unit, clipId: clip.clipId, source: clip.source, read: { by: "time", time }, weight };
   };
+  const joins = joinOuts(p);
+  /** A retimed unit on slot `slotAt`, its warp counted from anchorSlot (warpFrames.ts); past endSlot, its last slot's frame. */
+  const warpRead = (unit: number, anchorSlot: number, endSlot: number, slotAt: number): Omit<FrameLayer, "held" | "weight"> => {
+    const planned = p.planned[unit] as PlannedClip & { warp: ClipWarp };
+    const clip = clipOf(unit);
+    const map = warpMap({ inSec: planned.inSec, outSec: planned.outSec }, planned.warp);
+    const at = Math.min(slotAt, endSlot - 1);
+    return {
+      unit,
+      clipId: clip.clipId,
+      source: clip.source,
+      read: {
+        by: "warp",
+        time: warpSlotTime(map, at, anchorSlot),
+        until: joins[unit] ?? planned.outSec,
+        blend: blendsOnSlot(map, at, anchorSlot),
+      },
+    };
+  };
   const solo = (read: Omit<FrameLayer, "held" | "weight">, held?: Omit<FrameLayer, "held" | "weight">): FramePlan =>
     plan({ kind: "layers", layers: [{ ...read, weight: 1, ...(held ? { held } : {}) }] });
 
-  if (p.env) return planPlaced(p, p.env, n, plan, slotRead);
+  if (p.env) return planPlaced(p, p.env, n, plan, slotRead, warpRead);
 
   if (!p.sp) {
     // Track
@@ -237,6 +268,7 @@ export function planFrameAt(
       const planned = p.planned[unit];
       const anchorSlot = secToSlot(planned.seqStart);
       const endSlot = secToSlot(planned.seqStart + planned.length);
+      if (isWarpedPlan(planned)) return warpRead(unit, anchorSlot, endSlot, n);
       return slotRead(unit, n, { origin: planned.origin, anchorSlot, endSlot, fps: FRAME_RATE }, planned.inSec);
     };
     const k = p.planned.findIndex(
@@ -248,28 +280,39 @@ export function planFrameAt(
 
   // A lined-up stack
   const sp = p.sp;
+  /** A unit's solo window [from, to) and its read there: a retimed one through its warp, anchored at its own start. */
   const soloRead = (unit: number) => {
     const clip = sp.clips[unit];
     const pass = soloPass(clip, 0, FRAME_RATE);
     if (!pass) return null;
-    const window = { origin: clip.soloOrigin, anchorSlot: secToSlot(pass.fromSec), endSlot: secToSlot(pass.toSec), fps: FRAME_RATE };
-    return { read: slotRead(unit, n, window, pass.decodeFrom), window };
+    const from = secToSlot(pass.fromSec);
+    const to = secToSlot(pass.toSec);
+    if (isWarpedPlan(clip)) return { read: warpRead(unit, secToSlot(clip.seqStart), to, n), from, to };
+    const window = { origin: clip.soloOrigin, anchorSlot: from, endSlot: to, fps: FRAME_RATE };
+    return { read: slotRead(unit, n, window, pass.decodeFrom), from, to };
   };
   for (const d of sp.dissolves) {
     if (!(secToSlot(d.fromSec) <= n && n < secToSlot(d.toSec))) continue;
-    const cadence = sharedCadence(
-      factsOf(facts, clipOf(d.outgoing).source),
-      factsOf(facts, clipOf(d.incoming).source),
-    );
+    const warped = isWarpedPlan(sp.clips[d.outgoing]) || isWarpedPlan(sp.clips[d.incoming]);
+    // A retimed side changes frames at its own momentary rate: Render writes every slot (no cadence)
+    const cadence = warped
+      ? null
+      : sharedCadence(factsOf(facts, clipOf(d.outgoing).source), factsOf(facts, clipOf(d.incoming).source));
     const f = dissolveFrames(sp, d, 0, { fps: FRAME_RATE, cadence });
     let i = -1;
     f.slots.forEach((written, j) => {
       if (written <= n) i = j;
     });
     if (i >= 0) {
+      /** A side as Render reads it on the written slot: its own reader's frame when retimed, else the dissolve's time. */
+      const side = (unit: number, time: number, weight: number): FrameLayer => {
+        const c = sp.clips[unit];
+        if (!isWarpedPlan(c)) return timeRead(unit, time, weight);
+        return { ...warpRead(unit, secToSlot(c.seqStart), secToSlot(c.seqStart + c.length), f.slots[i]), weight };
+      };
       return plan({
         kind: "layers",
-        layers: [timeRead(d.outgoing, f.outgoingTimes[i], 1 - f.alphas[i]), timeRead(d.incoming, f.incomingTimes[i], f.alphas[i])],
+        layers: [side(d.outgoing, f.outgoingTimes[i], 1 - f.alphas[i]), side(d.incoming, f.incomingTimes[i], f.alphas[i])],
       });
     }
     // Before the dissolve's first frame Render still holds the outgoing clip's last solo frame
@@ -278,7 +321,7 @@ export function planFrameAt(
   }
   for (let k = 0; k < sp.clips.length; k++) {
     const own = soloRead(k);
-    if (!own || !(own.window.anchorSlot <= n && n < own.window.endSlot)) continue;
+    if (!own || !(own.from <= n && n < own.to)) continue;
     return solo(own.read, k > 0 ? soloRead(k - 1)?.read : undefined);
   }
   return plan({ kind: "none" });
@@ -291,6 +334,7 @@ function planPlaced(
   n: number,
   plan: (show: FramePlan["show"]) => FramePlan,
   slotRead: (unit: number, at: number, window: ClipReaderWindow, inSec: number) => Omit<FrameLayer, "held" | "weight">,
+  warpRead: (unit: number, anchorSlot: number, endSlot: number, at: number) => Omit<FrameLayer, "held" | "weight">,
 ): FramePlan {
   const segments = pictureSegments(env);
   const withSlots = segments
@@ -310,6 +354,7 @@ function planPlaced(
     const planned = p.planned[unit];
     const slots = unitSlots(env, unit, 0, FRAME_RATE);
     const run = runs[unit]?.find((r) => r.n0 <= n0 && n0 < r.n1) ?? { n0, n1 };
+    if (isWarpedPlan(planned)) return warpRead(unit, slots.anchor, Math.min(run.n1, slots.end), at);
     return slotRead(
       unit,
       at,

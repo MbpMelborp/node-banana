@@ -13,7 +13,7 @@ import {
   canEncodeVideo,
 } from 'mediabunny';
 import type { Rotation, VideoSample } from 'mediabunny';
-import { getEasingFunction, type EasingFunction } from '@/lib/easing-functions';
+import { getEasingFunction, type EasingFunction } from '@/lib/easing';
 import { createAvcEncodingConfig, AVC_LEVEL_4_0, AVC_LEVEL_5_1 } from '@/lib/video-encoding';
 
 // Inlined constants (same pattern as Phase 41)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mirrorDraft, mirrorIsEmpty, type MirrorSources } from "../editMirror";
 import type { StitchDraft } from "../draft";
+import { createTextOverlay } from "../overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import type { SourceKey } from "../timeline";
 import type { StitchAudioClip, StitchTimelineClip } from "@/types";
@@ -86,6 +87,13 @@ describe("mirrorDraft", () => {
     const out = mirrorDraft(d, sources({ eA: "A1" }, null), measured);
     expect(out.draft.audioClips).toEqual([]);
     expect(out.leftOut).toBe(1);
+  });
+
+  it("passes the overlays through as they are", () => {
+    const overlays = [createTextOverlay({ id: "o1", font: { family: "Inter", file: "Inter.ttf" } }), createTextOverlay({ id: "o2", row: 1 })];
+    const out = mirrorDraft({ ...draft([clip("c1", { kind: "edge", edgeId: "eA" })]), overlays }, sources({ eA: "A1" }), measured);
+    expect(out.draft.overlays).toBe(overlays);
+    expect(mirrorDraft(draft([]), sources({}), measured).draft).not.toHaveProperty("overlays");
   });
 
   it("is empty when no clip survives", () => {

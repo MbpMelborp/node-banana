@@ -49,6 +49,9 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
           registerCanvas={composition.registerCanvas}
           audioLayers={composition.audioLayers}
           registerAudio={composition.registerAudio}
+          hasOverlays={composition.hasOverlays}
+          frameSize={composition.frameSize}
+          total={total}
         >
           <div
             onPointerEnter={() => setHeldHeight(drawnHeight > 0 ? drawnHeight : null)}
@@ -64,7 +67,7 @@ export function EditorWorkspace({ composition }: { composition: EditorCompositio
             />
           </div>
         </EditorStage>
-        <EditorRail media={byClip} audio={audioByClip} />
+        <EditorRail media={byClip} audio={audioByClip} frameSize={composition.frameSize} />
       </div>
       <TimelineResizeHandle
         height={drawnHeight}

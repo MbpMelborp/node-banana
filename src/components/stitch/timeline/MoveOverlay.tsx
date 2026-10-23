@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { moveSnapText } from "@/lib/stitch/moveDrag";
+import { STACK_BOX_PX } from "@/lib/stitch/stackedLayout";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
@@ -12,9 +13,6 @@ import type { MoveLive } from "./useClipMove";
 /** The move chip's gap from the moving box, and its drop from the box's top, px. */
 const CHIP_GAP = 12;
 const CHIP_DROP = 10;
-
-/** A box's bottom in the lane content from its top in the rows block, which starts under the ruler, px. */
-const boxBottom = (rowTop: number) => GEOMETRY.ruler + rowTop + GEOMETRY.stackClipHeight;
 
 /**
  * Inside the lanes, scrolling with them, while Stacked's body drag runs: the
@@ -31,23 +29,30 @@ export function MoveOverlay({
   lengthSec,
   boxWidth,
   boxTop,
+  boxHeight = STACK_BOX_PX,
   targetBoxTop,
+  targetBoxHeight = STACK_BOX_PX,
   scrollLeft,
   laneWidth,
+  rowsTop = GEOMETRY.ruler,
   group = null,
 }: {
   move: MoveLive;
   axis: TimeAxis;
   /** The clip's length (0 for an empty clip, whose chip names its start only). */
   lengthSec: number;
-  /** The moving box's width and its drawn top in the rows block, px. */
+  /** The moving box's width, its drawn top in the rows block and its height (taller on a row open for its curve), px. */
   boxWidth: number;
   boxTop: number;
-  /** The top of the box that owns the snapped target, in the rows block; null for the playhead and 0:00. */
+  boxHeight?: number;
+  /** The top and height of the box that owns the snapped target, in the rows block; null for the playhead and 0:00. */
   targetBoxTop: number | null;
+  targetBoxHeight?: number;
   /** The visible lanes' left in the content, and their width, px. */
   scrollLeft: number;
   laneWidth: number;
+  /** Where the rows block starts in the lane content: under the ruler and the text layers' rows, px. */
+  rowsTop?: number;
   /** A group drag: from the earliest moved start to the latest moved end, sequence seconds; null for one clip. */
   group?: { fromSec: number; toSec: number } | null;
 }) {
@@ -55,7 +60,9 @@ export function MoveOverlay({
   const { startSec, deltaSec } = move.result;
   const left = move.x;
   const right = move.x + boxWidth;
-  const top = GEOMETRY.ruler + boxTop + CHIP_DROP;
+  const top = rowsTop + boxTop + CHIP_DROP;
+  // A box's bottom in the lane content from its top in the rows block
+  const boxBottom = (rowTop: number, height: number) => rowsTop + rowTop + height;
 
   // Right of the box when it fits in the visible lanes, else left of it, never past their sides
   useLayoutEffect(() => {
@@ -77,7 +84,7 @@ export function MoveOverlay({
       ? `${formatTimecode(startSec)}–${formatTimecode(startSec + lengthSec)}`
       : formatTimecode(startSec);
   const text = moveSnapText(move.result);
-  const bottom = boxBottom(boxTop);
+  const bottom = boxBottom(boxTop, boxHeight);
   return (
     <>
       <div
@@ -92,7 +99,7 @@ export function MoveOverlay({
       {move.result.snapped && text && (
         <SnapGuide
           x={axis.timeToX(move.result.snapped.t)}
-          bottom={Math.max(bottom, targetBoxTop === null ? 0 : boxBottom(targetBoxTop))}
+          bottom={Math.max(bottom, targetBoxTop === null ? 0 : boxBottom(targetBoxTop, targetBoxHeight))}
           chipTop={bottom + CHIP_GAP}
           text={text}
         />

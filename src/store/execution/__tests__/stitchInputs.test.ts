@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import type { NodeExecutionContext } from "../types";
 import type { StitchDraft } from "@/lib/stitch/draft";
+import { familyList, fontKey, type ResolvedFont } from "@/lib/stitch/fonts";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import {
   gatherDraftInputs,
+  gatherOverlayInputs,
   gatherStitchInputs,
   NO_CLIP_TO_RENDER,
   stitchEngineOptions,
@@ -22,12 +25,23 @@ const mocks = vi.hoisted(() => {
       this.name = "AssetApiError";
     }
   }
-  return { AssetApiError, fetchAssetBlob: vi.fn(), prepareAudioAsync: vi.fn(), requestAssetInfo: vi.fn(), gatherAudioClipInputs: vi.fn() };
+  return {
+    AssetApiError,
+    fetchAssetBlob: vi.fn(),
+    prepareAudioAsync: vi.fn(),
+    requestAssetInfo: vi.fn(),
+    gatherAudioClipInputs: vi.fn(),
+    ensureOverlayFonts: vi.fn(),
+  };
 });
 vi.mock("../audioClipInputs", () => ({ gatherAudioClipInputs: mocks.gatherAudioClipInputs }));
 vi.mock("@/lib/assets/client/api", () => ({ AssetApiError: mocks.AssetApiError, fetchAssetBlob: mocks.fetchAssetBlob }));
 vi.mock("@/hooks/useAudioMixing", () => ({ prepareAudioAsync: mocks.prepareAudioAsync }));
 vi.mock("@/lib/stitch/assetInfo", () => ({ requestAssetInfo: mocks.requestAssetInfo }));
+vi.mock("@/lib/stitch/fonts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/stitch/fonts")>()),
+  ensureOverlayFonts: mocks.ensureOverlayFonts,
+}));
 
 /** Where each fetched Blob came from (jsdom's Blob cannot be read back). */
 const origins = new WeakMap<Blob, string>();
@@ -63,6 +77,14 @@ const assetClip = (id: string, assetId: string, extra: Partial<StitchTimelineCli
   ...extra,
 });
 
+const RAMP: ClipWarp = {
+  speed: 0.5,
+  curve: { kind: "preset", name: "easeInOutSine" },
+  window: [0.2, 0.9],
+  reverse: true,
+  blend: true,
+};
+
 function stitchNode(data: Record<string, unknown> = {}): WorkflowNode {
   return node("s", "videoStitch", { clips: [], clipOrder: [], loopCount: 1, outputVideo: null, ...data });
 }
@@ -96,6 +118,7 @@ beforeEach(() => {
   mocks.fetchAssetBlob.mockImplementation(async (id: string) => sourced(`asset:${id}`, "video/mp4"));
   mocks.prepareAudioAsync.mockResolvedValue({ buffer: { sampleRate: 48000 }, duration: 3 });
   mocks.gatherAudioClipInputs.mockResolvedValue([]);
+  mocks.ensureOverlayFonts.mockResolvedValue(new Map());
 });
 
 describe("gatherStitchInputs", () => {
@@ -124,6 +147,15 @@ describe("gatherStitchInputs", () => {
       { inSec: 0, outSec: null, muted: true, volume: 0.4 },
     ]);
     expect(g.clipCount).toBe(2);
+  });
+
+  it("passes the warp through, and gives an unwarped clip none", async () => {
+    const { nodes, edges } = twoVideos();
+    const stitch = stitchNode({ timeline: [edgeClip("a", "e1", { inSec: 0.8, warp: RAMP }), edgeClip("b", "e2")] });
+    const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+    expect(g.clips[0].warp).toEqual(RAMP);
+    expect(Object.keys(g.clips[0]).at(-1)).toBe("warp");
+    expect("warp" in g.clips[1]).toBe(false);
   });
 
   it("loads a library clip from the asset library, with the run's signal", async () => {
@@ -521,6 +553,20 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
     });
   });
 
+  it("passes a draft clip's warp, and none for a warp that changes nothing", async () => {
+    const identity: ClipWarp = { speed: 1, curve: null, reverse: false, blend: true };
+    const g = await gatherDraftInputs(
+      draftOf([
+        assetClip("x", "alibrary00001", { warp: RAMP }),
+        assetClip("y", "alibrary00002", { warp: identity }),
+        assetClip("z", "alibrary00003"),
+      ]),
+    );
+    expect(g.clips[0].warp).toEqual(RAMP);
+    expect("warp" in g.clips[1]).toBe(false);
+    expect("warp" in g.clips[2]).toBe(false);
+  });
+
   it("refuses an empty edit before fetching anything", async () => {
     await expect(gatherDraftInputs(draftOf([]))).rejects.toThrow(NO_CLIP_TO_RENDER);
     expect(mocks.fetchAssetBlob).not.toHaveBeenCalled();
@@ -548,10 +594,27 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
   // The same library clips must encode the same in the view as on the node (parent ruling 8)
   it.each([
     ["Track", [assetClip("x", "alibrary00001", { inSec: 0.5 }), assetClip("y", "alibrary00002", { muted: true })], TRACK],
+    [
+      "Track with a warped clip",
+      [assetClip("x", "alibrary00001", { inSec: 0.5, warp: RAMP }), assetClip("y", "alibrary00002", { muted: true })],
+      TRACK,
+    ],
     ["a lined-up stack", [assetClip("x", "alibrary00001"), assetClip("y", "alibrary00002", { outSec: 3 })], STACKED],
     [
       "a placed stack",
       [assetClip("x", "alibrary00001", { startSec: 0 }), assetClip("y", "alibrary00002", { startSec: 2.5 }), assetClip("z", "alibrary00001", { inSec: 4 })],
+      STACKED,
+    ],
+    [
+      "a placed stack with a warped clip",
+      [
+        assetClip("x", "alibrary00001", { startSec: 0 }),
+        assetClip("y", "alibrary00002", {
+          startSec: 2.5,
+          warp: { speed: 2, curve: null, reverse: false, blend: false },
+        }),
+        assetClip("z", "alibrary00001", { inSec: 4 }),
+      ],
       STACKED,
     ],
   ] as const)("gathers %s exactly as the node with the same clips", async (_name, timeline, sequenceLayout) => {
@@ -561,6 +624,7 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
     const fromNode = await gatherStitchInputs(makeCtx(stitch, [], []), stitch.data as never);
     const fromDraft = await gatherDraftInputs(draftOf([...timeline], { sequenceLayout, audioClips, loopCount: 2 }));
     expect(shape(fromDraft)).toEqual(shape(fromNode));
+    expect(fromNode.clips.map((c) => c.warp)).toEqual(timeline.map((c) => c.warp));
   });
 
   it("gathers no audio clips for an edit with none, as the node with none", async () => {
@@ -571,5 +635,83 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
     expect(shape(fromDraft)).toEqual(shape(fromNode));
     expect(stitchEngineOptions(fromDraft)).toEqual({ loopCount: 1 });
     expect(mocks.gatherAudioClipInputs).not.toHaveBeenCalled();
+  });
+});
+
+describe("overlays", () => {
+  const georgia = createTextOverlay({ id: "ovl_a", text: "Title", font: { family: "Georgia", file: "Georgia.ttf" } });
+  const sans = createTextOverlay({ id: "ovl_b", row: 1, text: "Under" });
+  const GEORGIA_LIST = '"nbf-0badf00d", "Space Grotesk", sans-serif';
+  const resolved = new Map<string, ResolvedFont>([[fontKey(georgia.font), { list: GEORGIA_LIST, state: "ready" }]]);
+  const timeline = [assetClip("x", "alibrary00001"), assetClip("y", "alibrary00002")];
+  const draftOf = (extra: Partial<StitchDraft> = {}): StitchDraft => ({
+    timeline,
+    audioClips: [],
+    legacyAudio: { curve: [], muted: false },
+    loopCount: 1,
+    sequenceLayout: { mode: "track", overlapSec: 1, crossfade: true },
+    ...extra,
+  });
+  const fromNode = (extra: Record<string, unknown> = {}, ctx: Partial<NodeExecutionContext> = {}) => {
+    const stitch = stitchNode({ timeline, ...extra });
+    return gatherStitchInputs(makeCtx(stitch, [], [], ctx), stitch.data as never);
+  };
+  /** Fonts that load only when released. */
+  function slowFonts() {
+    let release = () => {};
+    mocks.ensureOverlayFonts.mockImplementation(() => new Promise((resolve) => (release = () => resolve(resolved))));
+    return () => release();
+  }
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it.each([
+    ["the node's run", () => fromNode({ overlays: [georgia, sans] })],
+    ["the edit's render", () => gatherDraftInputs(draftOf({ overlays: [georgia, sans] }))],
+  ])("loads every overlay's font before %s, and passes each overlay with its family list", async (_name, gather) => {
+    const release = slowFonts();
+    let done = false;
+    const pending = gather().then((g) => {
+      done = true;
+      return g;
+    });
+    await tick();
+    expect(mocks.ensureOverlayFonts).toHaveBeenCalledWith([georgia, sans]);
+    expect(done).toBe(false);
+    release();
+    const g = await pending;
+    expect(g.overlays).toEqual([
+      { ...georgia, fontList: GEORGIA_LIST },
+      { ...sans, fontList: familyList(sans.font) },
+    ]);
+    expect(stitchEngineOptions(g)).toEqual({ loopCount: 1, overlays: g.overlays });
+    expect(stitchRecordParameters(g)).toMatchObject({ overlays: 2 });
+  });
+
+  it("gathers a node's overlays exactly as an edit's", async () => {
+    mocks.ensureOverlayFonts.mockResolvedValue(resolved);
+    const node = await fromNode({ overlays: [georgia, sans] });
+    const draft = await gatherDraftInputs(draftOf({ overlays: [georgia, sans] }));
+    const shape = (g: GatheredStitch) => ({ overlays: g.overlays, options: stitchEngineOptions(g), parameters: stitchRecordParameters(g) });
+    expect(shape(draft)).toEqual(shape(node));
+  });
+
+  it("leaves every overlay key out, and loads no font, when there are none", async () => {
+    for (const g of [await fromNode(), await fromNode({ overlays: [] }), await gatherDraftInputs(draftOf()), await gatherDraftInputs(draftOf({ overlays: [] }))]) {
+      expect("overlays" in g).toBe(false);
+      expect("overlays" in stitchEngineOptions(g)).toBe(false);
+      expect("overlays" in stitchRecordParameters(g)).toBe(false);
+    }
+    expect(mocks.ensureOverlayFonts).not.toHaveBeenCalled();
+    expect(await gatherOverlayInputs([])).toBeUndefined();
+  });
+
+  it("stops when the run is stopped while the fonts load", async () => {
+    const controller = new AbortController();
+    const release = slowFonts();
+    const pending = gatherDraftInputs(draftOf({ overlays: [georgia] }), controller.signal);
+    await tick();
+    controller.abort();
+    release();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });

@@ -10,6 +10,7 @@ import {
   type MoveDragStart,
   type MoveTarget,
 } from "../moveDrag";
+import { stackedRowsLayout } from "../stackedLayout";
 import { createClip, layoutSpans, type SourceDurations, type SourceKey } from "../timeline";
 
 const clip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
@@ -162,29 +163,66 @@ describe("moveSnapText", () => {
 
 describe("moveRowAt", () => {
   const ROW = 52;
+  const rows = stackedRowsLayout(4);
 
   it("keeps the row until the centre is more than half a row and 4 px past its middle", () => {
     expect(ROW_HYSTERESIS_PX).toBe(4);
-    expect(moveRowAt(1, 29, 1, 4, ROW)).toBe(1);
-    expect(moveRowAt(1, 30, 1, 4, ROW)).toBe(1);
-    expect(moveRowAt(1, 31, 1, 4, ROW)).toBe(2);
+    expect(moveRowAt(1, 29, 1, rows)).toBe(1);
+    expect(moveRowAt(1, 30, 1, rows)).toBe(1);
+    expect(moveRowAt(1, 31, 1, rows)).toBe(2);
   });
 
   it("holds the new row on the way back until it strays as far", () => {
-    expect(moveRowAt(1, 22, 2, 4, ROW)).toBe(2);
-    expect(moveRowAt(1, 21, 2, 4, ROW)).toBe(1);
-    expect(moveRowAt(1, -31, 1, 4, ROW)).toBe(0);
+    expect(moveRowAt(1, 22, 2, rows)).toBe(2);
+    expect(moveRowAt(1, 21, 2, rows)).toBe(1);
+    expect(moveRowAt(1, -31, 1, rows)).toBe(0);
   });
 
   it("is clamped to the first and last rows", () => {
-    expect(moveRowAt(0, -400, 0, 4, ROW)).toBe(0);
-    expect(moveRowAt(3, 400, 3, 4, ROW)).toBe(3);
-    expect(moveRowAt(1, 9 * ROW, 1, 4, ROW)).toBe(3);
+    expect(moveRowAt(0, -400, 0, rows)).toBe(0);
+    expect(moveRowAt(3, 400, 3, rows)).toBe(3);
+    expect(moveRowAt(1, 9 * ROW, 1, rows)).toBe(3);
   });
 
   it("keeps the current row for a dy that is not finite", () => {
-    expect(moveRowAt(1, Number.NaN, 2, 4, ROW)).toBe(2);
-    expect(moveRowAt(1, Infinity, 1, 4, ROW)).toBe(1);
+    expect(moveRowAt(1, Number.NaN, 2, rows)).toBe(2);
+    expect(moveRowAt(1, Infinity, 1, rows)).toBe(1);
+  });
+
+  it("keeps an open row (132 px) while the centre is within it and 4 px more", () => {
+    // Rows at 0, 52, 184 (row 1 open), 236: a box on row 0 (centre 26) dragged 60 px lands on row 1 ...
+    const open = stackedRowsLayout(4, 1);
+    expect(moveRowAt(0, 60, 0, open)).toBe(1);
+    // ... and stays there until its centre passes 184 + 4, or comes back above 52 − 4
+    expect(moveRowAt(0, 162, 1, open)).toBe(1);
+    expect(moveRowAt(0, 163, 1, open)).toBe(2);
+    expect(moveRowAt(0, 22, 1, open)).toBe(1);
+    expect(moveRowAt(0, 21, 1, open)).toBe(0);
+    // The open row dragged down from its centre (118): to row 2 once past 184 + 4
+    expect(moveRowAt(1, 70, 1, open)).toBe(1);
+    expect(moveRowAt(1, 71, 1, open)).toBe(2);
+  });
+
+  it("equals the uniform rows' formula with no row open", () => {
+    const uniform = (index: number, dy: number, current: number, rowCount: number) => {
+      const last = Math.max(0, rowCount - 1);
+      const kept = Math.min(Math.max(current, 0), last);
+      const centre = index * ROW + dy;
+      if (Math.abs(centre - kept * ROW) <= ROW / 2 + ROW_HYSTERESIS_PX) return kept;
+      return Math.min(Math.max(Math.round(centre / ROW), 0), last);
+    };
+    let seed = 41;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let run = 0; run < 2000; run++) {
+      const count = 1 + Math.floor(rnd() * 6);
+      const index = Math.floor(rnd() * count);
+      const current = Math.floor(rnd() * count);
+      const dy = (rnd() - 0.5) * 800;
+      expect(moveRowAt(index, dy, current, stackedRowsLayout(count))).toBe(uniform(index, dy, current, count));
+    }
   });
 });
 

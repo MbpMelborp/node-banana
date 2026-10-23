@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
+import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchClipboard } from "@/store/stitchClipboardStore";
 import { requestSave, useSaveRequestStore } from "@/store/saveRequestStore";
 import {
@@ -13,14 +13,16 @@ import {
 } from "@/lib/stitch/mediaInfo";
 import { __resetAssetInfoForTests, primeAssetInfo } from "@/lib/stitch/assetInfo";
 import { createClip } from "@/lib/stitch/timeline";
+import { normalizeWarp, withWarp } from "@/lib/stitch/warp";
 import { createAudioClip, MUSIC_CLIP_ID } from "@/lib/stitch/audioClips";
 import { musicAudio } from "@/lib/stitch/draft";
+import { createTextOverlay } from "@/lib/stitch/overlays";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { libraryDrop } from "../timeline/libraryDrop";
 import { setClipStart, setLoopCount, setOverlapSec, setSequenceMode } from "../editorActions";
-import type { StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, StitchAudioClip, VideoStitchNodeData, WorkflowEdge, WorkflowNode } from "@/types";
 import { restoreStoreActions } from "@/test/storeActions";
 import { LOOP_AUDIO_NOTE } from "../sequenceMenu";
 
@@ -214,6 +216,38 @@ describe("StitchEditorModal", () => {
     seed({ fps: [24, 30] });
     openEditor();
     expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  /** The first clip retimed, as an edit writes it. */
+  const retimeFirst = (warp: Partial<ClipWarp>) =>
+    act(() =>
+      editor().apply((d) => ({
+        ...d,
+        timeline: d.timeline.map((c, i) =>
+          i === 0 ? withWarp(c, normalizeWarp({ speed: 1, curve: null, reverse: false, blend: false, ...warp })) : c,
+        ),
+      })),
+    );
+
+  it("names no rate once a clip is retimed", () => {
+    seed();
+    openEditor();
+    retimeFirst({ speed: 2 });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  it("names no rate for a clip on a ramp at an average 1×", () => {
+    seed();
+    openEditor();
+    retimeFirst({ curve: { kind: "preset", name: "easeInQuad" } });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080");
+  });
+
+  it("keeps the rate for a clip that is only reversed", () => {
+    seed();
+    openEditor();
+    retimeFirst({ reverse: true });
+    expect(menuMeta()).toBe("2 clips · 1920 × 1080 · 24 fps");
   });
 
   it("leaves a clip the encode drops out of the size and rate", () => {
@@ -666,6 +700,75 @@ describe("StitchEditorModal", () => {
     // Nothing to select, so the rail does not ask for a selection
     expect(screen.queryByText("Select a clip to edit it.")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  });
+
+  it("shows a node's text layers on the black frame when it has no clips, the transport still off", () => {
+    // The stage is never measured here, so the overlay canvas falls back to its own size: give it one
+    vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(360);
+    const fillText = vi.fn();
+    const ctx = { setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), fillText, measureText: () => ({ width: 10 }) };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    seed({ clips: false, stitch: { overlays: [createTextOverlay({ id: "ovl_a", text: "Opening", startSec: 1, endSec: 5 })] } });
+    openEditor();
+    expect(screen.queryByText("No clips yet")).toBeNull();
+    const frame = screen.getByTestId("stitch-preview");
+    expect(frame.querySelectorAll("video")).toHaveLength(0);
+    expect(frame.lastElementChild).toBe(screen.getByTestId("stitch-overlay-canvas"));
+    // Drawn where its fade-in ends: there is no playhead to move
+    expect(fillText).toHaveBeenLastCalledWith("Opening", expect.any(Number), expect.any(Number));
+    // The transport is still gated on video: Play and the rest of its row are inert
+    const controls = screen.getByTestId("stitch-controls");
+    expect(controls.closest("[inert]")).not.toBeNull();
+    expect(controls).toContainElement(screen.getByRole("button", { name: "Play", hidden: true }));
+  });
+
+  it("lets Done apply a node's text layers with no clip: ones added with \"+ Text\", or ones it was given", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    seed({ clips: false });
+    openEditor();
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Add text" }));
+    // No video: at 0:00, and the playhead stays
+    expect(editor().draft!.overlays).toEqual([expect.objectContaining({ startSec: 0, endSec: 4, text: "Title" })]);
+    expect(editor().playhead).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(editor().isOpen).toBe(false);
+    expect(stitchData().overlays).toEqual([expect.objectContaining({ startSec: 0, endSec: 4, text: "Title" })]);
+    expect(stitchData().timeline).toEqual([]);
+
+    // Given: Done stays on once they are all removed, and takes them off the node
+    act(() => {
+      openStitchEditor("stitch");
+    });
+    const done = screen.getByRole("button", { name: "Done" });
+    expect(done).toBeEnabled();
+    act(() => editor().select(overlaySelectionOf({ clipId: editor().draft!.overlays![0].id })));
+    press(document.body, "Backspace");
+    expect(editor().draft!.overlays).toEqual([]);
+    expect(done).toBeEnabled();
+    fireEvent.click(done);
+    expect(stitchData().overlays).toBeUndefined();
+  });
+
+  it("hands a layer \"+ Text\" adds to the rail with its text focused and selected, so typing replaces \"Title\"", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    seed();
+    openEditor();
+    const add = within(screen.getByTestId("stitch-timeline-foot")).getByRole("button", { name: "Add text" });
+    act(() => add.focus());
+    fireEvent.click(add);
+    const rail = screen.getByRole("complementary", { name: "Text" });
+    const area = within(rail).getByRole("textbox", { name: "Text" }) as HTMLTextAreaElement;
+    expect(area).toHaveFocus();
+    expect([area.selectionStart, area.selectionEnd]).toEqual([0, "Title".length]);
+    fireEvent.change(area, { target: { value: "Lower third" } });
+    // The editor's keys leave the text alone: S splits nothing, ⌫ removes nothing
+    press(area, "s");
+    press(area, "Backspace");
+    expect(editor().draft!.overlays).toEqual([expect.objectContaining({ text: "Lower third" })]);
+    // The add, then the typing
+    expect(editor().past).toHaveLength(2);
   });
 
   it("keeps Done off in an empty editor whatever the loop count, and Loop off in the menu", () => {
@@ -1452,6 +1555,10 @@ describe("StitchEditorModal, several clips", () => {
       "Move up a row⌥↑",
       "Move down a row⌥↓",
       "Reset trim",
+      "Speed…",
+      "Reverse",
+      "Reset speed",
+      "Show speed curve",
       "Copy⌘C",
       "Cut⌘X",
       "Paste⌘V",
@@ -1460,6 +1567,12 @@ describe("StitchEditorModal, several clips", () => {
       "Remove 3 clips⌫",
     ]);
     const item = (name: string) => within(menu).getByRole("menuitem", { name: new RegExp(`^${name}`) });
+    // Nothing is retimed; the tallest menu scrolls in a short window rather than run past its edge
+    expect(item("Reset speed")).toBeDisabled();
+    // A speed curve is one clip's
+    expect(item("Show speed curve")).toBeDisabled();
+    expect(item("Show speed curve")).toHaveAttribute("title", "Select one clip");
+    expect(menu.style.maxHeight).not.toBe("");
     expect(item("Start at playhead")).toBeDisabled();
     expect(item("Start at playhead")).toHaveAttribute("title", "Select one clip");
     expect(item("End at playhead")).toHaveAttribute("title", "Select one clip");

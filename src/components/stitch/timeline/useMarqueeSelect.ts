@@ -20,7 +20,8 @@ import { releaseTypingFocus } from "./releaseTypingFocus";
  * press adds them to the selection. Release writes the selection once;
  * Escape drops the rectangle and puts the scroll back. A press that does not
  * travel clears the selection, unless a modifier was held. The audio rows
- * use the same gesture with their own kind, commit and clear. The lanes
+ * and the overlay rows use the same gesture with their own kind, commit and
+ * clear. The lanes
  * scroll by themselves near their edges, as for a body drag, and the
  * rectangle takes in rows scrolled out of view under it.
  */
@@ -47,7 +48,7 @@ export interface MarqueeOptions {
   /** The y range the rectangle is clamped to, lane content px. */
   bounds: () => { top: number; bottom: number };
   /** The kind of clip the box selects; an additive box adds to a selection of that kind only. Default "clip". */
-  kind?: "clip" | "audio";
+  kind?: "clip" | "audio" | "overlay";
   /** The release with the clips touched, in order. Default: applyBoxSelection over the selection at the press. */
   commit?: (hitIds: string[], additive: boolean) => void;
   /** A press that did not travel, without a modifier. Default: clearClipSelection. */

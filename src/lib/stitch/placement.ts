@@ -13,18 +13,29 @@ import { joinOverlaps, type StackItem } from "./stack";
  * is capped by how long the picture below has played (or plays on), so moving
  * a clip never makes the picture jump. With Crossfade off the top live clip
  * covers and every live clip is heard. Pieces of one video whose frames
- * continue (a split) count as one clip: a split changes nothing.
+ * continue (a split, retimed pieces included) count as one clip: a split
+ * changes nothing.
  *
  * Pure: no React, no DOM, no mediabunny. Times are seconds.
  */
 
-/** A non-empty clip on the Stacked timeline. row = its timeline index (0 = top); source = its source key; inSec = its In. */
+/**
+ * A non-empty clip on the Stacked timeline. row = its timeline index (0 = top); source = its source key; inSec = its
+ * In. sourceEnds: a retimed clip's source seconds at its start and at its end (reversed: its Out, then its In); absent
+ * for a clip at its own speed, whose frames run from inSec at one second a second.
+ */
 export interface PlacedUnit {
   start: number;
   length: number;
   row: number;
   source: string;
   inSec: number;
+  sourceEnds?: readonly [number, number];
+}
+
+/** PlacedUnit.sourceEnds of a clip playing [inSec, outSec] under a warp: the editor and the encoder build it here. */
+export function warpedUnitEnds(inSec: number, outSec: number, reverse: boolean): readonly [number, number] {
+  return reverse ? [outSec, inSec] : [inSec, outSec];
 }
 
 export interface LayerFades {
@@ -191,7 +202,11 @@ export function buildEnvelope(units: readonly PlacedUnit[], crossfade: boolean):
       above !== null &&
       above.source === unit.source &&
       Math.abs(unit.start - (above.start + above.length)) < RUN_TOL_SEC - TIME_EPS &&
-      Math.abs(unit.start - unit.inSec - (above.start - above.inSec)) < RUN_TOL_SEC - TIME_EPS;
+      // A retimed piece continues the one above when its frames start where those end: a split, whatever the warp
+      (above.sourceEnds || unit.sourceEnds
+        ? Math.abs((unit.sourceEnds?.[0] ?? unit.inSec) - (above.sourceEnds?.[1] ?? above.inSec + above.length)) <
+          RUN_TOL_SEC - TIME_EPS
+        : Math.abs(unit.start - unit.inSec - (above.start - above.inSec)) < RUN_TOL_SEC - TIME_EPS);
     if (continues) {
       const run = runs[runs.length - 1];
       run.units.push(i);

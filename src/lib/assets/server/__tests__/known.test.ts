@@ -249,6 +249,7 @@ describe("project folder names", () => {
     expect(await uniqueFolderName(root, "Dogs")).toEqual({ folder: "Dogs 2", taken: true });
     expect(await uniqueFolderName(root, "Generations")).toEqual({ folder: "Generations 2", taken: true });
     expect(await uniqueFolderName(root, "Edits")).toEqual({ folder: "Edits 2", taken: true });
+    expect(await uniqueFolderName(root, "fonts")).toEqual({ folder: "fonts 2", taken: true });
     expect(await projectFolderName(root, "cats")).toEqual({ folder: "cats 3", path: path.join(root, "cats 3"), taken: true });
     expect(await projectFolderName(path.join(base, "missing"), "New")).toMatchObject({ folder: "New", taken: false });
   });

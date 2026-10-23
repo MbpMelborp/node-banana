@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ReferenceEdge } from "@/components/edges/ReferenceEdge";
 import { ReactFlowProvider, Position } from "@xyflow/react";
 
 // Mock the workflow store
 const mockUseWorkflowStore = vi.fn();
+const mockSetCenter = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
   useWorkflowStore: (selector?: (state: unknown) => unknown) => {
@@ -13,6 +14,20 @@ vi.mock("@/store/workflowStore", () => ({
     }
     return mockUseWorkflowStore((s: unknown) => s);
   },
+}));
+
+vi.mock("@xyflow/react", async () => {
+  const actual = await vi.importActual("@xyflow/react");
+  return {
+    ...actual,
+    useReactFlow: () => ({ setCenter: mockSetCenter, getZoom: () => 1.5 }),
+    useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+  };
+});
+
+// The real label renderer portals into a mounted canvas; render in place
+vi.mock("@/components/flowPortals", () => ({
+  EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <foreignObject><div>{children}</div></foreignObject>,
 }));
 
 vi.mock("@/components/edges/EditableEdge", () => ({
@@ -70,6 +85,23 @@ describe("ReferenceEdge", () => {
       );
       expect(getByTestId("editable-edge").getAttribute("data-id")).toBe("ref-edge-1");
       expect(container.querySelector(".react-flow__edge-interaction")).toBeNull();
+    });
+  });
+
+  describe("Toolbar", () => {
+    it("jumps to the handle at either end", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({
+        edges: [{ id: "ref-edge-1", type: "reference", source: "node-1", target: "node-2", selected: true, data: {} }],
+      })));
+      render(
+        <TestWrapper>
+          <ReferenceEdge {...createDefaultProps({ selected: true })} />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Jump to start of noodle" }));
+      expect(mockSetCenter).toHaveBeenLastCalledWith(100, 50, { zoom: 1.5, duration: 300 });
+      fireEvent.click(screen.getByRole("button", { name: "Jump to end of noodle" }));
+      expect(mockSetCenter).toHaveBeenLastCalledWith(300, 50, { zoom: 1.5, duration: 300 });
     });
   });
 

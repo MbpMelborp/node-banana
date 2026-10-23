@@ -51,6 +51,7 @@ import {
   canSplitClipsAt,
   clearStarts,
   createClip,
+  edgeAtPlayheadPatch,
   inOverlap,
   isPlaced,
   layoutSpans,
@@ -68,11 +69,11 @@ import {
   setEdgeAtPlayhead,
   shiftRows,
   sourceKey,
-  sourceTimeAt,
   spansAt,
   spansEnd,
   splitClipAt,
   splitClipsAt,
+  splitRefusal,
   topSpanAt,
   trimClip,
   trimClipInPlace,
@@ -93,6 +94,7 @@ import type {
 } from "@/types";
 import { commitStitchEdit } from "./commitStitchEdit";
 import { liveFitZoom } from "./liveFitZoom";
+import { removeOverlaySelection } from "./overlayActions";
 
 /**
  * What the editor's keys, rail and transport do to its store. Each reads the
@@ -103,7 +105,7 @@ import { liveFitZoom } from "./liveFitZoom";
 const editor = () => useStitchEditorStore.getState();
 
 /** One loop of the sequence, in seconds. */
-function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number {
+export function editorTotal(s: Pick<StitchEditorState, "draft" | "durations">): number {
   return s.draft ? draftDuration(s.draft, s.durations) : 0;
 }
 
@@ -196,13 +198,6 @@ function canSplitGroup(s: StitchEditorState): boolean {
   return canSplitClipsAt(draftSpans(s.draft, s.durations), s.playhead, new Set(selectedClipIds(s)), placedOf(s));
 }
 
-/** Some selected clip plays at the playhead, whether or not it is far enough from its ends to split. */
-function selectedUnderPlayhead(s: StitchEditorState): boolean {
-  if (!s.draft) return false;
-  const ids = new Set(selectedClipIds(s));
-  return spansAt(draftSpans(s.draft, s.durations), s.playhead).some((span) => ids.has(span.clip.id));
-}
-
 /** Whether S would split something now. */
 export function canSplitAtPlayhead(s: StitchEditorState): boolean {
   if (!s.draft) return false;
@@ -242,18 +237,28 @@ export const canSplitSelectedAtPlayhead = onPlayhead((s: StitchEditorState): boo
   return topSpanAt(draftSpans(s.draft, s.durations), s.playhead, clipId)?.clip.id === clipId && canSplitAtPlayhead(s);
 });
 
+/** Why Split is off when a selected clip's speed refuses the cut at the playhead (splitRefusal). */
+export const WARP_SPLIT_REASON = "Move the playhead: the speed here is too slow to split";
+
 /**
  * Why Split is off, when the reason is not obvious: two clips play under the playhead in a lined-up stack, whose
- * split would re-sequence it. A placed stack splits there too (the pieces stay one run, so nothing changes).
+ * split would re-sequence it, or a selected clip's speed cannot be cut there. A placed stack splits inside an
+ * overlap too (the pieces stay one run, so nothing changes).
  */
 export const splitBlockedReason = onPlayhead((s: StitchEditorState): string | null => {
   if (!s.draft) return null;
-  const overlap =
-    stackedOf(s) && !placedOf(s) && inOverlap(draftSpans(s.draft, s.durations), s.playhead)
-      ? "Move the playhead out of the overlap to split"
-      : null;
-  if (selectIsMulti(s)) return overlap ?? (selectedUnderPlayhead(s) ? null : "No selected clip is under the playhead");
-  return overlap;
+  const spans = draftSpans(s.draft, s.durations);
+  const placed = placedOf(s);
+  if (stackedOf(s) && !placed && inOverlap(spans, s.playhead)) {
+    return "Move the playhead out of the overlap to split";
+  }
+  const multi = selectIsMulti(s);
+  const lead = selectedClipId(s);
+  const ids = new Set(multi ? selectedClipIds(s) : lead ? [lead] : []);
+  const live = spansAt(spans, s.playhead).filter((span) => ids.has(span.clip.id));
+  if (multi && live.length === 0) return "No selected clip is under the playhead";
+  if (!live.some((span) => splitRefusal(span, s.playhead, placed) === "warp")) return null;
+  return multi && canSplitClipsAt(spans, s.playhead, ids, placed) ? null : WARP_SPLIT_REASON;
 });
 
 /**
@@ -279,8 +284,9 @@ export function splitAtPlayhead(): void {
 }
 
 /**
- * I / O: the selected clip's In or Out at the playhead, when the playhead is inside it. In Stacked the frames stay
- * where they are (trimClipInPlace), so I starts the clip at the playhead.
+ * I / O: the selected clip's In or Out at the playhead, when the playhead is inside it (edgeAtPlayheadPatch). In
+ * Stacked the frames stay where they are (trimClipInPlace), so I starts the clip at the playhead; on a ramp the frames
+ * between re-time and the far edge stays.
  */
 export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
   const s = editor();
@@ -296,14 +302,8 @@ export function setEdgeAtPlayheadForSelection(edge: "in" | "out"): void {
   const t = s.playhead;
   if (!span || span.length === 0 || !Number.isFinite(t) || t < span.start || t > span.end) return;
   if (edge === "out" ? t <= span.start : t >= span.end) return;
-  const at = sourceTimeAt(span, t);
-  const timeline = trimClipInPlace(
-    s.draft.timeline,
-    clipId,
-    s.durations,
-    edge === "in" ? { inSec: at } : { outSec: at },
-    overlapOf(s),
-  );
+  const patch = edgeAtPlayheadPatch(span, edge, t);
+  const timeline = trimClipInPlace(s.draft.timeline, clipId, s.durations, patch, overlapOf(s));
   s.apply((d) => ({ ...d, timeline }));
 }
 
@@ -329,12 +329,14 @@ export function removeClipsById(ids: readonly string[]): string[] {
 
 /**
  * ⌫: the selected clip, or the selected curve point. The neighbour takes the clip's selection. A lined-up stack
- * closes up; a placed one is pinned first, so nothing else moves. With several selected, all of them.
+ * closes up; a placed one is pinned first, so nothing else moves. With several selected, all of them. Audio clips
+ * and text layers selected are removed as theirs.
  */
 export function removeSelection(): void {
   const s = editor();
   if (!s.draft) return;
   if (s.selection?.kind === "audio") return removeAudioSelection();
+  if (s.selection?.kind === "overlay") return removeOverlaySelection();
   if (selectIsMulti(s)) {
     editor().untagCut(removeClipsById(selectedClipIds(s)));
     return;
@@ -398,8 +400,9 @@ export function toggleMusicMute(): void {
 }
 
 /**
- * Clamped by trimClip; an unchanged value is no step. In Stacked the frames stay where they are: an In change moves
- * the start by as much, never before 0:00 (trimClipInPlace, which pins).
+ * Clamped by trimClip; an unchanged value is no step. In Stacked the frames stay where they are: the head's change
+ * (the In, or a reversed clip's Out) moves the start by as much over the clip's speed, never before 0:00
+ * (trimClipInPlace, which pins).
  */
 export function trimSelected(patch: { inSec?: number; outSec?: number | null }): void {
   const s = editor();
@@ -416,8 +419,9 @@ export function trimSelected(patch: { inSec?: number; outSec?: number | null }):
 }
 
 /**
- * In Stacked the start moves back by the old In, clamped at 0:00 (resetTrimInPlace, which pins). With several
- * selected, every trimmed one, in one step.
+ * In Stacked the start moves back by what the head gains over the clip's speed (the In, or a reversed clip's Out),
+ * clamped at 0:00 (resetTrimInPlace, which pins). A clip slower than 1× gets no more than its 600 s of output
+ * (resetTrim's range). With several selected, every trimmed one, in one step.
  */
 export function resetSelectedTrim(): void {
   const s = editor();
@@ -432,7 +436,9 @@ export function resetSelectedTrim(): void {
   const overlapSec = overlapOf(s);
   s.apply((d) => ({
     ...d,
-    timeline: stacked ? resetTrimInPlace(d.timeline, clipId, s.durations, overlapSec) : resetTrim(d.timeline, clipId),
+    timeline: stacked
+      ? resetTrimInPlace(d.timeline, clipId, s.durations, overlapSec)
+      : resetTrim(d.timeline, clipId, s.durations),
   }));
 }
 
@@ -602,9 +608,9 @@ export function moveClipsBody(ids: readonly string[], timeline: StitchTimelineCl
   s.apply((d) => ({ ...d, timeline }));
 }
 
-/** One output frame: the encoder's grid. */
-const NUDGE_SEC = 1 / FRAME_RATE;
-const BIG_NUDGE_FRAMES = 10;
+/** One output frame: the encoder's grid. ⌥←/→ move clips, audio clips and text layers by it (⇧: ten). */
+export const NUDGE_SEC = 1 / FRAME_RATE;
+export const BIG_NUDGE_FRAMES = 10;
 const START_STEP_SEC = 0.1;
 const BIG_START_STEP_SEC = 1;
 
