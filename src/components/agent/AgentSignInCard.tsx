@@ -45,7 +45,7 @@ export interface AgentSignInCardProps {
 
 /**
  * The button launches the vendor tool's own sign-in, so it names that tool:
- * Node Banana doesn't offer a Claude login of its own (Anthropic's terms
+ * Creativo Melborp doesn't offer a Claude login of its own (Anthropic's terms
  * forbid third-party apps offering Claude.ai login). "Sign in with ChatGPT"
  * is the Codex CLI's own name for its login.
  */
@@ -129,7 +129,7 @@ export function AgentSignInCard({
         <>
           {heading(
             `Couldn't reach ${label}`,
-            `Node Banana's own server failed while asking ${label} for its status. The agent isn't affected; this window is.`,
+            `Creativo Melborp's own server failed while asking ${label} for its status. The agent isn't affected; this window is.`,
           )}
           <div className="flex flex-col gap-2.5">
             <DialogButton variant="primary" size="md" data-agent-primary onClick={onCheckAgain} disabled={checking} className="self-start">
@@ -144,7 +144,7 @@ export function AgentSignInCard({
               </MonoWell>
             </Disclosure>
           </div>
-          {footer("If this keeps happening, restart Node Banana.")}
+          {footer("If this keeps happening, restart Creativo Melborp.")}
         </>
       );
       break;
@@ -175,7 +175,7 @@ export function AgentSignInCard({
               {checking ? "Checking…" : "Check again"}
             </DialogButton>
             <p className="text-[11px] leading-4 text-ink-3">
-              Already installed somewhere else? Node Banana looks on your PATH and in the usual npm and Homebrew locations.
+              Already installed somewhere else? Creativo Melborp looks on your PATH and in the usual npm and Homebrew locations.
             </p>
           </div>
           {footer(`Runs on your ${plan} through ${label}.`)}
@@ -300,7 +300,7 @@ export function AgentSignInCard({
         <>
           {heading(
             api ? "This login would bill API credits" : `No ${plan} on this login`,
-            `Node Banana only runs the agent on a ${plan}, so it won't use this login.`,
+            `Creativo Melborp only runs the agent on a ${plan}, so it won't use this login.`,
           )}
           <div className="flex gap-2.5 rounded-lg bg-well px-3 py-2.5 shadow-well">
             <StatusDot tone="blocked" className="mt-[7px]" />

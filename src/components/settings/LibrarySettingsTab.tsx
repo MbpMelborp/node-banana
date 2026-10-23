@@ -49,7 +49,7 @@ import {
 import { cn } from "@/components/nodes/ui/cn";
 
 /**
- * The Storage page of the settings dialog: the Node Banana folder, which
+ * The Storage page of the settings dialog: the Creativo Melborp folder, which
  * holds the projects saved by name and the generations of workflows that
  * have none. Nothing here is a draft — every action applies at once and long
  * ones (moves, clean-up) run as a server job this page follows.
@@ -143,7 +143,7 @@ export function describeScan(result: ScanProjectsResult): string {
   const count = result.projects.length;
   const parts = [
     count === 0
-      ? `No Node Banana projects in ${result.root}.`
+      ? `No Creativo Melborp projects in ${result.root}.`
       : `Found ${count.toLocaleString()} ${count === 1 ? "project" : "projects"} in ${result.root}.`,
   ];
   if (result.truncated) parts.push("The search stopped early; pick a smaller folder to see the rest.");
@@ -297,7 +297,7 @@ function projectCount(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "project" : "projects"}`;
 }
 
-/** The known projects' folders, inside the Node Banana folder or outside it (at most what one request takes). */
+/** The known projects' folders, inside the Creativo Melborp folder or outside it (at most what one request takes). */
 function projectDirs(overview: ProjectsOverview | null, inRoot: boolean): string[] {
   if (!overview) return [];
   return overview.projects
@@ -399,7 +399,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
     }
   };
 
-  /** Moves project folders into the Node Banana folder, as a job this page follows. */
+  /** Moves project folders into the Creativo Melborp folder, as a job this page follows. */
   const moveProjects = (dirs: string[], count: number) => {
     setMovingCount(count);
     return runJob(async () => {
@@ -509,7 +509,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
     try {
       await revealLibraryRoot();
     } catch (error) {
-      setFeedback({ text: errorMessage(error, "Could not show the Node Banana folder."), error: true });
+      setFeedback({ text: errorMessage(error, "Could not show the Creativo Melborp folder."), error: true });
     }
   };
 
@@ -520,7 +520,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
       const picked = await pickFolder("library");
       if (!picked) return;
       if (samePath(picked, status.root, status.platform)) {
-        setFeedback({ text: "That folder is already your Node Banana folder.", error: false });
+        setFeedback({ text: "That folder is already your Creativo Melborp folder.", error: false });
         return;
       }
       setApplyError(null);
@@ -566,7 +566,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
         });
       }
     } catch (error) {
-      setApplyError(errorMessage(error, "Could not change the Node Banana folder."));
+      setApplyError(errorMessage(error, "Could not change the Creativo Melborp folder."));
     } finally {
       setApplying(null);
     }
@@ -634,14 +634,14 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
 
   return (
     <div onKeyDown={keepEnter}>
-      {/* The Node Banana folder */}
+      {/* The Creativo Melborp folder */}
       <DialogRow
         first
         align="start"
         className="pt-0"
         title={
           <span className="flex items-center gap-2">
-            Node Banana folder
+            Creativo Melborp folder
             <DialogChip>{SOURCE_LABELS[status.source] ?? status.source}</DialogChip>
           </span>
         }
@@ -826,7 +826,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
         portal
       >
         <DialogHeader>
-          <DialogTitle>Change the Node Banana folder</DialogTitle>
+          <DialogTitle>Change the Creativo Melborp folder</DialogTitle>
           <DialogDescription className="font-mono break-all">{pendingRoot}</DialogDescription>
         </DialogHeader>
         <DialogBody scroll={false} className="flex flex-col gap-2 pb-4">

@@ -27,7 +27,7 @@ export function DesktopRecovery({ children }: { children: ReactNode }) {
       }
       if (result.value.snapshot) setCheckpoint(result.value.snapshot);
       else setReady(true);
-    }).catch(() => setError('Recovery could not be opened. Restart Node Banana to retry.'));
+    }).catch(() => setError('Recovery could not be opened. Restart Creativo Melborp to retry.'));
   }, []);
   useEffect(() => {
     if (!ready || !isDesktop()) return;
@@ -73,8 +73,8 @@ export function DesktopRecovery({ children }: { children: ReactNode }) {
         <DialogTitle>{checkpoint ? 'Restore your previous session?' : 'Session recovery'}</DialogTitle>
         <DialogDescription>
           {checkpoint
-            ? 'Node Banana did not close normally. Restore checkpointed tabs and edits, or discard them and open an empty workspace.'
-            : 'Node Banana did not close normally and the checkpoint could not be read.'}
+            ? 'Creativo Melborp did not close normally. Restore checkpointed tabs and edits, or discard them and open an empty workspace.'
+            : 'Creativo Melborp did not close normally and the checkpoint could not be read.'}
         </DialogDescription>
       </DialogHeader>
       <DialogBody scroll={false} className="flex flex-col gap-2 pb-4">

@@ -230,9 +230,9 @@ export function ProjectSetupModal({
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // "Choose another location…": the project goes in a directory of the user's
-  // choosing instead of a folder of its own inside the Node Banana folder
+  // choosing instead of a folder of its own inside the Creativo Melborp folder
   const [customLocation, setCustomLocation] = useState(true);
-  // The folder the name gets inside the Node Banana folder, as the server numbers it
+  // The folder the name gets inside the Creativo Melborp folder, as the server numbers it
   const [folderTarget, setFolderTarget] = useState<ProjectFolderName | null>(null);
   // The chosen folder already holds a different workflow: replace it, or save beside it
   const [folderConflict, setFolderConflict] = useState<{ path: string; existingName: string | null } | null>(null);
@@ -299,8 +299,8 @@ export function ProjectSetupModal({
         setDirectoryPath(getLastProjectBaseDir() || "");
         setExternalStorage(true);
       }
-      // A project goes in the Node Banana folder unless it already lives
-      // somewhere, or there is no Node Banana folder to put it in.
+      // A project goes in the Creativo Melborp folder unless it already lives
+      // somewhere, or there is no Creativo Melborp folder to put it in.
       const openingStatus = getRecorderLibraryStatus();
       setCustomLocation(!(openingStatus?.available && openingStatus.root) || (mode === "settings" && !!saveDirectoryPath));
       setFolderTarget(null);
@@ -353,7 +353,7 @@ export function ProjectSetupModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageRequest]);
 
-  // Where the name lands in the Node Banana folder, asked as it is typed
+  // Where the name lands in the Creativo Melborp folder, asked as it is typed
   const recorderStatus = getRecorderLibraryStatus();
   const libraryRoot = recorderStatus?.available ? recorderStatus.root : null;
   const folderQuery = isOpen && activeTab === "project" && !customLocation && libraryRoot ? name.trim() || "my-project" : null;
@@ -375,7 +375,7 @@ export function ProjectSetupModal({
     };
   }, [folderQuery]);
 
-  /** "Choose another location…" and back: a chosen directory starts at the Node Banana folder. */
+  /** "Choose another location…" and back: a chosen directory starts at the Creativo Melborp folder. */
   const toggleCustomLocation = () => {
     if (customLocation) {
       setCustomLocation(false);
@@ -416,7 +416,7 @@ export function ProjectSetupModal({
     }
   };
 
-  /** The Node Banana workflow a folder already holds, if any. */
+  /** The Creativo Melborp workflow a folder already holds, if any. */
   const findWorkflowInFolder = async (folder: string): Promise<{ id: string | null; name: string | null } | null> => {
     try {
       const response = await fetch(`/api/workflow?path=${encodeURIComponent(folder)}&load=true`);
@@ -630,7 +630,7 @@ export function ProjectSetupModal({
   if (!isOpen) return null;
 
   const page = SETTINGS_PAGES.find((p) => p.id === activeTab) ?? SETTINGS_PAGES[0];
-  // The folder the project is saved in, inside the Node Banana folder
+  // The folder the project is saved in, inside the Creativo Melborp folder
   const folderPath = libraryRoot
     ? folderTarget?.path ?? joinPathForPlatform(libraryRoot, sanitizeProjectFolderName(name) || "my-project")
     : null;
@@ -729,7 +729,7 @@ export function ProjectSetupModal({
                 </p>
                 {libraryRoot && (
                   <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
-                    Use the Node Banana folder
+                    Use the Creativo Melborp folder
                   </DialogTextButton>
                 )}
               </div>

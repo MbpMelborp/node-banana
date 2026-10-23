@@ -70,7 +70,7 @@ export function downloadAsset(asset: Pick<AssetView, "id" | "filename">) {
 /** The zip's name, dated by the user's own calendar (not UTC's, which is a day off half the day in some zones). */
 export function zipFileName(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `Node Banana assets ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.zip`;
+  return `Creativo Melborp assets ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.zip`;
 }
 
 /**

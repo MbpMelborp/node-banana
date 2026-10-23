@@ -50,7 +50,7 @@ function problemText(problem: EditListProblem): string {
     case "unreadable":
       return `Couldn't read ${problem.fileName}`;
     case "newer":
-      return `${problem.fileName} was made by a newer Node Banana`;
+      return `${problem.fileName} was made by a newer Creativo Melborp`;
     case "duplicate":
       return problem.name ? `${problem.fileName} is a copy of “${problem.name}”` : `${problem.fileName} is a copy of another edit`;
   }
@@ -62,7 +62,7 @@ function problemText(problem: EditListProblem): string {
  * the active one (the row under the pointer or with focus; it stays on the
  * last one hovered and starts on the newest). ↑ ↓ Home End move, Enter opens.
  * Above them New edit and the Edits folder; under them the files that are not
- * edits it can open (unreadable, from a newer Node Banana, a copy made in
+ * edits it can open (unreadable, from a newer Creativo Melborp, a copy made in
  * Finder). With no edits the list holds New edit, beside an empty frame.
  *
  * Focus starts where Enter does what the home is for: on the active row (the

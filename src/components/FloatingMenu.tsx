@@ -483,7 +483,7 @@ export function FloatingMenu() {
             ref={menuRef}
             floating={false}
             role="menu"
-            aria-label="Node Banana menu"
+            aria-label="Creativo Melborp menu"
             onKeyDown={handleMenuKeyDown}
             className="flex min-w-[224px] flex-col py-1"
           >

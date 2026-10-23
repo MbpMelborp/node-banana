@@ -17,7 +17,7 @@ function errorMessage(error: unknown, fallback: string): string {
 
 /**
  * The card between the Assets header and the grid when known projects live
- * outside the Node Banana folder: "Move them in" starts the projects move
+ * outside the Creativo Melborp folder: "Move them in" starts the projects move
  * (its progress shows in the header), "Keep where they are" declines, and
  * the offer is not made again here or in Settings › Storage.
  */

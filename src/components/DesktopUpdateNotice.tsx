@@ -57,7 +57,7 @@ export function DesktopUpdateNotice() {
       dismiss = false;
       break;
     case "available":
-      text = `Node Banana ${state.version} is available`;
+      text = `Creativo Melborp ${state.version} is available`;
       actions = <>
         <button type="button" className={STRONG} onClick={() => void updates.download()}>Update</button>
         <button type="button" className={QUIET} onClick={() => void updates.skip()}>Skip</button>

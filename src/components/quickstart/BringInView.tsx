@@ -70,8 +70,8 @@ function errorText(error: unknown, fallback: string): string {
 }
 
 /**
- * "Bring in your projects": pick the folder an earlier Node Banana saved
- * projects in, see what is there, then make it the Node Banana folder, move
+ * "Bring in your projects": pick the folder an earlier Creativo Melborp saved
+ * projects in, see what is there, then make it the Creativo Melborp folder, move
  * the projects into the current one (with progress), or list them where
  * they are. Opened from the welcome dialog, Open's empty state and
  * Settings › Storage.
@@ -92,7 +92,7 @@ export function BringInView({ onBack, onClose, onDone }: BringInViewProps) {
     };
   }, []);
 
-  // The Node Banana folder, for "Move them into …" and the move's destination
+  // The Creativo Melborp folder, for "Move them into …" and the move's destination
   useEffect(() => {
     const controller = new AbortController();
     fetchProjects(controller.signal)
@@ -192,7 +192,7 @@ export function BringInView({ onBack, onClose, onDone }: BringInViewProps) {
     }
   }, [job]);
 
-  const rootShort = root ? shortLibraryPath(root) : "your Node Banana folder";
+  const rootShort = root ? shortLibraryPath(root) : "your Creativo Melborp folder";
 
   if (phase.kind === "moving") {
     return <MovingView scan={phase.scan} job={phase.job} root={root} rootShort={rootShort} error={error} onStop={stop} onClose={onClose} onDone={onDone} />;
@@ -240,7 +240,7 @@ export function BringInView({ onBack, onClose, onDone }: BringInViewProps) {
                 <ChoiceCard
                   checked={choice === "use"}
                   onSelect={() => setChoice("use")}
-                  title="Make this my Node Banana folder"
+                  title="Make this my Creativo Melborp folder"
                   recommended={scan.recommendUse === true}
                   description={
                     scan.recommendUse
@@ -275,7 +275,7 @@ export function BringInView({ onBack, onClose, onDone }: BringInViewProps) {
           </>
         ) : scan ? (
           <Wait>
-            No Node Banana projects in {shortenHomePath(scan.root)} or its subfolders.
+            No Creativo Melborp projects in {shortenHomePath(scan.root)} or its subfolders.
             {scan.unreadable > 0 && ` ${formatCount(scan.unreadable, "folder")} could not be read.`}
           </Wait>
         ) : (

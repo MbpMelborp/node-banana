@@ -47,7 +47,7 @@ export function ConfirmDelete() {
         <DialogDescription className="text-[13px] leading-5">
           {remove
             ? "Their files are already missing. The records, with their prompts and settings, are removed. This cannot be undone."
-            : `Library files go to ${osTrashName(resolvePlatform(library))}. They leave Node Banana for good: this cannot be undone here.`}
+            : `Library files go to ${osTrashName(resolvePlatform(library))}. They leave Creativo Melborp for good: this cannot be undone here.`}
         </DialogDescription>
         {!remove && confirm.projectCount !== 0 && (
           <label className="flex items-start gap-2.5 rounded-lg border border-card-border p-3 text-[13px] leading-5 text-neutral-300">

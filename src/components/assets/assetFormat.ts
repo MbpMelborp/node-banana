@@ -224,7 +224,7 @@ export function revealLabel(platform: string): string {
   return "Show in folder";
 }
 
-/** "~/Pictures/Node Banana" → "Pictures › Node Banana": the last two folders, for a one-line hint. */
+/** "~/Pictures/Creativo Melborp" → "Pictures › Creativo Melborp": the last two folders, for a one-line hint. */
 export function shortLibraryPath(root: string): string {
   const parts = root.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
   return parts.slice(-2).join(" › ") || root;

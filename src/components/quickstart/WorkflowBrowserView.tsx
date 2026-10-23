@@ -53,7 +53,7 @@ function FolderIcon({ className, strokeWidth = 1.5 }: { className?: string; stro
 }
 
 /**
- * "Your projects": the pane names the Node Banana folder and holds the
+ * "Your projects": the pane names the Creativo Melborp folder and holds the
  * actions on it, the page lists every project the app knows about as ruled
  * rows, newest first, wherever it lives. With none yet, the page says where
  * saved projects go and offers a new one or to bring earlier ones in.
@@ -179,7 +179,7 @@ export function WorkflowBrowserView({
           <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4 px-12 pb-6 text-center">
             <FolderIcon className="w-10 h-10 text-neutral-600" strokeWidth={1.25} />
             <p className="max-w-[360px] text-[13px] leading-[19px] text-neutral-400">
-              Projects you save are kept here, in {root ? shortLibraryPath(root) : "your Node Banana folder"}.
+              Projects you save are kept here, in {root ? shortLibraryPath(root) : "your Creativo Melborp folder"}.
             </p>
             {onNewProject && (
               <DialogButton variant="primary" size="md" onClick={onNewProject}>
@@ -188,7 +188,7 @@ export function WorkflowBrowserView({
             )}
             {onBringIn && (
               <DialogTextButton className="text-xs" onClick={onBringIn}>
-                <span className="mr-1 text-neutral-500">Used Node Banana before?</span>
+                <span className="mr-1 text-neutral-500">Used Creativo Melborp before?</span>
                 Bring in your projects
               </DialogTextButton>
             )}

@@ -43,7 +43,7 @@ export function WelcomeModal({
   initialView = "initial",
 }: WelcomeModalProps) {
   const [currentView, setCurrentView] = useState<QuickstartView>(initialView);
-  // Only someone with no known projects is asked whether they used Node Banana before
+  // Only someone with no known projects is asked whether they used Creativo Melborp before
   const [noProjects, setNoProjects] = useState(false);
 
   // A second request while open (Settings › Storage's "Choose folder…") switches the view

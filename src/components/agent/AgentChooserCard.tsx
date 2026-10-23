@@ -67,7 +67,7 @@ export function AgentChooserCard({ readiness, onPick, onCheckAgain, checking = f
   return (
     <div data-testid="agent-chooser" className="flex w-full flex-col gap-5 px-4 pb-6 pt-5">
       <CardHeading harness="Agent" tone="unknown" pulse={false} title="Choose how to run the agent" size="full">
-        Node Banana runs the agent on a paid subscription you already have. Pick one to sign in; you can switch later
+        Creativo Melborp runs the agent on a paid subscription you already have. Pick one to sign in; you can switch later
         from the header.
       </CardHeading>
       <div className="flex flex-col gap-2.5">

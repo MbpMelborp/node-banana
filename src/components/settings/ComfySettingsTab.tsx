@@ -41,7 +41,7 @@ const MODES: Array<{ value: ComfyBackendMode; label: string; hint: string }> = [
 const MODE_OPTIONS = MODES.map((mode) => ({ value: mode.value, label: mode.label, title: mode.hint }));
 
 /**
- * How Node Banana runs ComfyUI workflows.
+ * How Creativo Melborp runs ComfyUI workflows.
  *
  * Cloud is the default because it works with nothing installed; local and
  * remote are there for people who already run their own ComfyUI and have the
@@ -356,7 +356,7 @@ function ApiV2Toggle({
         <span className="block text-[13px] leading-[18px] text-neutral-100">Behind comfy-api-proxy</span>
         <span className="block text-xs leading-4 text-ink-3">
           Turn on only if this endpoint serves the Comfy API v2. A stock ComfyUI does not —
-          leave it off and Node Banana drives it directly.
+          leave it off and Creativo Melborp drives it directly.
         </span>
       </span>
     </label>

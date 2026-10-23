@@ -79,7 +79,7 @@ export function DesktopSession({ children }: { children: ReactNode }) {
   }, []);
   return <>
     {(!ready || error) && <DesktopStartupDragRegion />}
-    {ready ? <DesktopRecovery>{children}</DesktopRecovery> : <div className="h-screen bg-[#0f0f0f] flex items-center justify-center text-xs text-neutral-500">Opening Node Banana…</div>}
+    {ready ? <DesktopRecovery>{children}</DesktopRecovery> : <div className="h-screen bg-[#0f0f0f] flex items-center justify-center text-xs text-neutral-500">Opening Creativo Melborp…</div>}
     {ready && <DisconnectedBanner />}
     {/* Last, after every drag region: Electron applies app-regions in DOM order, and
         the controls' no-drag must be subtracted after the strips' drag is added. */}

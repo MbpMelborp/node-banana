@@ -2,7 +2,7 @@ import type { ProjectsElsewhere } from "@/lib/assets/types";
 import { formatBytes } from "./assetFormat";
 
 /**
- * Words for the Node Banana folder's projects, shared by Settings › Storage
+ * Words for the Creativo Melborp folder's projects, shared by Settings › Storage
  * and the Assets view's offer to move projects in.
  */
 
@@ -44,4 +44,4 @@ export function elsewhereWhere(elsewhere: ProjectsElsewhere, detail: boolean): s
   return detail && elsewhere.bytes > 0 ? `${where}, ${formatBytes(elsewhere.bytes)}` : where;
 }
 
-export const ELSEWHERE_PITCH = "Move them into your Node Banana folder to keep everything in one place.";
+export const ELSEWHERE_PITCH = "Move them into your Creativo Melborp folder to keep everything in one place.";

@@ -49,7 +49,7 @@ let projectsReport: Promise<void> | null = null;
 
 /**
  * Sends the report once the library is known to work. When the server
- * adopted the old workflows folder as the Node Banana folder, the status
+ * adopted the old workflows folder as the Creativo Melborp folder, the status
  * the page holds is stale, so it is asked for again.
  */
 function reportProjectsOnce(): Promise<void> {
