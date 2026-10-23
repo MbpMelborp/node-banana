@@ -27,3 +27,5 @@ export {
   toPoints,
   type CurvePoint,
 } from "./points";
+export { easingPolyline } from "./polyline";
+export { easingLabel } from "./labels";

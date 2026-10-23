@@ -1,11 +1,12 @@
 "use client";
 
 import type { MouseEvent, ReactNode, PointerEvent as ReactPointerEvent } from "react";
-import { Volume1, VolumeX } from "lucide-react";
+import { Rewind, Volume1, VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { clipName } from "@/lib/stitch/labels";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
+import { activeWarp, warpRateLabel } from "@/lib/stitch/warp";
 import { setClipMuted } from "../editorActions";
 import { GEOMETRY, LIFTED_CLIP, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
 import { isToggleClick } from "../selectionActions";
@@ -43,6 +44,17 @@ const MIN_SOUND_BUTTON_BOX_PX = 96;
 /** A muted clip's mark (video or audio): an 18px VolumeX square, placed by the box. */
 export const MUTED_BADGE =
   "pointer-events-none absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300";
+/** A retimed clip's mark: its rate ("2×", "Ramp") and Rewind while reversed, beside the sound badge; presses pass through. */
+export const SPEED_BADGE =
+  "pointer-events-none absolute z-2 inline-flex h-[18px] min-w-[18px] items-center justify-center gap-0.5 rounded-[5px] bg-black/60 px-1 text-[10px] font-medium leading-none tabular-nums text-neutral-200";
+/**
+ * About how wide the speed badge draws, never less: 4px padding a side, Rewind 11px (2px more before text), 7px a
+ * character (the system font's "Ramp" draws 27.9px, its numerals under 6.6px).
+ */
+export const speedBadgePx = (text: string | null, reversed: boolean): number =>
+  Math.max(18, 8 + (reversed ? 11 : 0) + (reversed && text ? 2 : 0) + (text ? 7 * text.length : 0));
+/** How far in from the box's right the length chip reaches, and a gap: right-3, 4px padding a side, 6px a character. */
+const lengthChipPx = (text: string): number => 22 + 6 * text.length;
 /** A mouse press takes no focus: a focused clip or button would be unmounted by its own action and drop focus out of the editor. */
 export const keepFocus = (event: MouseEvent) => event.preventDefault();
 
@@ -90,14 +102,16 @@ export function EdgeHandle({
 
 /**
  * One clip on the lane: at rest only its frames, on the edit-field ground
- * with 6px corners, and the muted badge on a muted clip. Selected (one of
- * several too, or while an edge is dragged) it is ringed in white over its
- * frames. On hover: its trimmed length at the bottom right (also while
- * trimming, to two decimals), its trim handles, and its sound button (the
- * badge unmutes, or a button mutes). Those buttons are pointer shortcuts,
- * hidden from the accessibility tree and the tab order: an option holds no
- * controls, and ⌥M and the clip menu do the same. Its name is its
- * accessible name; a box lifted to be dragged shows it.
+ * with 6px corners, the muted badge on a muted clip, and on a retimed or
+ * reversed one its speed badge, where the box has room for it beside the
+ * sound badge and the handles. Selected (one of several too, or while an
+ * edge is dragged) it is ringed in white over its frames. On hover: its
+ * trimmed length at the bottom right (also while trimming, to two
+ * decimals), its trim handles, and its sound button (the badge unmutes, or
+ * a button mutes). Those buttons are pointer shortcuts, hidden from the
+ * accessibility tree and the tab order: an option holds no controls, and
+ * ⌥M and the clip menu do the same. Its name is its accessible name; a box
+ * lifted to be dragged shows it.
  *
  * Compact (a Stacked row's 40px box): the sound badges centred at the left.
  * Its accessible name says where it starts, and a box under 96px keeps its
@@ -122,6 +136,8 @@ export function ClipBox({
   height = GEOMETRY.clipHeight,
   compact = false,
   multi = false,
+  expanded = false,
+  curveEditable = false,
   overlay,
   onBodyPointerDown,
   onHandlePointerDown,
@@ -149,6 +165,10 @@ export function ClipBox({
   compact?: boolean;
   /** One of several selected clips: its handles show on hover only, since a trim acts on one clip. */
   multi?: boolean;
+  /** On a row open for its speed curve (the box is taller). */
+  expanded?: boolean;
+  /** The single selected clip on an open row: presses on its speed curve are the curve's, so no hover mute button. */
+  curveEditable?: boolean;
   /** Drawn over the frames, under the badges and handles (Stacked's crossfade marks). */
   overlay?: ReactNode;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -164,9 +184,23 @@ export function ClipBox({
   const handlesWhite = selected && !multi;
   // The badges make room for the handles while they show
   const badgeLeft = trimEdge ? "left-4" : "left-1.5 group-hover:left-4";
-  const badgeTop = compact ? "top-[11px]" : "top-1.5";
+  const badgeTop = compact && !expanded ? "top-[11px]" : "top-1.5";
   const soundButtons = !compact || width >= MIN_SOUND_BUTTON_BOX_PX;
   const ringed = (selected || trimEdge !== null) && (mode === "rest" || mode === "dimmed");
+  // The hover mute button: Track's at the right, a compact box's in the first slot; none while the curve is edited
+  const hoverMute = atRest && !clip.muted && !trimEdge && soundButtons && !curveEditable;
+  const warp = activeWarp(clip);
+  const rate = warpRateLabel(warp);
+  const reversed = warp?.reverse === true;
+  // The second slot, after a muted badge (or a compact box's hover mute button): 28px, 38px while the handles show
+  const secondSlot = trimEdge ? "left-[38px]" : "left-7 group-hover:left-[38px]";
+  const speedLeft = clip.muted ? secondSlot : compact && hoverMute ? "left-1.5 group-hover:left-[38px]" : badgeLeft;
+  const lengthText = formatSeconds(lengthSec, trimEdge ? 2 : 1);
+  // It must fit where it sits on hover, clear of what shares its line at the right: a compact box's length chip, the
+  // Track mute button, else the Out handle
+  const leftPx = clip.muted || (compact && hoverMute) ? 38 : 16;
+  const rightPx = compact && !expanded ? lengthChipPx(lengthText) : !compact && hoverMute ? 38 : 14;
+  const speedBadge = warp !== null && mode !== "lifted" && leftPx + speedBadgePx(rate, reversed) + rightPx <= width;
 
   return (
     <div
@@ -221,13 +255,19 @@ export function ClipBox({
             trimEdge || mode === "moving" ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
           )}
         >
-          {formatSeconds(lengthSec, trimEdge ? 2 : 1)}
+          {lengthText}
         </span>
       )}
 
       {clip.muted && ((atRest && !soundButtons) || mode === "moving") && (
         <span aria-hidden="true" data-muted-mark="" className={cn(MUTED_BADGE, badgeTop, badgeLeft)}>
           <VolumeX size={11} strokeWidth={2} />
+        </span>
+      )}
+      {speedBadge && (
+        <span aria-hidden="true" data-speed-badge="" className={cn(SPEED_BADGE, badgeTop, speedLeft)}>
+          {reversed && <Rewind size={11} strokeWidth={2} />}
+          {rate && <span>{rate}</span>}
         </span>
       )}
       {atRest && clip.muted && soundButtons && (
@@ -251,7 +291,7 @@ export function ClipBox({
           <VolumeX size={11} strokeWidth={2} />
         </button>
       )}
-      {atRest && !clip.muted && !trimEdge && soundButtons && (
+      {hoverMute && (
         <button
           type="button"
           aria-label="Mute clip audio"

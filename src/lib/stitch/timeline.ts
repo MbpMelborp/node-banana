@@ -1,4 +1,4 @@
-import type { ClipWarp, StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { ClipWarp, ClipWarpCurve, StitchClipSource, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import {
   buildEnvelope,
   domOpacities,
@@ -15,8 +15,13 @@ import { crossfadeGain, joinOverlaps } from "./stack";
 import {
   activeWarp,
   canSplitWarp,
+  IDENTITY_WARP,
+  MAX_SPEED,
   maxSourceLength,
+  MIN_SPEED,
   minSourceLength,
+  normalizeWarp,
+  sameWarp,
   splitWarp,
   trimField,
   warpedLength,
@@ -555,6 +560,90 @@ export function updateClipAudio(
   const volume = clamp(finiteOr(patch.volume, clip.volume), 0, 1);
   if (muted === clip.muted && volume === clip.volume) return timeline;
   return timeline.map((c, i) => (i === index ? { ...c, muted, volume } : c));
+}
+
+/** A positive value to three significant figures, rounded down or up with a 1e-9 give, so 0.3 / 0.1 gives 3, not 2.99. */
+function sig3(value: number, dir: "down" | "up"): number {
+  const unit = 10 ** (Math.floor(Math.log10(value)) - 2);
+  const scaled = dir === "down" ? Math.floor(value / unit + 1e-9) : Math.ceil(value / unit - 1e-9);
+  return Number((scaled * unit).toPrecision(3));
+}
+
+/**
+ * The speeds the rail offers a clip with this much source (seconds; undefined while unknown): MIN_SPEED–MAX_SPEED,
+ * never so slow that it plays past MAX_START_SEC, never so fast that it lasts under MIN_CLIP_SEC, the bounds rounded
+ * inward to three significant figures; but 1× always, so "1×" and Reset speed reach it: at 1× a long source plays past
+ * 10 minutes and a clip holding under 0.1 s of source lasts under 0.1 s, as unwarped clips do.
+ */
+export function speedLimits(sourceLength: number | undefined): { min: number; max: number } {
+  if (sourceLength === undefined || !(sourceLength > 0) || !Number.isFinite(sourceLength)) {
+    return { min: MIN_SPEED, max: MAX_SPEED };
+  }
+  const max = Math.max(1, Math.min(MAX_SPEED, sig3(sourceLength / MIN_CLIP_SEC, "down")));
+  const min = Math.min(1, Math.max(MIN_SPEED, sig3(sourceLength / MAX_START_SEC, "up")));
+  return { min, max };
+}
+
+/** speedLimits of the source a clip holds (MIN_SPEED–MAX_SPEED while the source's length is unknown). */
+export function clipSpeedLimits(
+  clip: StitchTimelineClip,
+  sourceDuration: number | undefined,
+): { min: number; max: number } {
+  return speedLimits(sourceDuration === undefined ? undefined : clipSourceOut(clip, sourceDuration) - clip.inSec);
+}
+
+/** A change to clips' warps: each given field replaces the clip's; a curve (null included) replaces the ramp and drops its window. */
+export interface WarpPatch {
+  speed?: number;
+  curve?: ClipWarpCurve | null;
+  reverse?: boolean;
+  blend?: boolean;
+}
+
+/**
+ * The patch on every clip in ids. A patched speed is clamped to the clip's clipSpeedLimits (its source length from
+ * durations); a stored speed outside them (a split piece's) is kept when the patch has none. Each result is canonical
+ * (normalizeWarp, withWarp), so an identity warp is removed. A clip whose warp comes out the same keeps its object; the
+ * same array when nothing changes.
+ */
+export function updateClipsWarp(
+  timeline: StitchTimelineClip[],
+  ids: ReadonlySet<string>,
+  durations: SourceDurations,
+  patch: WarpPatch,
+): StitchTimelineClip[] {
+  const newCurve = "curve" in patch;
+  let changed = false;
+  const next = timeline.map((clip) => {
+    if (!ids.has(clip.id)) return clip;
+    const was = clip.warp ?? IDENTITY_WARP;
+    let speed = was.speed;
+    if (patch.speed !== undefined && Number.isFinite(patch.speed)) {
+      const { min, max } = clipSpeedLimits(clip, durations.get(sourceKey(clip.source)));
+      speed = clamp(patch.speed, min, max);
+    }
+    const warp = normalizeWarp({
+      speed,
+      curve: newCurve ? (patch.curve ?? null) : was.curve,
+      ...(!newCurve && was.window ? { window: was.window } : {}),
+      reverse: patch.reverse ?? was.reverse,
+      blend: patch.blend ?? was.blend,
+    });
+    if (sameWarp(warp, clip.warp)) return clip;
+    changed = true;
+    return withWarp(clip, warp);
+  });
+  return changed ? next : timeline;
+}
+
+/** updateClipsWarp on one clip. */
+export function updateClipWarp(
+  timeline: StitchTimelineClip[],
+  clipId: string,
+  durations: SourceDurations,
+  patch: WarpPatch,
+): StitchTimelineClip[] {
+  return updateClipsWarp(timeline, new Set([clipId]), durations, patch);
 }
 
 /** Final-index semantics: the moved clip ends up at toIndex (truncated). A non-integer fromIndex or non-finite toIndex moves nothing. */

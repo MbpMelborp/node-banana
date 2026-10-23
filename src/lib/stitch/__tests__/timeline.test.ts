@@ -55,12 +55,15 @@ import {
   spanWarpMap,
   splitClipAt,
   splitClipsAt,
+  speedLimits,
   splitRefusal,
   topSpanAt,
   trimClip,
   trimClipInPlace,
   updateClipAudio,
   updateClipsAudio,
+  updateClipsWarp,
+  updateClipWarp,
   type ClipSpan,
   type SourceDurations,
   type SourceKey,
@@ -1628,5 +1631,99 @@ describe("retimed clips", () => {
       }
     }
     expect(misses.slice(0, 3)).toEqual([]);
+  });
+});
+
+describe("speedLimits", () => {
+  it("offers 0.1–10×, never past 10 minutes or under 0.1 s, rounded inward to three figures", () => {
+    expect(speedLimits(0.3)).toEqual({ min: 0.1, max: 3 });
+    expect(speedLimits(0.37).max).toBe(3.7);
+    expect(speedLimits(0.6).max).toBe(6);
+    expect(speedLimits(0.15).max).toBe(1.5);
+    expect(speedLimits(10)).toEqual({ min: 0.1, max: 10 });
+    expect(speedLimits(74).min).toBe(0.124);
+    expect(speedLimits(100.3).min).toBe(0.168);
+    expect(speedLimits(120).min).toBe(0.2);
+    // Never forced above 1×: a long source plays at its own speed
+    expect(speedLimits(900)).toEqual({ min: 1, max: 10 });
+    // Nor below it: under 0.1 s of source plays under 0.1 s at 1×, as it does unwarped
+    expect(speedLimits(0.05)).toEqual({ min: 0.1, max: 1 });
+    expect(speedLimits(0.0999)).toEqual({ min: 0.1, max: 1 });
+    for (const unknown of [undefined, 0, -1, Number.NaN]) expect(speedLimits(unknown)).toEqual({ min: 0.1, max: 10 });
+  });
+
+  it("keeps every clip it allows within its bounds, as three-figure values", () => {
+    const rnd = lcg(7);
+    for (let i = 0; i < 2000; i++) {
+      const len = 10 ** (rnd() * 5 - 1.5);
+      const { min, max } = speedLimits(len);
+      for (const bound of [min, max]) expect(bound).toBe(Number(bound.toPrecision(3)));
+      expect(min).toBeLessThanOrEqual(1);
+      expect(max).toBeGreaterThanOrEqual(1);
+      if (max > 1) expect(len / max).toBeGreaterThanOrEqual(MIN_CLIP_SEC - 1e-12);
+      if (min < 1) expect(len / min).toBeLessThanOrEqual(MAX_START_SEC + 1e-9);
+    }
+  });
+});
+
+describe("updateClipsWarp", () => {
+  const d = durations({ "edge:e1": 10, "edge:e2": 120, "edge:e3": 0.3 });
+  const timeline = () => [edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")];
+
+  it("writes the patched fields through normalizeWarp, the same array for an equal patch", () => {
+    const base = timeline();
+    const once = updateClipWarp(base, "a", d, { speed: 2 });
+    expect(once[0].warp).toEqual({ speed: 2, curve: null, reverse: false, blend: false });
+    expect(Object.keys(once[0])).toEqual([...Object.keys(base[0]), "warp"]);
+    expect(once[1]).toBe(base[1]);
+    expect(updateClipWarp(once, "a", d, { speed: 2 })).toBe(once);
+    expect(updateClipWarp(once, "a", d, { reverse: false })).toBe(once);
+    // An unknown clip, or no field at all, changes nothing
+    expect(updateClipWarp(once, "x", d, { speed: 3 })).toBe(once);
+    expect(updateClipWarp(once, "a", d, {})).toBe(once);
+  });
+
+  it("removes the key when the patch makes the identity", () => {
+    const fast = updateClipWarp(timeline(), "a", d, { speed: 2, blend: true });
+    const back = updateClipWarp(fast, "a", d, { speed: 1 });
+    expect("warp" in back[0]).toBe(false);
+    // A ramp taken away at 1× forward goes too
+    const ramp = updateClipWarp(timeline(), "a", d, { curve: QUAD });
+    expect("warp" in updateClipWarp(ramp, "a", d, { curve: null })[0]).toBe(false);
+    // Not a number keeps the speed
+    expect(updateClipWarp(fast, "a", d, { speed: Number.NaN })).toBe(fast);
+  });
+
+  it("clamps a patched speed to each clip's own limits, and keeps a stored one outside them", () => {
+    const all = new Set(["a", "b", "c"]);
+    const slow = updateClipsWarp(timeline(), all, d, { speed: 0.1 });
+    expect(slow.map((c) => c.warp?.speed)).toEqual([0.1, 0.2, 0.1]);
+    const fast = updateClipsWarp(timeline(), all, d, { speed: 10 });
+    expect(fast.map((c) => c.warp?.speed)).toEqual([10, 10, 3]);
+    // Unknown length: the rail's range
+    expect(updateClipWarp([edgeClip("u", "e9")], "u", d, { speed: 50 })[0].warp?.speed).toBe(10);
+    const piece = retimed(edgeClip("p", "e1"), W(0.04, { curve: QUAD, window: [0, 0.3] }));
+    const reversed = updateClipWarp([piece], "p", d, { reverse: true })[0];
+    expect(reversed.warp).toEqual({ speed: 0.04, curve: QUAD, window: [0, 0.3], reverse: true, blend: false });
+  });
+
+  it("always reaches 1×, and never slows a clip holding under 0.1 s of source", () => {
+    // 0.05 s of source: unwarped at 1×, and slowed to 0.5×, its least length at that speed
+    const short = edgeClip("s", "e1", { inSec: 9.95 });
+    const slow = retimed(edgeClip("t", "e1", { outSec: 0.05 }), W(0.5));
+    const group = [short, slow, edgeClip("a", "e1")];
+    const ids = new Set(["s", "t", "a"]);
+    const reset = updateClipsWarp(group, ids, d, { speed: 1, curve: null });
+    expect(reset[0]).toBe(short);
+    expect("warp" in reset[1]).toBe(false);
+    const fast = updateClipsWarp(group, ids, d, { speed: 2 });
+    expect(fast[0]).toBe(short);
+    expect(fast.map((c) => c.warp?.speed)).toEqual([undefined, undefined, 2]);
+  });
+
+  it("drops a split piece's window with a new curve, and keeps it with a new speed", () => {
+    const piece = retimed(edgeClip("p", "e1"), W(1.5, { curve: QUAD, window: [0.2, 0.7] }));
+    expect(updateClipWarp([piece], "p", d, { curve: QUAD })[0].warp).toEqual(W(1.5, { curve: QUAD }));
+    expect(updateClipWarp([piece], "p", d, { speed: 2 })[0].warp).toEqual(W(2, { curve: QUAD, window: [0.2, 0.7] }));
   });
 });

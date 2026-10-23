@@ -15,16 +15,21 @@ import {
   IDENTITY_WARP,
   MAX_STORED_SPEED,
   MIN_STORED_SPEED,
+  SPEED_PRESETS,
   activeWarp,
   bakeError,
+  canBlend,
   canSplitWarp,
   cloneWarp,
   dropsSound,
+  formatSpeed,
   isPieceOfWarp,
+  isRetimed,
   isWarped,
   maxSourceLength,
   minSourceLength,
   normalizeWarp,
+  parseSpeed,
   pointsOfWarp,
   sameWarp,
   sanitizeWarp,
@@ -32,6 +37,7 @@ import {
   trimField,
   warpCurve,
   warpMap,
+  warpRateLabel,
   warpedLength,
   withWarp,
   type SourceRange,
@@ -845,5 +851,71 @@ describe("pointsOfWarp", () => {
     const base = pointsCurve(points);
     const [ca, cb] = [base.ease(0.2), base.ease(0.9)];
     expect(baked.points).toContainEqual([(0.5 - 0.2) / 0.7, (0.3 - ca) / (cb - ca)]);
+  });
+});
+
+describe("the rail's speed words", () => {
+  it("offers 0.25, 0.5, 1, 2 and 4×", () => {
+    expect(SPEED_PRESETS).toEqual([0.25, 0.5, 1, 2, 4]);
+  });
+
+  it("formats a speed to three figures, never with an exponent", () => {
+    expect(formatSpeed(2)).toBe("2×");
+    expect(formatSpeed(0.5)).toBe("0.5×");
+    expect(formatSpeed(1.05)).toBe("1.05×");
+    expect(formatSpeed(0.04123)).toBe("0.0412×");
+    expect(formatSpeed(0)).toBe("0×");
+    expect(formatSpeed(3e-7)).toBe("< 0.001×");
+    expect(formatSpeed(150)).toBe("> 100×");
+    for (const speed of [MIN_STORED_SPEED, 1e-4, 0.0005, 0.00123, 12.34, 99.94, 99.96, MAX_STORED_SPEED, 1e6]) {
+      expect(formatSpeed(speed)).not.toMatch(/e/i);
+    }
+  });
+
+  it("reads a typed speed, with or without its ×, a comma for the point", () => {
+    for (const [text, speed] of [
+      ["2", 2],
+      ["2x", 2],
+      ["2X", 2],
+      ["2×", 2],
+      [" 2 x ", 2],
+      ["0,5", 0.5],
+      [".5", 0.5],
+      [".5 x", 0.5],
+      ["1.", 1],
+    ] as const) {
+      expect(parseSpeed(text)).toBe(speed);
+    }
+    for (const text of ["", "x", "0", "0.0", "-1", "2 s", "1:00", "fast", "2xx", "1e3"]) expect(parseSpeed(text)).toBeNull();
+  });
+
+  it("names what the badge shows: the rate, or a ramp", () => {
+    expect(warpRateLabel(undefined)).toBeNull();
+    expect(warpRateLabel(IDENTITY_WARP)).toBeNull();
+    expect(warpRateLabel(W(2))).toBe("2×");
+    expect(warpRateLabel(W(0.04123))).toBe("0.0412×");
+    expect(warpRateLabel(W(2, QUAD))).toBe("Ramp");
+    expect(warpRateLabel(W(1, QUAD))).toBe("Ramp");
+    expect(warpRateLabel(W(1, null, { reverse: true }))).toBeNull();
+    expect(warpRateLabel(W(2, null, { reverse: true }))).toBe("2×");
+  });
+
+  it("tells a retimed clip from one only reversed", () => {
+    expect(isWarped(IDENTITY_WARP)).toBe(false);
+    expect(isRetimed(IDENTITY_WARP)).toBe(false);
+    expect(isRetimed(undefined)).toBe(false);
+    expect(isRetimed(W(1, null, { reverse: true }))).toBe(false);
+    expect(isRetimed(W(2))).toBe(true);
+    expect(isRetimed(W(1, QUAD))).toBe(true);
+    expect(isRetimed(W(1, { kind: "preset", name: "linear" }))).toBe(false);
+  });
+
+  it("lets Blend frames act only where there is slow motion", () => {
+    expect(canBlend(undefined)).toBe(false);
+    expect(canBlend(W(1, null, { reverse: true }))).toBe(false);
+    expect(canBlend(W(2))).toBe(false);
+    expect(canBlend(W(0.5))).toBe(true);
+    expect(canBlend(W(1, QUAD))).toBe(true);
+    expect(canBlend(W(4, SINE))).toBe(true);
   });
 });

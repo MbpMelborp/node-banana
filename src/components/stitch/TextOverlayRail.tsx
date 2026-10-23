@@ -34,6 +34,7 @@ import {
   RailAction,
   RailActions,
   RailField,
+  RailLabel,
   RailNote,
   RailSegments,
   RailSlider,
@@ -132,11 +133,6 @@ function nearestWeight(weights: readonly number[], weight: number): number {
 /** The rail's ⌫ for text layers: they go, and none of them stays tagged "cut". */
 function removeLayers(ids: readonly string[]): void {
   editor().untagCut(removeOverlaysById(ids));
-}
-
-/** A control's label above it, as RailField's, for one that is no single input (segments, a pair). */
-function RailLabel({ children }: { children: ReactNode }) {
-  return <div className="mb-1.5 text-xs leading-3 text-ink-3">{children}</div>;
 }
 
 /**

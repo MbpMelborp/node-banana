@@ -1555,6 +1555,9 @@ describe("StitchEditorModal, several clips", () => {
       "Move up a row⌥↑",
       "Move down a row⌥↓",
       "Reset trim",
+      "Speed…",
+      "Reverse",
+      "Reset speed",
       "Copy⌘C",
       "Cut⌘X",
       "Paste⌘V",
@@ -1563,6 +1566,9 @@ describe("StitchEditorModal, several clips", () => {
       "Remove 3 clips⌫",
     ]);
     const item = (name: string) => within(menu).getByRole("menuitem", { name: new RegExp(`^${name}`) });
+    // Nothing is retimed; the tallest menu scrolls in a short window rather than run past its edge
+    expect(item("Reset speed")).toBeDisabled();
+    expect(menu.style.maxHeight).not.toBe("");
     expect(item("Start at playhead")).toBeDisabled();
     expect(item("Start at playhead")).toHaveAttribute("title", "Select one clip");
     expect(item("End at playhead")).toHaveAttribute("title", "Select one clip");

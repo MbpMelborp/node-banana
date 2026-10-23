@@ -1,6 +1,6 @@
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import {
@@ -1172,6 +1172,130 @@ describe("Timeline, the clip menu", () => {
   });
 });
 
+
+describe("Timeline, a clip's speed", () => {
+  const menuItem = (name: string) => within(screen.getByRole("menu")).getByRole("menuitem", { name: new RegExp(`^${name}`) });
+  const openMenu = (name: string) => fireEvent.contextMenu(clipBox(name), { clientX: 400, clientY: 300 });
+  /** Clip `index` with this trim, mute and warp in place of its own, as one edit. */
+  const setClip = (index: number, init: Partial<StitchTimelineClip>, warp?: ClipWarp) =>
+    act(() =>
+      editor().apply((d) => ({
+        ...d,
+        timeline: d.timeline.map((c, i) =>
+          i === index ? withWarp({ ...c, inSec: 0, outSec: null, muted: false, ...init }, warp ? normalizeWarp(warp) : null) : c,
+        ),
+      })),
+    );
+  const badgeOf = (box: HTMLElement) => box.querySelector<HTMLElement>("[data-speed-badge]");
+
+  it("Speed… selects the clip and, a frame later, focuses the rail's Speed well", async () => {
+    seed();
+    openEditor();
+    openMenu("Clip 2");
+    fireEvent.click(menuItem("Speed…"));
+    expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:eB" });
+    const well = within(rail()).getByRole("textbox", { name: "Speed" }) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(well));
+    expect([well.selectionStart, well.selectionEnd]).toEqual([0, well.value.length]);
+  });
+
+  it("reverses from the menu, plays forward again, and resets only a retimed clip's speed", () => {
+    seed();
+    openEditor();
+    openMenu("Clip 1");
+    expect(menuItem("Reset speed")).toBeDisabled();
+    fireEvent.click(menuItem("Reverse"));
+    expect(editor().draft!.timeline[0].warp).toEqual(W(1, { reverse: true }));
+    openMenu("Clip 1");
+    expect(menuItem("Reset speed")).toBeDisabled();
+    fireEvent.click(menuItem("Play forward"));
+    expect("warp" in editor().draft!.timeline[0]).toBe(false);
+    retimeFirst(W(2));
+    openMenu("Clip 1");
+    fireEvent.click(menuItem("Reset speed"));
+    expect("warp" in editor().draft!.timeline[0]).toBe(false);
+  });
+
+  it("reverses a group in one step, and offers no Speed… on a clip of unknown length", () => {
+    seed({ bRan: false });
+    openEditor();
+    openMenu("Clip 2");
+    expect(menuItem("Speed…")).toBeDisabled();
+    press("Escape");
+    act(() => editor().select({ kind: "clip", clipId: "clip:eA", clipIds: ["clip:eA", "clip:eB"] }));
+    openMenu("Clip 1");
+    fireEvent.click(menuItem("Reverse"));
+    expect(editor().draft!.timeline.map((c) => c.warp?.reverse)).toEqual([true, true]);
+    expect(editor().past).toHaveLength(1);
+  });
+
+  it("marks a retimed clip's box with its rate, where the box has room for it", () => {
+    seed();
+    openEditor();
+    const box = () => clipBox("Clip 2");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, {}, W(2));
+    let badge = badgeOf(box())!;
+    expect(badge).toHaveTextContent("2×");
+    expect(badge).toHaveClass("left-1.5", "group-hover:left-4", "top-1.5");
+    expect(badge).toHaveAttribute("aria-hidden", "true");
+    expect(badge.querySelector("svg")).toBeNull();
+    setClip(1, { muted: true }, W(2));
+    expect(badgeOf(box())).toHaveClass("left-7", "group-hover:left-[38px]");
+    setClip(1, {}, W(1, { curve: { kind: "preset", name: "easeInQuad" } }));
+    expect(badgeOf(box())).toHaveTextContent("Ramp");
+    setClip(1, {}, W(1, { reverse: true }));
+    badge = badgeOf(box())!;
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(badge.textContent).toBe("");
+    setClip(1, {}, W(2, { reverse: true }));
+    badge = badgeOf(box())!;
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(badge).toHaveTextContent("2×");
+    // The rate needs 76px beside the handle and the mute button: 2× of 2.375 s draws 75px, of 2.40625 s 76px
+    setClip(1, { outSec: 2.375 }, W(2));
+    expect(box().style.width).toBe("75px");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, { outSec: 2.40625 }, W(2));
+    expect(box().style.width).toBe("76px");
+    expect(badgeOf(box())).not.toBeNull();
+    // Muted, reversed and a ramp: 101px
+    const ramp = { curve: { kind: "preset", name: "easeInQuad" }, reverse: true } as const;
+    setClip(1, { outSec: 101 / 64, muted: true }, W(1, ramp));
+    expect(box().style.width).toBe("100px");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, { outSec: 102 / 64, muted: true }, W(1, ramp));
+    expect(box().style.width).toBe("101px");
+    expect(badgeOf(box())).not.toBeNull();
+  });
+
+  it("puts a Stacked box's badge on its sound badges' line, after the hover mute button", () => {
+    seed();
+    openEditor();
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    const box = () => lane().querySelector<HTMLElement>('[data-clip-id="clip:eA"]')!;
+    const ramp = W(1, { curve: { kind: "preset", name: "easeInQuad" } });
+    // Beside a "2.0 s" length chip: 126px
+    setClip(0, { outSec: 126 / 64 }, ramp);
+    expect(box().style.width).toBe("126px");
+    const badge = badgeOf(box())!;
+    expect(badge).toHaveTextContent("Ramp");
+    expect(badge).toHaveClass("left-1.5", "group-hover:left-[38px]", "top-[11px]");
+    expect(box()).toHaveAccessibleName(/^Clip 1, starts /);
+    setClip(0, { outSec: 125 / 64 }, ramp);
+    expect(box().style.width).toBe("125px");
+    expect(badgeOf(box())).toBeNull();
+    // A wider chip ("10.0 s" of a 0.5× ramp over 5 s) leaves it room from 132px
+    const slow = W(0.5, { curve: { kind: "preset", name: "easeInQuad" } });
+    setClip(0, {}, slow);
+    act(() => editor().setZoom(13.1));
+    expect(box().style.width).toBe("131px");
+    expect(badgeOf(box())).toBeNull();
+    act(() => editor().setZoom(13.2));
+    expect(box().style.width).toBe("132px");
+    expect(badgeOf(box())).not.toBeNull();
+  });
+});
 
 describe("Timeline, Stacked", () => {
   const ROW = 52;

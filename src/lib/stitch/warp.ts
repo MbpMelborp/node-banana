@@ -262,6 +262,10 @@ export function withWarp<T extends { warp?: ClipWarp }>(item: T, warp: ClipWarp 
   return next;
 }
 
+/** A split piece's part of its ramp: a window other than the whole [0, 1]. */
+export const isWindowed = (window: readonly [number, number] | undefined): window is readonly [number, number] =>
+  window !== undefined && !(window[0] === 0 && window[1] === 1);
+
 /**
  * The curve a clip plays: output progress → source progress over the clip. Straight for none; the kind's curve; or,
  * with a window, its part [a, b] stretched back to [0, 1] (straight for a window inside a freeze, which no canonical
@@ -270,7 +274,7 @@ export function withWarp<T extends { warp?: ClipWarp }>(item: T, warp: ClipWarp 
 export function warpCurve(curve: ClipWarpCurve | null, window?: readonly [number, number]): RemapCurve {
   if (curve === null) return LINEAR_CURVE;
   const base = curveOf(curve);
-  if (!window || (window[0] === 0 && window[1] === 1)) return base;
+  if (!isWindowed(window)) return base;
   return windowCurve(base, window[0], window[1]) ?? LINEAR_CURVE;
 }
 
@@ -490,4 +494,42 @@ export function pointsOfWarp(
     .map(([x, y]): [number, number] => [(x - a) / (b - a), (y - ca) / rise])
     .filter(([x]) => x >= MIN_POINT_GAP && x <= 1 - MIN_POINT_GAP);
   return { kind: "points", points: toPoints(played.ease, maxError, { seed: [[0, 0], ...seed, [1, 1]] }) };
+}
+
+/** The rail's speed presets. */
+export const SPEED_PRESETS = [0.25, 0.5, 1, 2, 4] as const;
+
+/**
+ * "2×", "0.5×", "1.05×", "0.0412×": three significant figures, no trailing zeros, never an exponent; "0×" for 0 (a
+ * freeze's momentary speed), "< 0.001×" under 0.0005 (a split piece's average can be anything), "> 100×" over 99.95
+ * (a vertical slope reports up to MAX_SLOPE × speed).
+ */
+export function formatSpeed(speed: number): string {
+  if (!(speed >= 0.0005)) return speed > 0 ? "< 0.001×" : "0×";
+  if (speed > 99.95) return "> 100×";
+  return `${Number(speed.toPrecision(3))}×`;
+}
+
+/** "2", "2x", "2×", "0,5", ".5 x": the speed; null for anything else, 0 included. */
+export function parseSpeed(text: string): number | null {
+  const m = /^(\d+(?:[.,]\d*)?|[.,]\d+)\s*[x×]?$/i.exec(text.trim());
+  const value = m ? Number(m[1].replace(",", ".")) : Number.NaN;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Whether Blend frames can do anything: slow motion somewhere (a constant speed under 1×, or a ramp, which dips). */
+export function canBlend(warp: ClipWarp | null | undefined): boolean {
+  return isWarped(warp) && (warp.curve !== null || warp.speed < 1);
+}
+
+/** Retimed, not only reversed: a speed other than 1 or a ramp. Reset speed shows only for these. */
+export function isRetimed(warp: ClipWarp | null | undefined): boolean {
+  return isWarped(warp) && (warp.speed !== 1 || warp.curve !== null);
+}
+
+/** The timeline badge's text: "Ramp" for a ramp, formatSpeed for another speed, else null (forward or reversed 1×). */
+export function warpRateLabel(warp: ClipWarp | null | undefined): string | null {
+  if (!isWarped(warp)) return null;
+  if (warp.curve !== null) return "Ramp";
+  return warp.speed !== 1 ? formatSpeed(warp.speed) : null;
 }
