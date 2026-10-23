@@ -87,6 +87,11 @@ export function RailNote({ children }: { children: ReactNode }) {
   return <p className="mt-2 text-xs leading-4 text-ink-3">{children}</p>;
 }
 
+/** A control's label above it, as RailField's, for one that is no single input (segments, a pair, a picker). */
+export function RailLabel({ children }: { children: ReactNode }) {
+  return <div className="mb-1.5 text-xs leading-3 text-ink-3">{children}</div>;
+}
+
 /** The rail's switch: 32×18, a white track with a dark knob when on, a dark grey one with a grey knob when off. */
 export function RailSwitch({
   checked,

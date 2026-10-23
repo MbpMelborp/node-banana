@@ -130,7 +130,7 @@ export function TrimOverlay({
       <div className={cn(CHROME_SURFACE, "w-full rounded-media p-1")}>
         <EdgeFrame src={src} time={time} fallback={fallback} />
         <div className="flex h-[18px] items-center justify-between px-1 text-[10px]">
-          <span className="text-neutral-400">{trim.edge === "out" ? "Out" : "In"}</span>
+          <span className="text-neutral-400">{trim.result.field === "outSec" ? "Out" : "In"}</span>
           <span className="tabular-nums text-neutral-100">{formatTimecode(time)}</span>
         </div>
       </div>
@@ -156,6 +156,7 @@ export function TrimMarks({
   scrollLeft,
   row,
   videoTop = GEOMETRY.ruler,
+  rowHeight = GEOMETRY.clipRow,
 }: {
   trim: TrimLive;
   /** The axis the playhead is drawn on during the drag (built from liveSpans). */
@@ -168,6 +169,8 @@ export function TrimMarks({
   row?: { top: number; bottom: number };
   /** Track's clips row's top in content px: under the ruler and the text layers' rows. */
   videoTop?: number;
+  /** Track's clips row's height: taller while it is open for a clip's speed curve. */
+  rowHeight?: number;
 }) {
   const { edge } = trim.start;
   // On the playhead's axis: a snapped playhead and its guide are drawn at the same x, even with a slot between
@@ -175,7 +178,7 @@ export function TrimMarks({
   const snapped = trim.result.snapped;
   const chipOnRight = edge === "out" || edgeX - 12 - DELTA_CHIP_ROOM < scrollLeft;
   const deltaTop = row ? row.top + 10 : videoTop + 26;
-  const clipsBottom = row ? row.bottom : videoTop + GEOMETRY.clipRow;
+  const clipsBottom = row ? row.bottom : videoTop + rowHeight;
   return (
     <>
       <div

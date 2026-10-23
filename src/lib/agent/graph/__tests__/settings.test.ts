@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NodeType } from "@/types";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
-import { getEasingBezier } from "@/lib/easing-presets";
+import { getEasingBezier } from "@/lib/easing";
 import { LLM_MODELS, defaultLLMModel } from "@/lib/llm/catalog";
 import { pickAgentData } from "../nodeData";
 import { resolveSettings } from "../settings";

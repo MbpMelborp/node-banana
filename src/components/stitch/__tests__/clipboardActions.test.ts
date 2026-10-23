@@ -213,6 +213,21 @@ describe("copy and paste", () => {
     expect(editor().selection).toEqual({ kind: "clip", clipId: copy.id });
   });
 
+  it("duplicates and pastes a clip's warp, a copy of it", () => {
+    const warp = { speed: 0.5, curve: { kind: "preset" as const, name: "easeInOutSine" }, reverse: true, blend: true };
+    open([edgeClip("a", "e1", { warp }), edgeClip("b", "e2")]);
+    select("a");
+    duplicateSelection();
+    const copy = editor().draft!.timeline[1];
+    expect(copy.warp).toEqual(warp);
+    expect(copy.warp).not.toBe(warp);
+    copySelection();
+    select("b");
+    pasteClipboard();
+    expect(editor().draft!.timeline[3].warp).toEqual(warp);
+    expect("warp" in editor().draft!.timeline[2]).toBe(false);
+  });
+
   it("waits in a lined-up stack while a clip is still loading: paste and duplicate would pin it at 0 s", () => {
     open([edgeClip("a", "e1"), edgeClip("b", "e2"), edgeClip("c", "e3")], { stacked: true });
     // Only b has been measured; a and c are still loading

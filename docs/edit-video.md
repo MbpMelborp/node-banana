@@ -25,7 +25,8 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   Off", no chevron, as the boards draw it; off with no clips) and opens Off,
   2× and 3× as radios beside the menu on a hover, a click, → or Enter,
   and, in a muted last line, "N clips · W × H · F fps" (the frame rate only
-  when the clips agree); then Cancel, Save and Done.
+  when the clips agree and none plays at another speed or on a ramp); then
+  Cancel, Save and Done.
   The control row shows the length (in Stacked it runs to the end of the
   clip that ends last).
 - **Stage**: the sequence previewed at the playhead, on black in a frame
@@ -52,16 +53,19 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   clips, "Select a text layer to edit it."). One clip: "Clip 2 of 4", then
   where it comes from and how long it is ("Veo 3.1 · 5.00 s", or "4.20 s of
   5.00 s" once trimmed); its In and Out side by side (in Stacked Start first,
-  where it starts on the timeline); its Sound switch and Volume; and at the
-  foot Split at playhead, Reset trim (only while it is trimmed), Reveal
-  source node and Remove clip. An audio clip: its row ("Audio 1"), its file,
+  where it starts on the timeline); its Sound switch and Volume; its Speed,
+  Ramp, Reverse and Blend frames (see Speed and ramps); and at the foot
+  Split at playhead, Reset trim (only while there is a trim to reset), Reset
+  speed (only while it plays at another speed or on a ramp), Reveal source
+  node and Remove clip. An audio clip: its row ("Audio 1"), its file,
   source and length; Start, In and Out; Sound; and Volume's shapes, Flat,
   Fade in and Fade out, pressed by what the curve does; then Split at
   playhead, Reset trim and Remove clip. With several clips selected the
   rail shows how many and which, and what applies to all of them: Sound (On
-  or Off, with neither pressed while some are muted and some not), Split at
-  playhead, Reset trim and Remove; several audio clips: Mute 2 clips (or
-  Unmute, M), Split at playhead and Remove. A text layer: its first line, its
+  or Off, with neither pressed while some are muted and some not), Speed
+  and Reverse, Split at playhead, Reset trim, Reset speed and Remove;
+  several audio clips: Mute 2 clips (or Unmute, M), Split at playhead and
+  Remove. A text layer: its first line, its
   row and length, then its Text, Font, Size, Weight, Colour, Align,
   Position, Wash, fades, Start and Length, and Split at playhead and Remove
   text (see Text layers). The keys are in hover labels: a
@@ -78,9 +82,10 @@ edge). The editor's other colours are the `edit-*` tokens in `globals.css`:
   **+ Text**. A
   clip shows only its frames (or its waveform) at rest; its length shows on
   hover or keyboard focus, and on hover its trim handles and, on a video
-  clip, its sound button; an audio clip's file name is its tooltip. A muted clip keeps its muted badge
-  (an icon). Selected clips, video or audio, and selected text layers are
-  ringed in white; a selected
+  clip, its sound button; an audio clip's file name is its tooltip. A
+  muted clip keeps its muted badge (an icon), and a retimed or reversed
+  clip its speed badge (see Speed and ramps). Selected clips, video or
+  audio, and selected text layers are ringed in white; a selected
   audio clip's waveform lightens and its volume curve is drawn in white. The
   playhead's line ends above "+ Audio". What the track headers held floats
   in the timeline's 20 px left padding, 2 px clear of its edge and of
@@ -143,7 +148,19 @@ interface StitchTimelineClip {
   muted: boolean;                               // the clip's own sound
   volume: number;                               // 0..1, linear, on the clip's own sound
   startSec?: number;                            // Stacked: where the trimmed clip starts, 0..600 s; absent = laid out from Overlap
+  warp?: ClipWarp;                              // its speed, ramp and reverse; absent = its own speed (see Speed and ramps)
 }
+interface ClipWarp {
+  speed: number;                                // the average speed: the clip lasts (Out − In) / speed; the rail sets 0.1..10
+  curve: ClipWarpCurve | null;                  // the ramp; null = constant speed
+  window?: [number, number];                    // a split piece's part of the curve, 0 ≤ a < b ≤ 1; absent = all of it
+  reverse: boolean;                             // plays In..Out backwards
+  blend: boolean;                               // Blend frames
+}
+type ClipWarpCurve =
+  | { kind: "preset"; name: string }                                // a monotone easing from src/lib/easing
+  | { kind: "bezier"; handles: [number, number, number, number] }   // CSS cubic-bezier, every handle in 0..1
+  | { kind: "points"; points: Array<[number, number]> };            // a monotone cubic through the points
 interface StitchAudioClip {
   id: string;
   source: { kind: "music" } | { kind: "asset"; assetId: string };   // the node's audio socket, or a library file
@@ -212,6 +229,19 @@ Done writes it with the rest of the timeline, in the same single
 `updateNodeData`. It travels with its clip: the card's reorder and ✕,
 paste and the agent's edits keep it. A build from before clips could be
 placed drops it on its next card write.
+
+**`warp` retimes a clip.** Its curve maps the clip's progress on the
+timeline (0 to 1) to its progress through the source from In to Out (0 to
+1), and never falls, so time never runs backwards inside a clip; Reverse is
+the flag alone. A clip that plays at its own speed has no `warp`: 1× with no
+ramp, played forward, is never stored, Blend frames with it. It is read like
+the other fields (`sanitizeWarp` in `src/lib/stitch/warp.ts`): a speed that
+is not a number reads as 1, any speed is clamped to 1e-9–1e9, a curve the
+editor could not have made reads as no ramp (another kind, a preset that is
+not a monotone easing, handles that are not numbers, more than 64 points),
+as does the straight line, and a warp left changing nothing is dropped.
+It travels with its clip through split, copy, paste and the Edits file. A
+build from before clip speeds drops it (see Limits).
 
 **Clips are muted under music on a legacy node.** The node has always
 replaced the clips' sound with the music when music was connected. To keep
@@ -331,14 +361,16 @@ then on an edit moves only the clip it edits.
 
 - Always placing, in Stacked: dragging a clip's box (in time, to another
   row, or both), a nudge, a typed Start, [ and ], every trim (a drag,
-  I, O, a typed In or Out, Reset trim), a paste, a duplicate, and a drag
-  or nudge of several clips.
+  I, O, a typed In or Out, Reset trim), every change of a clip's speed
+  (Speed's slider, well or presets, for one clip or several, or Reset
+  speed), a paste, a duplicate, and a drag or nudge of several clips.
 - Placing only in a stack that is already placed: a row move by a row's
   grip, ⌥↑ / ⌥↓ or the clip menu, a split, a removal and a cut. In a
   lined-up stack these work as before: a row move or a removal
   re-sequences the clips, and a split is refused inside an overlap.
 - Never placing: adding from the library, Crossfade, the layout switch,
-  loops, clip sound and the curve. Edits in Track, and the card's reorder
+  loops, clip sound, the volume curve, and Ramp, Reverse and Blend frames
+  (the speed row's edits included). Edits in Track, and the card's reorder
   and ✕, keep every stored start.
 
 **Line up**, in Stacked a quiet text button after **+ Audio** and
@@ -1044,7 +1076,7 @@ is one undo step. Trims, Start, In and Out stay one clip's: the rail hides
 them, and their keys do nothing.
 
 **Copy and paste.** ⌘C copies the selected clips: each one's video, trim,
-sound and volume, and where it starts relative to the first. ⌘X does the
+speed, sound and volume, and where it starts relative to the first. ⌘X does the
 same and removes them, as one undo step. ⌘V pastes. In Track the clips go
 after the last selected clip, or at the end. In Stacked they go on new rows
 below the lowest selected row (after the last piece, when that row is a
@@ -1078,19 +1110,19 @@ lost."
 ## How it is encoded
 
 `stitchVideosAsync` (`src/hooks/useStitchVideos.ts`) takes one input per
-clip (`{ blob, inSec, outSec, muted, volume }`, and on a node the editor
-wrote the clip's `source` key, so pieces of one video are known), the music
-with its curve, and the options: `{ loopCount }`, `audioClips` (each unmuted
-audio clip with its decoded file, start, In, Out and curve) when the node's
-audio is more than the untouched music, plus `overlapSec` and
-`crossfade` when the node is a lined-up stack with an overlap above 0, or
-`overlapSec`, `crossfade` and `placed: true` when some clip is placed (each
-placed clip's input then carries its `startSec`), and `overlays` (each text
-layer with the CSS family list its font resolved to) when there are text
-layers. A Track node without text layers passes
-`{ loopCount }` alone, as before. `gatherStitchInputs`
-(`src/store/execution/stitchInputs.ts`) builds them from the node: connected
-videos are fetched as before, library clips through
+clip (`{ blob, inSec, outSec, muted, volume }`, a retimed clip's `warp`,
+and on a node the editor wrote the clip's `source` key, so pieces of one
+video are known), the music with its curve, and the options:
+`{ loopCount }`, `audioClips` (each unmuted audio clip with its decoded
+file, start, In, Out and curve) when the node's audio is more than the
+untouched music, plus `overlapSec` and `crossfade` when the node is a
+lined-up stack with an overlap above 0, or `overlapSec`, `crossfade` and
+`placed: true` when some clip is placed (each placed clip's input then
+carries its `startSec`), and `overlays` (each text layer with the CSS
+family list its font resolved to) when there are text layers. A Track
+node without text layers passes `{ loopCount }` alone, as before.
+`gatherStitchInputs` (`src/store/execution/stitchInputs.ts`) builds them
+from the node: connected videos are fetched as before, library clips through
 `/api/assets/<id>/file`. If a library clip's asset is gone, the run stops
 with "Clip N's library video is no longer in the library". It and the
 view's `gatherDraftInputs` load the text layers' fonts first
@@ -1115,6 +1147,11 @@ Every clip's sound is converted into one master format: the music's rate
 when the music plays alone, otherwise the highest rate that plays, at most
 stereo (5.1 and quad are downmixed; centre kept, LFE dropped). Resampling is
 linear. A clip whose sound fails to decode is silence in its own place.
+
+**Retimed clips.** A clip with a warp does not pass through: each of its
+slots shows the frame its warp names, and its sound is resampled along the
+warp (see Speed and ramps). It takes the length the editor gives it in
+every layout, loop, overlap and dissolve.
 
 **Audio.** On a node without `audioClips`, the music plays once,
 continuously across loops (as before; see Loops in Audio clips). The curve
@@ -1152,9 +1189,10 @@ or formats, or 10-bit video) they are drawn on a canvas at that size, each
 scaled to cover it, with no rotation. The blended frames come at the
 earlier clip's own frame times when the two clips report the same frame
 rate (within 1 %, from 10 to 60 fps), so a 24 fps sequence stays 24 fps
-through its dissolves; otherwise one comes every 1/60 s. Below 10 fps (a
-slideshow, a one-frame still) too few frames fall inside an overlap to
-blend, so those dissolves also use every 1/60 s. The rate is measured from
+through its dissolves; otherwise one comes every 1/60 s, as it does when
+either clip is retimed. Below 10 fps (a slideshow, a one-frame still) too
+few frames fall inside an overlap to blend, so those dissolves also use
+every 1/60 s. The rate is measured from
 the gaps between frames, so a WebM whose last frame was stored without a
 duration reads as its real rate. Each clip's sound
 starts at the clip's own start, a hidden head included. With Crossfade on
@@ -1327,6 +1365,15 @@ own user-data SEI, one or two bytes in each of three packets (the first and
 two later ones). Two renders by the same build differ in those bytes too;
 with the SEI left out, the streams hash the same.
 
+**Clip speeds change none of this.** An edit with no retimed clip hands the
+encoder the same inputs and takes the same path as before; in an edit with
+some, an unretimed clip outside a dissolve with a retimed one does too.
+Measured with the engine on Track, a lined-up stack, a placed
+stack, a loop and text layers, and in the desktop app on a Track copy of a
+real edit (915 video packets): with the SEI left out, the video stream and
+its packet timing are the same as the build's before clip speeds, and in
+the engine runs so are the audio packets.
+
 ## The volume curve
 
 Each audio clip's line is drawn on a square-root scale: a point's height is
@@ -1337,7 +1384,9 @@ An empty curve is flat at 0 dB. Before the first point the line holds the
 first point's level, and after the last point the last one's.
 
 Click the line to add a point; drag a point (up and down, and along);
-double-click a point to remove it; ⌥-drag moves the whole line. Fade in and
+double-click a point to remove it; ⌥-drag moves the whole line. A ⌘- or
+⇧-press (Ctrl or ⇧ on Windows) on the curve does what a plain press does;
+on a Mac, a Ctrl-click opens the clip menu instead. Fade in and
 Fade out set a 1 s ramp at either end of the part of the clip that is heard
 (at most half of it), and Flat clears the curve.
 
@@ -1355,6 +1404,196 @@ so the curve returns as it was. Other points keep their times, and a move
 that would take the point before the last below 0 or past the point ahead of
 it leaves the curve as it is. Moving or trimming a clip in Stacked does not
 move the curve: press Fade out again after a move that changes the end.
+
+## Speed and ramps
+
+A video clip can play slower or faster than its source, speed up and slow
+down along a ramp, and play backwards. Together these are the clip's warp:
+its speed, its ramp, Reverse and Blend frames (`src/lib/stitch/warp.ts`). In
+and Out keep their meaning: the part of the source the clip plays. Audio
+clips and text layers have no speed; they stay in sequence time.
+
+**Length.** A clip lasts its source range divided by its speed (on a ramp,
+its average speed): 4 s of source lasts 2 s at 2× and 8 s at 0.5×. Its box,
+the ruler and the total follow, and in Track so do the clips after it. A
+trim keeps the speed, and a ramp stretches over the new range, so the
+length is still the range over the speed. A reversed clip starts on its
+Out, so its left edge trims its Out and its right edge its In. A trim keeps
+at least 0.1 s on the timeline. A slowed clip trimmed that short and then
+made faster, up to 1× (Reset speed, the 1× preset, a typed 1), lasts less,
+as a source that short does. A clip slower than 1× never plays for more
+than 10 minutes: no speed, trim, typed In or Out, I or O takes it past
+that. Reset trim on such a clip grows its end first, then its start,
+keeping the frame the clip starts on, and stops at 10 minutes; a clip
+already there has nothing to reset. The filmstrip shows the frame the warp
+plays at each cell, so a reversed clip's runs backwards.
+
+**Speed**, in the rail under Volume. The slider runs from 0.1× at its left
+to 10× at its right on a log scale, with 1× in the middle, and snaps to the
+presets. A drag is one undo step. The well beside it shows the speed to
+three figures ("2×", "0.75×") and takes a typed one ("2", "2x", "0,5"). ↑
+and ↓ in the well move a slider step (about 5 %; ⇧: ten steps), one undo
+step until the well is left. The presets are 0.25×, 0.5×, 1×, 2× and 4×.
+No speed may make the clip last under 0.1 s or play for more than 10
+minutes: the slider stops there, a typed speed past it is set to the limit,
+and a preset past it is off, with "It would last under 0.1 s" or "It would
+play for more than 10 minutes" as its title. 1× is always in reach, and
+on a clip that holds under 0.1 s of source so is every speed up to it
+(see Length). Under
+the presets the rail notes "Lasts 8.00 s on the timeline." at any speed
+other than 1×, "No sound above 4× or below 0.25×." on a constant speed
+outside those, and, at a limit, "Can't be slower: it would play for more
+than 10 minutes." or "Can't be faster: it would last under 0.1 s.". Speed,
+Ramp and Blend frames wait for the clip's length to load, as In and Out do.
+A piece of a split ramp can average a speed outside 0.1–10×: the well shows
+it as it is ("0.0412×", "< 0.001×"), and ↑, ↓ and the slider only move it
+towards the range. The rail's title line gives a clip with a warp its
+source range ("4.20 s of 5.00 s"); its length on the timeline is the Speed
+note.
+
+**A speed change in Stacked** places the stack, as a trim does (see Lined
+up and placed): it first writes every clip's start, so the clip keeps its
+start and no other clip moves. While some clip has no start of its own yet
+and a clip is still loading, it waits ("Waiting for the clips to load"),
+and the rail's Speed controls are off with that as their title. Ramp,
+Reverse and Blend frames keep the length and never place the stack.
+
+**Ramp**, under Speed, has four modes: None (a constant speed), Preset,
+Bezier and Points. A ramp maps the clip's time to its source: where the
+curve is steep the clip rushes, where it is flat the clip slows or holds.
+The speed stays the average, so a ramp never changes the length.
+
+- **Preset** shows the easings that never run time backwards as a grid of
+  curve thumbnails (the arrows, Home and End move in it). From None it
+  starts on a sine ease in and out, the Ease Curve node's default.
+- **Bezier** shows the bezier editor: two handles, each kept inside the
+  plot. A focused handle moves with the arrow keys (0.01; ⇧: 0.1). From a
+  preset it starts on the bezier the Ease Curve node keeps for it, which
+  only comes close to the easing: the ramp shifts a little, and for the
+  two hybrids it visibly changes. A handle's drag is one undo step.
+- **Points** draws the curve in the rail, read-only. Its points are edited
+  on the timeline, and pressing Points opens the clip's speed row (below).
+  A switch to Points redraws the ramp as points (see Limits).
+
+A piece of a split ramp shows as Points with its part of the ramp drawn,
+and the note "Part of a ramp, cut by a split.". Preset or Bezier then gives
+the piece a whole new ramp.
+
+**Reverse** plays the clip's range backwards, at its speed and along its
+ramp. It keeps the length. It works while the clip's length is still
+loading, as the clip menu's Reverse does.
+
+**Blend frames** mixes the two source frames around each output frame by
+their distance where the clip plays below 1×, instead of holding the
+nearer one. It is on only in slow motion: a speed under 1×, or a ramp
+(otherwise its title says "Only in slow motion"). A slider drag, or a run
+of ↑ and ↓ in the well, that passes 1× keeps it; the 1× preset or a typed
+1× on a forward clip with no ramp drops it. Only the render and Frame to
+canvas show it.
+
+**Reset speed** sets 1× and no ramp; Reverse stays. The rail shows it at
+its foot while the clip plays at another speed or on a ramp, not for
+Reverse alone. The clip menu always lists it, and it is off there
+otherwise.
+
+**Several clips.** With several selected, the rail shows Speed (the well
+and the presets, "Mixed" while the speeds differ) and Reverse (On or Off,
+"Mixed" while they differ), and Reset speed while any plays at another
+speed or on a ramp. Each clip
+keeps to its own limits. Speed is off while any selected clip's length is
+unknown. Ramp and Blend frames are one clip's.
+
+**On the timeline** a retimed clip's box shows a badge: its speed ("2×",
+"0.5×") or "Ramp", and a rewind icon when it is reversed, where the box has
+room. The clip menu has Speed… (the rail's Speed well, focused), Reverse
+(Play forward when every selected clip is reversed), Reset speed (off
+unless a clip plays at another speed or on a ramp) and Show speed curve
+(Hide speed curve while open; one clip only). Reverse and Reset speed act
+on every selected clip. Cancel's discard sheet counts a clip whose speed,
+ramp, Reverse or Blend frames changed as "a speed change".
+
+**I and O on a reversed clip.** I sets the clip's start on the timeline and
+O its end. A reversed clip starts on its Out, so there I sets the Out and O
+the In; the rail's In and Out hints name the keys that way round. Under a
+speed or a ramp the edge lands where a drag of it to the playhead would.
+
+**Split** through a retimed clip keeps the picture: each piece plays its
+part of the ramp, and every moment shows the frame it showed. Each piece's
+speed is its own average. A reversed clip's left piece is the end of its
+range. Where a piece would stand still or hold almost no source, Split is
+off and says "Move the playhead: the speed here is too slow to split".
+
+**The speed row.** Show speed curve, under Ramp in the rail or in the clip
+menu, opens the clip's row on the timeline for its speed curve; pressing
+Points opens it too. Selecting a clip does not. One clip's speed row is
+open at a time; an audio row open for its volume curve stays open beside
+it.
+In Track the clips row grows to 136 px and draws every clip's curve; it is
+the first row to give way in a short window, down to its closed 80 px. In
+Stacked the clip's own row grows to 132 px and scrolls into view. The curve
+lies over the clip's frames under a dark wash: the clip's time across, its
+progress through the source up, so the slope is the speed. A dashed
+diagonal is the clip at its average speed. A reversed clip's line rises
+too; its filmstrip runs backwards.
+
+Only the single selected clip, at rest, takes edits on its curve. Its line
+is white, with a dot on each point of a points ramp; the two ends are fixed
+and have none. Drag on the line to add a point and move it; a click adds
+nothing. On a preset, a bezier, a piece of a split ramp or the straight
+line of a constant speed, that first drag turns the line into points, with
+a point where you pressed (see Limits). Drag a point to move it between its
+neighbours; double-click it to remove it. A press within 2 % of the clip's
+length of a point takes that point. The line takes no press that close to
+either end, so a drag there reorders the clip in Track and moves it in
+Stacked, as on the rest of its box. A ramp holds at most 64 points, its
+ends included. While a point moves, its momentary speed and its time on
+the timeline show beside it; over the line, a hint says "Drag to add
+point". Escape cancels a drag. Each drag or removal is one undo step.
+Points are never selected: ⌫ removes the clip, as always. A point under a
+trim handle still takes a press, and the box's hover sound button hides
+while its curve can be edited. A straight line left after removing points
+is no ramp: a forward clip at 1× goes back to its own speed. While the row
+is open, the rail says "Drag the line to add a point. Double-click a point
+to remove it.", or "Dragging the line turns the ramp into points." on a
+ramp that is not points yet.
+
+**Render.** Each 60 fps slot inside a retimed clip shows the source frame
+nearest the time its warp names (a tie goes to the earlier frame). Fast
+motion skips frames; slow motion holds them. With Blend frames on, a slot
+where the clip plays below 1× blends the two frames around that time by
+their distance. A frame is written on each slot where the picture changes,
+so the file keeps its variable frame rate. A reversed clip is decoded
+forward in chunks, each from the key frame before it, and written
+backwards. Frame to canvas shows the frame the render shows on that slot,
+blend included.
+
+The clip's own sound follows its picture, like tape: its pitch rises with
+its speed and falls in slow motion, a ramp glides, and a reversed clip
+plays backwards. It is resampled with a windowed sinc that filters out
+what fast motion would fold back (measured: a 440 Hz tone at 2× renders at
+880.00 Hz, with aliasing at −96 dB). A constant speed above 4× or below
+0.25× has no sound; 4× and 0.25× keep it. A ramp keeps its sound at any
+average speed: it fades below a quarter speed and is silent where the
+picture holds. Muted clips and clips at volume 0 are left out, as before.
+
+**Preview.** Each retimed clip's `<video>` plays at the speed its warp gives;
+on a ramp the rate is set again every frame. Its pitch follows its speed,
+as in the render; a clip at its own speed keeps its pitch. Chromium plays
+an element between 1/16× and 16×. Faster, the element plays at 16× and is
+seeked on. Slower (a hold, the flat end of an ease, a very slow speed), it
+is paused and stepped by seeks. A ramp starts playing only once it reaches
+a quarter speed; before that it is stepped by seeks. A reversed clip is
+always stepped by seeks, prepared on its first frame so a cut into it does
+not hold. A clip stepped by seeks is silent. A constant speed whose sound
+the render drops is silent in the preview too. A playing ramp's sound
+fades below a quarter speed as the render's does, but its slow start
+(until it first reaches a quarter speed) and any stretch below 1/16× are
+silent, where the render keeps their sound, faded. At a retimed clip's Out the
+preview holds its last frame, never a trimmed-off one. Text layers and
+audio clips run on the clock, as before.
+
+**Without a warp** nothing changes: an edit with no retimed clip saves,
+loads and renders as before (see "Renders as before").
 
 ## Library clips
 
@@ -1663,7 +1902,8 @@ is off (that reason is also its description for assistive tech).
 
 - It shows the clips the preview shows at the playhead, with the same
   source frames and blend as Render: in Stacked, the same mix of the clips
-  that overlap there.
+  that overlap there. A retimed clip gives the frame its warp names on that
+  slot, with Blend frames as Render blends it (see Speed and ramps).
 - It draws the text layers over them as Render draws them on that frame's
   60 fps slot, with the same drawing function, laid out at the image's
   size, once their fonts have loaded.
@@ -1699,7 +1939,7 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | Key | Action |
 |---|---|
 | Space | Play or pause |
-| I / O | Set the selected clip's or audio clip's In / Out at the playhead (the playhead must be inside it); with a text layer selected, move its start / end to the playhead, the other edge kept (the playhead must be at least 0.1 s inside it) |
+| I / O | Set the selected clip's or audio clip's In / Out at the playhead (the playhead must be inside it; on a reversed clip I sets the Out and O the In); with a text layer selected, move its start / end to the playhead, the other edge kept (the playhead must be at least 0.1 s inside it) |
 | S | Split the clip under the playhead; with several selected, every selected clip under it (in a lined-up stack, not where two clips play); or the selected audio clips; or the selected text layers the playhead is at least 0.1 s inside, never the video under them |
 | ⌫ / Delete | Remove the selected clips, audio clips or text layers, or the selected curve point |
 | M | Mute or unmute the selected audio clips; with none selected, or with text layers selected, the music |
@@ -1716,7 +1956,7 @@ point is being dragged, only Escape (cancels the drag) and K work.
 | Context menu key / ⇧F10 | Open the clip menu |
 | Escape | Close the menu or the picker; cancel a drag; on the discard sheet, Keep editing; otherwise Cancel (in the Edit video view, nothing). In a text layer's Text, leave the field; in its Font field, close the list, then leave the field |
 | ⇧ while dragging a clip or an edge | No snapping (in Stacked, pressing or releasing ⇧ while the pointer rests takes effect at once) |
-| ⌥ while dragging the curve | Move the whole line |
+| ⌥ while dragging the volume curve | Move the whole line |
 | − / = (or +) | Zoom the timeline out / in, as the control row's − and + do |
 | ⇧Z | Fit the timeline, as the control row's Fit does |
 | ? | The keyboard shortcuts, the editor's first (in the node's dialog too) |
@@ -1803,7 +2043,8 @@ snaps its start only.
   and the ones coming up load ahead; the others load their metadata until
   they are needed. Where clips overlap they all play at once, hidden ones
   too.
-- Every `<video>` and each audio clip's `<audio>` follow the clock. Within
+- Every `<video>` of a clip at its own speed (a retimed clip: see Speed and
+  ramps › Preview) and each audio clip's `<audio>` follow the clock. Within
   a frame (a video) or 0.03 s (an audio clip) one is left alone; up to
   0.25 s off it plays 2 % faster or slower (5 % past 0.12 s) until it is
   back within 0.01 s, so its sound never jumps; only past 0.25 s is it
@@ -1831,7 +2072,8 @@ snaps its start only.
   frames and blend are Render's too, so at the very start of a lined-up
   dissolve it can show the outgoing clip alone where the preview has begun
   to fade the next one in.
-- Clip sound is resampled linearly, and a mix of clip sound and music above
+- Clip sound is resampled linearly (a retimed clip's with a windowed sinc,
+  see Speed and ramps), and a mix of clip sound and music above
   full scale is hard-clipped. So is clip sound where stacked clips overlap,
   which adds up: with Crossfade off every clip that plays is heard at its
   own volume, so two loud ones can clip for the whole overlap and three or
@@ -1849,7 +2091,10 @@ snaps its start only.
   loop. A clip shown again after a cutaway, or hidden in the middle by a
   higher row and shown again (with Crossfade on or off), decodes its lead
   again, from its last key frame. Every clip that shows at once holds a
-  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. Above 4 at once the
+  decoder, roughly 50 MB each at 1080p and 175 MB at 4K. A reversed clip
+  also keeps up to 192 MB of decoded frames while it shows (about 64 frames
+  at 1080p), on top of its decoder, and several reversed clips shown at
+  once add up. Above 4 clips at once the
   encoder logs a warning ("[VideoStitch] 5 clips blend at once; this takes
   about 250 MB at 1080p"). When a decoder fails while 3 or more clips blend,
   the run stops with "Could not decode 3 clips at once at 0:12. Move some
@@ -1899,6 +2144,13 @@ snaps its start only.
   the Edits copy that the node's Done writes in 2.2.0. The node itself
   keeps its `overlays` through 2.2.0's Done, since the store merges what
   Done writes, but 2.2.0 does not render them.
+- **Node Banana 2.2.0 and clip speeds.** 2.2.0 opens an edit with retimed
+  clips (the file's version is still 1) and plays every clip at its own
+  speed. Any write 2.2.0 makes to the edit drops the speeds, as it drops
+  text layers. On a node, 2.2.0 reads no speeds either, and drops them
+  whenever it writes the node's timeline: a Done or Save in its editor
+  that changes the edit, a reorder or a Remove clip ✕ on the card, or
+  connecting a video. Disconnecting a video keeps them.
 - This build drops overlay kinds it does not know (a later build's) when it
   writes an edit file. On a node they survive a Done that leaves the text
   layers alone.
@@ -1923,24 +2175,65 @@ snaps its start only.
   piece fades in over what is left before the cut and the right one starts
   at full; split in a fade out, the left piece stays at full to the cut and
   the right one fades out over what is left.
+- **The preview of a retimed clip.** Blend frames, a reversed clip's
+  sound and the sound of a ramp's slow start (until it first reaches a
+  quarter speed) or of a stretch below 1/16× are only in the render (Blend
+  frames in Frame to canvas too). A
+  reversed clip, stepped by seeks, shows about 17 to 30 pictures a second
+  (measured on the H.264 files of a real edit: 17 to 21 on files with one
+  key frame, 23 to 30 on one with eight). At a cut into a slow clip, its
+  first frame can stay about one frame period longer (107–158 ms at 0.5×;
+  at 0.25× a frame is skipped instead). Just after a ramp starts, a frame can
+  hold for 250–325 ms. In some sessions Chromium runs a retimed clip's
+  picture about two source frames ahead for the whole clip. On a 120 Hz
+  display a 0.5× clip is about 0.6 of a source frame off at the median,
+  against 0.3 at 60 Hz. A forward retimed clip's own sound can stop up to
+  one source frame before its Out (42 ms of a 24 fps file at 1×, 167 ms at
+  0.25×).
+- **Reversing a long file with one key frame is slow.** The render decodes
+  a reversed clip forward in chunks, each from the key frame before it. A
+  file with a single key frame is decoded from its start for every chunk,
+  so the work grows with the square of the clip's length.
+- A clip stored to play far longer than 10 minutes (a file edited by hand
+  to 1e-9×, say) can make the render fail.
+- A text layer that fades during the frames held at the very end of an
+  edit (the flat end of an ease out on the last clip) makes the video
+  track end 1/60 s after the fade's last frame, not at the end of the
+  edit.
+- **Points redraw a ramp.** A switch to Points, or the first drag on a
+  ramp's line in the speed row, redraws a preset or a bezier as points, at
+  least 2 % of the clip's length apart. They aim for half a source frame,
+  between 0.2 % and 1 % of the source range, and most presets keep to it.
+  Points cannot follow a very steep stretch or a vertical tangent. The
+  largest measured gap from the curve they replace, as a share of the
+  source range: about 2 % for the Expo and Quint presets and the two
+  hybrids, about 7 % for the Circ presets, and up to about 30 % for a
+  bezier with a vertical tangent (a handle on the plot's left or right
+  edge). About one random bezier in ten ends
+  more than 3 source frames off on a 10 s clip at 24 fps. The speed row
+  draws the new line, and Undo puts the ramp back.
 - Frame to canvas stays off in a gap, so text the render shows over black
   there can be seen on the stage but not grabbed.
 - The agent sees the node's `clipOrder` and loop count, not its timeline,
-  its layout, where its clips are placed, its audio clips or its text
-  layers; its edits merge into the node's data, so they keep them all.
+  its layout, where its clips are placed, their speeds, its audio clips or
+  its text layers; its edits merge into the node's data, so they keep them
+  all.
 - Not built: ducking the music under clips with sound, roll edits,
   transitions other than the crossfade where stacked clips overlap, a
   crossfade at the loop's restart, an overlap set per join, fade lengths
-  set per clip, selecting or deleting a gap, a slip edit,
-  a start before 0:00, a lock to one axis while dragging a clip, speed
-  changes, fade handles on a text layer's box (the fades are set in the
-  rail), editing or dragging text on the stage, a wash behind the text
-  alone (it covers the whole frame), overlays other than text (an image, a
-  shape), a second video track (Stacked's rows are still one
-  sequence and one output track), a second audio socket, audio effects
-  other than the volume curve, selecting video and audio clips together, a
-  volume slider for audio clips, audio that follows a video clip when the
-  video moves, selecting a whole audio row at once, extending a selection with ⇧ and
-  the arrow keys, copying clips to the system clipboard (the copy lives in
-  the app until it reloads), snapping every clip of a group drag (only the
-  clip you hold snaps).
+  set per clip, selecting or deleting a gap, a slip edit, a start before
+  0:00, a lock to one axis while dragging a clip, fade handles on a text
+  layer's box (the fades are set in the rail), editing or dragging text on
+  the stage, a wash behind the text alone (it covers the whole frame),
+  overlays other than text (an image, a shape), a second video track
+  (Stacked's rows are still one sequence and one output track), a second
+  audio socket, audio effects other than the volume curve, selecting video
+  and audio clips together, a volume slider for audio clips, audio that
+  follows a video clip when the video moves, selecting a whole audio row
+  at once, extending a selection with ⇧ and the arrow keys, copying clips
+  to the system clipboard (the copy lives in the app until it reloads),
+  snapping every clip of a group drag (only the clip you hold snaps), a
+  speed that keeps the sound's pitch, speed on audio clips or text layers,
+  a key for speed, selecting a point on a speed curve (⌫ removes the
+  clip), and slow motion with new in-between frames (Blend frames mixes
+  the two frames around each).

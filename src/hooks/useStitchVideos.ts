@@ -15,7 +15,8 @@ import {
   getFirstEncodableAudioCodec,
   canEncodeVideo,
 } from 'mediabunny';
-import type { AudioCodec, InputAudioTrack, Rotation, VideoSample } from 'mediabunny';
+import type { AudioCodec, InputAudioTrack, InputVideoTrack, Rotation, VideoSample } from 'mediabunny';
+import type { ClipWarp } from '@/types';
 import { createAvcEncodingConfig, AVC_LEVEL_4_0, AVC_LEVEL_5_1 } from '@/lib/video-encoding';
 import {
   DEFAULT_BITRATE,
@@ -38,8 +39,26 @@ import {
 } from '@/lib/stitch/engineTypes';
 import { FrameSlotter, secToSlot, type PlannedClip } from '@/lib/stitch/sequencePlan';
 import { clipFadeSamples, dissolveFrames, sharedCadence, soloPass, type Dissolve } from '@/lib/stitch/stack';
-import { createFrameBlender, encodeDissolve, type FrameBlender } from '@/lib/stitch/crossfadeFrames';
-import { encodePlacedLoop, openClipReader, type ClipReaderWindow, type PlacedEncodeState } from '@/lib/stitch/clipReader';
+import {
+  createFrameBlender,
+  encodeDissolve,
+  encodeDissolveFrames,
+  timesSide,
+  type BlenderRef,
+  type DissolveSide,
+  type FrameBlender,
+} from '@/lib/stitch/crossfadeFrames';
+import {
+  encodePlacedLoop,
+  openClipReader,
+  type ClipReaderWindow,
+  type PlacedEncodeState,
+  type SlotReader,
+} from '@/lib/stitch/clipReader';
+import { dropsSound, warpMap, type WarpMap } from '@/lib/stitch/warp';
+import { isWarpedPlan, joinOuts, type WarpSlots } from '@/lib/stitch/warpFrames';
+import { clipBlend, clipFrames, openWarpedReader, type ClipFrames, type WarpBlend } from '@/lib/stitch/warpReader';
+import { warpResample, warpSoundMargin } from '@/lib/stitch/warpAudio';
 import { createOverlayWriter, type OverlayWriter } from '@/lib/stitch/overlayFrames';
 import { gainPieces, LAYER_WARNING, SLOT_SEC, TIME_EPS } from '@/lib/stitch/placement';
 import { maxVisibleLayers, pictureSegments, segmentsInLoop } from '@/lib/stitch/placedSchedule';
@@ -55,6 +74,7 @@ import {
   mixLoop,
   pcmFromAudioBuffer,
   pcmHead,
+  remix,
   sliceChunksToRange,
   toMasterFormat,
   type LoopMix,
@@ -71,6 +91,9 @@ interface StitchUnit {
   clip: StitchClipInput;
   probe: ClipProbe;
 }
+
+/** A retimed clip's unit: its frames come from the warp map (warpFrames.ts), never from its plan's origin. */
+type WarpedUnit = StitchUnit & { plan: PlannedClip & { warp: ClipWarp } };
 
 const determineEncodeParameters = (
   probes: ClipProbe[]
@@ -279,6 +302,8 @@ export async function stitchVideosAsync(
             firstTimestamp: probe?.firstTimestamp,
             source: clip.source,
             startSec: clip.startSec,
+            // readClip kept only an active warp
+            ...(clip.warp ? { warp: clip.warp } : {}),
           };
         }),
         options
@@ -293,6 +318,43 @@ export async function stitchVideosAsync(
         throw new Error('Nothing to render: every clip is empty');
       }
       totalVideos = units.length * loopCount;
+
+      // A retimed clip's map and frame list: made once however many loops and runs play it
+      const joins = joinOuts(picture);
+      const maps = new Map<StitchUnit, WarpMap>();
+      const frameLists = new Map<StitchUnit, Promise<ClipFrames>>();
+      // One blender per coded frame size, which every blended clip of that size shares: each keeps three frames'
+      // buffers until the render ends, and the readers blend one frame at a time
+      const blenders = new Map<string, FrameBlender>();
+      const blenderOfSize = (size: BlenderRef): FrameBlender => {
+        const key = `${size.width}x${size.height}`;
+        let blender = blenders.get(key);
+        if (!blender) blenders.set(key, (blender = createFrameBlender(size)));
+        return blender;
+      };
+      const mapOf = (unit: WarpedUnit): WarpMap => {
+        let map = maps.get(unit);
+        if (!map) maps.set(unit, (map = warpMap({ inSec: unit.plan.inSec, outSec: unit.plan.outSec }, unit.plan.warp)));
+        return map;
+      };
+      const framesOf = (unit: WarpedUnit): Promise<ClipFrames> => {
+        let list = frameLists.get(unit);
+        if (!list) {
+          // A split's piece lists the frame past its join, as the whole did
+          const joinOut = joins[picture.planned.indexOf(unit.plan)] ?? null;
+          list = clipFrames(unit.probe.videoTrack, unit.plan.inSec, unit.plan.outSec, signal, joinOut);
+          frameLists.set(unit, list);
+        }
+        return list;
+      };
+      const blendOf = (unit: WarpedUnit): WarpBlend | null => (unit.plan.warp.blend ? clipBlend(blenderOfSize) : null);
+      const warpedReader = (unit: WarpedUnit, slots: WarpSlots) =>
+        openWarpedReader(unit.probe.videoTrack, mapOf(unit), { ...slots, fps: MAX_OUTPUT_FPS }, {
+          frames: () => framesOf(unit),
+          frameBytes: unit.probe.width * unit.probe.height * 4,
+          blend: blendOf(unit),
+          signal,
+        });
 
       const {
         width: probedWidth,
@@ -338,9 +400,10 @@ export async function stitchVideosAsync(
       });
 
       // The sound: every audible clip and the music, in one master format
-      // Each keeps its unit's index: muted and soundless clips are left out, so a position here is not one in the sequence
+      // Each keeps its unit's index: muted and soundless clips are left out, so a position here is not one in the sequence.
+      // A clip at a constant speed above 4× or below 0.25× is left out too (dropsSound)
       const audible = units.flatMap((unit, unitIndex) =>
-        unit.probe.audioTrack && !unit.clip.muted && unit.clip.volume > 0
+        unit.probe.audioTrack && !unit.clip.muted && unit.clip.volume > 0 && !dropsSound(unit.plan.warp)
           ? [{ ...unit, unitIndex, audioTrack: unit.probe.audioTrack }]
           : []
       );
@@ -355,12 +418,23 @@ export async function stitchVideosAsync(
       if (audible.length > 0 || audibleMusic || soundingAudio.length > 0) {
         // Decoded first, so the master format comes from the sound itself
         // (an HE-AAC track's container says half its rate and mono)
-        const decoded: Array<{ pcm: Pcm; unitIndex: number; gain: number }> = [];
+        /** from: the source second the pcm's first sample is. */
+        const decoded: Array<{ pcm: Pcm; unitIndex: number; gain: number; from: number }> = [];
         for (let k = 0; k < audible.length; k++) {
           throwIfAborted();
           const { plan: planned, clip, audioTrack, unitIndex } = audible[k];
           updateProgress('processing', 'Extracting audio from source videos...', 5 + (k / audible.length) * 5);
           try {
+            if (isWarpedPlan(planned)) {
+              // Read through its warp map from In, with real sound either side for the resampler's kernel: a range cut at
+              // In and Out would ring into silence at both edges
+              const margin = warpSoundMargin(audioTrack.sampleRate);
+              const from = Math.max(0, planned.inSec - margin);
+              const to = planned.outSec + margin;
+              const pcm = await decodeClipSound(audioTrack, from, to, to, signal);
+              if (pcm) decoded.push({ pcm, unitIndex, gain: clip.volume, from });
+              continue;
+            }
             // From the same origin as the clip's frames, so picture and sound stay in the source's sync
             const pcm = await decodeClipSound(
               audioTrack,
@@ -369,7 +443,7 @@ export async function stitchVideosAsync(
               planned.outSec,
               signal
             );
-            if (pcm) decoded.push({ pcm, unitIndex, gain: clip.volume });
+            if (pcm) decoded.push({ pcm, unitIndex, gain: clip.volume, from: planned.origin });
           } catch (err) {
             if (err instanceof DOMException && err.name === "AbortError") throw err;
             // Silence for this clip; the others keep their place
@@ -407,32 +481,57 @@ export async function stitchVideosAsync(
             const played = loopCount * Math.max(0, Math.round(loopLength * chosen.format.sampleRate));
             return pcmHead(buffer, (played * buffer.sampleRate) / chosen.format.sampleRate + 1);
           };
+          /** A clip's sound in the master format, placed and faded as its picture is. */
+          const clipSound = (master: Pcm, unitIndex: number, gain: number): LoopMix['clips'][number] => {
+            if (env) {
+              // Placed: at its own start; with Crossfade on its sound follows its share of the picture
+              const start = env.units[unitIndex].start;
+              const sampleRate = chosen.format.sampleRate;
+              if (env.crossfade) {
+                applyGainPieces(master.channels, sampleRate, Math.round(start * sampleRate), gainPieces(env, unitIndex), signal);
+              }
+              return { pcm: master, seqStart: start, gain };
+            }
+            if (!sp) return { pcm: master, seqStart: units[unitIndex].plan.seqStart, gain };
+            const placed = sp.clips[unitIndex];
+            if (stack?.crossfade) {
+              // Faded against the next planned clip, sounding or not: a silent partner still fades this side
+              const next = sp.clips[unitIndex + 1];
+              applyCrossfades(
+                master.channels,
+                clipFadeSamples(placed, next ? next.seqStart : null, chosen.format.sampleRate)
+              );
+            }
+            return { pcm: master, seqStart: placed.seqStart, gain };
+          };
+          const clipMix: Array<LoopMix['clips'][number]> = [];
+          let retiming = false;
+          for (const { pcm, unitIndex, gain, from } of decoded) {
+            const unit = units[unitIndex];
+            if (!isWarpedPlan(unit.plan)) {
+              clipMix.push(clipSound(toMasterFormat(pcm, chosen.format), unitIndex, gain));
+              continue;
+            }
+            throwIfAborted();
+            if (!retiming) updateProgress('processing', 'Retiming clip sound...', 10);
+            retiming = true;
+            // Resampled to the master rate in the same step, along the map: the pitch follows the speed
+            const map = mapOf(unit as WarpedUnit);
+            const master = await warpResample({
+              pcm: remix(pcm, chosen.format.channels),
+              firstSample: Math.round(from * pcm.sampleRate),
+              sourceAt: map.sourceTimeAt,
+              speedAt: map.speedAt,
+              length: unit.plan.length,
+              sampleRate: chosen.format.sampleRate,
+              signal,
+            });
+            clipMix.push(clipSound(master, unitIndex, gain));
+          }
           mix = {
             format: chosen.format,
             loopLength,
-            clips: decoded.map(({ pcm, unitIndex, gain }) => {
-              const master = toMasterFormat(pcm, chosen.format);
-              if (env) {
-                // Placed: at its own start; with Crossfade on its sound follows its share of the picture
-                const start = env.units[unitIndex].start;
-                const sampleRate = chosen.format.sampleRate;
-                if (env.crossfade) {
-                  applyGainPieces(master.channels, sampleRate, Math.round(start * sampleRate), gainPieces(env, unitIndex), signal);
-                }
-                return { pcm: master, seqStart: start, gain };
-              }
-              if (!sp) return { pcm: master, seqStart: units[unitIndex].plan.seqStart, gain };
-              const placed = sp.clips[unitIndex];
-              if (stack?.crossfade) {
-                // Faded against the next planned clip, sounding or not: a silent partner still fades this side
-                const next = sp.clips[unitIndex + 1];
-                applyCrossfades(
-                  master.channels,
-                  clipFadeSamples(placed, next ? next.seqStart : null, chosen.format.sampleRate)
-                );
-              }
-              return { pcm: master, seqStart: placed.seqStart, gain };
-            }),
+            clips: clipMix,
             music: audibleMusic
               ? { pcm: toMasterFormat(musicPcm(audibleMusic.audio.buffer), chosen.format), curve: audibleMusic.curve }
               : null,
@@ -653,6 +752,39 @@ export async function stitchVideosAsync(
         }
       };
 
+      /** A retimed clip's slots [n0, n1) from its reader, each claimed from the slotter (it never writes a slot twice). */
+      const encodeWarpedPass = async (pass: { reader: SlotReader; unitIndex: number; n0: number; n1: number }) => {
+        throwIfAborted();
+        const videoNumber = pass.unitIndex + 1;
+        updateProgress(
+          'processing',
+          `Processing video ${videoNumber}/${totalVideos}...`,
+          12 + (pass.unitIndex / totalVideos) * 85,
+          videoNumber
+        );
+        let written = 0;
+        try {
+          await pass.reader.passThrough(pass.n0, pass.n1, async (sample, slot) => {
+            throwIfAborted();
+            if (slotter.claim(slot) === null) return;
+            await addToEncoder(sample);
+            if (++written % 10 === 0) {
+              const withinClip = Math.min(1, Math.max(0, (slot - pass.n0) / Math.max(1, pass.n1 - pass.n0)));
+              updateProgress(
+                'processing',
+                `Processing video ${videoNumber}/${totalVideos}: ${written} frames...`,
+                12 + ((pass.unitIndex + withinClip) / totalVideos) * 85,
+                videoNumber
+              );
+            }
+          });
+        } catch (videoError) {
+          if (videoError instanceof DOMException && videoError.name === "AbortError") throw videoError;
+          console.error(`Error processing video ${videoNumber}:`, videoError);
+          throw new Error(videoError instanceof Error ? videoError.message : `Failed to process video ${videoNumber}`);
+        }
+      };
+
       if (env) {
         const segments = pictureSegments(env);
         const most = maxVisibleLayers(segments);
@@ -667,8 +799,10 @@ export async function stitchVideosAsync(
           outSec: unit.plan.outSec,
           origin: unit.plan.origin,
           frameRate: unit.probe.frameRate,
-          open: (range: { from: number; to: number }, window: ClipReaderWindow) =>
-            openClipReader(unit.probe.videoTrack, range, window, unit.plan.inSec),
+          open: (range: { from: number; to: number }, window: ClipReaderWindow, run: { n0: number; n1: number }): SlotReader =>
+            isWarpedPlan(unit.plan)
+              ? warpedReader(unit as WarpedUnit, { anchorSlot: window.anchorSlot, fromSlot: run.n0, endSlot: window.endSlot })
+              : openClipReader(unit.probe.videoTrack, range, window, unit.plan.inSec),
         }));
         for (let loop = 0; loop < loopCount; loop++) {
           const videoNumber = (unit: number) => loop * units.length + unit + 1;
@@ -710,6 +844,18 @@ export async function stitchVideosAsync(
             const unit = units[k];
             const { plan: planned } = unit;
             const windowStart = loop * loopLength + planned.seqStart;
+            if (isWarpedPlan(planned)) {
+              // begin()'s own slots: the clip before stops at n0 and the one after starts at n1
+              const n0 = secToSlot(windowStart);
+              const n1 = secToSlot(windowStart + planned.length);
+              const reader = warpedReader(unit as WarpedUnit, { anchorSlot: n0, fromSlot: n0, endSlot: n1 });
+              try {
+                await encodeWarpedPass({ reader, unitIndex: loop * units.length + k, n0, n1 });
+              } finally {
+                await reader.close();
+              }
+              continue;
+            }
             await encodeRun({
               unit,
               unitIndex: loop * units.length + k,
@@ -736,9 +882,10 @@ export async function stitchVideosAsync(
           return blender;
         };
         const dissolveFrom = new Map<number, Dissolve>(stacked.dissolves.map((d) => [d.outgoing, d]));
+        const dissolveInto = new Map<number, Dissolve>(stacked.dissolves.map((d) => [d.incoming, d]));
 
         // A dissolve's slots, claimed after the outgoing clip's solo frames and before the incoming clip's
-        const blendJoin = async (d: Dissolve, loopOffset: number, unitIndex: number) => {
+        const blendJoin = async (d: Dissolve, loopOffset: number, unitIndex: number, readerOf: (k: number) => SlotReader) => {
           throwIfAborted();
           const videoNumber = unitIndex + 1;
           updateProgress(
@@ -749,10 +896,14 @@ export async function stitchVideosAsync(
           );
           const outgoing = units[d.outgoing].probe;
           const incoming = units[d.incoming].probe;
+          const warpedOut = isWarpedPlan(units[d.outgoing].plan);
+          const warpedIn = isWarpedPlan(units[d.incoming].plan);
           const frames = dissolveFrames(stacked, d, loopOffset, {
             fps: MAX_OUTPUT_FPS,
-            cadence: sharedCadence(outgoing, incoming),
+            // A retimed side changes frames at its own momentary rate, not its source's: every slot
+            cadence: warpedOut || warpedIn ? null : sharedCadence(outgoing, incoming),
           });
+          const slots: number[] = [];
           const timestamps: number[] = [];
           const outgoingTimes: number[] = [];
           const incomingTimes: number[] = [];
@@ -760,26 +911,46 @@ export async function stitchVideosAsync(
           frames.slots.forEach((slot, i) => {
             const timestamp = slotter.claim(slot);
             if (timestamp === null) return;
+            slots.push(slot);
             timestamps.push(timestamp);
             outgoingTimes.push(frames.outgoingTimes[i]);
             incomingTimes.push(frames.incomingTimes[i]);
             alphas.push(frames.alphas[i]);
           });
+          // A retimed side is its clip's own reader, which the loop closes; the other looks its times up as before
+          const side = (warped: boolean, k: number, track: InputVideoTrack, times: number[]): DissolveSide =>
+            warped ? { frameOn: (slot) => readerOf(k).frameOn(slot), close: async () => {} } : timesSide(track, times);
           try {
-            await encodeDissolve(
-              {
-                outgoing: outgoing.videoTrack,
-                incoming: incoming.videoTrack,
-                timestamps,
-                outgoingTimes,
-                incomingTimes,
-                alphas,
-                frameDuration: frameInterval,
-                signal,
-              },
-              blenderFor,
-              addToEncoder
-            );
+            if (!warpedOut && !warpedIn) {
+              await encodeDissolve(
+                {
+                  outgoing: outgoing.videoTrack,
+                  incoming: incoming.videoTrack,
+                  timestamps,
+                  outgoingTimes,
+                  incomingTimes,
+                  alphas,
+                  frameDuration: frameInterval,
+                  signal,
+                },
+                blenderFor,
+                addToEncoder
+              );
+            } else {
+              await encodeDissolveFrames(
+                {
+                  outgoing: side(warpedOut, d.outgoing, outgoing.videoTrack, outgoingTimes),
+                  incoming: side(warpedIn, d.incoming, incoming.videoTrack, incomingTimes),
+                  slots,
+                  timestamps,
+                  alphas,
+                  frameDuration: frameInterval,
+                  signal,
+                },
+                blenderFor,
+                addToEncoder
+              );
+            }
           } catch (blendError) {
             if (blendError instanceof DOMException && blendError.name === "AbortError") throw blendError;
             console.error(`Error processing video ${videoNumber}:`, blendError);
@@ -789,25 +960,52 @@ export async function stitchVideosAsync(
 
         for (let loop = 0; loop < loopCount; loop++) {
           const loopOffset = loop * loopLength;
-          for (let k = 0; k < units.length; k++) {
-            const unit = units[k];
+          // One reader per retimed clip per loop, from its dissolve in (else its solo window) to its own end: its
+          // dissolve in, solo pass and dissolve out ask it for rising slots on one anchor, the clip's own start
+          const readers = new Map<number, SlotReader>();
+          const readerOf = (k: number): SlotReader => {
+            const held = readers.get(k);
+            if (held) return held;
             const placed = stacked.clips[k];
-            const unitIndex = loop * units.length + k;
-            const solo = soloPass(placed, loopOffset, MAX_OUTPUT_FPS);
-            if (solo) {
-              await encodeRun({
-                unit,
-                unitIndex,
-                startSlotAt: () => slotter.beginRange({ origin: placed.soloOrigin, fromSec: solo.fromSec, toSec: solo.toSec }),
-                // A head the clip before covers or dissolves over is not decoded again here
-                from: solo.decodeFrom,
-                to: solo.decodeTo,
-                holdBefore: placed.soloOrigin,
-                window: { startSec: solo.fromSec, length: solo.toSec - solo.fromSec },
-              });
+            const into = dissolveInto.get(k);
+            const reader = warpedReader(units[k] as WarpedUnit, {
+              anchorSlot: secToSlot(loopOffset + placed.seqStart),
+              fromSlot: secToSlot(loopOffset + (into ? into.fromSec : placed.soloStart)),
+              endSlot: secToSlot(loopOffset + placed.seqStart + placed.length),
+            });
+            readers.set(k, reader);
+            return reader;
+          };
+          try {
+            for (let k = 0; k < units.length; k++) {
+              const unit = units[k];
+              const placed = stacked.clips[k];
+              const unitIndex = loop * units.length + k;
+              const solo = soloPass(placed, loopOffset, MAX_OUTPUT_FPS);
+              if (solo && isWarpedPlan(unit.plan)) {
+                await encodeWarpedPass({ reader: readerOf(k), unitIndex, n0: secToSlot(solo.fromSec), n1: secToSlot(solo.toSec) });
+              } else if (solo) {
+                await encodeRun({
+                  unit,
+                  unitIndex,
+                  startSlotAt: () => slotter.beginRange({ origin: placed.soloOrigin, fromSec: solo.fromSec, toSec: solo.toSec }),
+                  // A head the clip before covers or dissolves over is not decoded again here
+                  from: solo.decodeFrom,
+                  to: solo.decodeTo,
+                  holdBefore: placed.soloOrigin,
+                  window: { startSec: solo.fromSec, length: solo.toSec - solo.fromSec },
+                });
+              }
+              const join = dissolveFrom.get(k);
+              if (join) await blendJoin(join, loopOffset, unitIndex, readerOf);
+              const done = readers.get(k);
+              if (done) {
+                readers.delete(k);
+                await done.close();
+              }
             }
-            const join = dissolveFrom.get(k);
-            if (join) await blendJoin(join, loopOffset, unitIndex);
+          } finally {
+            await Promise.all([...readers.values()].map((reader) => reader.close()));
           }
         }
       }

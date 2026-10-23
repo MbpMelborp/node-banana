@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StitchSequenceLayout, StitchTimelineClip } from "@/types";
+import type { ClipWarp, StitchSequenceLayout, StitchTimelineClip } from "@/types";
 import {
   copyClips,
   duplicateAt,
@@ -402,6 +402,64 @@ describe("pasteIntoTimeline in Stacked", () => {
       expect(runOf(timeline, "a1")).toEqual(runOf(before, "a1"));
       expect(runOf(timeline, "b")).toEqual(["b"]);
     });
+  });
+});
+
+describe("warps on the clipboard", () => {
+  const ramp: ClipWarp = {
+    speed: 0.5,
+    curve: {
+      kind: "points",
+      points: [
+        [0, 0],
+        [0.3, 0.1],
+        [0.7, 0.8],
+        [1, 1],
+      ],
+    },
+    window: [0.2, 0.9],
+    reverse: true,
+    blend: true,
+  };
+  const timeline = [edgeClip("a", "e1", { warp: ramp }), edgeClip("b", "e2")];
+
+  function objectsIn(value: unknown, into = new Set<object>()): Set<object> {
+    if (value && typeof value === "object") {
+      into.add(value);
+      for (const child of Object.values(value)) objectsIn(child, into);
+    }
+    return into;
+  }
+
+  it("copies a warp, sharing nothing with the clip, and gives an unwarped clip no key", () => {
+    const copy = copyClips({ timeline, sequenceLayout: TRACK }, d, ["a", "b"], ORIGIN)!;
+    const [warped, plain] = copy.items as ClipboardVideoItem[];
+    expect(warped.warp).toEqual(ramp);
+    const theirs = objectsIn(ramp);
+    for (const object of objectsIn(warped.warp)) expect(theirs.has(object)).toBe(false);
+    expect("warp" in plain).toBe(false);
+  });
+
+  it("pastes the warp sanitized, last, in Track and Stacked; an item without one makes a clip without the key", () => {
+    const broken = { speed: 1e12, curve: { kind: "bezier", handles: [-1, 2, 0.5, 0.5] }, reverse: false, blend: false };
+    const items = [
+      item({ kind: "asset", assetId: "x" }, 0, { warp: ramp }),
+      item({ kind: "asset", assetId: "x" }, 1, { warp: broken as unknown as ClipWarp }),
+      item({ kind: "asset", assetId: "x" }, 2),
+    ];
+    for (const layout of [TRACK, STACKED]) {
+      const { timeline: pasted } = pasteIntoTimeline([], d, layout, items, { afterIndex: -1, startSec: 4 }, counter());
+      expect(pasted[0].warp).toEqual(ramp);
+      expect(pasted[0].warp).not.toBe(ramp);
+      expect(pasted[1].warp).toEqual({
+        speed: 1e9,
+        curve: { kind: "bezier", handles: [0, 1, 0.5, 0.5] },
+        reverse: false,
+        blend: false,
+      });
+      expect(Object.keys(pasted[0]).at(-1)).toBe("warp");
+      expect("warp" in pasted[2]).toBe(false);
+    }
   });
 });
 

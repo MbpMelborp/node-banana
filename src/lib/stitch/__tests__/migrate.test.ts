@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import {
   dropRemovedStitchEdges,
   dropStitchEdges,
@@ -15,6 +15,7 @@ import {
 } from "../migrate";
 import { createAudioClip, MUSIC_CLIP_ID } from "../audioClips";
 import { createClip } from "../timeline";
+import { sanitizeWarp, splitWarp, warpMap, withWarp } from "../warp";
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
@@ -106,6 +107,7 @@ describe("sanitizeTimeline", () => {
       { id: "b", source: { kind: "asset", assetId: "alibrary00001" }, inSec: 3, outSec: null, muted: true, volume: 0.4 },
       { id: "c", source: { kind: "edge", edgeId: "e2" }, inSec: 1, outSec: 4, muted: false, volume: 0 },
     ]);
+    expect(sanitizeTimeline(raw).some((clip) => "warp" in clip)).toBe(false);
   });
 
   it("keeps a finite startSec unrounded, clamped to 0–600, and drops anything else", () => {
@@ -134,6 +136,122 @@ describe("sanitizeTimeline", () => {
     expect(new Set(ids).size).toBe(3);
     expect(ids[0]).toBe("a");
     expect(sanitizeTimeline(raw).map((c) => c.id)).toEqual(ids);
+  });
+});
+
+describe("sanitizeTimeline (warps)", () => {
+  const W = (speed: number, curve: ClipWarp["curve"] = null, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+    speed,
+    curve,
+    reverse: false,
+    blend: false,
+    ...extra,
+  });
+  const ramps: ClipWarp[] = [
+    W(2),
+    W(0.5, { kind: "preset", name: "easeInOutSine" }, { blend: true }),
+    W(1.5, { kind: "bezier", handles: [0.42, 0, 0.58, 1] }, { window: [0.2, 0.7] }),
+    W(
+      0.8,
+      {
+        kind: "points",
+        points: [
+          [0, 0],
+          [0.3, 0.1],
+          [0.7, 0.8],
+          [1, 1],
+        ],
+      },
+      { reverse: true },
+    ),
+  ];
+
+  it("keeps a warp of each kind, the key last", () => {
+    for (const warp of ramps) {
+      const [clip] = sanitizeTimeline([{ ...edgeClip("a", "e1", { inSec: 1, outSec: 4 }), warp }]);
+      expect(clip.warp).toEqual(warp);
+      expect(Object.keys(clip)).toEqual(["id", "source", "inSec", "outSec", "muted", "volume", "warp"]);
+      const [placed] = sanitizeTimeline([{ ...edgeClip("a", "e1"), warp, startSec: 2 }]);
+      expect(Object.keys(placed)).toEqual(["id", "source", "inSec", "outSec", "muted", "volume", "startSec", "warp"]);
+    }
+  });
+
+  it("sanitizes a broken warp and drops one that changes nothing", () => {
+    const [fast, falling, identity, blendOnly] = sanitizeTimeline([
+      { ...edgeClip("a", "e1"), warp: { speed: 1e12, curve: null, reverse: false, blend: false } },
+      {
+        ...edgeClip("b", "e1"),
+        warp: {
+          speed: 1,
+          curve: { kind: "points", points: [[0, 0], [0.4, 0.8], [0.6, 0.3], [1, 1]] },
+          reverse: false,
+          blend: false,
+        },
+      },
+      {
+        ...edgeClip("c", "e1"),
+        warp: { speed: 1, curve: { kind: "preset", name: "linear" }, reverse: false, blend: true },
+      },
+      { ...edgeClip("d", "e1"), warp: "2x" },
+    ]);
+    expect(fast.warp!.speed).toBe(1e9);
+    expect(falling.warp!.curve).toEqual({ kind: "points", points: [[0, 0], [0.4, 0.8], [0.6, 0.8], [1, 1]] });
+    expect("warp" in identity).toBe(false);
+    expect("warp" in blendOnly).toBe(false);
+  });
+
+  function lcg(seed: number): () => number {
+    let s = seed;
+    return () => {
+      s = (s * 1103515245 + 12345) % 2147483648;
+      return s / 2147483648;
+    };
+  }
+
+  it("is a fixed point: a timeline with warps reads back the same through a file", () => {
+    const random = lcg(3);
+    const pick = <T,>(options: readonly T[]): T => options[Math.floor(random() * options.length)];
+    const names = ["easeInQuad", "easeOutCubic", "easeInOutSine", "easeInExpo", "easeInOutCirc", "linear", "toString"];
+    const fuzz = () =>
+      sanitizeWarp({
+        speed: pick([10 ** (random() * 4 - 2), 1, -1, Number.NaN]),
+        curve: pick([
+          null,
+          { kind: "preset", name: pick(names) },
+          { kind: "bezier", handles: [random(), random() * 1.4 - 0.2, random(), random()] },
+          { kind: "points", points: Array.from({ length: Math.floor(random() * 6) }, () => [random(), random()]) },
+        ]),
+        ...(random() < 0.5 ? { window: [random() * 0.5, 0.5 + random() * 0.5] } : {}),
+        reverse: random() < 0.5,
+        blend: random() < 0.5,
+      });
+    const piece = () => {
+      const whole = fuzz();
+      if (!whole) return undefined;
+      const range = { inSec: random() * 5, outSec: 5 + random() * 30 };
+      const split = splitWarp(range, whole, random() * warpMap(range, whole).length);
+      return split ? pick([split.first.warp, split.second.warp]) : whole;
+    };
+    for (let k = 0; k < 300; k++) {
+      const timeline = Array.from({ length: 1 + Math.floor(random() * 5) }, (_, i) => {
+        const inSec = Math.floor(random() * 4);
+        const clip = createClip(
+          { kind: "edge", edgeId: `e${i}` },
+          {
+            id: `c${i}`,
+            inSec,
+            outSec: random() < 0.5 ? null : inSec + 1 + random() * 5,
+            volume: random(),
+            ...(random() < 0.4 ? { startSec: random() * 600 } : {}),
+          },
+        );
+        return withWarp(clip, random() < 0.5 ? fuzz() : piece());
+      });
+      const read = sanitizeTimeline(JSON.parse(JSON.stringify(timeline)));
+      expect(read).toEqual(timeline);
+      const text = JSON.stringify(read);
+      expect(JSON.stringify(sanitizeTimeline(JSON.parse(text)))).toBe(text);
+    }
   });
 });
 

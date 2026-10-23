@@ -138,3 +138,35 @@ describe("timelineLayout", () => {
     expect(timelineLayout(2, 3, null, false, Infinity, 50, 3).height).toBe(189 + 52);
   });
 });
+
+describe("timelineLayout with a clip row open for its speed curve", () => {
+  it("Track: the clips row grows to 136, and gives way first under the room the editor leaves, down to 80", () => {
+    expect(timelineLayout(2, 1, null, false, Infinity, null, 0, 0)).toMatchObject({ height: 245, videoHeight: 136 });
+    expect(timelineLayout(2, 1, null, false, Infinity, null, 0, null)).toMatchObject({ height: 189, videoHeight: 80 });
+    // Any index opens Track's one clips row
+    expect(timelineLayout(2, 1, null, false, Infinity, null, 0, 1)).toMatchObject({ height: 245, videoHeight: 136 });
+    expect(timelineLayout(2, 1, null, false, 220, null, 0, 0)).toMatchObject({ height: 220, videoHeight: 111 });
+    // At the closed row's height it is the closed row, and the least height is unchanged
+    expect(timelineLayout(2, 1, null, false, 189, null, 0, 0)).toMatchObject({ height: 189, videoHeight: 80 });
+    expect(timelineLayout(2, 1, null, false, 100, null, 0, 0)).toMatchObject({ height: 189, videoHeight: 80 });
+    // Dragged taller, it takes its 136 first
+    expect(timelineLayout(2, 1, null, false, Infinity, 300, 0, 0)).toMatchObject({ height: 300, videoHeight: 136 });
+  });
+
+  it("Stacked: the open row is 132 px inside the rows view, whose cap grows by its 80 px more", () => {
+    expect(timelineLayout(2, 1, null, true, Infinity, null, 0, 0)).toMatchObject({ height: 293, videoHeight: 184 });
+    // Five clips, row 1 open: 340 px of rows in a 182 + 80 px view
+    const five = timelineLayout(5, 1, null, true, Infinity, null, 0, 1);
+    expect(five.videoHeight).toBe(262);
+    expect(five.height).toBe(1 + 28 + 262 + 80);
+    // Under the room the editor leaves the view gives way first, as with no row open, down to its floor of one and a
+    // half rows (three audio rows here, so the floor is reached before the least height)
+    expect(timelineLayout(5, 1, null, true, 200, null, 0, 1).videoHeight).toBe(200 - 1 - 28 - 80);
+    expect(timelineLayout(5, 3, null, true, 230, null, 0, 1)).toMatchObject({ height: 230, videoHeight: 78 });
+    // A chosen height past the rows' cap grows the view up to all of them
+    expect(timelineLayout(5, 1, null, true, Infinity, 2000, 0, 1).videoHeight).toBe(340);
+    expect(timelineLayout(5, 1, null, true, Infinity, 400, 0, 1).videoHeight).toBe(400 - 1 - 28 - 80);
+    // A row out of range opens nothing
+    expect(timelineLayout(2, 1, null, true, Infinity, null, 0, 5)).toEqual(timelineLayout(2, 1, null, true));
+  });
+});

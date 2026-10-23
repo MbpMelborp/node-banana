@@ -65,6 +65,20 @@ describe("laneBoxes", () => {
     expect(trimEdgeX(boxes[1], "in")).toBe(336);
     expect(trimEdgeX(boxes[1], "out")).toBe(336 + 288);
   });
+
+  it("draws a retimed clip at its warped length", () => {
+    // Clip 2 at 2×: 4 s of source from In 1 is 2 s
+    const warp = { speed: 2, curve: null, reverse: false, blend: false };
+    const retimed = [timeline[0], clip("c2", "e2", { inSec: 1, warp }), timeline[2]];
+    const fast = clipSpans(retimed, durations({ "edge:e1": 6, "edge:e2": 5, "edge:e3": 3 }), 0);
+    const boxes = laneBoxes(buildTimeAxis(fast, PPS), fast, null);
+    expect(boxes.map((b) => [b.x, b.width])).toEqual([
+      [16, 320],
+      [336, 128],
+      [464, 192],
+    ]);
+    expect(boxes[1]).toEqual({ x: 336, width: 128, inSec: 1, lengthSec: 2 });
+  });
 });
 
 describe("insetBox", () => {

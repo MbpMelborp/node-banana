@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { moveSnapText } from "@/lib/stitch/moveDrag";
+import { STACK_BOX_PX } from "@/lib/stitch/stackedLayout";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
@@ -28,7 +29,9 @@ export function MoveOverlay({
   lengthSec,
   boxWidth,
   boxTop,
+  boxHeight = STACK_BOX_PX,
   targetBoxTop,
+  targetBoxHeight = STACK_BOX_PX,
   scrollLeft,
   laneWidth,
   rowsTop = GEOMETRY.ruler,
@@ -38,11 +41,13 @@ export function MoveOverlay({
   axis: TimeAxis;
   /** The clip's length (0 for an empty clip, whose chip names its start only). */
   lengthSec: number;
-  /** The moving box's width and its drawn top in the rows block, px. */
+  /** The moving box's width, its drawn top in the rows block and its height (taller on a row open for its curve), px. */
   boxWidth: number;
   boxTop: number;
-  /** The top of the box that owns the snapped target, in the rows block; null for the playhead and 0:00. */
+  boxHeight?: number;
+  /** The top and height of the box that owns the snapped target, in the rows block; null for the playhead and 0:00. */
   targetBoxTop: number | null;
+  targetBoxHeight?: number;
   /** The visible lanes' left in the content, and their width, px. */
   scrollLeft: number;
   laneWidth: number;
@@ -57,7 +62,7 @@ export function MoveOverlay({
   const right = move.x + boxWidth;
   const top = rowsTop + boxTop + CHIP_DROP;
   // A box's bottom in the lane content from its top in the rows block
-  const boxBottom = (rowTop: number) => rowsTop + rowTop + GEOMETRY.stackClipHeight;
+  const boxBottom = (rowTop: number, height: number) => rowsTop + rowTop + height;
 
   // Right of the box when it fits in the visible lanes, else left of it, never past their sides
   useLayoutEffect(() => {
@@ -79,7 +84,7 @@ export function MoveOverlay({
       ? `${formatTimecode(startSec)}–${formatTimecode(startSec + lengthSec)}`
       : formatTimecode(startSec);
   const text = moveSnapText(move.result);
-  const bottom = boxBottom(boxTop);
+  const bottom = boxBottom(boxTop, boxHeight);
   return (
     <>
       <div
@@ -94,7 +99,7 @@ export function MoveOverlay({
       {move.result.snapped && text && (
         <SnapGuide
           x={axis.timeToX(move.result.snapped.t)}
-          bottom={Math.max(bottom, targetBoxTop === null ? 0 : boxBottom(targetBoxTop))}
+          bottom={Math.max(bottom, targetBoxTop === null ? 0 : boxBottom(targetBoxTop, targetBoxHeight))}
           chipTop={bottom + CHIP_GAP}
           text={text}
         />

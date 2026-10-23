@@ -7,6 +7,7 @@ import {
   stackedDropIndex,
   stackedInsertionY,
 } from "../reorder";
+import { stackedRowsLayout } from "../stackedLayout";
 
 // Three boxes: 16–336, 336–604, 604–988
 const boxes = [
@@ -49,25 +50,54 @@ describe("insertionX", () => {
 });
 
 describe("stackedDropIndex", () => {
+  const rows = stackedRowsLayout(4);
+
   it("moves a row once the lifted box's centre passes half a row", () => {
-    expect(stackedDropIndex(1, 25, 4, 52)).toBe(1);
-    expect(stackedDropIndex(1, 27, 4, 52)).toBe(2);
-    expect(stackedDropIndex(1, -27, 4, 52)).toBe(0);
-    expect(stackedDropIndex(0, 104, 4, 52)).toBe(2);
+    expect(stackedDropIndex(1, 25, rows)).toBe(1);
+    expect(stackedDropIndex(1, 27, rows)).toBe(2);
+    expect(stackedDropIndex(1, -27, rows)).toBe(0);
+    expect(stackedDropIndex(0, 104, rows)).toBe(2);
   });
 
   it("stops at the first and last rows", () => {
-    expect(stackedDropIndex(1, -500, 4, 52)).toBe(0);
-    expect(stackedDropIndex(1, 500, 4, 52)).toBe(3);
-    expect(stackedDropIndex(1, Number.NaN, 4, 52)).toBe(1);
+    expect(stackedDropIndex(1, -500, rows)).toBe(0);
+    expect(stackedDropIndex(1, 500, rows)).toBe(3);
+    expect(stackedDropIndex(1, Number.NaN, rows)).toBe(1);
+  });
+
+  it("takes the row under the centre when one is open, and equals the uniform rows' formula with none", () => {
+    // Rows at 0, 52, 184 (row 1 open), 236: row 0's centre (26) moved 60 px is in row 1, 160 px still is, 159 + 26
+    // past 184 is row 2
+    const open = stackedRowsLayout(4, 1);
+    expect(stackedDropIndex(0, 60, open)).toBe(1);
+    expect(stackedDropIndex(0, 157, open)).toBe(1);
+    expect(stackedDropIndex(0, 158, open)).toBe(2);
+    let seed = 13;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let run = 0; run < 2000; run++) {
+      const count = 1 + Math.floor(rnd() * 6);
+      const index = Math.floor(rnd() * count);
+      const dy = (rnd() - 0.5) * 800;
+      const uniform = Math.min(Math.max(index + Math.round(dy / 52), 0), count - 1);
+      expect(stackedDropIndex(index, dy, stackedRowsLayout(count))).toBe(uniform);
+    }
   });
 });
 
 describe("stackedInsertionY", () => {
   it("marks above the drop row moving up, below it moving down", () => {
-    expect(stackedInsertionY(0, 2, 52)).toBe(0);
-    expect(stackedInsertionY(3, 1, 52)).toBe(208);
-    expect(stackedInsertionY(1, 1, 52)).toBeNull();
+    const rows = stackedRowsLayout(4);
+    expect(stackedInsertionY(0, 2, rows)).toBe(0);
+    expect(stackedInsertionY(3, 1, rows)).toBe(208);
+    expect(stackedInsertionY(1, 1, rows)).toBeNull();
+    // Below an open row 1, and under the last row past it
+    const open = stackedRowsLayout(4, 1);
+    expect(stackedInsertionY(1, 0, open)).toBe(184);
+    expect(stackedInsertionY(3, 0, open)).toBe(288);
+    expect(stackedInsertionY(1, 3, open)).toBe(52);
   });
 });
 

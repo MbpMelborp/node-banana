@@ -1,8 +1,9 @@
-import type { StitchOverlay, VolumePoint } from "@/types";
+import type { ClipWarp, StitchOverlay, VolumePoint } from "@/types";
 import { sortCurve } from "./curve";
 import { clampOverlay } from "./overlays";
 import { MAX_START_SEC } from "./placement";
 import { MAX_OVERLAP_SEC } from "./stack";
+import { sanitizeWarp } from "./warp";
 
 /**
  * What stitchVideosAsync takes. Pure: the executor builds these from the
@@ -25,6 +26,8 @@ export interface StitchClipInput {
   source?: string;
   /** Stacked, placed: where this clip starts in one loop, seconds. */
   startSec?: number;
+  /** The clip's retiming; absent = its own speed. */
+  warp?: ClipWarp;
 }
 
 /** prepareAudioAsync's result; also the engine's old AudioData shape. */
@@ -93,6 +96,7 @@ const finite = (value: unknown): value is number => typeof value === "number" &&
 
 function readClip(clip: StitchClipInput): StitchClipInput {
   const inSec = finite(clip.inSec) && clip.inSec > 0 ? clip.inSec : 0;
+  const warp = sanitizeWarp(clip.warp);
   return {
     blob: clip.blob,
     inSec,
@@ -101,6 +105,7 @@ function readClip(clip: StitchClipInput): StitchClipInput {
     volume: finite(clip.volume) ? Math.min(Math.max(clip.volume, 0), 1) : 1,
     ...(typeof clip.source === "string" && clip.source !== "" ? { source: clip.source } : {}),
     ...(finite(clip.startSec) ? { startSec: Math.min(Math.max(clip.startSec, 0), MAX_START_SEC) } : {}),
+    ...(warp ? { warp } : {}),
   };
 }
 
@@ -109,7 +114,7 @@ function readClip(clip: StitchClipInput): StitchClipInput {
  * - A bare Blob plays whole, at volume 1. It is muted only when `audio` is a
  *   bare StitchAudioData: the old engine let that music replace clip sound.
  * - A bare StitchAudioData becomes music with a flat curve, unmuted.
- * Explicit inputs pass through, with In, Out and volume made finite.
+ * Explicit inputs pass through, with In, Out and volume made finite and the warp sanitized.
  */
 export function normalizeStitchArgs(
   clips: ReadonlyArray<Blob | StitchClipInput>,

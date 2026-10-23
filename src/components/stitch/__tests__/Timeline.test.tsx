@@ -1,6 +1,6 @@
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { audioSelectionOf, overlaySelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import {
@@ -11,13 +11,18 @@ import {
   nearestFrame,
 } from "@/lib/stitch/mediaInfo";
 import { createAudioClip } from "@/lib/stitch/audioClips";
+import { draftSpans } from "@/lib/stitch/draft";
 import { createTextOverlay } from "@/lib/stitch/overlays";
+import { formatTimecode } from "@/lib/stitch/timecode";
+import { sourceKey, sourceTimeAt, spanAtTime } from "@/lib/stitch/timeline";
+import { normalizeWarp, withWarp } from "@/lib/stitch/warp";
 import { primeAssetInfo } from "@/lib/stitch/assetInfo";
 import type { AssetView } from "@/lib/assets/types";
 import { StitchEditorModal } from "../StitchEditorModal";
 import { openStitchEditor } from "../openStitchEditor";
 import { moveClipTo, removeSelection, setClipStart, setCrossfade, setOverlapSec } from "../editorActions";
 import type {
+  ClipWarp,
   StitchAudioClip,
   StitchOverlay,
   StitchTimelineClip,
@@ -131,6 +136,21 @@ const clipItem = (id: string, init: Partial<StitchTimelineClip> = {}): StitchTim
   volume: 1,
   ...init,
 });
+const W = (speed: number, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+  speed,
+  curve: null,
+  reverse: false,
+  blend: false,
+  ...extra,
+});
+/** Clip 1 with this warp, as one edit. */
+const retimeFirst = (warp: ClipWarp) =>
+  act(() =>
+    editor().apply((d) => ({
+      ...d,
+      timeline: d.timeline.map((c, i) => (i === 0 ? withWarp(c, normalizeWarp(warp)) : c)),
+    })),
+  );
 const pointer = (type: "pointermove" | "pointerup", clientX: number, init: MouseEventInit = {}) =>
   act(() => {
     window.dispatchEvent(new MouseEvent(type, { clientX, bubbles: true, ...init }));
@@ -658,6 +678,137 @@ describe("Timeline", () => {
     expect(cells()[0]).not.toBe(nearestFrame(info, 28 / PPS));
   });
 
+  it("shows a retimed clip's frames through its warp", () => {
+    seed();
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, frames });
+    openEditor();
+    const info = { frames, duration: 5 };
+    const cells = () => Array.from(clipBox("Clip 1").querySelectorAll("img")).map((img) => img.getAttribute("src"));
+    retimeFirst(W(2));
+    expect(cells()).toEqual([0, 1, 2].map((k) => nearestFrame(info, (2 * (k * 56 + 28)) / PPS)));
+    retimeFirst(W(1, { reverse: true }));
+    expect(cells()).toEqual([0, 1, 2].map((k) => nearestFrame(info, 5 - (k * 56 + 28) / PPS)));
+  });
+
+  it("draws a retimed clip at its new length", () => {
+    seed();
+    openEditor();
+    retimeFirst(W(2));
+    expect(within(clipBox("Clip 1")).getByText("2.5 s")).toBeInTheDocument();
+    expect(parseFloat(clipBox("Clip 2").style.left)).toBeCloseTo(ORIGIN + 2.5 * PPS + 1);
+  });
+
+  it("trims a 2× clip's Out by twice the travel", () => {
+    seed();
+    openEditor();
+    retimeFirst(W(2));
+    const steps = editor().past.length;
+    const edgeX = ORIGIN + 2.5 * PPS;
+    fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, clientX: edgeX, pointerId: 1 });
+    pointer("pointermove", edgeX - 32);
+    const popover = screen.getByTestId("stitch-trim-popover");
+    expect(within(popover).getByText("Out")).toBeInTheDocument();
+    expect(within(popover).getByText(formatTimecode(4))).toBeInTheDocument();
+    pointer("pointerup", edgeX - 32);
+    expect(editor().draft!.timeline[0].outSec).toBeCloseTo(4);
+    expect(editor().past).toHaveLength(steps + 1);
+  });
+
+  it("draws a 2× clip's cut tail as its old frames while trimming", () => {
+    seed();
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, frames });
+    openEditor();
+    const info = { frames, duration: 5 };
+    retimeFirst(W(2));
+    const edgeX = ORIGIN + 2.5 * PPS;
+    fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, clientX: edgeX, pointerId: 1 });
+    pointer("pointermove", edgeX - 96);
+    const cells = Array.from(screen.getByTestId("stitch-trim-ghost").querySelectorAll("img"));
+    expect(cells.length).toBeGreaterThan(0);
+    // The ghost is the clip's output from 1 s to 2.5 s: at 2×, source 2 s to 5 s
+    for (const img of cells) {
+      const k = Math.round(parseFloat((img.parentElement as HTMLElement).style.left) / 56);
+      expect(img.getAttribute("src")).toBe(nearestFrame(info, 2 * (1 + (k * 56 + 28) / PPS)));
+    }
+    pointer("pointerup", edgeX - 96);
+  });
+
+  it("draws an unwarped clip's cut tail from the cut's source time while trimming", () => {
+    seed();
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, frames });
+    openEditor();
+    const info = { frames, duration: 5 };
+    const edgeX = ORIGIN + 5 * PPS;
+    fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, clientX: edgeX, pointerId: 1 });
+    pointer("pointermove", edgeX - 4 * PPS);
+    const cells = Array.from(screen.getByTestId("stitch-trim-ghost").querySelectorAll("img"));
+    expect(cells.length).toBeGreaterThan(0);
+    // Output 1 s to 5 s is source 1 s to 5 s, not the clip's first frames
+    expect(cells[0].getAttribute("src")).not.toBe(nearestFrame(info, 28 / PPS));
+    for (const img of cells) {
+      const k = Math.round(parseFloat((img.parentElement as HTMLElement).style.left) / 56);
+      expect(img.getAttribute("src")).toBe(nearestFrame(info, 1 + (k * 56 + 28) / PPS));
+    }
+    pointer("pointerup", edgeX - 4 * PPS);
+  });
+
+  it("draws a 2× clip's cut head as its first frames while trimming", () => {
+    seed();
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    __setMediaInfoForTests(mediaKeyOf("blob:a"), { duration: 5, frames });
+    openEditor();
+    const info = { frames, duration: 5 };
+    retimeFirst(W(2));
+    fireEvent.pointerDown(handleOf("Clip 1", "in"), { button: 0, clientX: ORIGIN, pointerId: 1 });
+    pointer("pointermove", ORIGIN + 48);
+    const cells = Array.from(screen.getByTestId("stitch-trim-ghost").querySelectorAll("img"));
+    expect(cells.length).toBeGreaterThan(0);
+    expect(cells[0].getAttribute("src")).not.toBe(nearestFrame(info, 28 / PPS));
+    for (const img of cells) {
+      const k = Math.round(parseFloat((img.parentElement as HTMLElement).style.left) / 56);
+      expect(img.getAttribute("src")).toBe(nearestFrame(info, (2 * (k * 56 + 28)) / PPS));
+    }
+    pointer("pointerup", ORIGIN + 48);
+  });
+
+  it("names a reversed clip's head Out, and trims its Out from there", () => {
+    seed();
+    openEditor();
+    retimeFirst(W(1, { reverse: true }));
+    fireEvent.pointerDown(handleOf("Clip 1", "in"), { button: 0, clientX: ORIGIN, pointerId: 1 });
+    pointer("pointermove", ORIGIN + 32);
+    const popover = screen.getByTestId("stitch-trim-popover");
+    expect(within(popover).getByText("Out")).toBeInTheDocument();
+    expect(within(popover).getByText(formatTimecode(4.5))).toBeInTheDocument();
+    pointer("pointerup", ORIGIN + 32);
+    expect(editor().draft!.timeline[0].outSec).toBeCloseTo(4.5);
+    expect(editor().draft!.timeline[0].inSec).toBe(0);
+  });
+
+  it("splits a ramp at the playhead keeping its picture", () => {
+    seed();
+    openEditor();
+    retimeFirst(W(1, { curve: { kind: "preset", name: "easeInQuad" } }));
+    const pictureAt = (t: number) => {
+      const span = spanAtTime(draftSpans(editor().draft!, editor().durations), t)!;
+      return [sourceKey(span.clip.source), sourceTimeAt(span, t)] as const;
+    };
+    const instants = Array.from({ length: 20 }, (_, i) => (i + 0.5) * (9 / 20));
+    const before = instants.map(pictureAt);
+    act(() => editor().setPlayhead(2));
+    press("s");
+    expect(editor().draft!.timeline).toHaveLength(3);
+    expect(parseFloat(clipBox("Clip 1").style.width)).toBeCloseTo(2 * PPS - 1);
+    instants.forEach((t, i) => {
+      const [source, at] = pictureAt(t);
+      expect(source).toBe(before[i][0]);
+      expect(at).toBeCloseTo(before[i][1], 9);
+    });
+  });
+
   it("keeps a very short clip pressable at a low zoom", () => {
     seed({ stitch: { timeline: [clipItem("eA"), clipItem("eB", { inSec: 1, outSec: 1.1 })], clipOrder: ["eA", "eB"] } });
     openEditor();
@@ -1021,6 +1172,130 @@ describe("Timeline, the clip menu", () => {
   });
 });
 
+
+describe("Timeline, a clip's speed", () => {
+  const menuItem = (name: string) => within(screen.getByRole("menu")).getByRole("menuitem", { name: new RegExp(`^${name}`) });
+  const openMenu = (name: string) => fireEvent.contextMenu(clipBox(name), { clientX: 400, clientY: 300 });
+  /** Clip `index` with this trim, mute and warp in place of its own, as one edit. */
+  const setClip = (index: number, init: Partial<StitchTimelineClip>, warp?: ClipWarp) =>
+    act(() =>
+      editor().apply((d) => ({
+        ...d,
+        timeline: d.timeline.map((c, i) =>
+          i === index ? withWarp({ ...c, inSec: 0, outSec: null, muted: false, ...init }, warp ? normalizeWarp(warp) : null) : c,
+        ),
+      })),
+    );
+  const badgeOf = (box: HTMLElement) => box.querySelector<HTMLElement>("[data-speed-badge]");
+
+  it("Speed… selects the clip and, a frame later, focuses the rail's Speed well", async () => {
+    seed();
+    openEditor();
+    openMenu("Clip 2");
+    fireEvent.click(menuItem("Speed…"));
+    expect(editor().selection).toEqual({ kind: "clip", clipId: "clip:eB" });
+    const well = within(rail()).getByRole("textbox", { name: "Speed" }) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(well));
+    expect([well.selectionStart, well.selectionEnd]).toEqual([0, well.value.length]);
+  });
+
+  it("reverses from the menu, plays forward again, and resets only a retimed clip's speed", () => {
+    seed();
+    openEditor();
+    openMenu("Clip 1");
+    expect(menuItem("Reset speed")).toBeDisabled();
+    fireEvent.click(menuItem("Reverse"));
+    expect(editor().draft!.timeline[0].warp).toEqual(W(1, { reverse: true }));
+    openMenu("Clip 1");
+    expect(menuItem("Reset speed")).toBeDisabled();
+    fireEvent.click(menuItem("Play forward"));
+    expect("warp" in editor().draft!.timeline[0]).toBe(false);
+    retimeFirst(W(2));
+    openMenu("Clip 1");
+    fireEvent.click(menuItem("Reset speed"));
+    expect("warp" in editor().draft!.timeline[0]).toBe(false);
+  });
+
+  it("reverses a group in one step, and offers no Speed… on a clip of unknown length", () => {
+    seed({ bRan: false });
+    openEditor();
+    openMenu("Clip 2");
+    expect(menuItem("Speed…")).toBeDisabled();
+    press("Escape");
+    act(() => editor().select({ kind: "clip", clipId: "clip:eA", clipIds: ["clip:eA", "clip:eB"] }));
+    openMenu("Clip 1");
+    fireEvent.click(menuItem("Reverse"));
+    expect(editor().draft!.timeline.map((c) => c.warp?.reverse)).toEqual([true, true]);
+    expect(editor().past).toHaveLength(1);
+  });
+
+  it("marks a retimed clip's box with its rate, where the box has room for it", () => {
+    seed();
+    openEditor();
+    const box = () => clipBox("Clip 2");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, {}, W(2));
+    let badge = badgeOf(box())!;
+    expect(badge).toHaveTextContent("2×");
+    expect(badge).toHaveClass("left-1.5", "group-hover:left-4", "top-1.5");
+    expect(badge).toHaveAttribute("aria-hidden", "true");
+    expect(badge.querySelector("svg")).toBeNull();
+    setClip(1, { muted: true }, W(2));
+    expect(badgeOf(box())).toHaveClass("left-7", "group-hover:left-[38px]");
+    setClip(1, {}, W(1, { curve: { kind: "preset", name: "easeInQuad" } }));
+    expect(badgeOf(box())).toHaveTextContent("Ramp");
+    setClip(1, {}, W(1, { reverse: true }));
+    badge = badgeOf(box())!;
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(badge.textContent).toBe("");
+    setClip(1, {}, W(2, { reverse: true }));
+    badge = badgeOf(box())!;
+    expect(badge.querySelector("svg")).not.toBeNull();
+    expect(badge).toHaveTextContent("2×");
+    // The rate needs 76px beside the handle and the mute button: 2× of 2.375 s draws 75px, of 2.40625 s 76px
+    setClip(1, { outSec: 2.375 }, W(2));
+    expect(box().style.width).toBe("75px");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, { outSec: 2.40625 }, W(2));
+    expect(box().style.width).toBe("76px");
+    expect(badgeOf(box())).not.toBeNull();
+    // Muted, reversed and a ramp: 101px
+    const ramp = { curve: { kind: "preset", name: "easeInQuad" }, reverse: true } as const;
+    setClip(1, { outSec: 101 / 64, muted: true }, W(1, ramp));
+    expect(box().style.width).toBe("100px");
+    expect(badgeOf(box())).toBeNull();
+    setClip(1, { outSec: 102 / 64, muted: true }, W(1, ramp));
+    expect(box().style.width).toBe("101px");
+    expect(badgeOf(box())).not.toBeNull();
+  });
+
+  it("puts a Stacked box's badge on its sound badges' line, after the hover mute button", () => {
+    seed();
+    openEditor();
+    fireEvent.click(within(screen.getByRole("group", { name: "Timeline layout" })).getByRole("button", { name: "Stacked" }));
+    const box = () => lane().querySelector<HTMLElement>('[data-clip-id="clip:eA"]')!;
+    const ramp = W(1, { curve: { kind: "preset", name: "easeInQuad" } });
+    // Beside a "2.0 s" length chip: 126px
+    setClip(0, { outSec: 126 / 64 }, ramp);
+    expect(box().style.width).toBe("126px");
+    const badge = badgeOf(box())!;
+    expect(badge).toHaveTextContent("Ramp");
+    expect(badge).toHaveClass("left-1.5", "group-hover:left-[38px]", "top-[11px]");
+    expect(box()).toHaveAccessibleName(/^Clip 1, starts /);
+    setClip(0, { outSec: 125 / 64 }, ramp);
+    expect(box().style.width).toBe("125px");
+    expect(badgeOf(box())).toBeNull();
+    // A wider chip ("10.0 s" of a 0.5× ramp over 5 s) leaves it room from 132px
+    const slow = W(0.5, { curve: { kind: "preset", name: "easeInQuad" } });
+    setClip(0, {}, slow);
+    act(() => editor().setZoom(13.1));
+    expect(box().style.width).toBe("131px");
+    expect(badgeOf(box())).toBeNull();
+    act(() => editor().setZoom(13.2));
+    expect(box().style.width).toBe("132px");
+    expect(badgeOf(box())).not.toBeNull();
+  });
+});
 
 describe("Timeline, Stacked", () => {
   const ROW = 52;
@@ -1503,6 +1778,61 @@ describe("Timeline, Stacked", () => {
     expect(clipBox("Clip 1").style.width).toBe(live.width);
     expect(clipBox("Clip 2").style.left).toBe(live.next);
     expect(clipBox("Clip 3").style.left).toBe(live.last);
+  });
+
+  describe("the trim ghost's frames", () => {
+    const frames = Array.from({ length: 12 }, (_, i) => `data:image/png;base64,frame${i}`);
+    const info = { frames, duration: 5 };
+    const openWithFrames = () => {
+      seedClips([5, 5, 6]);
+      __setMediaInfoForTests(mediaKeyOf("blob:s0"), { duration: 5, frames });
+      openStacked();
+    };
+    const open2x = () => {
+      openWithFrames();
+      retimeFirst(W(2));
+    };
+    const ghostCells = () =>
+      Array.from(screen.getByTestId("stitch-trim-ghost").querySelectorAll("img")).map((img) => ({
+        k: Math.round(parseFloat((img.parentElement as HTMLElement).style.left) / 56),
+        src: img.getAttribute("src"),
+      }));
+
+    it("draws an unwarped clip's cut tail from the cut's source time", () => {
+      openWithFrames();
+      const edgeX = ORIGIN + 5 * PPS;
+      fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, pointerId: 1, ...at(edgeX, 26) });
+      move(edgeX - 4 * PPS, 26);
+      const cells = ghostCells();
+      expect(cells.length).toBeGreaterThan(0);
+      expect(cells[0].src).not.toBe(nearestFrame(info, 28 / PPS));
+      // Output 1 s to 5 s: source 1 s to 5 s
+      for (const { k, src } of cells) expect(src).toBe(nearestFrame(info, 1 + (k * 56 + 28) / PPS));
+      release(edgeX - 4 * PPS, 26);
+    });
+
+    it("draws a 2× clip's cut tail as the old frames, from the crossed part's offset", () => {
+      open2x();
+      const edgeX = ORIGIN + 2.5 * PPS;
+      fireEvent.pointerDown(handleOf("Clip 1", "out"), { button: 0, pointerId: 1, ...at(edgeX, 26) });
+      move(edgeX - 96, 26);
+      const cells = ghostCells();
+      expect(cells.length).toBeGreaterThan(0);
+      // Output 1 s to 2.5 s: source 2 s to 5 s
+      for (const { k, src } of cells) expect(src).toBe(nearestFrame(info, 2 * (1 + (k * 56 + 28) / PPS)));
+      release(edgeX - 96, 26);
+    });
+
+    it("draws a 2× clip's cut head as the old clip's first frames", () => {
+      open2x();
+      fireEvent.pointerDown(handleOf("Clip 1", "in"), { button: 0, pointerId: 1, ...at(ORIGIN, 26) });
+      move(ORIGIN + 48, 26);
+      const cells = ghostCells();
+      expect(cells.length).toBeGreaterThan(0);
+      for (const { k, src } of cells) expect(src).toBe(nearestFrame(info, (2 * (k * 56 + 28)) / PPS));
+      release(ORIGIN + 48, 26);
+      expect(editor().draft!.timeline[0].inSec).toBeCloseTo(1.5, 6);
+    });
   });
 
   it("starts Clip 1 at 1.0 s after a +1 s In trim, its cut head at the lane's origin", () => {

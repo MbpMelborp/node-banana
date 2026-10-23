@@ -6,6 +6,7 @@ import { formatFps } from "@/lib/stitch/labels";
 import { NO_OVERLAYS } from "@/lib/stitch/overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "@/lib/stitch/stack";
 import { isPlaced, layoutSpans, spansEnd } from "@/lib/stitch/timeline";
+import { isRetimed } from "@/lib/stitch/warp";
 import type { StitchAudioClip, StitchTimelineClip } from "@/types";
 import type { PreviewLayerSource } from "./EditorStage";
 import { GEOMETRY } from "./editorStyles";
@@ -76,7 +77,9 @@ export function useEditorComposition(
       if (view?.status !== "ready") continue;
       width = Math.max(width, view.width ?? 0);
       height = Math.max(height, view.height ?? 0);
-      rates.push(view.fps);
+      // A retimed clip's picture changes at its rate times its speed, or along its ramp: no one rate to name. Reversed
+      // alone it keeps its own rate
+      rates.push(isRetimed(span.clip.warp) ? null : view.fps);
     }
     const known = width > 0 && height > 0;
     return {

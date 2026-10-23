@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import type { StitchAudioClip, StitchOverlay, StitchTextOverlay, StitchTimelineClip, VideoStitchNodeData } from "@/types";
+import type {
+  ClipWarp,
+  StitchAudioClip,
+  StitchOverlay,
+  StitchTextOverlay,
+  StitchTimelineClip,
+  VideoStitchNodeData,
+} from "@/types";
 import { createDefaultNodeData } from "@/store/utils/nodeDefaults";
 import {
   describeDraftChanges,
@@ -17,12 +24,30 @@ import { createAudioClip, legacyMusicClip, MUSIC_CLIP_ID } from "../audioClips";
 import { createTextOverlay } from "../overlays";
 import { DEFAULT_SEQUENCE_LAYOUT } from "../stack";
 import { createClip, type SourceKey } from "../timeline";
+import { splitWarp, withWarp } from "../warp";
 
 const TRACK_LAYOUT = DEFAULT_SEQUENCE_LAYOUT;
 const STACKED = { mode: "stacked", overlapSec: 1, crossfade: true } as const;
 
 const edgeClip = (id: string, edgeId: string, init: Partial<StitchTimelineClip> = {}) =>
   createClip({ kind: "edge", edgeId }, { id, ...init });
+
+const W = (speed: number, curve: ClipWarp["curve"] = null, extra: Partial<ClipWarp> = {}): ClipWarp => ({
+  speed,
+  curve,
+  reverse: false,
+  blend: false,
+  ...extra,
+});
+const RAMP_POINTS: ClipWarp["curve"] = {
+  kind: "points",
+  points: [
+    [0, 0],
+    [0.3, 0.1],
+    [0.7, 0.8],
+    [1, 1],
+  ],
+};
 
 const nodeData = (overrides: Partial<VideoStitchNodeData> = {}): VideoStitchNodeData => ({
   ...(createDefaultNodeData("videoStitch") as VideoStitchNodeData),
@@ -270,6 +295,31 @@ describe("sameDraft", () => {
     expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT, crossfade: false } })).toBe(false);
     expect(sameDraft(base, { ...base, sequenceLayout: { ...TRACK_LAYOUT } })).toBe(true);
   });
+
+  it("sees each kind of warp change", () => {
+    const warped = (warp: ClipWarp | undefined) => ({ ...base, timeline: [edgeClip("a", "e1", warp ? { warp } : {})] });
+    const ramp = W(2, RAMP_POINTS, { window: [0.2, 0.7] });
+    const knot = structuredClone(ramp);
+    (knot.curve as { points: Array<[number, number]> }).points[1][0] = 0.31;
+    for (const changed of [
+      W(2),
+      { ...ramp, speed: 2.5 },
+      { ...ramp, curve: { kind: "preset", name: "easeInQuad" } },
+      { ...ramp, curve: { kind: "bezier", handles: [0.42, 0, 0.58, 1] } },
+      knot,
+      { ...ramp, window: [0.2, 0.75] },
+      { ...ramp, reverse: true },
+      { ...ramp, blend: true },
+    ] as ClipWarp[]) {
+      expect(sameDraft(warped(ramp), warped(changed))).toBe(false);
+    }
+    const bezier = W(2, { kind: "bezier", handles: [0.42, 0, 0.58, 1] });
+    expect(sameDraft(warped(bezier), warped(W(2, { kind: "bezier", handles: [0.42, 0, 0.58, 0.9] })))).toBe(false);
+    expect(sameDraft(base, warped(W(2)))).toBe(false);
+    expect(sameDraft(warped(ramp), warped(structuredClone(ramp)))).toBe(true);
+    // Blend alone at 1× changes nothing
+    expect(sameDraft(base, warped({ speed: 1, curve: null, reverse: false, blend: true }))).toBe(true);
+  });
 });
 
 describe("draftPatch", () => {
@@ -326,6 +376,34 @@ describe("draftPatch", () => {
     expect(patch).not.toHaveProperty("media");
     const data = { ...nodeData(), ...patch, media: ["a0000000000001"] } as VideoStitchNodeData;
     expect(readStitchDraft(data, { liveEdgeIds: ["e1"], hasMusic: false })).not.toHaveProperty("media");
+  });
+});
+
+describe("warps in the draft", () => {
+  const ctx = { liveEdgeIds: ["e1", "e2"], hasMusic: false };
+  // A piece cut near a ramp's slow end: an average far below anything the rail sets, and a window
+  const piece = splitWarp({ inSec: 0, outSec: 60 }, W(0.1, { kind: "preset", name: "easeInQuint" }), 25)!.first;
+  const timeline = [
+    withWarp(edgeClip("a", "e1", { inSec: 0, outSec: piece.range.outSec }), piece.warp),
+    withWarp(edgeClip("b", "e2", { inSec: 1, outSec: 4 }), W(0.5, RAMP_POINTS, { reverse: true, blend: true })),
+    edgeClip("c", "e1", { inSec: 2 }),
+  ];
+
+  it("reads a stored warp, and writes it back to read the same", () => {
+    expect(piece.warp.speed).toBeCloseTo(3e-7, 8);
+    expect(piece.warp.window).toBeDefined();
+    const read = readStitchDraft(nodeData({ clipOrder: ["e1", "e2"], timeline }), ctx);
+    expect(read.timeline).toEqual(timeline);
+    const again = readStitchDraft({ ...nodeData(), ...draftPatch(read) }, ctx);
+    expect(sameDraft(again, read)).toBe(true);
+    expect(again.timeline).toEqual(timeline);
+  });
+
+  it("never writes on read", () => {
+    const data = nodeData({ clipOrder: ["e1", "e2"], timeline: JSON.parse(JSON.stringify(timeline)) });
+    const read = readStitchDraft(data, ctx);
+    expect(readStitchDraft(data, ctx).timeline).toEqual(read.timeline);
+    expect(JSON.stringify(draftPatch(read).timeline)).toBe(JSON.stringify(data.timeline));
   });
 });
 

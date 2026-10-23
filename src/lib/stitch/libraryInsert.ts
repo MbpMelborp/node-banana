@@ -10,6 +10,7 @@ import {
 } from "./audioClips";
 import type { AudioSectionLayout } from "./audioLayout";
 import { draftDuration, type StitchDraft } from "./draft";
+import { nearestBoundary } from "./stackedLayout";
 import {
   appendClips,
   createClip,
@@ -199,8 +200,8 @@ export interface LibraryDropGeometry {
   axis: Pick<TimeAxis, "xToTime" | "pxPerSec">;
   /** Track's clip boxes at rest, in lane content x. */
   boxes: ReadonlyArray<{ x: number; width: number }>;
-  /** Stacked's one row per clip, px. */
-  rowHeight: number;
+  /** Stacked's rows: each one's top in the rows block, then their end (stackedRowsLayout). */
+  rowTops: readonly number[];
   /** Where the video starts in the content, under the ruler and the text layers' rows: Stacked's rows start there. */
   ruler: number;
   /** The text layers' rows in the lanes' visible box (y from top to bottom): nothing drops there. None when absent. */
@@ -277,6 +278,6 @@ export function libraryDropAt(
     const index = g.boxes.findIndex((box) => box.x + box.width / 2 > point.x);
     return { lane: "clips", mode: "track", index: index === -1 ? timeline.length : Math.min(index, timeline.length) };
   }
-  const row = clamp(Math.round((point.contentY - g.ruler) / g.rowHeight), 0, timeline.length);
+  const row = clamp(nearestBoundary({ rowTops: g.rowTops }, point.contentY - g.ruler), 0, timeline.length);
   return { lane: "clips", mode: "stacked", startSec: timeAt(), row };
 }

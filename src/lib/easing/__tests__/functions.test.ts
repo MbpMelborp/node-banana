@@ -1,13 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   easing,
   createBezierEasing,
   getEasingFunction,
   getAllEasingNames,
-  type EasingFunction,
-} from "../easing-functions";
+} from "..";
 
-describe("easing-functions", () => {
+describe("easing functions", () => {
   describe("boundary values", () => {
     const allNames = getAllEasingNames();
 

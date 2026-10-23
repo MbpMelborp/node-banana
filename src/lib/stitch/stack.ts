@@ -157,6 +157,7 @@ export function stackSequence(
       seqStart: starts[k],
       soloStart: k > 0 ? ends[k - 1] : starts[0],
       soloEnd: blendsOut ? starts[k + 1] : ends[k],
+      // Not read for a retimed clip, nor soloPass's decode range: its frames come from the warp map (warpFrames.ts)
       soloOrigin: clip.origin + overlapIn,
     };
   });

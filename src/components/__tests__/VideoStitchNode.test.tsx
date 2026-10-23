@@ -678,6 +678,33 @@ describe("VideoStitchNode", () => {
       expect(await within(right).findByRole("img")).toHaveAttribute("src", "blob:slot7");
     });
 
+    it("shows a ramped clip's poster from its own range", async () => {
+      __resetMediaInfoForTests();
+      const extractor: MediaExtractor = {
+        probe: async () => ({ duration: 6, width: 160, height: 90, fps: 24 }),
+        open: async () => ({
+          duration: 6,
+          width: 160,
+          height: 90,
+          frame: async (time) => `blob:slot${Math.round((time * FILMSTRIP_FRAMES) / 6 - 0.5)}`,
+          close() {},
+        }),
+      };
+      __setMediaExtractorForTests(extractor);
+      const warp = { speed: 1, curve: { kind: "preset" as const, name: "easeInQuad" }, reverse: false, blend: false };
+      renderCard(twoClips, {
+        clipOrder: ["e1", "e2"],
+        timeline: [
+          createClip({ kind: "edge", edgeId: "e1" }, { id: "ramp", warp }),
+          createClip({ kind: "edge", edgeId: "e2" }, { id: "other" }),
+        ],
+      });
+      // A quarter of its 6 s is 1.5 s, where the ramp shows 0.375 s of source: slot 0. The poster level alone would
+      // give POSTER_FRAME's slot 3
+      const ramp = document.querySelector('[data-clip-id="ramp"]') as HTMLElement;
+      expect(await within(ramp).findByRole("img")).toHaveAttribute("src", "blob:slot0");
+    });
+
     it("says when a source cannot be read", () => {
       __setMediaInfoForTests("blob:v1", { status: "error", duration: null });
       renderCard(twoClips, { clipOrder: ["e1", "e2"] });

@@ -13,6 +13,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { hiddenAudioRows, type AudioSectionLayout } from "@/lib/stitch/audioLayout";
 import { hiddenOverlayRows, type OverlaySectionLayout } from "@/lib/stitch/overlayLayout";
+import { boxHeightOf, boxTopOf, rowUnder, type StackedRowsLayout } from "@/lib/stitch/stackedLayout";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { ClipSpan } from "@/lib/stitch/timeline";
 import {
@@ -283,6 +284,8 @@ export function AudioRowControls({
 /** Stacked's rows, for a grip per clip. */
 export interface StackedRowGrips {
   spans: readonly ClipSpan[];
+  /** The rows as drawn: a row open for its clip's speed curve is taller. */
+  rows: StackedRowsLayout;
   /** The grips' inner block: the timeline writes its translateY as the lanes scroll, with no render. */
   rowsRef: RefObject<HTMLDivElement | null>;
   /** The lanes' vertical scroll now, for the row under the pointer. */
@@ -318,10 +321,10 @@ export function StackedRowHandles({
   /** Where the rows' view starts in the timeline: under the ruler and the text layers' rows. */
   top?: number;
 }) {
-  const { spans, rowsRef, scrollTop, viewport, onRowPointerDown } = grips;
+  const { spans, rows, rowsRef, scrollTop, viewport, onRowPointerDown } = grips;
   const layerRef = useRef<HTMLDivElement>(null);
   const hovered = useHoveredRow(rootRef, layerRef, (y) => {
-    const row = Math.floor((y + scrollTop()) / GEOMETRY.stackRow);
+    const row = rowUnder(rows, y + scrollTop());
     return row >= 0 && row < spans.length ? row : null;
   });
   return (
@@ -334,7 +337,7 @@ export function StackedRowHandles({
         ref={rowsRef}
         data-testid="stitch-row-grips"
         className="absolute inset-x-0 top-0"
-        style={{ height: Math.max(1, spans.length) * GEOMETRY.stackRow }}
+        style={{ height: rows.height }}
       >
         {spans.map((span, i) => (
           <div
@@ -350,9 +353,9 @@ export function StackedRowHandles({
             )}
             style={{
               left: CONTROL_INSET_PX,
-              top: i * GEOMETRY.stackRow + GEOMETRY.stackClipTop,
+              top: boxTopOf(rows, i),
               width: CONTROL_PX,
-              height: GEOMETRY.stackClipHeight,
+              height: boxHeightOf(rows, i),
             }}
           >
             <GripVertical size={12} strokeWidth={1.5} />

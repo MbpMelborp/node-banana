@@ -72,6 +72,7 @@ function PreviewVideo({
     <video
       ref={ref}
       src={src}
+      data-layer-key={layerKey}
       preload="metadata"
       playsInline
       className="absolute inset-0 h-full w-full object-contain opacity-0"

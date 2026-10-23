@@ -1,6 +1,7 @@
 import { cn } from "@/components/nodes/ui/cn";
 import { AUDIO_ROW_EXPANDED_PX, AUDIO_ROW_PX, AUDIO_ROWS_CAP, AUDIO_STRIP_PX } from "@/lib/stitch/audioLayout";
 import { OVERLAY_ROW_PX } from "@/lib/stitch/overlayLayout";
+import { STACK_BOX_PX, STACK_BOX_TOP_PX, STACK_ROW_PX } from "@/lib/stitch/stackedLayout";
 
 /**
  * The Stitch editor's class constants and geometry, in one place so the
@@ -102,6 +103,8 @@ export const GEOMETRY = {
   clipRow: CLIP_ROW_PX,
   clipTop: 8,
   clipHeight: 64,
+  /** Track's clips row open for a clip's speed curve: 120px clips with 8px over and under them (it gives way first). */
+  clipRowExpanded: 136,
   audioRow: AUDIO_ROW_PX,
   audioRowExpanded: AUDIO_ROW_EXPANDED_PX,
   /** An audio clip's block sits at its row's top, 8px over the next row. */
@@ -117,10 +120,10 @@ export const GEOMETRY = {
   emptySlot: 160,
   /** The lane's margin after the add slot, and the empty lane's placeholder's right margin. */
   endMargin: 20,
-  /** One clip per row in Stacked. */
-  stackRow: 52,
-  stackClipTop: 6,
-  stackClipHeight: 40,
+  /** One clip per row in Stacked (stackedLayout.ts, which also has the row open for its clip's speed curve). */
+  stackRow: STACK_ROW_PX,
+  stackClipTop: STACK_BOX_TOP_PX,
+  stackClipHeight: STACK_BOX_PX,
   /** 3.5 rows: the rows scroll vertically past this. */
   stackRowsCap: 182,
   /** Under the audio rows: "+ Audio" and Line up, the "New row" drop target in the lanes. */

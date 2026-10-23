@@ -1,48 +1,74 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { nearestFrame } from "@/lib/stitch/mediaInfo";
+import { isWarped, warpMap } from "@/lib/stitch/warp";
+import type { ClipWarp } from "@/types";
 import { GEOMETRY } from "../editorStyles";
 
+/** A box taller than the clips row's 64px (one open for its speed curve) widens its cells with it, 56px per 64px. */
+export const frameCellFor = (boxHeight: number): number =>
+  Math.round((GEOMETRY.frameCell * boxHeight) / GEOMETRY.clipHeight);
+
 /**
- * A clip's frames, one 56px cell after another from its left edge. Each
+ * A clip's frames, one 56px cell after another from its left edge (wider
+ * in a box taller than the row's 64px, so a frame keeps its shape). Each
  * cell shows the source frame at its own time (In plus the cell's middle),
  * so the frames slide when the In moves. Only the cells inside the visible
  * range are drawn. The frames come from the shared media cache (at most
- * twelve per source; a cell takes the nearest).
+ * twelve per source; a cell takes the nearest). A retimed clip's cell shows
+ * the frame its warp plays at the cell's middle.
  */
 export const Filmstrip = memo(function Filmstrip({
   frames,
   duration,
   inSec,
+  lengthSec,
+  warp,
+  offsetSec = 0,
   pxPerSec,
   width,
   boxX,
   viewLeft,
   viewRight,
+  cell = GEOMETRY.frameCell,
   className,
 }: {
   frames: ReadonlyArray<string | null>;
   duration: number | null;
-  /** Source seconds at the strip's left edge. */
+  /** Source seconds at the strip's left edge; for a retimed clip, the clip's In. */
   inSec: number;
+  /** A retimed clip: its output length, its warp (the stored object, so memo holds), where in it the strip starts. */
+  lengthSec?: number;
+  warp?: ClipWarp;
+  offsetSec?: number;
   pxPerSec: number;
   width: number;
   /** The strip's left in lane pixels, and the visible lane range, for virtualising the cells. */
   boxX: number;
   viewLeft: number;
   viewRight: number;
+  /** One frame's width, px. */
+  cell?: number;
   className?: string;
 }) {
-  const cell = GEOMETRY.frameCell;
+  // A ramp bunches and spreads the frames, and a reversed clip runs them backwards
+  const map = useMemo(
+    () =>
+      isWarped(warp) && lengthSec !== undefined && lengthSec > 0
+        ? warpMap({ inSec, outSec: inSec + lengthSec * warp.speed }, warp)
+        : null,
+    [inSec, lengthSec, warp],
+  );
   const count = Math.max(0, Math.ceil(width / cell));
   const first = Math.max(0, Math.floor((viewLeft - boxX) / cell));
   const last = Math.min(count - 1, Math.ceil((viewRight - boxX) / cell));
   const info = { frames, duration };
   const cells = [];
   for (let k = first; k <= last; k++) {
-    const src = nearestFrame(info, inSec + (k * cell + cell / 2) / pxPerSec);
+    const mid = (k * cell + cell / 2) / pxPerSec;
+    const src = nearestFrame(info, map ? map.sourceTimeAt(offsetSec + mid) : inSec + mid);
     cells.push(
       <div key={k} className="absolute inset-y-0" style={{ left: k * cell, width: cell }}>
         {src && (

@@ -403,7 +403,7 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
     if (activeEasingPreset) {
       easingFunction = activeEasingPreset;
     } else {
-      const { createBezierEasing } = await import("@/lib/easing-functions");
+      const { createBezierEasing } = await import("@/lib/easing");
       easingFunction = createBezierEasing(
         activeBezierHandles[0],
         activeBezierHandles[1],

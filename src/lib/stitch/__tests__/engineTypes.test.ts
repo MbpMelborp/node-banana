@@ -67,6 +67,30 @@ describe("normalizeStitchArgs", () => {
     expect(normalizeStitchArgs([a], null).clips[0]).not.toHaveProperty("source");
   });
 
+  it("passes a clip's warp sanitized, last, and drops one that changes nothing", () => {
+    const base = { blob: a, inSec: 0, outSec: null, muted: false, volume: 1, source: "edge:e1", startSec: 2 };
+    const read = (warp: unknown) =>
+      normalizeStitchArgs([{ ...base, warp } as unknown as StitchClipInput], null).clips[0];
+    const ramp = {
+      speed: 0.5,
+      curve: { kind: "preset", name: "easeInQuad" },
+      window: [0.2, 0.8],
+      reverse: true,
+      blend: true,
+    };
+    expect(read(ramp).warp).toEqual(ramp);
+    expect(Object.keys(read(ramp)).at(-1)).toBe("warp");
+    expect(read({ speed: 1e12, curve: null, reverse: false, blend: false }).warp).toEqual({
+      speed: 1e9,
+      curve: null,
+      reverse: false,
+      blend: false,
+    });
+    expect(read({ speed: 1, curve: null, reverse: false, blend: true })).not.toHaveProperty("warp");
+    expect(read("2x")).not.toHaveProperty("warp");
+    expect(normalizeStitchArgs([a], null).clips[0]).not.toHaveProperty("warp");
+  });
+
   it("tells music from a bare buffer", () => {
     expect(isMusicInput(audio)).toBe(false);
     expect(isMusicInput({ audio, curve: [], muted: false })).toBe(true);

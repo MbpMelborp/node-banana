@@ -1,4 +1,5 @@
 import type {
+  ClipWarp,
   StitchAudioSource,
   StitchClipSource,
   StitchOverlay,
@@ -17,6 +18,7 @@ import {
   type ClipSpan,
   type SourceDurations,
 } from "./timeline";
+import { cloneWarp, isWarped, sanitizeWarp } from "./warp";
 
 /**
  * The editor's clipboard: copied clips as plain values (sources are ids, so
@@ -31,6 +33,8 @@ export interface ClipboardVideoItem {
   outSec: number | null;
   muted: boolean;
   volume: number;
+  /** Its retiming, a copy; absent when it plays at its own speed. */
+  warp?: ClipWarp;
   /** Its span's start less the earliest copied start, seconds, in the layout it was copied from (>= 0). */
   offsetSec: number;
 }
@@ -112,6 +116,7 @@ export function copyItems(
     outSec: clip.outSec,
     muted: clip.muted,
     volume: clip.volume,
+    ...(isWarped(clip.warp) ? { warp: cloneWarp(clip.warp) } : {}),
     offsetSec: start - earliest,
   }));
 }
@@ -211,8 +216,8 @@ export function skippedMessage(skipped: ReadonlyArray<{ reason: SkipReason; coun
 }
 
 /**
- * New clips from items (makeId each; source, In, Out, muted, volume copied), inserted at index afterIndex + 1
- * (−1 = the top or the start; afterIndex >= length − 1 or non-finite = the end).
+ * New clips from items (makeId each; source, In, Out, muted, volume and the warp copied, the warp sanitized), inserted
+ * at index afterIndex + 1 (−1 = the top or the start; afterIndex >= length − 1 or non-finite = the end).
  * Track: no startSec, the timeline unpinned, afterIndex used as given.
  * Stacked: pinStarts first; then afterIndex moves to the end of the run that row belongs to (runEndIndex), so new
  * rows never land between the pieces of a split; then each new clip starts at clamp(startSec + offsetSec, 0, 10:00).
@@ -231,8 +236,9 @@ export function pasteIntoTimeline(
   const base = stacked ? pinStarts(timeline, durations, layout.overlapSec) : timeline;
   let after = Number.isFinite(at.afterIndex) ? clamp(Math.trunc(at.afterIndex), -1, base.length - 1) : base.length - 1;
   if (stacked && after >= 0) after = runEndIndex(layoutSpans(base, durations, layout), after);
-  const clips = items.map((item) =>
-    createClip(
+  const clips = items.map((item) => {
+    const warp = sanitizeWarp(item.warp);
+    return createClip(
       { ...item.source },
       {
         id: makeId(),
@@ -240,10 +246,11 @@ export function pasteIntoTimeline(
         outSec: item.outSec,
         muted: item.muted,
         volume: item.volume,
+        ...(warp ? { warp } : {}),
         ...(stacked ? { startSec: clamp(at.startSec + item.offsetSec, 0, MAX_START_SEC) } : {}),
       },
-    ),
-  );
+    );
+  });
   return {
     timeline: [...base.slice(0, after + 1), ...clips, ...base.slice(after + 1)],
     ids: clips.map((clip) => clip.id),

@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InputVideoTrack, VideoSample } from "mediabunny";
-import { blendBytes, blendBytesWeighted, createFrameBlender, encodeDissolve, rgbaToYuv, type FrameBlender } from "../crossfadeFrames";
+import {
+  blendBytes,
+  blendBytesWeighted,
+  createFrameBlender,
+  encodeDissolve,
+  encodeDissolveFrames,
+  rgbaToYuv,
+  timesSide,
+  type DissolveSide,
+  type FrameBlender,
+} from "../crossfadeFrames";
 
 /** Every VideoSample the module constructs: its data (copied, as mediabunny copies a buffer it is given) and init. */
 const constructed: Array<{ data: unknown; input: unknown; init: Record<string, unknown>; close: ReturnType<typeof vi.fn> }> = [];
@@ -681,5 +691,151 @@ describe("encodeDissolve", () => {
       async () => {},
     );
     expect(iterate).not.toHaveBeenCalled();
+  });
+});
+
+describe("encodeDissolveFrames", () => {
+  /** A blender that records its calls and returns a closable result. */
+  function recordingBlender() {
+    const calls: Array<{ a: unknown; b: unknown; alpha: number; timestamp: number; duration: number }> = [];
+    const results: Array<{ timestamp: number; close: ReturnType<typeof vi.fn> }> = [];
+    const blender: FrameBlender = {
+      blend: vi.fn(async (a, b, alpha, timestamp, duration) => {
+        calls.push({ a, b, alpha, timestamp, duration });
+        const result = { timestamp, close: vi.fn() };
+        results.push(result);
+        return result as unknown as VideoSample;
+      }),
+      composite: vi.fn(),
+      black: vi.fn(),
+    };
+    return { blender, calls, results };
+  }
+
+  /** A side whose frame on slot s is frames[s], recording what it is asked. */
+  function side(frames: Record<number, FakeSample | null>) {
+    const asked: number[] = [];
+    const close = vi.fn(async () => {});
+    const dissolveSide: DissolveSide = {
+      frameOn: async (slot) => {
+        asked.push(slot);
+        return (frames[slot] ?? null) as unknown as VideoSample | null;
+      },
+      close,
+    };
+    return { side: dissolveSide, asked, close };
+  }
+
+  it("asks both sides for each written slot in order, blends at the alphas and closes each result after adding it", async () => {
+    const a = { 240: frame(10), 241: frame(11), 243: frame(12) };
+    const b = { 240: frame(20), 241: frame(21), 243: frame(22) };
+    const out = side(a);
+    const inc = side(b);
+    const { blender, calls, results } = recordingBlender();
+    const blenderFor = vi.fn(() => blender);
+    const added: number[] = [];
+    await encodeDissolveFrames(
+      {
+        outgoing: out.side,
+        incoming: inc.side,
+        slots: [240, 241, 243],
+        timestamps: [4, 241 / 60, 243 / 60],
+        alphas: [0.1, 0.5, 0.9],
+        frameDuration: 1 / 60,
+      },
+      blenderFor,
+      async (sample) => {
+        added.push(sample.timestamp);
+      },
+    );
+    expect(out.asked).toEqual([240, 241, 243]);
+    expect(inc.asked).toEqual(out.asked);
+    expect(blenderFor).toHaveBeenCalledTimes(1);
+    expect(blenderFor).toHaveBeenCalledWith(a[240]);
+    expect(calls.map((c) => [c.a, c.b, c.alpha, c.timestamp, c.duration])).toEqual([
+      [a[240], b[240], 0.1, 4, 1 / 60],
+      [a[241], b[241], 0.5, 241 / 60, 1 / 60],
+      [a[243], b[243], 0.9, 243 / 60, 1 / 60],
+    ]);
+    expect(added).toEqual([4, 241 / 60, 243 / 60]);
+    for (const result of results) expect(result.close).toHaveBeenCalledTimes(1);
+    expect(out.close).toHaveBeenCalledTimes(1);
+    expect(inc.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes both sides when the encoder refuses a frame, and on an abort", async () => {
+    const job = (outgoing: DissolveSide, incoming: DissolveSide, signal?: AbortSignal) => ({
+      outgoing,
+      incoming,
+      slots: [0, 1],
+      timestamps: [0, 1 / 60],
+      alphas: [0.25, 0.75],
+      frameDuration: 1 / 60,
+      signal,
+    });
+    const refused = [side({ 0: frame(1) }), side({ 0: frame(2) })];
+    const { blender, results } = recordingBlender();
+    await expect(
+      encodeDissolveFrames(job(refused[0].side, refused[1].side), () => blender, async () => {
+        throw new Error("encoder failed");
+      }),
+    ).rejects.toThrow("encoder failed");
+    expect(results[0].close).toHaveBeenCalledTimes(1);
+    expect(refused.every((s) => s.close.mock.calls.length === 1)).toBe(true);
+
+    const controller = new AbortController();
+    const stopped = [side({}), side({})];
+    await expect(
+      encodeDissolveFrames(job(stopped[0].side, stopped[1].side, controller.signal), () => recordingBlender().blender, async () => {
+        controller.abort();
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(stopped[0].asked).toHaveLength(1);
+    expect(stopped.every((s) => s.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("gives encodeDissolve's blends through two times sides, a side's previous frame held over a null", async () => {
+    const run = async (via: "encodeDissolve" | "sides") => {
+      const a = [frame(10), frame(11), null];
+      const b = [null, frame(20), frame(21)];
+      const out = iteratorOf(a);
+      const inc = iteratorOf(b);
+      const outgoing = trackOf(out.iterator, []);
+      const incoming = trackOf(inc.iterator, []);
+      const { blender, calls } = recordingBlender();
+      const shared = { timestamps: [4, 4 + 1 / 60, 4 + 2 / 60], alphas: [0.1, 0.5, 0.9], frameDuration: 1 / 60 };
+      if (via === "encodeDissolve") {
+        await encodeDissolve(
+          { outgoing, incoming, outgoingTimes: [4.01, 4.02, 4.03], incomingTimes: [0, 0.01, 0.02], ...shared },
+          () => blender,
+          async () => {},
+        );
+      } else {
+        await encodeDissolveFrames(
+          {
+            outgoing: timesSide(outgoing, [4.01, 4.02, 4.03]),
+            incoming: timesSide(incoming, [0, 0.01, 0.02]),
+            slots: [240, 241, 242],
+            ...shared,
+          },
+          () => blender,
+          async () => {},
+        );
+      }
+      const index = (sample: unknown, list: Array<FakeSample | null>) => (sample === null ? -1 : list.indexOf(sample as FakeSample));
+      const closed = [...a, ...b].map((sample) => sample?.close.mock.calls.length ?? null);
+      return {
+        calls: calls.map((c) => [index(c.a, a), index(c.b, b), c.alpha, c.timestamp]),
+        closed,
+        returned: [out.state.returnSettled, inc.state.returnSettled],
+      };
+    };
+    const sides = await run("sides");
+    expect(sides).toEqual(await run("encodeDissolve"));
+    expect(sides.calls).toEqual([
+      [0, -1, 0.1, 4],
+      [1, 1, 0.5, 4 + 1 / 60],
+      [1, 2, 0.9, 4 + 2 / 60],
+    ]);
   });
 });

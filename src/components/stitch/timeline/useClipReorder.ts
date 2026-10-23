@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { blockDropIndexAt, dropIndexAt, stackedDropIndex } from "@/lib/stitch/reorder";
+import { groupTravel, stackedRowsLayout, type StackedRowsLayout } from "@/lib/stitch/stackedLayout";
 import { moveClipRows, moveClipsTo, moveClipTo } from "../editorActions";
-import { GEOMETRY } from "../editorStyles";
 import {
   clearTextSelection,
   clickClip,
@@ -13,7 +13,6 @@ import {
 } from "../selectionActions";
 import { DRAG_START_PX } from "./autoScroll";
 import { releaseTypingFocus } from "./releaseTypingFocus";
-import { groupTravel } from "./useClipMove";
 
 /**
  * A pointer down on a clip's body: a click selects it, and a move of more
@@ -56,7 +55,8 @@ export interface ReorderLive {
 export interface ReorderOptions {
   /** Rows, not a row: the drag is vertical. */
   stacked?: boolean;
-  rowCount?: number;
+  /** Stacked's rows as drawn, read at the press: a row open for its speed curve is taller. */
+  rows?: StackedRowsLayout;
   /** The visible rows' band on screen (clientY), for the auto-scroll; null while it is not laid out. */
   rowsView?: () => { top: number; bottom: number } | null;
 }
@@ -64,6 +64,7 @@ export interface ReorderOptions {
 /** Stacked: the rows scroll while the pointer is this near their top or bottom, this far each frame. */
 const AUTO_SCROLL_EDGE_PX = 20;
 const AUTO_SCROLL_STEP_PX = 6;
+const NO_ROWS = stackedRowsLayout(0);
 
 export function useClipReorder(
   boxes: ReadonlyArray<{ x: number; width: number }>,
@@ -101,7 +102,7 @@ export function useClipReorder(
       );
       const minIdx = Math.min(index, ...groupIndices);
       const maxIdx = Math.max(index, ...groupIndices);
-      const { stacked = false, rowCount = 0 } = latestOptions.current;
+      const { stacked = false, rows = NO_ROWS } = latestOptions.current;
       const target = event.currentTarget;
       const pointerId = event.pointerId;
       const startX = event.clientX;
@@ -126,12 +127,12 @@ export function useClipReorder(
         let dropIndex: number;
         if (!multi) {
           dropIndex = stacked
-            ? stackedDropIndex(index, dy, rowCount, GEOMETRY.stackRow)
+            ? stackedDropIndex(index, dy, rows)
             : dropIndexAt(x, latestBoxes.current, index);
         } else if (stacked) {
-          const row = stackedDropIndex(index, rawDy, rowCount, GEOMETRY.stackRow);
-          dropIndex = Math.min(Math.max(row, index - minIdx), index + (rowCount - 1 - maxIdx));
-          dy = groupTravel(rawDy, minIdx, maxIdx, rowCount);
+          const row = stackedDropIndex(index, rawDy, rows);
+          dropIndex = Math.min(Math.max(row, index - minIdx), index + (rows.rowHeights.length - 1 - maxIdx));
+          dy = groupTravel(rawDy, minIdx, maxIdx, rows);
         } else {
           dropIndex = blockDropIndexAt(x, latestBoxes.current, groupIndices);
         }

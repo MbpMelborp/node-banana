@@ -1,13 +1,16 @@
 "use client";
 
-import type { KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { clipName } from "@/lib/stitch/labels";
 import type { LaneBox } from "@/lib/stitch/laneLayout";
 import type { WeightPiece } from "@/lib/stitch/placement";
+import { boxHeightOf, boxTopOf, type StackedRowsLayout } from "@/lib/stitch/stackedLayout";
 import { formatSeconds } from "@/lib/stitch/timecode";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { spansEnd, type ClipSpan } from "@/lib/stitch/timeline";
+import { isWarped } from "@/lib/stitch/warp";
+import type { ClipWarp } from "@/types";
 import { EDITOR_CHIP, GEOMETRY } from "../editorStyles";
 import { useLibraryAvailable } from "../library/useLibraryAvailable";
 import type { ClipMediaView } from "../useStitchEditorMedia";
@@ -15,11 +18,12 @@ import { ClipBox, keepFocus, type ClipBoxMode } from "./ClipBox";
 import { AddSlotButton, EmptyLaneButton, laneTabStop, onLaneKeyDown, openClipMenu, useLaneFocus } from "./ClipsLane";
 import { CrossfadeMarks, LayerMarks } from "./CrossfadeMark";
 import { EmptyClipSlot } from "./EmptyClipSlot";
-import { Filmstrip } from "./Filmstrip";
+import { Filmstrip, frameCellFor } from "./Filmstrip";
 import type { MoveLive } from "./useClipMove";
 import type { ReorderLive } from "./useClipReorder";
 import type { TrimLive } from "./useTrimDrag";
 
+/** The empty lane's one row, and a closed row's box (the add slot's too). */
 const ROW = GEOMETRY.stackRow;
 const BOX_TOP = GEOMETRY.stackClipTop;
 const BOX_HEIGHT = GEOMETRY.stackClipHeight;
@@ -41,7 +45,8 @@ export interface LaneMarks {
 
 /**
  * Stacked's clip rows, inside the rows block under the sticky ruler: one
- * 52px row per clip, its 40px compact box at the clip's own start on a
+ * 52px row per clip (132px, its box 120px, while it is open for the clip's
+ * speed curve), its 40px compact box at the clip's own start on a
  * linear axis (an empty clip is a 160px slot at its instant), the marks of
  * how it layers, a black band over each gap, and after the latest end, in
  * the last row, the + slot that opens Add media. A lined-up stack
@@ -84,6 +89,9 @@ export function StackedClipsLane({
   viewLeft,
   viewRight,
   contentWidth,
+  visibleRight,
+  contentRef,
+  rows,
   rowsTop = GEOMETRY.ruler,
   onBodyPointerDown,
   onHandlePointerDown,
@@ -121,6 +129,12 @@ export function StackedClipsLane({
   viewLeft: number;
   viewRight: number;
   contentWidth: number;
+  /** The visible lanes' right, for a curve readout's side. */
+  visibleRight: number;
+  /** The lane content, which a speed curve's presses are measured against. */
+  contentRef: RefObject<HTMLDivElement | null>;
+  /** The rows as drawn: the one open for its clip's speed curve is taller. */
+  rows: StackedRowsLayout;
   /** Where the rows start in the lanes' view: under the sticky ruler and the text layers' rows. */
   rowsTop?: number;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>, clipId: string, index: number) => void;
@@ -150,18 +164,38 @@ export function StackedClipsLane({
   }
 
   // The frames the trim cuts, drawn where they were on the side they leave from, in source order: the head just left of
-  // the box for an In trim (whose left edge moves with the In), the tail just right of it for an Out trim
+  // the box for an In trim (whose left edge moves with the In), the tail just right of it for an Out trim; a retimed
+  // clip's from its old frames at their old offsets
   const trimIndex = trim ? spans.findIndex((s) => s.clip.id === trim.clipId) : -1;
-  let ghost: { x: number; width: number; inSec: number; side: "in" | "out" } | null = null;
+  let ghost: {
+    x: number;
+    width: number;
+    inSec: number;
+    lengthSec: number;
+    warp: ClipWarp | undefined;
+    offsetSec: number;
+    side: "in" | "out";
+  } | null = null;
   if (trim && trimIndex !== -1 && spans[trimIndex].length > 0) {
     const live = boxes[trimIndex];
     const rest = restBoxes[trimIndex];
     const width = live && rest ? (rest.lengthSec - live.lengthSec) * axis.pxPerSec : 0;
     if (live && rest && width >= MIN_GHOST_PX) {
+      const clipWarp = spans[trimIndex].clip.warp;
+      const warp = isWarped(clipWarp) ? clipWarp : undefined;
+      const lengthSec = rest.lengthSec;
       ghost =
         trim.edge === "out"
-          ? { x: live.x + live.width, width, inSec: live.inSec + live.lengthSec, side: "out" }
-          : { x: live.x - width, width, inSec: rest.inSec, side: "in" };
+          ? {
+              x: live.x + live.width,
+              width,
+              inSec: warp ? rest.inSec : live.inSec + live.lengthSec,
+              lengthSec,
+              warp,
+              offsetSec: warp ? live.lengthSec : 0,
+              side: "out",
+            }
+          : { x: live.x - width, width, inSec: rest.inSec, lengthSec, warp, offsetSec: 0, side: "in" };
     }
   }
   const trimView = trimIndex === -1 ? undefined : media.get(spans[trimIndex].clip.id);
@@ -185,7 +219,7 @@ export function StackedClipsLane({
           aria-hidden="true"
           data-stacked-row={span.clip.id}
           className={cn("absolute inset-x-0 border-b border-white/4", selectedIds.has(span.clip.id) && "bg-white/4")}
-          style={{ top: i * ROW, height: ROW }}
+          style={{ top: rows.rowTops[i], height: rows.rowHeights[i] }}
         />
       ))}
       {gaps.map((gap) => {
@@ -247,7 +281,9 @@ export function StackedClipsLane({
             : lifted
               ? (liftedX?.get(span.clip.id) ?? box.x)
               : box.x;
-          const top = moving ? i * ROW + BOX_TOP + moving.dy : i * ROW + BOX_TOP + (lifted ? reorder.dy : 0);
+          const top = boxTopOf(rows, i) + (moving ? moving.dy : lifted ? reorder.dy : 0);
+          const height = boxHeightOf(rows, i);
+          const expanded = i === rows.expanded;
           const selected = selectedIds.has(span.clip.id);
           const focusable = tabStop === span.clip.id;
           const onBody = (event: ReactPointerEvent<HTMLElement>) => onBodyPointerDown(event, span.clip.id, i);
@@ -264,7 +300,7 @@ export function StackedClipsLane({
                 focusable={focusable}
                 mode={mode}
                 top={top}
-                height={BOX_HEIGHT}
+                height={height}
                 stacked
                 onBodyPointerDown={onBody}
                 onContextMenu={onMenu}
@@ -288,9 +324,15 @@ export function StackedClipsLane({
               viewLeft={viewLeft}
               viewRight={viewRight}
               top={top}
-              height={BOX_HEIGHT}
+              height={height}
               compact
               multi={multi}
+              expanded={expanded}
+              curveEditable={expanded && selected && !multi && mode === "rest" && trimIndex === -1}
+              curveWidth={box.width}
+              contentRef={contentRef}
+              visibleRight={visibleRight}
+              contentWidth={contentWidth}
               overlay={
                 marks ? (
                   <LayerMarks
@@ -322,17 +364,26 @@ export function StackedClipsLane({
             aria-hidden="true"
             data-testid="stitch-trim-ghost"
             className={cn("absolute overflow-hidden", ghost.side === "out" ? "rounded-r-md" : "rounded-l-md")}
-            style={{ left: ghost.x, top: trimIndex * ROW + BOX_TOP, width: ghost.width, height: BOX_HEIGHT }}
+            style={{
+              left: ghost.x,
+              top: boxTopOf(rows, trimIndex),
+              width: ghost.width,
+              height: boxHeightOf(rows, trimIndex),
+            }}
           >
             <Filmstrip
               frames={trimView?.frames ?? []}
               duration={trimView?.duration ?? null}
               inSec={ghost.inSec}
+              lengthSec={ghost.lengthSec}
+              warp={ghost.warp}
+              offsetSec={ghost.offsetSec}
               pxPerSec={axis.pxPerSec}
               width={ghost.width}
               boxX={ghost.x}
               viewLeft={viewLeft}
               viewRight={viewRight}
+              cell={trimIndex === rows.expanded ? frameCellFor(boxHeightOf(rows, trimIndex)) : undefined}
               className="opacity-30"
             />
             <div className="absolute inset-0 editor-ghost-hatch" />
@@ -351,7 +402,7 @@ export function StackedClipsLane({
       <AddSlotButton
         libraryOn={libraryOn}
         left={slotX}
-        top={(spans.length - 1) * ROW + BOX_TOP}
+        top={boxTopOf(rows, spans.length - 1)}
         height={BOX_HEIGHT}
         onFocus={onFocus}
         onBlur={onBlur}

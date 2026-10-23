@@ -1,5 +1,5 @@
 import { normalizePlacement, normalizeStack, type StitchOptions } from "./engineTypes";
-import { buildEnvelope, type StackEnvelope } from "./placement";
+import { buildEnvelope, warpedUnitEnds, type StackEnvelope } from "./placement";
 import { routePlacement, type StitchRoute } from "./placedSchedule";
 import { planSequence, type PlanClip, type PlannedClip } from "./sequencePlan";
 import { stackSequence, type StackedPlan } from "./stack";
@@ -50,7 +50,8 @@ export function planPicture(clips: readonly PictureClip[], options: StitchOption
   // Stacked only when some join really overlaps: a stack of cuts is Track, call for call
   let sp: StackedPlan | null = stack && route.kind === "derived" ? stackSequence(planned, sources, stack) : null;
   if (sp && !sp.clips.some((clip) => clip.overlapIn > 0)) sp = null;
-  // Placed: unit k is the envelope's unit k (every planned clip is non-empty, and rows follow the clip order)
+  // Placed: unit k is the envelope's unit k (every planned clip is non-empty, and rows follow the clip order); a retimed
+  // unit's sourceEnds are the editor's (spansEnvelope), so both see the same runs
   const env: StackEnvelope | null =
     route.kind === "placed"
       ? buildEnvelope(
@@ -60,6 +61,7 @@ export function planPicture(clips: readonly PictureClip[], options: StitchOption
             row: k,
             source: sources[k],
             inSec: unit.inSec,
+            ...(unit.warp ? { sourceEnds: warpedUnitEnds(unit.inSec, unit.outSec, unit.warp.reverse) } : {}),
           })),
           placement?.crossfade ?? true,
         )

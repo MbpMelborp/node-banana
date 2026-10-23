@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
+import type { ClipWarp, StitchAudioClip, StitchTimelineClip, WorkflowEdge, WorkflowNode } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import type { NodeExecutionContext } from "../types";
 import type { StitchDraft } from "@/lib/stitch/draft";
@@ -77,6 +77,14 @@ const assetClip = (id: string, assetId: string, extra: Partial<StitchTimelineCli
   ...extra,
 });
 
+const RAMP: ClipWarp = {
+  speed: 0.5,
+  curve: { kind: "preset", name: "easeInOutSine" },
+  window: [0.2, 0.9],
+  reverse: true,
+  blend: true,
+};
+
 function stitchNode(data: Record<string, unknown> = {}): WorkflowNode {
   return node("s", "videoStitch", { clips: [], clipOrder: [], loopCount: 1, outputVideo: null, ...data });
 }
@@ -139,6 +147,15 @@ describe("gatherStitchInputs", () => {
       { inSec: 0, outSec: null, muted: true, volume: 0.4 },
     ]);
     expect(g.clipCount).toBe(2);
+  });
+
+  it("passes the warp through, and gives an unwarped clip none", async () => {
+    const { nodes, edges } = twoVideos();
+    const stitch = stitchNode({ timeline: [edgeClip("a", "e1", { inSec: 0.8, warp: RAMP }), edgeClip("b", "e2")] });
+    const g = await gatherStitchInputs(makeCtx(stitch, nodes, edges), stitch.data as never);
+    expect(g.clips[0].warp).toEqual(RAMP);
+    expect(Object.keys(g.clips[0]).at(-1)).toBe("warp");
+    expect("warp" in g.clips[1]).toBe(false);
   });
 
   it("loads a library clip from the asset library, with the run's signal", async () => {
@@ -536,6 +553,20 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
     });
   });
 
+  it("passes a draft clip's warp, and none for a warp that changes nothing", async () => {
+    const identity: ClipWarp = { speed: 1, curve: null, reverse: false, blend: true };
+    const g = await gatherDraftInputs(
+      draftOf([
+        assetClip("x", "alibrary00001", { warp: RAMP }),
+        assetClip("y", "alibrary00002", { warp: identity }),
+        assetClip("z", "alibrary00003"),
+      ]),
+    );
+    expect(g.clips[0].warp).toEqual(RAMP);
+    expect("warp" in g.clips[1]).toBe(false);
+    expect("warp" in g.clips[2]).toBe(false);
+  });
+
   it("refuses an empty edit before fetching anything", async () => {
     await expect(gatherDraftInputs(draftOf([]))).rejects.toThrow(NO_CLIP_TO_RENDER);
     expect(mocks.fetchAssetBlob).not.toHaveBeenCalled();
@@ -563,10 +594,27 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
   // The same library clips must encode the same in the view as on the node (parent ruling 8)
   it.each([
     ["Track", [assetClip("x", "alibrary00001", { inSec: 0.5 }), assetClip("y", "alibrary00002", { muted: true })], TRACK],
+    [
+      "Track with a warped clip",
+      [assetClip("x", "alibrary00001", { inSec: 0.5, warp: RAMP }), assetClip("y", "alibrary00002", { muted: true })],
+      TRACK,
+    ],
     ["a lined-up stack", [assetClip("x", "alibrary00001"), assetClip("y", "alibrary00002", { outSec: 3 })], STACKED],
     [
       "a placed stack",
       [assetClip("x", "alibrary00001", { startSec: 0 }), assetClip("y", "alibrary00002", { startSec: 2.5 }), assetClip("z", "alibrary00001", { inSec: 4 })],
+      STACKED,
+    ],
+    [
+      "a placed stack with a warped clip",
+      [
+        assetClip("x", "alibrary00001", { startSec: 0 }),
+        assetClip("y", "alibrary00002", {
+          startSec: 2.5,
+          warp: { speed: 2, curve: null, reverse: false, blend: false },
+        }),
+        assetClip("z", "alibrary00001", { inSec: 4 }),
+      ],
       STACKED,
     ],
   ] as const)("gathers %s exactly as the node with the same clips", async (_name, timeline, sequenceLayout) => {
@@ -576,6 +624,7 @@ describe("gatherDraftInputs (an edit project's draft)", () => {
     const fromNode = await gatherStitchInputs(makeCtx(stitch, [], []), stitch.data as never);
     const fromDraft = await gatherDraftInputs(draftOf([...timeline], { sequenceLayout, audioClips, loopCount: 2 }));
     expect(shape(fromDraft)).toEqual(shape(fromNode));
+    expect(fromNode.clips.map((c) => c.warp)).toEqual(timeline.map((c) => c.warp));
   });
 
   it("gathers no audio clips for an edit with none, as the node with none", async () => {

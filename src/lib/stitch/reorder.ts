@@ -1,3 +1,5 @@
+import { rowAtY, rowCentreOf, type StackedRowsLayout } from "./stackedLayout";
+
 /**
  * Drag-to-reorder in the clips lane: which place a dragged clip would take,
  * and where the insertion bar marks it. Boxes are the lane's boxes in
@@ -53,17 +55,17 @@ export function blockInsertionX(dropIndex: number, boxes: ReadonlyArray<Box>, dr
 }
 
 /**
- * Stacked rows: the final index for moveClip from the lifted box's centre, dy pixels from its row. A row's centre
- * crossing half a row moves it one place.
+ * Stacked rows: the final index for moveClip from the lifted box's centre, dy pixels from its row: the row under it,
+ * so a centre crossing into the next row moves it one place.
  */
-export function stackedDropIndex(index: number, dy: number, rowCount: number, rowHeight: number): number {
-  if (rowCount <= 0) return 0;
-  const steps = Number.isFinite(dy) && rowHeight > 0 ? Math.round(dy / rowHeight) : 0;
-  return Math.min(Math.max(index + steps, 0), rowCount - 1);
+export function stackedDropIndex(index: number, dy: number, rows: StackedRowsLayout): number {
+  if (rows.rowHeights.length === 0) return 0;
+  if (!Number.isFinite(dy)) return Math.min(Math.max(index, 0), rows.rowHeights.length - 1);
+  return rowAtY(rows, rowCentreOf(rows, index) + dy);
 }
 
 /** y of the insertion bar's centre in the rows block: above the drop row moving up, below it moving down; null when unmoved. */
-export function stackedInsertionY(dropIndex: number, draggedIndex: number, rowHeight: number): number | null {
+export function stackedInsertionY(dropIndex: number, draggedIndex: number, rows: StackedRowsLayout): number | null {
   if (dropIndex === draggedIndex) return null;
-  return dropIndex < draggedIndex ? dropIndex * rowHeight : (dropIndex + 1) * rowHeight;
+  return dropIndex < draggedIndex ? rows.rowTops[dropIndex] : rows.rowTops[dropIndex + 1];
 }
