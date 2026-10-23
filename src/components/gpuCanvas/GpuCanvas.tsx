@@ -472,14 +472,18 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
       const all = scene.view.zoom >= LIVE_EDGE_ZOOM;
       const w = scene.canvas.clientWidth, h = scene.canvas.clientHeight;
       const a = scene.toWorld(-w * 0.25, -h * 0.25), b = scene.toWorld(w * 1.25, h * 1.25);
-      const candidates: { id: string; distance: number; onScreen: boolean }[] = [];
+      const candidates: { id: string; distance: number; onScreen: boolean; e: number }[] = [];
       const centre = scene.toWorld(w / 2, h / 2);
       const s0 = scene.toWorld(0, 0), s1 = scene.toWorld(w, h);
-      const onScreen = new Set(scene.edgesWithin(s0.x, s0.y, s1.x, s1.y));
       for (const e of scene.edgesWithin(a.x, a.y, b.x, b.y)) {
         const edge = scene.graph.edges[e], route = scene.edgeRoute(e);
         if (!route?.decorated || edge.edge.selected || (!all && !route.running)) continue;
-        candidates.push({ id: edge.id, distance: Math.hypot(route.labelX - centre.x, route.labelY - centre.y), onScreen: onScreen.has(e) });
+        candidates.push({ id: edge.id, distance: Math.hypot(route.labelX - centre.x, route.labelY - centre.y), onScreen: false, e });
+      }
+      // Which of them are on screen, asked only when there are some: zoomed out, a frame's pan asked it of every edge.
+      if (candidates.length) {
+        const onScreen = new Set(scene.edgesWithin(s0.x, s0.y, s1.x, s1.y));
+        for (const c of candidates) c.onScreen = onScreen.has(c.e);
       }
       // Those on screen are never capped; the limit bounds only those made live early in the margin.
       for (const id of pickLiveEdges(candidates, MAX_LIVE_EDGES)) ids.push(id);

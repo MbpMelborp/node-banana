@@ -588,6 +588,7 @@ export class Scene {
   private hovered = -1;
   private index: GridIndex;
   private dirty = true;
+  private backingScale = 1;
   /** For runners isolating page costs from the GPU's: the view and its listeners run, nothing is drawn. */
   drawing = true;
   private haloWasShown = false;
@@ -1627,13 +1628,14 @@ export class Scene {
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
     this.uniforms.uViewport.value.set(canvas.clientWidth, canvas.clientHeight);
     this.uniforms.uDpr.value = devicePixelRatio;
+    this.backingScale = canvas.width / (canvas.clientWidth || 1) || devicePixelRatio;
     this.dirty = true;
     for (const listener of this.viewListeners) listener();
   }
 
-  /** Device pixels per css px of the canvas's backing store. */
+  /** Device pixels per css px of the canvas's backing store (kept at each resize: the painter asks per node). */
   get scale() {
-    return this.canvas.width / (this.canvas.clientWidth || 1) || devicePixelRatio;
+    return this.backingScale;
   }
 
   private tick = (now: number) => {
