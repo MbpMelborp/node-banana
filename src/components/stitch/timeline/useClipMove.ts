@@ -4,11 +4,11 @@ import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { draftSpans } from "@/lib/stitch/draft";
 import { moveDragAt, moveRowAt, moveTargets, type MoveDragResult, type MoveDragStart } from "@/lib/stitch/moveDrag";
 import { MAX_START_SEC } from "@/lib/stitch/placement";
+import { groupTravel, type StackedRowsLayout } from "@/lib/stitch/stackedLayout";
 import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { placeClip, placeClips } from "@/lib/stitch/timeline";
 import type { StitchTimelineClip } from "@/types";
 import { moveClipBody, moveClipsBody, pause } from "../editorActions";
-import { GEOMETRY } from "../editorStyles";
 import {
   clearTextSelection,
   clickClip,
@@ -66,7 +66,8 @@ export interface MoveLive {
 }
 
 export interface MoveOptions {
-  rowCount: number;
+  /** The rows as drawn, read at the press: a row open for its speed curve is taller. */
+  rows: StackedRowsLayout;
   /** The visible rows' band on screen (clientY), for the auto-scroll; null while it is not laid out. */
   rowsView: () => { top: number; bottom: number } | null;
   /** The lanes' content width as last drawn, px. */
@@ -80,15 +81,6 @@ export interface ReleasedWidth {
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
-
-/**
- * A group's travel down the rows, clamped once for all of it: its first box stops where it rests on the first row,
- * its last where it rests on the last row, so a box dragged past the rows is drawn where release puts it. With one
- * clip (minIdx = maxIdx) it is the clamp for a single box.
- */
-export function groupTravel(dy: number, minIdx: number, maxIdx: number, rows: number): number {
-  return clamp(dy, -minIdx * GEOMETRY.stackRow, (rows - 1 - maxIdx) * GEOMETRY.stackRow);
-}
 
 /** axisNow: the lane's axis for the editor's state at the press (useTimelineZoom), after a field's blur. */
 export function useClipMove(
@@ -156,6 +148,7 @@ export function useClipMove(
       const groupRows = draftAtStart.timeline.flatMap((c, i) => (groupSet.has(c.id) ? [i] : []));
       const minIdx = groupRows[0] ?? index;
       const maxIdx = groupRows[groupRows.length - 1] ?? index;
+      const rows = latestOptions.current.rows;
 
       const place = () => {
         if (!start) return;
@@ -166,10 +159,9 @@ export function useClipMove(
         if (current && at === placedAt) return;
         placedAt = at;
         const result = moveDragAt(start, x, { snap });
-        const { rowCount } = latestOptions.current;
-        const rowAt = moveRowAt(index, dy, current?.dropIndex ?? index, rowCount, GEOMETRY.stackRow);
+        const rowAt = moveRowAt(index, dy, current?.dropIndex ?? index, rows);
         const multi = group.length > 1;
-        const dropIndex = multi ? clamp(rowAt, index - minIdx, index + (rowCount - 1 - maxIdx)) : rowAt;
+        const dropIndex = multi ? clamp(rowAt, index - minIdx, index + (rows.rowHeights.length - 1 - maxIdx)) : rowAt;
         // The same place gives the same timeline: the lane's marks are not built again for a pointer that moved within it
         const timeline =
           current && current.result.startSec === result.startSec && current.dropIndex === dropIndex
@@ -177,7 +169,7 @@ export function useClipMove(
             : multi
               ? placeClips(draftAtStart.timeline, durationsAtStart, groupSet, result.deltaSec, dropIndex - index, overlapSec)
               : placeClip(draftAtStart.timeline, durationsAtStart, clipId, result.startSec, dropIndex, overlapSec);
-        const drawnDy = groupTravel(dy, minIdx, maxIdx, rowCount);
+        const drawnDy = groupTravel(dy, minIdx, maxIdx, rows);
         current = { clipId, clipIds: group, index, dropIndex, result, timeline, x: axis.timeToX(result.startSec), dy: drawnDy };
         setMove(current);
       };

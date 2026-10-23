@@ -57,7 +57,15 @@ import {
   splitSelectedOverlaysAtPlayhead,
   startSelectedOverlayAtPlayhead,
 } from "../overlayActions";
-import { canSetSpeed, focusSpeedWell, resetSelectedSpeed, speedWaitsReason, toggleSelectedReverse } from "../speedActions";
+import {
+  canSetSpeed,
+  focusSpeedWell,
+  isClipCurveExpanded,
+  resetSelectedSpeed,
+  speedWaitsReason,
+  toggleClipCurveExpanded,
+  toggleSelectedReverse,
+} from "../speedActions";
 import type { AudioClipView, ClipMediaView } from "../useStitchEditorMedia";
 import { audioRowName } from "./AudioLane";
 import { overlayName, overlayRowName } from "./OverlayLane";
@@ -169,15 +177,16 @@ function menuItem(act: (run: () => void) => () => void) {
  * heading, then its rows with their keys, no icons. Its sound, a split at
  * the playhead, in Stacked its place (start or end at the playhead, a row up
  * or down), its trim, its speed (Speed… goes to the rail's well, Reverse,
- * Reset speed), copy, cut, paste and duplicate, its source node, and
- * removing it. The clip is the selection (the right-click selected it), so
- * each item is the same action as its key; an item selects it again before
- * it runs, so the label and the action never part. Opened on one of several
- * selected clips it acts on all of them ("3 clips"); the place items that
- * are one clip's are off then. Any press outside closes it, even one that cancels its
- * pointerdown (a trim handle, the ruler). Escape belongs to the editor's key
- * handler, which closes it. However it closes, focus that was in it goes
- * back to the panel, so the editor's keys and its Tab trap keep working.
+ * Reset speed, its speed curve shown on the timeline), copy, cut, paste and
+ * duplicate, its source node, and removing it. The clip is the selection (the
+ * right-click selected it), so each item is the same action as its key; an
+ * item selects it again before it runs, so the label and the action never
+ * part. Opened on one of several selected clips it acts on all of them
+ * ("3 clips"); the place items that are one clip's are off then. Any press
+ * outside closes it, even one that cancels its pointerdown (a trim handle, the
+ * ruler). Escape belongs to the editor's key handler, which closes it. However
+ * it closes, focus that was in it goes back to the panel, so the editor's keys
+ * and its Tab trap keep working.
  */
 export function ClipContextMenu({
   media,
@@ -234,6 +243,7 @@ function OpenMenu({
   const speedIds = useMemo(() => (multi ? group.map((c) => c.id) : [clipId]), [multi, group, clipId]);
   const speedOn = useStitchEditorStore((s) => canSetSpeed(s, speedIds));
   const waiting = useStitchEditorStore(speedWaitsReason);
+  const curveOpen = useStitchEditorStore((s) => isClipCurveExpanded(s, clipId));
 
   const act = (run: () => void) => () =>
     close(() => {
@@ -256,6 +266,7 @@ function OpenMenu({
   const trimmed = multi ? group.some(resettable) : resettable(clip);
   const reversed = multi ? group.every((c) => c.warp?.reverse) : !!clip.warp?.reverse;
   const retimed = multi ? group.some((c) => isRetimed(c.warp)) : isRetimed(clip.warp);
+  const lengthKnown = durations.has(sourceKey(clip.source));
   const header = multi ? `${group.length} clips` : source ? `${name} · ${source}` : name;
   const item = menuItem(act);
 
@@ -312,6 +323,10 @@ function OpenMenu({
       })}
       {item(reversed ? "Play forward" : "Reverse", toggleSelectedReverse)}
       {item("Reset speed", resetSelectedSpeed, { disabled: !retimed })}
+      {item(curveOpen ? "Hide speed curve" : "Show speed curve", () => toggleClipCurveExpanded(clipId), {
+        disabled: multi || !lengthKnown,
+        title: multi ? "Select one clip" : undefined,
+      })}
       <MenuDivider role="separator" className={EDIT_MENU_DIVIDER} />
       {item("Copy", copySelection, { shortcut: "⌘C" })}
       {item("Cut", cutSelection, { shortcut: "⌘X" })}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { easing } from "@/lib/easing";
-import { progressToY, remapMetrics, remapPolyline } from "../remapGeometry";
+import { pointerToRemap, progressToY, remapMetrics, remapPolyline, yToProgress } from "../remapGeometry";
 
 describe("remapGeometry", () => {
   it("keeps 12px clear over and under the remap", () => {
@@ -17,6 +17,22 @@ describe("remapGeometry", () => {
     expect(progressToY(2, m)).toBe(12);
     expect(progressToY(-1, m)).toBe(108);
     expect(progressToY(Number.NaN, m)).toBe(108);
+  });
+
+  it("reads a y back as source progress, clamped, and 0 in a box with no span", () => {
+    const m = remapMetrics(120);
+    for (const q of [0, 0.25, 0.5, 1]) expect(yToProgress(progressToY(q, m), m)).toBeCloseTo(q, 12);
+    expect(yToProgress(0, m)).toBe(1);
+    expect(yToProgress(200, m)).toBe(0);
+    expect(yToProgress(5, remapMetrics(10))).toBe(0);
+  });
+
+  it("reads a pointer in the box as [output progress, source progress], both clamped", () => {
+    const m = remapMetrics(120);
+    expect(pointerToRemap(80, 60, 320, m)).toEqual([0.25, 0.5]);
+    expect(pointerToRemap(-10, 0, 320, m)).toEqual([0, 1]);
+    expect(pointerToRemap(400, 300, 320, m)).toEqual([1, 0]);
+    expect(pointerToRemap(10, 60, 0, m)).toEqual([0, 0.5]);
   });
 
   it("draws a vertex every 4px and one on each knot", () => {

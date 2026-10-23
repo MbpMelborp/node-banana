@@ -205,6 +205,42 @@ describe("stitchEditorStore", () => {
     expect(store().audioExpandedRow).toBe(0);
   });
 
+  it("closes a clip's open speed curve when the clip goes, and an undo brings the clip back closed", () => {
+    openOn();
+    store().setVideoExpandedClip("b");
+    expect(store().past).toHaveLength(0);
+    // Not undoable, and kept by edits and history moves that keep the clip
+    store().apply((d) => ({ ...d, loopCount: 2 }));
+    store().undo();
+    store().redo();
+    expect(store().videoExpandedClip).toBe("b");
+    store().apply((d) => ({ ...d, timeline: removeClip(d.timeline, "b").timeline }));
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    expect(store().draft!.timeline.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(store().videoExpandedClip).toBeNull();
+    // A redo that takes it away closes it too; a gesture's later frames as well
+    store().setVideoExpandedClip("b");
+    store().redo();
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    // An undo that takes it away (of an add) closes it, and the redo brings the clip back closed
+    store().apply((d) => ({ ...d, timeline: [...d.timeline, { ...d.timeline[0], id: "c" }] }));
+    store().setVideoExpandedClip("c");
+    store().undo();
+    expect(store().videoExpandedClip).toBeNull();
+    store().redo();
+    expect(store().draft!.timeline.map((c) => c.id)).toEqual(["a", "b", "c"]);
+    expect(store().videoExpandedClip).toBeNull();
+    store().undo();
+    store().setVideoExpandedClip("a");
+    store().apply((d) => ({ ...d, loopCount: 3 }), { gestureKey: "g" });
+    store().apply((d) => ({ ...d, timeline: removeClip(d.timeline, "a").timeline }), { gestureKey: "g" });
+    expect(store().videoExpandedClip).toBeNull();
+    store().close();
+    expect(store().videoExpandedClip).toBeNull();
+  });
+
   it("keeps the music edge from open, updates it on markSaved when given, and resets the audio session on close", () => {
     store().open({ nodeId: "s1", draft: makeDraft(), canvasGeneration: 3, musicEdgeIdAtOpen: "eM" });
     expect(store().musicEdgeIdAtOpen).toBe("eM");
@@ -1329,6 +1365,7 @@ describe("stitchEditorStore: edit project sessions", () => {
     store().setZoom(80);
     store().setDurations(new Map<SourceKey, number>([["asset:a1", 5]]));
     store().setAudioExpandedRow(0);
+    store().setVideoExpandedClip("v2");
     store().setAudioDurations(new Map<AudioSourceKey, number>([["asset:m1", 7]]));
     store().tagClips(["v2"], "pasted");
     const before = store();
@@ -1350,6 +1387,7 @@ describe("stitchEditorStore: edit project sessions", () => {
     expect(s.durations.get("asset:a1")).toBe(5);
     expect(s.audioDurations.get("asset:m1")).toBe(7);
     expect(s.audioExpandedRow).toBe(0);
+    expect(s.videoExpandedClip).toBe("v2");
     expect(s.past).toHaveLength(1);
     expect(s.future).toHaveLength(1);
     expect(s.initial).toBe(before.initial);

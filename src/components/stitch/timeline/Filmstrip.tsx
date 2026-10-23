@@ -7,8 +7,13 @@ import { isWarped, warpMap } from "@/lib/stitch/warp";
 import type { ClipWarp } from "@/types";
 import { GEOMETRY } from "../editorStyles";
 
+/** A box taller than the clips row's 64px (one open for its speed curve) widens its cells with it, 56px per 64px. */
+export const frameCellFor = (boxHeight: number): number =>
+  Math.round((GEOMETRY.frameCell * boxHeight) / GEOMETRY.clipHeight);
+
 /**
- * A clip's frames, one 56px cell after another from its left edge. Each
+ * A clip's frames, one 56px cell after another from its left edge (wider
+ * in a box taller than the row's 64px, so a frame keeps its shape). Each
  * cell shows the source frame at its own time (In plus the cell's middle),
  * so the frames slide when the In moves. Only the cells inside the visible
  * range are drawn. The frames come from the shared media cache (at most
@@ -27,6 +32,7 @@ export const Filmstrip = memo(function Filmstrip({
   boxX,
   viewLeft,
   viewRight,
+  cell = GEOMETRY.frameCell,
   className,
 }: {
   frames: ReadonlyArray<string | null>;
@@ -43,6 +49,8 @@ export const Filmstrip = memo(function Filmstrip({
   boxX: number;
   viewLeft: number;
   viewRight: number;
+  /** One frame's width, px. */
+  cell?: number;
   className?: string;
 }) {
   // A ramp bunches and spreads the frames, and a reversed clip runs them backwards
@@ -53,7 +61,6 @@ export const Filmstrip = memo(function Filmstrip({
         : null,
     [inSec, lengthSec, warp],
   );
-  const cell = GEOMETRY.frameCell;
   const count = Math.max(0, Math.ceil(width / cell));
   const first = Math.max(0, Math.floor((viewLeft - boxX) / cell));
   const last = Math.min(count - 1, Math.ceil((viewRight - boxX) / cell));

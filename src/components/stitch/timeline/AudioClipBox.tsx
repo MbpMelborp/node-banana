@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { Plus, VolumeX } from "lucide-react";
+import { VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { audioSelectionOf, useStitchEditorStore } from "@/store/stitchEditorStore";
 import { useStitchWaveform } from "@/hooks/useStitchWaveform";
@@ -11,15 +11,13 @@ import type { TimeAxis } from "@/lib/stitch/timeAxis";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
 import type { StitchAudioClip } from "@/types";
 import { removeAudioCurvePoint, setAudioCurve } from "../editorActions";
-import { EDITOR_CHIP, GEOMETRY, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
+import { GEOMETRY, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
 import type { AudioClipView } from "../useStitchEditorMedia";
 import { EdgeHandle, handleWidthFor, keepFocus, LENGTH_CHIP, MUTED_BADGE } from "./ClipBox";
+import { AddPointHint, CurveReadout } from "./CurveChips";
 import { CurveLayer } from "./CurveLayer";
 import { useCurveDrag } from "./useCurveDrag";
 import { Waveform } from "./Waveform";
-
-/** Room a chip beside a point needs before it would pass the visible lanes' right side; it goes left of the point then. */
-const CHIP_ROOM = 130;
 
 /** What a box says instead of its file name when it has nothing to play. */
 function stateLabel(view: AudioClipView | undefined): string | null {
@@ -160,8 +158,7 @@ export function AudioClipBox({
     ? { x: axis.timeToX(dragged.t - offset), y: top + levelToY(gainToLevel(dragged.gain), metrics), point: dragged }
     : null;
   const hint = drag.hover ? { x: drag.hover.x, y: top + drag.hover.y } : null;
-  const beside = (at: number, gap: number) =>
-    at + gap + CHIP_ROOM > Math.min(contentWidth, visibleRight) ? { right: `calc(100% - ${at - gap}px)` } : { left: at + gap };
+  const chipsRight = Math.min(contentWidth, visibleRight);
 
   return (
     <>
@@ -280,29 +277,13 @@ export function AudioClipBox({
       </div>
 
       {readout && (
-        <div
-          aria-hidden="true"
-          data-testid="stitch-curve-readout"
-          className={cn(EDITOR_CHIP, "pointer-events-none absolute z-4 inline-flex -translate-y-1/2 items-center gap-2 whitespace-nowrap tabular-nums")}
-          style={{ top: readout.y, ...beside(readout.x, 12) }}
-        >
+        <CurveReadout x={readout.x} y={readout.y} right={chipsRight} testId="stitch-curve-readout">
           <span className="text-neutral-200">{formatDb(readout.point.gain)}</span>
           <span className="text-neutral-500">{formatTimecode(readout.point.t - offset)}</span>
-        </div>
+        </CurveReadout>
       )}
       {hint && !drag.live && (
-        <div
-          aria-hidden="true"
-          data-testid="stitch-add-point"
-          className={cn(
-            EDITOR_CHIP,
-            "pointer-events-none absolute z-4 inline-flex -translate-y-full items-center gap-[5px] whitespace-nowrap px-[7px] py-[3px] text-neutral-300",
-          )}
-          style={{ top: hint.y - 4, ...beside(hint.x, 6) }}
-        >
-          <Plus size={10} strokeWidth={2.25} />
-          Add point
-        </div>
+        <AddPointHint x={hint.x} y={hint.y} right={chipsRight} testId="stitch-add-point" label="Add point" />
       )}
     </>
   );

@@ -100,6 +100,11 @@ export interface StitchEditorState {
   /** The one audio row grown to edit its volume lines, by its header's toggle only; not undoable, never written. */
   audioExpandedRow: number | null;
   /**
+   * The clip whose speed curve is open on the timeline (its row in Stacked, the clips row in Track), by the rail's or
+   * the menu's toggle only; not undoable, never written. Closed when its clip goes.
+   */
+  videoExpandedClip: string | null;
+  /**
    * The non-loop edge into the node's audio socket at open (dimmed or not), or as of the last Save; null with none.
    * Done and Save drop the draft's music clips when it is gone by then (the music was disconnected on the canvas).
    */
@@ -174,6 +179,7 @@ export interface StitchEditorState {
   /** Kept when the keys are the same. */
   setClipsLoading(keys: ReadonlySet<SourceKey>): void;
   setAudioExpandedRow(row: number | null): void;
+  setVideoExpandedClip(clipId: string | null): void;
   /** Clamped to >= 0. */
   setPlayhead(t: number): void;
   setPlaying(playing: boolean): void;
@@ -213,6 +219,7 @@ type SessionState = Pick<
   | "audioDurations"
   | "clipsLoading"
   | "audioExpandedRow"
+  | "videoExpandedClip"
   | "musicEdgeIdAtOpen"
   | "musicHeld"
   | "edgeIdsAtOpen"
@@ -242,6 +249,7 @@ const closedSession = (): SessionState => ({
   audioDurations: EMPTY_AUDIO_DURATIONS,
   clipsLoading: NO_LOADING,
   audioExpandedRow: null,
+  videoExpandedClip: null,
   musicEdgeIdAtOpen: null,
   musicHeld: false,
   edgeIdsAtOpen: [],
@@ -266,6 +274,7 @@ export const PARKED_KEYS = [
   "durations",
   "audioDurations",
   "audioExpandedRow",
+  "videoExpandedClip",
   "playhead",
   "pxPerSec",
   "clipOrigins",
@@ -340,6 +349,10 @@ export function pruneSelection(selection: StitchSelection, draft: StitchDraft): 
 /** An expanded row a history move took away collapses. */
 const clampExpandedRow = (row: number | null, draft: StitchDraft) =>
   row !== null && row >= audioRowCount(draft.audioClips) ? null : row;
+
+/** A clip's open speed curve closes when the clip goes (an undo that brings it back brings it back closed). */
+const keepExpandedClip = (id: string | null, draft: StitchDraft) =>
+  id !== null && !draft.timeline.some((c) => c.id === id) ? null : id;
 
 /**
  * sameDraft compares the audio and the overlays with their rows compacted (a row a move emptied is no change to save),
@@ -427,7 +440,7 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
       set(musicEdgeId === undefined ? { initial: saved } : { initial: saved, musicEdgeIdAtOpen: musicEdgeId }),
 
     apply: (recipe, opts) => {
-      const { draft, gestureKey, past, selection, musicHeld } = get();
+      const { draft, gestureKey, past, selection, musicHeld, videoExpandedClip } = get();
       if (!draft) return;
       // An edit's media holds every asset its clips use, so a clip added any way brings its asset in, in the same step
       const next = coverEditMedia(recipe(draft));
@@ -443,8 +456,9 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         }
       }
       const held = musicHeld || hasMusicClip(next.audioClips);
+      const expandedClip = keepExpandedClip(videoExpandedClip, next);
       if (opts?.gestureKey !== undefined && opts.gestureKey === gestureKey) {
-        set({ draft: next, future: [], selection: nextSelection, musicHeld: held });
+        set({ draft: next, future: [], selection: nextSelection, musicHeld: held, videoExpandedClip: expandedClip });
         return;
       }
       set({
@@ -454,13 +468,14 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: opts?.gestureKey ?? null,
         selection: nextSelection,
         musicHeld: held,
+        videoExpandedClip: expandedClip,
       });
     },
 
     endGesture: () => set({ gestureKey: null }),
 
     undo: () => {
-      const { draft, past, future, selection, audioExpandedRow } = get();
+      const { draft, past, future, selection, audioExpandedRow, videoExpandedClip } = get();
       if (!draft || past.length === 0) return;
       const previous = past[past.length - 1];
       set({
@@ -470,11 +485,12 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: null,
         selection: pruneSelection(selection, previous),
         audioExpandedRow: clampExpandedRow(audioExpandedRow, previous),
+        videoExpandedClip: keepExpandedClip(videoExpandedClip, previous),
       });
     },
 
     redo: () => {
-      const { draft, past, future, selection, audioExpandedRow } = get();
+      const { draft, past, future, selection, audioExpandedRow, videoExpandedClip } = get();
       if (!draft || future.length === 0) return;
       const [next, ...rest] = future;
       set({
@@ -484,6 +500,7 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
         gestureKey: null,
         selection: pruneSelection(selection, next),
         audioExpandedRow: clampExpandedRow(audioExpandedRow, next),
+        videoExpandedClip: keepExpandedClip(videoExpandedClip, next),
       });
     },
 
@@ -495,6 +512,7 @@ export const useStitchEditorStore: UseBoundStore<StoreApi<StitchEditorState>> = 
     },
     setAudioDurations: (audioDurations) => set({ audioDurations }),
     setAudioExpandedRow: (audioExpandedRow) => set({ audioExpandedRow }),
+    setVideoExpandedClip: (videoExpandedClip) => set({ videoExpandedClip }),
     setPlayhead: (t) => set({ playhead: Number.isFinite(t) ? Math.max(0, t) : 0 }),
     // A pause lands the playhead where the frame loop's clock is, in the same change, so what follows the pause sees it
     setPlaying: (playing) => set(playing || !get().playing ? { playing } : { playing, playhead: live.playhead }),

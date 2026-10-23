@@ -1,17 +1,21 @@
 "use client";
 
-import type { MouseEvent, ReactNode, PointerEvent as ReactPointerEvent } from "react";
+import { useRef, type MouseEvent, type ReactNode, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { Rewind, Volume1, VolumeX } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 import { clipName } from "@/lib/stitch/labels";
+import { progressToY, remapMetrics } from "@/lib/stitch/remapGeometry";
 import { formatSeconds, formatTimecode } from "@/lib/stitch/timecode";
-import type { ClipSpan } from "@/lib/stitch/timeline";
-import { activeWarp, warpRateLabel } from "@/lib/stitch/warp";
+import { spanRange, type ClipSpan } from "@/lib/stitch/timeline";
+import { activeWarp, bakeError, formatSpeed, IDENTITY_WARP, isWarped, warpMap, warpRateLabel } from "@/lib/stitch/warp";
 import { setClipMuted } from "../editorActions";
 import { GEOMETRY, LIFTED_CLIP, MOVING_CLIP, SELECTED_RING } from "../editorStyles";
 import { isToggleClick } from "../selectionActions";
 import type { ClipMediaView } from "../useStitchEditorMedia";
-import { Filmstrip } from "./Filmstrip";
+import { AddPointHint, CurveReadout } from "./CurveChips";
+import { Filmstrip, frameCellFor } from "./Filmstrip";
+import { SpeedCurveLayer } from "./SpeedCurveLayer";
+import { useSpeedCurveDrag } from "./useSpeedCurveDrag";
 
 /**
  * At rest; "dimmed" while another clip is being dragged to a new place; "lifted" while this one is; "moving" while
@@ -57,6 +61,8 @@ export const speedBadgePx = (text: string | null, reversed: boolean): number =>
 const lengthChipPx = (text: string): number => 22 + 6 * text.length;
 /** A mouse press takes no focus: a focused clip or button would be unmounted by its own action and drop focus out of the editor. */
 export const keepFocus = (event: MouseEvent) => event.preventDefault();
+/** A box with no lane content to measure against: its curve takes no press. */
+const NO_CONTENT: RefObject<HTMLDivElement | null> = { current: null };
 
 /**
  * A clip's In or Out handle, on a video box or an audio box: shown on hover (white on the one selected clip), and
@@ -117,6 +123,15 @@ export function EdgeHandle({
  * Its accessible name says where it starts, and a box under 96px keeps its
  * middle for the body drag: no hover mute button, and the muted badge only
  * marks it (⌥M and the menu unmute).
+ *
+ * On a row open for its speed curve the box is taller, its frames wider,
+ * and its time remap is drawn over them (SpeedCurveLayer). The single
+ * selected clip there takes presses on its line and knots
+ * (useSpeedCurveDrag): its hover mute button gives way to them; any other
+ * press is the body's, as everywhere. While a knot is dragged its momentary
+ * speed and sequence time show beside it; over the line a hint says a drag
+ * adds a point, except near a knot, where the press drags that knot (drawn
+ * larger).
  */
 export function ClipBox({
   span,
@@ -138,6 +153,11 @@ export function ClipBox({
   multi = false,
   expanded = false,
   curveEditable = false,
+  curveOffsetX = 0,
+  curveWidth,
+  contentRef,
+  visibleRight = Infinity,
+  contentWidth = Infinity,
   overlay,
   onBodyPointerDown,
   onHandlePointerDown,
@@ -165,10 +185,18 @@ export function ClipBox({
   compact?: boolean;
   /** One of several selected clips: its handles show on hover only, since a trim acts on one clip. */
   multi?: boolean;
-  /** On a row open for its speed curve (the box is taller). */
+  /** On a row open for its speed curve: the box is taller, its curve drawn over its frames. */
   expanded?: boolean;
-  /** The single selected clip on an open row: presses on its speed curve are the curve's, so no hover mute button. */
+  /** The single selected clip on an open row, at rest and not trimmed: presses on its curve are the curve's. */
   curveEditable?: boolean;
+  /** Where the clip's time starts from the box's own left (≤ 0 where it is inset at a join), and its width on the lane. */
+  curveOffsetX?: number;
+  curveWidth?: number;
+  /** The lane content, which the curve's presses are measured against. */
+  contentRef?: RefObject<HTMLDivElement | null>;
+  /** For the readout's side: the visible lanes' right and the content's width. */
+  visibleRight?: number;
+  contentWidth?: number;
   /** Drawn over the frames, under the badges and handles (Stacked's crossfade marks). */
   overlay?: ReactNode;
   onBodyPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -202,134 +230,208 @@ export function ClipBox({
   const rightPx = compact && !expanded ? lengthChipPx(lengthText) : !compact && hoverMute ? 38 : 14;
   const speedBadge = warp !== null && mode !== "lifted" && leftPx + speedBadgePx(rate, reversed) + rightPx <= width;
 
+  const blockRef = useRef<HTMLDivElement>(null);
+  const metrics = remapMetrics(height);
+  const curveW = curveWidth ?? width;
+  // Lane content x of the clip's first frame (a lifted box's travel moves its line with it)
+  const curveX = x + curveOffsetX;
+  const drag = useSpeedCurveDrag({
+    clipId: clip.id,
+    x: curveX,
+    width: curveW,
+    metrics,
+    // A drag that turns a preset or bezier into points bakes it to the clip's budget, which toPoints can miss beside a
+    // steep stretch or a vertical tangent
+    maxError: bakeError(span.sourceOut - clip.inSec, view?.fps),
+    contentRef: contentRef ?? NO_CONTENT,
+    blockRef,
+    editable: curveEditable,
+  });
+  const shownWarp = drag.live?.curve ?? clip.warp ?? IDENTITY_WARP;
+  const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (drag.onPointerDown(event)) return;
+    onBodyPointerDown(event);
+  };
+  // The dragged knot's readout, in the row's coordinates: its momentary speed and its sequence time
+  const live = drag.live;
+  const dragged =
+    live && live.index !== null && live.curve.curve?.kind === "points" ? live.curve.curve.points[live.index] : null;
+  const readout =
+    live && dragged
+      ? {
+          x: curveX + dragged[0] * curveW,
+          y: top + progressToY(dragged[1], metrics),
+          speed: isWarped(live.curve) ? warpMap(spanRange(span), live.curve).speedAt(dragged[0] * span.length) : 1,
+          time: span.start + dragged[0] * span.length,
+        }
+      : null;
+  const chipsRight = Math.min(contentWidth, visibleRight);
+
   return (
-    <div
-      data-clip-id={clip.id}
-      aria-label={compact ? `${name}, starts ${formatTimecode(span.start)}` : name}
-      aria-selected={selected}
-      role="option"
-      tabIndex={focusable ? 0 : -1}
-      onPointerDown={onBodyPointerDown}
-      onMouseDown={keepFocus}
-      onContextMenu={onContextMenu}
-      className={cn(
-        // The focus ring, outside the box, marks the focused clip apart from the others a group selection rings
-        "group absolute overflow-hidden rounded-md bg-edit-field select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
-        mode === "moving"
-          ? MOVING_CLIP
-          : mode === "lifted"
-            ? cn(LIFTED_CLIP, "ring-1 ring-white/20")
-            : mode === "dimmed" && "opacity-40",
-        trimEdge === "in" && "z-1",
-        // Stacked: the body drags on both axes; only the row grip's drag lifts a box, up or down
-        compact && mode === "rest" && "cursor-grab",
-        compact && mode === "lifted" && "cursor-ns-resize",
-      )}
-      style={{ left: x, top, width, height }}
-    >
-      <Filmstrip
-        frames={view?.frames ?? []}
-        duration={view?.duration ?? null}
-        inSec={inSec}
-        lengthSec={lengthSec}
-        warp={clip.warp}
-        pxPerSec={pxPerSec}
-        width={width}
-        boxX={x}
-        viewLeft={viewLeft}
-        viewRight={viewRight}
-      />
-      {overlay}
-      {ringed && <span aria-hidden="true" data-selected-ring="" className={SELECTED_RING} />}
-
-      {/* A box lifted to a new place says which clip it is */}
-      {mode === "lifted" && (
-        <span className={cn(LENGTH_CHIP, "left-1.5 right-auto font-medium")}>{name}</span>
-      )}
-      {/* A box in motion keeps its length, without the buttons a press would reach */}
-      {(atRest || mode === "moving") && width >= MIN_CHIP_BOX_PX && (
-        // On hover, and on keyboard focus (the box is the group), as the length is drawn nowhere else
-        <span
-          className={cn(
-            LENGTH_CHIP,
-            trimEdge || mode === "moving" ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
-          )}
-        >
-          {lengthText}
-        </span>
-      )}
-
-      {clip.muted && ((atRest && !soundButtons) || mode === "moving") && (
-        <span aria-hidden="true" data-muted-mark="" className={cn(MUTED_BADGE, badgeTop, badgeLeft)}>
-          <VolumeX size={11} strokeWidth={2} />
-        </span>
-      )}
-      {speedBadge && (
-        <span aria-hidden="true" data-speed-badge="" className={cn(SPEED_BADGE, badgeTop, speedLeft)}>
-          {reversed && <Rewind size={11} strokeWidth={2} />}
-          {rate && <span>{rate}</span>}
-        </span>
-      )}
-      {atRest && clip.muted && soundButtons && (
-        <button
-          type="button"
-          aria-label="Unmute clip audio"
-          aria-hidden="true"
-          tabIndex={-1}
-          title="Clip audio muted"
-          onPointerDown={stopPress}
-          onMouseDown={keepFocus}
-          onClick={(event) => {
-            if (!selectsClip(event)) setClipMuted(clip.id, false);
-          }}
-          className={cn(
-            "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300 hover:text-neutral-100",
-            badgeTop,
-            badgeLeft,
-          )}
-        >
-          <VolumeX size={11} strokeWidth={2} />
-        </button>
-      )}
-      {hoverMute && (
-        <button
-          type="button"
-          aria-label="Mute clip audio"
-          aria-hidden="true"
-          tabIndex={-1}
-          onPointerDown={stopPress}
-          onMouseDown={keepFocus}
-          onClick={(event) => {
-            if (!selectsClip(event)) setClipMuted(clip.id, true);
-          }}
-          className={cn(
-            "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-100 opacity-0 group-hover:opacity-100",
-            badgeTop,
-            compact ? badgeLeft : "right-4",
-          )}
-        >
-          <Volume1 size={11} strokeWidth={2} />
-        </button>
-      )}
-
-      {showHandles && (
-        <>
-          <EdgeHandle
-            side="in"
-            width={handleWidth}
-            selected={handlesWhite}
-            active={trimEdge === "in"}
-            onPointerDown={(event) => onHandlePointerDown(event, "in")}
+    <>
+      <div
+        ref={blockRef}
+        data-clip-id={clip.id}
+        aria-label={compact ? `${name}, starts ${formatTimecode(span.start)}` : name}
+        aria-selected={selected}
+        role="option"
+        tabIndex={focusable ? 0 : -1}
+        onPointerDown={onPointerDown}
+        onPointerMove={drag.onPointerMove}
+        onPointerLeave={drag.onPointerLeave}
+        onDoubleClick={drag.onDoubleClick}
+        onMouseDown={keepFocus}
+        onContextMenu={onContextMenu}
+        className={cn(
+          // The focus ring, outside the box, marks the focused clip apart from the others a group selection rings
+          "group absolute overflow-hidden rounded-md bg-edit-field select-none outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-pane",
+          mode === "moving"
+            ? MOVING_CLIP
+            : mode === "lifted"
+              ? cn(LIFTED_CLIP, "ring-1 ring-white/20")
+              : mode === "dimmed" && "opacity-40",
+          trimEdge === "in" && "z-1",
+          // Stacked: the body drags on both axes; only the row grip's drag lifts a box, up or down
+          compact && mode === "rest" && "cursor-grab",
+          compact && mode === "lifted" && "cursor-ns-resize",
+          // Last, so it wins the compact box's cursor-grab
+          curveEditable &&
+            (drag.live ? "cursor-grabbing" : drag.overPoint ? "cursor-grab" : drag.hover ? "cursor-pointer" : undefined),
+        )}
+        style={{ left: x, top, width, height }}
+      >
+        <Filmstrip
+          frames={view?.frames ?? []}
+          duration={view?.duration ?? null}
+          inSec={inSec}
+          lengthSec={lengthSec}
+          warp={clip.warp}
+          pxPerSec={pxPerSec}
+          width={width}
+          boxX={x}
+          viewLeft={viewLeft}
+          viewRight={viewRight}
+          cell={expanded ? frameCellFor(height) : undefined}
+        />
+        {overlay}
+        {expanded && span.length > 0 && (
+          <SpeedCurveLayer
+            warp={shownWarp}
+            offsetX={curveOffsetX}
+            width={curveW}
+            height={height}
+            selected={selected && !multi}
+            editable={curveEditable}
+            pointIndex={drag.live?.index ?? drag.hoverPoint}
+            hover={drag.hover && { x: drag.hover.x - x, y: drag.hover.y }}
           />
-          <EdgeHandle
-            side="out"
-            width={handleWidth}
-            selected={handlesWhite}
-            active={trimEdge === "out"}
-            onPointerDown={(event) => onHandlePointerDown(event, "out")}
-          />
-        </>
+        )}
+        {ringed && <span aria-hidden="true" data-selected-ring="" className={SELECTED_RING} />}
+
+        {/* A box lifted to a new place says which clip it is */}
+        {mode === "lifted" && (
+          <span className={cn(LENGTH_CHIP, "left-1.5 right-auto font-medium")}>{name}</span>
+        )}
+        {/* A box in motion keeps its length, without the buttons a press would reach */}
+        {(atRest || mode === "moving") && width >= MIN_CHIP_BOX_PX && (
+          // On hover, and on keyboard focus (the box is the group), as the length is drawn nowhere else
+          <span
+            className={cn(
+              LENGTH_CHIP,
+              trimEdge || mode === "moving" ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+            )}
+          >
+            {lengthText}
+          </span>
+        )}
+
+        {clip.muted && ((atRest && !soundButtons) || mode === "moving") && (
+          <span aria-hidden="true" data-muted-mark="" className={cn(MUTED_BADGE, badgeTop, badgeLeft)}>
+            <VolumeX size={11} strokeWidth={2} />
+          </span>
+        )}
+        {speedBadge && (
+          <span aria-hidden="true" data-speed-badge="" className={cn(SPEED_BADGE, badgeTop, speedLeft)}>
+            {reversed && <Rewind size={11} strokeWidth={2} />}
+            {rate && <span>{rate}</span>}
+          </span>
+        )}
+        {atRest && clip.muted && soundButtons && (
+          <button
+            type="button"
+            aria-label="Unmute clip audio"
+            aria-hidden="true"
+            tabIndex={-1}
+            title="Clip audio muted"
+            onPointerDown={stopPress}
+            onMouseDown={keepFocus}
+            onClick={(event) => {
+              if (!selectsClip(event)) setClipMuted(clip.id, false);
+            }}
+            className={cn(
+              "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-300 hover:text-neutral-100",
+              badgeTop,
+              badgeLeft,
+            )}
+          >
+            <VolumeX size={11} strokeWidth={2} />
+          </button>
+        )}
+        {hoverMute && (
+          <button
+            type="button"
+            aria-label="Mute clip audio"
+            aria-hidden="true"
+            tabIndex={-1}
+            onPointerDown={stopPress}
+            onMouseDown={keepFocus}
+            onClick={(event) => {
+              if (!selectsClip(event)) setClipMuted(clip.id, true);
+            }}
+            className={cn(
+              "absolute z-2 inline-flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-black/60 text-neutral-100 opacity-0 group-hover:opacity-100",
+              badgeTop,
+              compact ? badgeLeft : "right-4",
+            )}
+          >
+            <Volume1 size={11} strokeWidth={2} />
+          </button>
+        )}
+
+        {showHandles && (
+          <>
+            <EdgeHandle
+              side="in"
+              width={handleWidth}
+              selected={handlesWhite}
+              active={trimEdge === "in"}
+              onPointerDown={(event) => onHandlePointerDown(event, "in")}
+            />
+            <EdgeHandle
+              side="out"
+              width={handleWidth}
+              selected={handlesWhite}
+              active={trimEdge === "out"}
+              onPointerDown={(event) => onHandlePointerDown(event, "out")}
+            />
+          </>
+        )}
+      </div>
+      {readout && (
+        <CurveReadout x={readout.x} y={readout.y} right={chipsRight} testId="stitch-speed-readout">
+          <span className="text-neutral-200">{formatSpeed(readout.speed)}</span>
+          <span className="text-neutral-500">{formatTimecode(readout.time)}</span>
+        </CurveReadout>
       )}
-    </div>
+      {drag.hover && !drag.live && (
+        <AddPointHint
+          x={drag.hover.x}
+          y={top + drag.hover.y}
+          right={chipsRight}
+          testId="stitch-speed-add-point"
+          label="Drag to add point"
+        />
+      )}
+    </>
   );
 }

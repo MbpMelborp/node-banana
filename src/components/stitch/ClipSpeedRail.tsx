@@ -1,6 +1,8 @@
 "use client";
 
 import { memo, useEffect, useRef, type CSSProperties } from "react";
+import { Spline } from "lucide-react";
+import { cn } from "@/components/nodes/ui/cn";
 import { useStitchEditorStore } from "@/store/stitchEditorStore";
 import { speedToSlider, sliderToSpeed } from "@/lib/stitch/speedScale";
 import { formatSeconds } from "@/lib/stitch/timecode";
@@ -9,6 +11,7 @@ import {
   bakeError,
   canBlend,
   dropsSound,
+  editablePoints,
   formatSpeed,
   MAX_SPEED,
   MIN_SPEED,
@@ -17,10 +20,12 @@ import {
 } from "@/lib/stitch/warp";
 import type { StitchTimelineClip } from "@/types";
 import { EasePicker } from "./EasePicker";
+import { TEXT_GHOST } from "./editorStyles";
 import { RailLabel, RailNote, RailRow, RailSegments, RailSwitch } from "./railParts";
 import {
   canSetSpeed,
   curveGestureKey,
+  isClipCurveExpanded,
   moveClipSpeed,
   nudgeClipSpeed,
   setClipBlend,
@@ -31,6 +36,7 @@ import {
   setSelectedClipsSpeed,
   speedGestureKey,
   speedWaitsReason,
+  toggleClipCurveExpanded,
 } from "./speedActions";
 import { TimecodeField } from "./TimecodeField";
 
@@ -40,8 +46,9 @@ const SPEED_WELL = "w-[76px] shrink-0";
 /**
  * One clip's Speed, Ramp, Reverse and Blend frames in the rail, under its Volume. Speed is a log slider (0.1–10×), a
  * well that takes a typed speed and ↑/↓, and the presets; the clip's length on the timeline and why it can go no
- * slower or faster are notes under them, and so is a sound the render leaves out. `duration` is the source's (null
- * while unknown: then only Reverse acts), `fps` its rate (the bake budget of a switch to Points).
+ * slower or faster are notes under them, and so is a sound the render leaves out. Under Ramp, Show speed curve opens
+ * the clip's curve on the timeline, where it is edited (pressing Points opens it too). `duration` is the source's
+ * (null while unknown: then only Reverse acts), `fps` its rate (the bake budget of a switch to Points).
  */
 export const ClipSpeed = memo(function ClipSpeed({
   clip,
@@ -54,6 +61,7 @@ export const ClipSpeed = memo(function ClipSpeed({
 }) {
   const endGesture = useStitchEditorStore((s) => s.endGesture);
   const waiting = useStitchEditorStore(speedWaitsReason);
+  const curveOpen = useStitchEditorStore((s) => isClipCurveExpanded(s, clip.id));
   // As In and Out: nothing to retime until the length is known. Reverse keeps the length and reads none, so it acts,
   // as the menu's and several clips' do
   const off = duration === null;
@@ -64,6 +72,8 @@ export const ClipSpeed = memo(function ClipSpeed({
   const sourceLength = duration === null ? 0 : clipSourceOut(clip, duration) - clip.inSec;
   const length = duration === null ? null : clipLength(clip, duration);
   const pos = Math.round(speedToSlider(speed));
+  // A drag on the timeline's line edits points: a preset, a bezier or a split piece's part of a ramp turns into them
+  const asPoints = warp?.curve != null && editablePoints(warp) === null;
   // A drag keeps the Blend it started with across 1×, where the warp itself goes
   const carried = useRef<boolean | null>(null);
   const blend = () => (carried.current ??= warp?.blend ?? false);
@@ -80,6 +90,15 @@ export const ClipSpeed = memo(function ClipSpeed({
     },
     [clip.id],
   );
+  // Opening the row grows the timeline under the rail, which can push the toggle and its note below the rail's fold
+  const curveToggle = useRef<HTMLDivElement>(null);
+  const curveWas = useRef(curveOpen);
+  useEffect(() => {
+    if (curveWas.current === curveOpen) return;
+    curveWas.current = curveOpen;
+    const frame = requestAnimationFrame(() => curveToggle.current?.scrollIntoView?.({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [curveOpen]);
 
   return (
     <>
@@ -168,7 +187,30 @@ export const ClipSpeed = memo(function ClipSpeed({
             setClipCurve(clip.id, curve, opts?.gestureKey ? { ...opts, blend: blend() } : undefined)
           }
           onGestureEnd={release}
+          onPoints={() => {
+            if (!isClipCurveExpanded(useStitchEditorStore.getState(), clip.id)) toggleClipCurveExpanded(clip.id);
+          }}
         />
+        <div ref={curveToggle}>
+          {/* Stays mounted, disabled while the length is unknown, so focus on it is never dropped */}
+          <button
+            type="button"
+            aria-expanded={curveOpen}
+            disabled={off}
+            onClick={() => toggleClipCurveExpanded(clip.id)}
+            className={cn(TEXT_GHOST, "-ml-1.5 mt-2 aria-expanded:bg-edit-pressed aria-expanded:text-neutral-100")}
+          >
+            <Spline size={14} strokeWidth={1.5} />
+            {curveOpen ? "Hide speed curve" : "Show speed curve"}
+          </button>
+          {curveOpen && (
+            <RailNote>
+              {asPoints
+                ? "Dragging the line turns the ramp into points."
+                : "Drag the line to add a point. Double-click a point to remove it."}
+            </RailNote>
+          )}
+        </div>
       </div>
 
       <div className="mt-5">

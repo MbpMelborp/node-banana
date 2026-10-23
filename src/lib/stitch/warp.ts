@@ -266,6 +266,10 @@ export function withWarp<T extends { warp?: ClipWarp }>(item: T, warp: ClipWarp 
 export const isWindowed = (window: readonly [number, number] | undefined): window is readonly [number, number] =>
   window !== undefined && !(window[0] === 0 && window[1] === 1);
 
+/** A points curve over the whole clip: the knots its open row draws and edits. null for any other ramp or none. */
+export const editablePoints = (warp: ClipWarp | null | undefined): ReadonlyArray<readonly [number, number]> | null =>
+  warp?.curve?.kind === "points" && !isWindowed(warp.window) ? warp.curve.points : null;
+
 /**
  * The curve a clip plays: output progress → source progress over the clip. Straight for none; the kind's curve; or,
  * with a window, its part [a, b] stretched back to [0, 1] (straight for a window inside a freeze, which no canonical
@@ -472,12 +476,15 @@ export function bakeError(sourceSec: number, fps: number | null | undefined): nu
 /**
  * The clip's ramp as points over the whole clip, for editing it as points: null without a ramp; an unwindowed points
  * curve's own knots (copied); else the curve it plays, baked by toPoints to maxError, seeded with a points curve's own
- * knots that fall inside its window (those within MIN_POINT_GAP of a new end dropped, as no knot may sit there). The
- * caller stores it as a new curve, which drops the window.
+ * knots that fall inside its window (those within MIN_POINT_GAP of a new end dropped, as no knot may sit there). With
+ * `knotAt` (output progress clear of the ends' gap), a bake also holds a knot there on the curve: its own knots within
+ * the gap of it go and toPoints fills in around it, so the speed row's press drags a knot under the pointer, never a
+ * hidden one beside it. The caller stores it as a new curve, which drops the window.
  */
 export function pointsOfWarp(
   warp: ClipWarp | null | undefined,
   maxError = 0.01,
+  knotAt?: number,
 ): { kind: "points"; points: Array<[number, number]> } | null {
   if (!isWarped(warp) || warp.curve === null) return null;
   const { curve, window } = warp;
@@ -485,15 +492,23 @@ export function pointsOfWarp(
     return { kind: "points", points: curve.points.map(([x, y]): [number, number] => [x, y]) };
   }
   const played = warpCurve(curve, window);
-  if (curve.kind !== "points" || !window) return { kind: "points", points: toPoints(played.ease, maxError) };
-  const [a, b] = window;
-  const base = curveOf(curve);
-  const ca = base.ease(a);
-  const rise = base.ease(b) - ca;
-  const seed = curve.points
-    .map(([x, y]): [number, number] => [(x - a) / (b - a), (y - ca) / rise])
-    .filter(([x]) => x >= MIN_POINT_GAP && x <= 1 - MIN_POINT_GAP);
-  return { kind: "points", points: toPoints(played.ease, maxError, { seed: [[0, 0], ...seed, [1, 1]] }) };
+  let points: Array<[number, number]>;
+  if (curve.kind !== "points" || !window) {
+    points = toPoints(played.ease, maxError);
+  } else {
+    const [a, b] = window;
+    const base = curveOf(curve);
+    const ca = base.ease(a);
+    const rise = base.ease(b) - ca;
+    const seed = curve.points
+      .map(([x, y]): [number, number] => [(x - a) / (b - a), (y - ca) / rise])
+      .filter(([x]) => x >= MIN_POINT_GAP && x <= 1 - MIN_POINT_GAP);
+    points = toPoints(played.ease, maxError, { seed: [[0, 0], ...seed, [1, 1]] });
+  }
+  if (knotAt === undefined) return { kind: "points", points };
+  const kept = points.filter(([x]) => Math.abs(x - knotAt) >= MIN_POINT_GAP);
+  const seed: Array<[number, number]> = [...kept, [knotAt, played.ease(knotAt)]];
+  return { kind: "points", points: toPoints(played.ease, maxError, { seed }) };
 }
 
 /** The rail's speed presets. */

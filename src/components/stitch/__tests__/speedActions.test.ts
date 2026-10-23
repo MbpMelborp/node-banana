@@ -9,8 +9,10 @@ import type { ClipWarp, ClipWarpCurve, StitchTimelineClip } from "@/types";
 import {
   canSetSpeed,
   focusSpeedWell,
+  isClipCurveExpanded,
   moveClipSpeed,
   nudgeClipSpeed,
+  removeClipWarpPoint,
   resetSelectedSpeed,
   setClipBlend,
   setClipCurve,
@@ -20,6 +22,7 @@ import {
   setSelectedClipsSpeed,
   speedGestureKey,
   speedWaitsReason,
+  toggleClipCurveExpanded,
   toggleSelectedReverse,
 } from "../speedActions";
 
@@ -322,5 +325,43 @@ describe("focusSpeedWell", () => {
     } finally {
       panel.remove();
     }
+  });
+});
+
+describe("the speed curve row", () => {
+  it("opens Track's clips row for any clip, a Stacked clip's own row only, as no undo step", () => {
+    toggleClipCurveExpanded("a");
+    expect(editor().videoExpandedClip).toBe("a");
+    expect([isClipCurveExpanded(editor(), "a"), isClipCurveExpanded(editor(), "b")]).toEqual([true, true]);
+    // Toggled from the other clip, Track's one row closes
+    toggleClipCurveExpanded("b");
+    expect(editor().videoExpandedClip).toBeNull();
+    expect(steps()).toBe(0);
+    open([edgeClip("a", "e1"), edgeClip("b", "e2")], { stacked: true });
+    toggleClipCurveExpanded("a");
+    expect([isClipCurveExpanded(editor(), "a"), isClipCurveExpanded(editor(), "b")]).toEqual([true, false]);
+    // One video row open at a time
+    toggleClipCurveExpanded("b");
+    expect(editor().videoExpandedClip).toBe("b");
+    expect(isClipCurveExpanded(editor(), "a")).toBe(false);
+  });
+
+  it("removes one interior knot in one step; never an end, nothing on another curve, and a straight line left is no warp", () => {
+    const ramp: ClipWarpCurve = { kind: "points", points: [[0, 0], [0.3, 0.1], [0.5, 0.5], [1, 1]] };
+    open([retimed(edgeClip("a", "e1"), W(1, { curve: ramp })), retimed(edgeClip("b", "e2"), W(2, { curve: QUAD }))]);
+    removeClipWarpPoint("a", 0);
+    removeClipWarpPoint("a", 3);
+    removeClipWarpPoint("b", 1);
+    expect(steps()).toBe(0);
+    removeClipWarpPoint("a", 2);
+    expect(clip("a").warp?.curve).toEqual({ kind: "points", points: [[0, 0], [0.3, 0.1], [1, 1]] });
+    expect(steps()).toBe(1);
+    removeClipWarpPoint("a", 1);
+    expect("warp" in clip("a")).toBe(false);
+    expect(steps()).toBe(2);
+    // A split piece's part of a ramp has no knots of its own
+    open([retimed(edgeClip("a", "e1"), W(1, { curve: ramp, window: [0, 0.6] }))]);
+    removeClipWarpPoint("a", 1);
+    expect(steps()).toBe(0);
   });
 });

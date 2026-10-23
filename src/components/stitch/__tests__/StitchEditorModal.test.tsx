@@ -1558,6 +1558,7 @@ describe("StitchEditorModal, several clips", () => {
       "Speed…",
       "Reverse",
       "Reset speed",
+      "Show speed curve",
       "Copy⌘C",
       "Cut⌘X",
       "Paste⌘V",
@@ -1568,6 +1569,9 @@ describe("StitchEditorModal, several clips", () => {
     const item = (name: string) => within(menu).getByRole("menuitem", { name: new RegExp(`^${name}`) });
     // Nothing is retimed; the tallest menu scrolls in a short window rather than run past its edge
     expect(item("Reset speed")).toBeDisabled();
+    // A speed curve is one clip's
+    expect(item("Show speed curve")).toBeDisabled();
+    expect(item("Show speed curve")).toHaveAttribute("title", "Select one clip");
     expect(menu.style.maxHeight).not.toBe("");
     expect(item("Start at playhead")).toBeDisabled();
     expect(item("Start at playhead")).toHaveAttribute("title", "Select one clip");

@@ -1,8 +1,10 @@
 import { useToast } from "@/components/Toast";
 import { selectedClipIds, useStitchEditorStore, type StitchEditorState } from "@/store/stitchEditorStore";
+import { removeRemapPoint } from "@/lib/easing";
 import { pinWaitsForLoading } from "@/lib/stitch/libraryInsert";
 import { nudgeSpeed } from "@/lib/stitch/speedScale";
 import { clipSpeedLimits, pinStarts, sourceKey, updateClipsWarp, type WarpPatch } from "@/lib/stitch/timeline";
+import { editablePoints } from "@/lib/stitch/warp";
 import type { ClipWarpCurve } from "@/types";
 import { EDITOR_PANEL_SELECTOR } from "./editorStyles";
 
@@ -132,6 +134,31 @@ export function moveClipSpeed(clipId: string, speed: number, dir: 1 | -1, opts?:
 export function nudgeClipSpeed(clipId: string, dir: 1 | -1, big: boolean): number | null {
   const from = clipOf(clipId)?.warp?.speed ?? 1;
   return moveClipSpeed(clipId, nudgeSpeed(from, dir, big), dir, { gestureKey: speedGestureKey([clipId]) });
+}
+
+/** Whether this clip's speed curve is open: Stacked, its own row; Track, the clips row (it names any clip there). */
+export function isClipCurveExpanded(s: StitchEditorState, clipId: string): boolean {
+  const id = s.videoExpandedClip;
+  if (id === null || !s.draft) return false;
+  return s.draft.sequenceLayout.mode === "stacked" ? id === clipId : s.draft.timeline.some((c) => c.id === id);
+}
+
+/** The rail's and the menu's Show / Hide speed curve. Not an undo step; one video row open at a time. */
+export function toggleClipCurveExpanded(clipId: string): void {
+  const s = editor();
+  s.setVideoExpandedClip(isClipCurveExpanded(s, clipId) ? null : clipId);
+}
+
+/**
+ * One knot off a clip's drawn speed curve (a double-click); the ends stay. Nothing on a curve that is not points over
+ * the whole clip. A straight line left is no ramp: at 1× forward the warp goes.
+ */
+export function removeClipWarpPoint(clipId: string, index: number): void {
+  const knots = editablePoints(clipOf(clipId)?.warp);
+  if (!knots) return;
+  const points = removeRemapPoint(knots, index);
+  if (points === knots) return;
+  setClipCurve(clipId, { kind: "points", points: points.map(([x, y]): [number, number] => [x, y]) });
 }
 
 /**

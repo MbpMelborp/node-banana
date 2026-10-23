@@ -835,6 +835,21 @@ describe("pointsOfWarp", () => {
     expect(normalizePoints(baked.points)).toEqual(baked.points);
   });
 
+  it("holds a knot at a press on the curve, the bake's own knots within its gap gone and the rest kept", () => {
+    for (const warp of [W(2, SINE), W(1, BEZIER), W(1, RAMP_POINTS, { window: [0.1, 0.8] })]) {
+      const played = warpCurve(warp.curve, warp.window).ease;
+      const plain = pointsOfWarp(warp, 0.004)!.points;
+      const at = plain[2][0] + MIN_POINT_GAP / 2;
+      const baked = pointsOfWarp(warp, 0.004, at)!.points;
+      expect(baked).toContainEqual([at, played(at)]);
+      expect(baked).not.toContainEqual(plain[2]);
+      for (const knot of plain) if (Math.abs(knot[0] - at) >= MIN_POINT_GAP) expect(baked).toContainEqual(knot);
+      expect(normalizePoints(baked)).toEqual(baked);
+    }
+    // A points curve over the whole clip is its own knots: there is nothing to bake
+    expect(pointsOfWarp(W(2, RAMP_POINTS), 0.004, 0.5)).toEqual(RAMP_POINTS);
+  });
+
   it("drops a stored knot that lands within MIN_POINT_GAP of a window's edge", () => {
     const points: Array<[number, number]> = [
       [0, 0],

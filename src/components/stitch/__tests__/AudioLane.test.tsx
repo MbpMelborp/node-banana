@@ -588,6 +588,19 @@ describe("Audio section", () => {
     expect(editor().selection).toMatchObject({ kind: "audio", point: 0, onCurve: true });
   });
 
+  it("leaves a Mac's Ctrl-press on the line to the clip menu: it adds no point", () => {
+    seed();
+    openEditor();
+    editMusic();
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    down(musicBox(), x(1), y(1) + 3, { ctrlKey: true });
+    fireEvent.contextMenu(musicBox(), { clientX: x(1), clientY: y(1) + 3, ctrlKey: true });
+    pointer("pointerup", x(1), y(1) + 3, { ctrlKey: true });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(curve()).toEqual([]);
+    expect(editor().past).toHaveLength(0);
+  });
+
   it("moves the whole line with ⌥ held, leaving no point selected", () => {
     seed();
     openEditor();

@@ -381,13 +381,23 @@ describe("EditorRail, a clip's speed", () => {
     expect(steps()).toBe(1);
   });
 
-  it("turns Speed, Ramp and Blend off while the length is unknown; Reverse, which reads none, still acts", () => {
-    renderRail(open([[edgeClip("a", "e1"), null]]));
+  it("turns Speed, Ramp, Blend and the speed curve off while the length is unknown; Reverse, which reads none, still acts", () => {
+    const media = open([[edgeClip("a", "e1"), null]]);
+    render(
+      <div data-stitch-editor="" tabIndex={-1}>
+        <EditorRail media={media} audio={new Map()} frameSize={null} />
+        <ClipContextMenu media={media} audio={new Map()} />
+      </div>,
+    );
     expect(slider()).toBeDisabled();
     expect(well()).toBeDisabled();
     for (const b of within(group("Speed presets")).getAllByRole("button")) expect(b).toBeDisabled();
     for (const b of within(group("Ramp")).getAllByRole("button")) expect(b).toBeDisabled();
     expect(toggle("Blend frames")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Show speed curve" })).toBeDisabled();
+    act(() => editor().openMenu({ kind: "clip", clipId: "a", x: 10, y: 10 }));
+    expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Show speed curve/ })).toBeDisabled();
+    act(() => editor().openMenu(null));
     fireEvent.click(toggle("Reverse"));
     expect(clip().warp).toEqual(W(1, { reverse: true }));
   });

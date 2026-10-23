@@ -156,6 +156,7 @@ export function TrimMarks({
   scrollLeft,
   row,
   videoTop = GEOMETRY.ruler,
+  rowHeight = GEOMETRY.clipRow,
 }: {
   trim: TrimLive;
   /** The axis the playhead is drawn on during the drag (built from liveSpans). */
@@ -168,6 +169,8 @@ export function TrimMarks({
   row?: { top: number; bottom: number };
   /** Track's clips row's top in content px: under the ruler and the text layers' rows. */
   videoTop?: number;
+  /** Track's clips row's height: taller while it is open for a clip's speed curve. */
+  rowHeight?: number;
 }) {
   const { edge } = trim.start;
   // On the playhead's axis: a snapped playhead and its guide are drawn at the same x, even with a slot between
@@ -175,7 +178,7 @@ export function TrimMarks({
   const snapped = trim.result.snapped;
   const chipOnRight = edge === "out" || edgeX - 12 - DELTA_CHIP_ROOM < scrollLeft;
   const deltaTop = row ? row.top + 10 : videoTop + 26;
-  const clipsBottom = row ? row.bottom : videoTop + GEOMETRY.clipRow;
+  const clipsBottom = row ? row.bottom : videoTop + rowHeight;
   return (
     <>
       <div
