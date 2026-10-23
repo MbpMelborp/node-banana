@@ -4,34 +4,35 @@ All notable changes to Node Banana will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [2.3.0] - 2026-10-24
+
+Text layers and clip speed come to Edit Video: words in a font of your choice
+over a dark wash, fading in and out, and clips that play faster, slower,
+along a ramp or in reverse. The toolbar of a noodle jumps to either end of
+it.
 
 ### Added
 
-- Text layers: "+ Text" under the audio rows, or Add text in the Edit video view's media pane, puts words over the video on a dark wash across the picture, fading in and out, on timeline rows of their own above the video.
-- Fonts for text layers: the app's own fonts, font files you add to the Fonts folder in the Node Banana folder, and the fonts installed on your computer once you allow it (the desktop app allows it).
-- Text layers in the video: Render and Frame to canvas burn the text layers in as the preview shows them.
-- Clip speed: in the Edit video view and the node's editor, play a video clip from 0.1× to 10×, ramp its speed along an ease curve, a bezier or points you draw on the timeline, play it in reverse, and blend frames in slow motion.
-- Clip speed in the video: Render burns in each clip's speed, ramp and reverse, frame by frame, and Frame to canvas grabs the frame they show. A clip's sound rises and falls in pitch with its speed; at a constant speed above 4× or below 0.25× it has none.
+- Text layers: + Text under the audio rows, or Add text in the Edit video view, puts words over the video on a dark wash, fading in and out. Text layers have rows of their own above the video.
+- Fonts for text layers: the app's own fonts, font files in the Fonts folder of your Node Banana folder, or the fonts installed on your computer once you allow it.
+- Render and Frame to canvas burn the text layers in as the preview shows them.
+- Clip speed: a video clip can play from 0.1× to 10×, ramp its speed along a curve, play in reverse, and blend frames in slow motion. The rail's Speed section and the clip's open row on the timeline set it.
+- Render burns in each clip's speed, ramp and reverse, and Frame to canvas grabs the frame they show. A clip's sound changes pitch with its speed. Above 4× or below 0.25× it has none.
 
 ### Changed
 
+- The toolbar of any noodle has Jump to start and Jump to end, which move the view to that end of the noodle. The crosshair is gone.
+- The noodle toolbar has no label field. Rename a noodle by double-clicking its label while it is hidden.
 - Ease Curve node: the arrow keys move a focused handle, and the plot sits on neutral black instead of navy.
-- Jump to either end: the toolbar of any noodle you click has Jump to start and Jump to end, which move the view to that end of the noodle.
-- Noodle labels: the toolbar has no label field now, so you rename a noodle by double-clicking its label while it is hidden.
-- The crosshair on a hidden noodle's toolbar is gone, because Jump to start does the same job.
 
 ### Fixed
 
-- Ease Curve node: a click on a curve handle no longer clears the chosen preset. A steep custom curve follows its handles; before, it could be up to 0.6% off.
+- Ease Curve node: a click on a curve handle keeps the chosen preset, and a steep custom curve follows its handles.
 
 ### Notes
 
-Edit files keep version 1, so Node Banana 2.2.0 still opens an edit with text
-layers or clip speeds. It shows no text layers and plays every clip at its own
-speed, and it drops both whenever it saves, renames, renders or duplicates
-that edit. On an Edit Video node, 2.2.0 also drops clip speeds whenever it
-writes the node's timeline: Done, a reorder, a connection.
+Node Banana 2.2.0 still opens an edit with text layers or clip speeds. It
+shows neither, and drops both when it saves the edit.
 
 ## [2.2.0] - 2026-10-22
 
