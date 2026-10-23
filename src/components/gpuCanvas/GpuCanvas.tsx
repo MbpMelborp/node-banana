@@ -145,9 +145,10 @@ export interface GpuCanvasApi {
    * For a runner isolating frame-rate costs: takes a part of the page away
    * (on = false) or puts it back. "subtree" is the canvas's layoutsubtree
    * attribute, "sheet" the painter's sheet inside it, "live" the live layer,
-   * "chrome" everything on the page but the canvas and the live layer.
+   * "chrome" everything on the page but the canvas and the live layer, "draw" the scene's
+   * drawing (the view and everything following it still run).
    */
-  diagnose: (part: "subtree" | "sheet" | "live" | "chrome", on: boolean) => void;
+  diagnose: (part: "subtree" | "sheet" | "live" | "chrome" | "draw", on: boolean) => void;
 }
 
 declare global {
@@ -719,8 +720,9 @@ export function GpuCanvas({ nodeTypes, edgeTypes, defaultEdgeOptions, headers, w
     };
     const sheetElement = canvas.querySelector<HTMLElement>("[data-gpu-canvas-sheet]");
     const hidden = new Map<HTMLElement, string>();
-    function diagnose(part: "subtree" | "sheet" | "live" | "chrome", on: boolean) {
-      if (part === "subtree") canvas!.toggleAttribute("layoutsubtree", on);
+    function diagnose(part: "subtree" | "sheet" | "live" | "chrome" | "draw", on: boolean) {
+      if (part === "draw") scene.drawing = on;
+      else if (part === "subtree") canvas!.toggleAttribute("layoutsubtree", on);
       else if (part === "sheet" && sheetElement) {
         if (on) canvas!.appendChild(sheetElement);
         else sheetElement.remove();

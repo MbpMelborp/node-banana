@@ -588,6 +588,8 @@ export class Scene {
   private hovered = -1;
   private index: GridIndex;
   private dirty = true;
+  /** For runners isolating page costs from the GPU's: the view and its listeners run, nothing is drawn. */
+  drawing = true;
   private haloWasShown = false;
   private frameHandle = 0;
   private disposed = false;
@@ -1652,7 +1654,7 @@ export class Scene {
       this.haloUniforms.uTime.value = now / 1000;
     } else if (this.haloWasShown) this.dirty = true;
     this.haloWasShown = halo;
-    if (this.dirty) {
+    if (this.dirty && this.drawing) {
       const start = performance.now();
       this.dirty = false;
       this.uniforms.uView.value.set(this.view.x, this.view.y, this.view.zoom);

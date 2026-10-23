@@ -14,8 +14,12 @@
 // --chromium-flags adds switches, e.g. "--no-sandbox --use-angle=swiftshader"
 // on a Linux box with no GPU (run under xvfb-run).
 // --fresh-paint also compares each node painted alone, bypassing the disk cache.
-// --scene-variants base,subtree,sheet,live,chrome,bare repeats the scene
-// gestures with parts of the page taken away, to find what costs frames.
+// --profile records a CPU profile of each gesture through Electron's own
+// debugger (<output>/<label>.cpuprofile) and prints its heaviest functions.
+// The debugger observes the page, so leave it off for comparisons.
+// --scene-variants base,subtree,sheet,live,chrome,draw,bare repeats the scene
+// gestures with parts of the page taken away, to find what costs frames
+// (draw keeps everything but the scene's drawing: the page's own costs on a slow GPU).
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -300,10 +304,30 @@ async function main() {
       return { x: 20, y: innerHeight - 20, ax: 10, ay: 10 };
     });
     // One traced gesture; its trace events go into `traced`.
+    const debug = (method, params) => app.run(({ BrowserWindow }, { method, params }) => BrowserWindow.getAllWindows()[0].webContents.debugger.sendCommand(method, params), { method, params });
+    if (flag('--profile')) {
+      await app.run(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.debugger.attach('1.3'));
+      await debug('Profiler.enable');
+      await debug('Profiler.setSamplingInterval', { interval: 200 });
+    }
+    // The functions that took the most time of their own, from a CPU profile.
+    function heaviest(profile, count = 15) {
+      const byNode = new Map(profile.nodes.map(node => [node.id, node]));
+      const self = new Map();
+      const deltas = profile.timeDeltas;
+      for (let i = 0; i < profile.samples.length; i++) {
+        const { callFrame: f } = byNode.get(profile.samples[i]);
+        const key = `${f.functionName || '(anonymous)'} ${f.url.split('/').pop()}:${f.lineNumber + 1}:${f.columnNumber + 1}`;
+        self.set(key, (self.get(key) ?? 0) + (deltas[i + 1] ?? 0) / 1000);
+      }
+      const total = [...self.values()].reduce((a, b) => a + b, 0);
+      return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, count).map(([fn, ms]) => ({ fn, ms: Math.round(ms), pct: Math.round(1000 * ms / total) / 10 }));
+    }
     async function measure(name, label, traced) {
       const spec = GESTURES[name];
       const origin = await emptyPoint();
       const events = schedule(spec, origin, { hz, seconds });
+      if (flag('--profile')) await debug('Profiler.start');
       await app.run(({ contentTracing }, categories) => contentTracing.startRecording({ included_categories: categories, excluded_categories: ['*'] }), PERF_TRACE_CATEGORIES);
       await page.evaluate(label => { performance.mark(`banana:gesture ${label}`); window.__runnerInput = {}; window.__gpuCanvas?.stats.reset(); }, label);
       const sent = await play(events, { synthetic: spec.synthetic });
@@ -312,10 +336,17 @@ async function main() {
         return seen && Math.abs(seen.x - x) <= 1.5 && Math.abs(seen.y - y) <= 1.5; }, last, { message: `${name} to reach the page` });
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const pageStats = await page.evaluate(() => window.__gpuCanvas?.stats.summary() ?? null);
+      let profileTop;
+      if (flag('--profile')) {
+        const { profile } = await debug('Profiler.stop');
+        await fs.writeFile(path.join(shots, `${label}-${Date.now()}.cpuprofile`), JSON.stringify(profile));
+        profileTop = heaviest(profile);
+        log(`  ${label}: heaviest functions\n${profileTop.map(f => `    ${String(f.ms).padStart(6)} ms ${String(f.pct).padStart(5)}%  ${f.fn}`).join('\n')}`);
+      }
       const traceFile = await app.run(({ contentTracing }, file) => contentTracing.stopRecording(file), path.join(traceDir, `${label}-${Date.now()}.json`));
       for (const event of readTrace(traceFile)) if (keepAnalyzed(event)) traced.push(event);
       await fs.rm(traceFile, { force: true });
-      return { name, label, inputEvents: sent, input: spec.synthetic || !osInput ? 'synthetic' : 'os', pageStats };
+      return { name, label, inputEvents: sent, input: spec.synthetic || !osInput ? 'synthetic' : 'os', pageStats, profileTop };
     }
     const traceResult = (traced, results) => {
       const trace = analyzeTrace(traced);
@@ -553,17 +584,27 @@ async function main() {
       const idleStarted = Date.now();
       await page.waitFor(() => { const p = window.__gpuCanvas.painter(); return !p.running && p.queued === 0; }, null, { timeout: 180000, interval: 500, message: 'the painter to finish' })
         .then(() => log(`  painter idle after ${Date.now() - idleStarted} ms`), () => log('  painter still busy after 180 s'));
-      // --scene-variants base,subtree,sheet,live,chrome,bare: repeat the gestures with a part of the page taken away
-      // (bare takes all of them), to find what costs frames. Labels carry the variant.
+      // --scene-variants base,subtree,sheet,live,chrome,draw,bare: repeat the gestures with a part of the page taken away
+      // (bare takes all of them; a+b takes both), to find what costs frames. Labels carry the variant.
       const variants = option('--scene-variants', 'base').split(',');
-      const PARTS = { subtree: ['sheet', 'subtree'], sheet: ['sheet'], live: ['live'], chrome: ['chrome'], bare: ['sheet', 'subtree', 'live', 'chrome'] };
+      const PARTS = { subtree: ['sheet', 'subtree'], sheet: ['sheet'], live: ['live'], chrome: ['chrome'], draw: ['draw'], bare: ['sheet', 'subtree', 'live', 'chrome'] };
       const traced = [], results = [];
       for (const variant of variants) {
-        const parts = PARTS[variant] || [];
+        const parts = variant.split('+').flatMap(v => PARTS[v] || []);
         await page.evaluate(parts => { for (const part of parts) window.__gpuCanvas.diagnose(part, false); }, parts);
         for (let round = 0; round < 2; round++) for (const name of gestureNames) {
           await page.evaluate(() => window.__gpuCanvas.fit());
           await delay(1500);
+          if (!round && name === gestureNames[0]) {
+            // What the page keeps live at this view: those are what a pan moves besides the scene.
+            const held = await page.evaluate(() => {
+              const types = {};
+              for (const id of window.__gpuCanvas.live()) { const t = window.__gpuCanvas.nodeRect(id)?.type ?? '?'; types[t] = (types[t] ?? 0) + 1; }
+              const count = s => document.querySelectorAll(s).length;
+              return { zoom: +window.__gpuCanvas.view().zoom.toFixed(3), types, nodes: count('.react-flow__node'), edges: count('.react-flow__edge'), canvases: count('canvas'), media: count('video, audio'), elements: count('*') };
+            });
+            log(`  live at ${variant}: ${JSON.stringify(held)}`);
+          }
           results.push(await measure(name, variant === 'base' ? name : `${name}:${variant}`, traced));
         }
         if (variant === 'base') await fs.writeFile(path.join(shots, 'fit.png'), await page.screenshot());
