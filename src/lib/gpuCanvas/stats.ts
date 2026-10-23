@@ -7,6 +7,8 @@
 
 const MAX_SAMPLES = 4096;
 const LONG_FRAME_MS = 250;
+/** Long animation frames over this are kept (the 50 longest): a missed vsync at 120 Hz is far below LONG_FRAME_MS. */
+const LOAF_MS = 50;
 
 export interface Percentiles {
   count: number;
@@ -53,7 +55,7 @@ export class GpuCanvasStats {
   phase = "idle";
   /** Frames over LONG_FRAME_MS: how long, when, and the phase they ended in. */
   longFrames: { ms: number; at: number; phase: string }[] = [];
-  /** The browser's long-animation-frame entries over LONG_FRAME_MS: where the time went, and the slowest scripts. */
+  /** The browser's 50 longest long-animation-frame entries over LOAF_MS: where the time went, and the slowest scripts. */
   loafs: LongAnimationFrame[] = [];
   private observer?: PerformanceObserver;
 
@@ -62,7 +64,7 @@ export class GpuCanvasStats {
     if (typeof PerformanceObserver === "undefined" || !PerformanceObserver.supportedEntryTypes?.includes("long-animation-frame")) return;
     this.observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries() as unknown as LoafEntry[]) {
-        if (entry.duration < LONG_FRAME_MS || this.loafs.length >= 50) continue;
+        if (entry.duration < LOAF_MS || (this.loafs.length >= 50 && entry.duration <= this.loafs[this.loafs.length - 1].ms)) continue;
         this.loafs.push({
           at: Math.round(entry.startTime), ms: Math.round(entry.duration), blockingMs: Math.round(entry.blockingDuration ?? 0),
           renderMs: entry.renderStart ? Math.round(entry.startTime + entry.duration - entry.renderStart) : 0,
@@ -73,6 +75,8 @@ export class GpuCanvasStats {
             layoutMs: Math.round(s.forcedStyleAndLayoutDuration ?? 0), pauseMs: Math.round(s.pauseDuration ?? 0),
           })),
         });
+        this.loafs.sort((a, b) => b.ms - a.ms);
+        this.loafs.length = Math.min(this.loafs.length, 50);
       }
     });
     this.observer.observe({ type: "long-animation-frame", buffered: false });
